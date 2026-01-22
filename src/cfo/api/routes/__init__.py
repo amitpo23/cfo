@@ -1,7 +1,18 @@
 """
 Route modules initialization
 """
-from . import accounting, crm, payments, communications, admin, cashflow, sync, reports, financial_management
+from . import (
+    accounting, 
+    crm, 
+    payments, 
+    communications, 
+    admin, 
+    cashflow, 
+    sync, 
+    reports, 
+    financial_management,
+    financial_operations
+)
 
 __all__ = [
     "accounting", 
@@ -12,5 +23,6 @@ __all__ = [
     "cashflow",
     "sync",
     "reports",
-    "financial_management"
+    "financial_management",
+    "financial_operations"
 ]

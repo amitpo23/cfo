@@ -24,6 +24,16 @@ from .cost_analysis_service import CostAnalysisService
 from .tax_service import TaxComplianceService
 from .ai_analytics_service import AdvancedAIService
 from .report_builder_service import ReportBuilderService, ReportFormat, ReportFrequency
+# Invoice, Payment and Agreement services
+from .invoice_service import InvoiceService, DocumentType, InvoiceStatus, ExpenseCategory
+from .payment_request_service import (
+    PaymentRequestService, PaymentRequestStatus, PaymentMethod, 
+    RecurringFrequency, StandingOrder, PaymentDemand
+)
+from .agreement_cashflow_service import (
+    AgreementCashFlowService, AgreementType, AgreementStatus, 
+    BillingCycle, CashFlowType
+)
 
 __all__ = [
     'FinancialService',
@@ -53,4 +63,20 @@ __all__ = [
     'ReportBuilderService',
     'ReportFormat',
     'ReportFrequency',
+    # Invoice, Payment, Agreement services
+    'InvoiceService',
+    'DocumentType',
+    'InvoiceStatus',
+    'ExpenseCategory',
+    'PaymentRequestService',
+    'PaymentRequestStatus',
+    'PaymentMethod',
+    'RecurringFrequency',
+    'StandingOrder',
+    'PaymentDemand',
+    'AgreementCashFlowService',
+    'AgreementType',
+    'AgreementStatus',
+    'BillingCycle',
+    'CashFlowType',
 ]
