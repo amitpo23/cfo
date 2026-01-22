@@ -3,7 +3,7 @@ FastAPI application initialization
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routes import accounting, crm, payments, communications, admin
+from .routes import accounting, crm, payments, communications, admin, cashflow, sync, reports, financial_management
 from ..config import settings
 
 app = FastAPI(
@@ -29,6 +29,10 @@ app.include_router(crm.router, prefix="/api/crm", tags=["CRM"])
 app.include_router(payments.router, prefix="/api/payments", tags=["Payments"])
 app.include_router(communications.router, prefix="/api/communications", tags=["Communications"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
+app.include_router(cashflow.router, prefix="/api/cashflow", tags=["Cash Flow & Forecasting"])
+app.include_router(sync.router, prefix="/api/sync", tags=["Data Sync & Bank Import"])
+app.include_router(reports.router, prefix="/api/reports", tags=["Financial Reports"])
+app.include_router(financial_management.router, prefix="/api", tags=["Financial Management"])
 
 
 @app.get("/")

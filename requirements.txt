@@ -21,6 +21,13 @@ httpx==0.26.0
 pandas==2.1.4
 numpy==1.26.2
 
+# Machine Learning & Forecasting
+scikit-learn==1.3.0
+statsmodels==0.14.0
+prophet==1.1.5
+xgboost==2.0.0
+tensorflow==2.15.0
+
 # Accounting Integrations
 # quickbooks-online==0.8.0  # Uncomment when needed
 # xero-python==3.0.0  # Uncomment when needed

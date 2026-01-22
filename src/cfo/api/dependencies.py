@@ -3,15 +3,27 @@ Authentication and authorization dependencies
 """
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Optional
+from typing import Optional, Generator
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..database import get_db_session
+from ..database import get_db_session, SessionLocal
 from ..models import User, UserRole
 from ..auth import decode_access_token
 
 security = HTTPBearer()
+
+
+def get_db() -> Generator[Session, None, None]:
+    """
+    Database session dependency
+    יצירת חיבור לדאטאבייס
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 async def get_current_user(
