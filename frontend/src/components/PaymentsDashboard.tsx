@@ -6,25 +6,16 @@ import {
   Plus,
   X,
   Clock,
-  Check,
-  AlertTriangle,
-  RefreshCw,
   Search,
   Calendar,
   Repeat,
-  Mail,
-  MessageSquare,
   DollarSign,
   User,
   Loader2,
   Play,
-  Pause,
   Trash2,
-  ChevronDown,
-  ChevronUp,
   Link,
-  FileText,
-  Settings
+  FileText
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -78,7 +69,7 @@ interface PaymentDemand {
 }
 
 // Status badge component
-const StatusBadge: React.FC<{ status: string; type?: 'request' | 'order' | 'demand' }> = ({ status, type }) => {
+const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
   const getStatusStyle = (status: string) => {
     switch (status.toLowerCase()) {
       case 'completed':
@@ -575,32 +566,32 @@ const PaymentsDashboard: React.FC = () => {
   const { data: paymentRequests = [], isLoading: loadingRequests } = useQuery({
     queryKey: ['payment-requests'],
     queryFn: async () => {
-      const response = await api.get('/financial/payments/requests');
-      return response.data;
+      const response = await api.get<PaymentRequest[]>('/financial/payments/requests');
+      return response;
     }
   });
 
   const { data: standingOrders = [], isLoading: loadingOrders } = useQuery({
     queryKey: ['standing-orders'],
     queryFn: async () => {
-      const response = await api.get('/financial/payments/standing-orders');
-      return response.data;
+      const response = await api.get<StandingOrder[]>('/financial/payments/standing-orders');
+      return response;
     }
   });
 
   const { data: paymentDemands = [], isLoading: loadingDemands } = useQuery({
     queryKey: ['payment-demands'],
     queryFn: async () => {
-      const response = await api.get('/financial/payments/demands');
-      return response.data;
+      const response = await api.get<PaymentDemand[]>('/financial/payments/demands');
+      return response;
     }
   });
 
   // Mutations
   const createRequestMutation = useMutation({
     mutationFn: async (data: any) => {
-      const response = await api.post('/financial/payments/requests', data);
-      return response.data;
+      const response = await api.post<PaymentRequest>('/financial/payments/requests', data);
+      return response;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['payment-requests'] });
@@ -610,8 +601,8 @@ const PaymentsDashboard: React.FC = () => {
 
   const sendRequestMutation = useMutation({
     mutationFn: async (requestId: string) => {
-      const response = await api.post(`/financial/payments/requests/${requestId}/send`);
-      return response.data;
+      const response = await api.post<PaymentRequest>(`/financial/payments/requests/${requestId}/send`);
+      return response;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['payment-requests'] });
@@ -620,8 +611,8 @@ const PaymentsDashboard: React.FC = () => {
 
   const createOrderMutation = useMutation({
     mutationFn: async (data: any) => {
-      const response = await api.post('/financial/payments/standing-orders', data);
-      return response.data;
+      const response = await api.post<StandingOrder>('/financial/payments/standing-orders', data);
+      return response;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['standing-orders'] });
@@ -631,8 +622,8 @@ const PaymentsDashboard: React.FC = () => {
 
   const chargeOrderMutation = useMutation({
     mutationFn: async (orderId: string) => {
-      const response = await api.post(`/financial/payments/standing-orders/${orderId}/charge`);
-      return response.data;
+      const response = await api.post<StandingOrder>(`/financial/payments/standing-orders/${orderId}/charge`);
+      return response;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['standing-orders'] });
@@ -641,8 +632,8 @@ const PaymentsDashboard: React.FC = () => {
 
   const cancelOrderMutation = useMutation({
     mutationFn: async (orderId: string) => {
-      const response = await api.delete(`/financial/payments/standing-orders/${orderId}`);
-      return response.data;
+      const response = await api.delete<StandingOrder>(`/financial/payments/standing-orders/${orderId}`);
+      return response;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['standing-orders'] });
@@ -651,8 +642,8 @@ const PaymentsDashboard: React.FC = () => {
 
   const runScheduledMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.post('/financial/payments/standing-orders/run-scheduled');
-      return response.data;
+      const response = await api.post<unknown>('/financial/payments/standing-orders/run-scheduled');
+      return response;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['standing-orders'] });

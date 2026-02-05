@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -10,8 +8,6 @@ import {
   ResponsiveContainer,
   LineChart,
   Line,
-  AreaChart,
-  Area,
   RadarChart,
   PolarGrid,
   PolarAngleAxis,
@@ -45,11 +41,6 @@ interface ExecutiveSummary {
   recommendations: string[];
 }
 
-interface KPITrend {
-  month: string;
-  value: number;
-}
-
 const KPI_CATEGORIES = [
   { id: 'profitability', name: 'רווחיות', icon: '💰' },
   { id: 'liquidity', name: 'נזילות', icon: '💧' },
@@ -60,14 +51,13 @@ const KPI_CATEGORIES = [
 
 export const KPIDashboard: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [selectedKPI, setSelectedKPI] = useState<string | null>(null);
 
   // Fetch KPI dashboard
   const { data: kpiData, isLoading: loadingKPIs } = useQuery({
     queryKey: ['kpi-dashboard'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/kpis');
-      return response.data.data;
+      const response = await api.get<{ kpis: KPI[] }>('/api/financial/kpis');
+      return response;
     },
   });
 
@@ -75,8 +65,8 @@ export const KPIDashboard: React.FC = () => {
   const { data: execSummary, isLoading: loadingSummary } = useQuery({
     queryKey: ['executive-summary'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/kpis/executive-summary');
-      return response.data.data as ExecutiveSummary;
+      const response = await api.get<ExecutiveSummary>('/api/financial/kpis/executive-summary');
+      return response;
     },
   });
 
@@ -84,10 +74,10 @@ export const KPIDashboard: React.FC = () => {
   const { data: kpiTrends } = useQuery({
     queryKey: ['kpi-trends'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/kpis/trends', {
+      const response = await api.get<Record<string, Array<{ month: string; value: number }>>>('/api/financial/kpis/trends', {
         params: { kpi_names: ['revenue_growth', 'gross_margin', 'net_margin'] }
       });
-      return response.data.data;
+      return response;
     },
   });
 
@@ -95,8 +85,8 @@ export const KPIDashboard: React.FC = () => {
   const { data: benchmarkData } = useQuery({
     queryKey: ['industry-benchmark'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/kpis/benchmark');
-      return response.data.data;
+      const response = await api.get<{ comparisons: Array<{ kpi_name: string; company_value: number; industry_avg: number }> }>('/api/financial/kpis/benchmark');
+      return response;
     },
   });
 
@@ -276,7 +266,6 @@ export const KPIDashboard: React.FC = () => {
         {filteredKPIs.map((kpi: KPI) => (
           <div
             key={kpi.name}
-            onClick={() => setSelectedKPI(kpi.name)}
             className="bg-white rounded-xl shadow-sm p-5 border border-gray-100 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
           >
             <div className="flex justify-between items-start mb-3">

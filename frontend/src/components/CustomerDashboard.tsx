@@ -2,9 +2,8 @@
  * Customer Management Dashboard
  */
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Plus, Search, Mail, Phone, Edit, Trash2 } from 'lucide-react';
-import apiService from '../services/api';
 
 interface Customer {
   customer_id: string;
@@ -17,8 +16,6 @@ interface Customer {
 
 export const CustomerDashboard: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const queryClient = useQueryClient();
 
   // Fetch customers (you'll need to implement this endpoint)
   const { data: customers, isLoading } = useQuery<Customer[]>({
@@ -40,7 +37,6 @@ export const CustomerDashboard: React.FC = () => {
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-3xl font-bold text-gray-800">Customers</h1>
         <button
-          onClick={() => setIsCreateModalOpen(true)}
           className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition"
         >
           <Plus size={20} />

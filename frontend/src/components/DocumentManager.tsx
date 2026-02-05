@@ -2,8 +2,8 @@
  * Document Creation and Management Component
  */
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, FileText, Download, Send, X } from 'lucide-react';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { Plus, Download, Send, X } from 'lucide-react';
 import { format } from 'date-fns';
 import apiService from '../services/api';
 
@@ -27,11 +27,10 @@ interface DocumentItem {
 export const DocumentManager: React.FC = () => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [filterType, setFilterType] = useState<string>('all');
-  const queryClient = useQueryClient();
 
   const { data: documents, isLoading } = useQuery<Document[]>({
     queryKey: ['documents', filterType],
-    queryFn: async () => {
+    queryFn: async (): Promise<Document[]> => {
       const params = filterType !== 'all' ? { document_type: filterType } : {};
       return apiService.listDocuments(params);
     },
@@ -120,7 +119,7 @@ export const DocumentManager: React.FC = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {documents?.map((doc) => (
+              {documents?.map((doc: Document) => (
                 <tr key={doc.document_id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                     {doc.document_number}

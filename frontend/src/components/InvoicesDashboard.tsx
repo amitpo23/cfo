@@ -11,14 +11,10 @@ import {
   AlertTriangle,
   RefreshCw,
   Search,
-  Filter,
   Mail,
-  CreditCard,
-  Building,
   Loader2,
   ChevronDown,
   ChevronUp,
-  Receipt,
   FileInput,
   FileMinus
 } from 'lucide-react';
@@ -146,7 +142,7 @@ const CreateInvoiceModal: React.FC<{
   const removeItem = (index: number) => {
     setFormData({
       ...formData,
-      items: formData.items.filter((_, i) => i !== index)
+      items: formData.items.filter((_item, i) => i !== index)
     });
   };
 
@@ -556,32 +552,28 @@ const InvoicesDashboard: React.FC = () => {
     queryKey: ['invoices', statusFilter],
     queryFn: async () => {
       const params = statusFilter ? `?status=${statusFilter}` : '';
-      const response = await api.get(`/financial/invoices${params}`);
-      return response.data;
+      return await api.get<Invoice[]>(`/financial/invoices${params}`);
     }
   });
 
   const { data: receivedInvoices = [], isLoading: loadingReceived } = useQuery({
     queryKey: ['received-invoices'],
     queryFn: async () => {
-      const response = await api.get('/financial/invoices/received');
-      return response.data;
+      return await api.get<ReceivedInvoice[]>('/financial/invoices/received');
     }
   });
 
   const { data: summary } = useQuery({
     queryKey: ['invoice-summary'],
     queryFn: async () => {
-      const response = await api.get('/financial/invoices/summary');
-      return response.data;
+      return await api.get<InvoiceSummary>('/financial/invoices/summary');
     }
   });
 
   // Mutations
   const createInvoiceMutation = useMutation({
     mutationFn: async (data: any) => {
-      const response = await api.post('/financial/invoices', data);
-      return response.data;
+      return await api.post<Invoice>('/financial/invoices', data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
@@ -592,8 +584,7 @@ const InvoicesDashboard: React.FC = () => {
 
   const receiveInvoiceMutation = useMutation({
     mutationFn: async (data: any) => {
-      const response = await api.post('/financial/invoices/receive', data);
-      return response.data;
+      return await api.post<ReceivedInvoice>('/financial/invoices/receive', data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['received-invoices'] });
@@ -603,8 +594,7 @@ const InvoicesDashboard: React.FC = () => {
 
   const sendRemindersMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.post('/financial/invoices/reminders');
-      return response.data;
+      return await api.post<{ success: boolean }>('/financial/invoices/reminders');
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
@@ -613,8 +603,7 @@ const InvoicesDashboard: React.FC = () => {
 
   const syncInvoicesMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.post('/financial/invoices/sync');
-      return response.data;
+      return await api.post<{ success: boolean }>('/financial/invoices/sync');
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });

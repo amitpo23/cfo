@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import {
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -14,8 +12,6 @@ import {
   Pie,
   Cell,
   Legend,
-  ScatterChart,
-  Scatter,
 } from 'recharts';
 import api from '../services/api';
 
@@ -76,20 +72,20 @@ export const AIAnalyticsDashboard: React.FC = () => {
   const [chatHistory, setChatHistory] = useState<Array<{role: string, content: string}>>([]);
 
   // Fetch anomalies
-  const { data: anomalies, isLoading: loadingAnomalies } = useQuery({
+  const { data: anomalies } = useQuery({
     queryKey: ['ai-anomalies'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ai/anomalies');
-      return response.data.data as Anomaly[];
+      const response = await api.get('/api/financial/ai/anomalies') as { data: { data: Anomaly[] } };
+      return response.data.data;
     },
   });
 
   // Fetch risks
-  const { data: risks, isLoading: loadingRisks } = useQuery({
+  const { data: risks } = useQuery({
     queryKey: ['ai-risks'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ai/risks');
-      return response.data.data as FinancialRisk[];
+      const response = await api.get('/api/financial/ai/risks') as { data: { data: FinancialRisk[] } };
+      return response.data.data;
     },
   });
 
@@ -97,24 +93,24 @@ export const AIAnalyticsDashboard: React.FC = () => {
   const { data: insights, isLoading: loadingInsights } = useQuery({
     queryKey: ['ai-insights'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ai/insights');
-      return response.data.data as AIInsight[];
+      const response = await api.get('/api/financial/ai/insights') as { data: { data: AIInsight[] } };
+      return response.data.data;
     },
   });
 
   // Fetch recommendations
-  const { data: recommendations, isLoading: loadingRecommendations } = useQuery({
+  const { data: recommendations } = useQuery({
     queryKey: ['ai-recommendations'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ai/recommendations');
-      return response.data.data as AIRecommendation[];
+      const response = await api.get('/api/financial/ai/recommendations') as { data: { data: AIRecommendation[] } };
+      return response.data.data;
     },
   });
 
   // AI Analysis mutation
   const analysisMutation = useMutation({
     mutationFn: async (question: string) => {
-      const response = await api.post('/api/financial/ai/analyze', { question });
+      const response = await api.post('/api/financial/ai/analyze', { question }) as { data: { data: { analysis: string } } };
       return response.data.data.analysis;
     },
     onSuccess: (analysis) => {

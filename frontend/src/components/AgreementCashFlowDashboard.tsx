@@ -4,7 +4,6 @@ import {
   FileSignature,
   TrendingUp,
   TrendingDown,
-  Calendar,
   Plus,
   X,
   RefreshCw,
@@ -18,11 +17,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Loader2,
-  Filter,
-  Download,
-  Users,
   Repeat,
-  Target,
   ChevronDown,
   ChevronUp
 } from 'lucide-react';
@@ -35,7 +30,6 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
-  BarChart,
   Bar,
   PieChart as RechartsPieChart,
   Pie,
@@ -74,28 +68,28 @@ interface CashFlowProjection {
   weighted_outflows: number;
 }
 
-interface CashFlowSummary {
-  period_start: string;
-  period_end: string;
-  total_inflows: number;
-  total_outflows: number;
+interface RevenueSummary {
+  by_type: Record<string, { value: number; count: number }>;
+  monthly_recurring: number;
+  expiring_soon: Array<{
+    agreement_id: string;
+    title: string;
+    customer_name: string;
+    value: number;
+    end_date: string;
+  }>;
+}
+
+interface CashFlowSummaryData {
   net_change: number;
-  avg_monthly_inflow: number;
-  avg_monthly_outflow: number;
-  income_by_source: Record<string, number>;
-  income_by_agreement_type: Record<string, number>;
-  outflows_by_category: Record<string, number>;
-  projections: CashFlowProjection[];
-  min_balance: number;
-  max_balance: number;
-  low_balance_months: string[];
   outstanding_invoices_total: number;
   outstanding_invoices_count: number;
   overdue_invoices_total: number;
   overdue_invoices_count: number;
+  low_balance_months: string[];
 }
 
-interface Forecast {
+interface ForecastData {
   dates: string[];
   inflows: {
     forecast: number[];
@@ -116,6 +110,7 @@ interface Forecast {
     best_month: string;
     worst_month: string;
   };
+  error?: string;
 }
 
 // Colors
@@ -399,56 +394,38 @@ const AgreementCashFlowDashboard: React.FC = () => {
   const [expandedAgreement, setExpandedAgreement] = useState<string | null>(null);
 
   // Queries
-  const { data: agreements = [], isLoading: loadingAgreements } = useQuery({
+  const { data: agreements = [], isLoading: loadingAgreements } = useQuery<Agreement[]>({
     queryKey: ['agreements'],
-    queryFn: async () => {
-      const response = await api.get('/financial/agreements');
-      return response.data;
-    }
+    queryFn: () => api.get<Agreement[]>('/financial/agreements')
   });
 
-  const { data: revenueSummary } = useQuery({
+  const { data: revenueSummary } = useQuery<RevenueSummary>({
     queryKey: ['agreement-revenue-summary'],
-    queryFn: async () => {
-      const response = await api.get('/financial/agreements/revenue-summary');
-      return response.data;
-    }
+    queryFn: () => api.get<RevenueSummary>('/financial/agreements/revenue-summary')
   });
 
-  const { data: cashFlowSummary } = useQuery({
+  const { data: cashFlowSummary } = useQuery<CashFlowSummaryData>({
     queryKey: ['cashflow-summary'],
-    queryFn: async () => {
-      const response = await api.get('/financial/cashflow/summary');
-      return response.data;
-    }
+    queryFn: () => api.get<CashFlowSummaryData>('/financial/cashflow/summary')
   });
 
-  const { data: projections = [] } = useQuery({
+  const { data: projections = [] } = useQuery<CashFlowProjection[]>({
     queryKey: ['cashflow-projections'],
-    queryFn: async () => {
-      const response = await api.get('/financial/cashflow/projection?periods=12');
-      return response.data;
-    }
+    queryFn: () => api.get<CashFlowProjection[]>('/financial/cashflow/projection?periods=12')
   });
 
-  const { data: forecast, isLoading: loadingForecast } = useQuery({
+  const { data: forecast, isLoading: loadingForecast } = useQuery<ForecastData>({
     queryKey: ['cashflow-forecast', forecastMonths],
-    queryFn: async () => {
-      const response = await api.post('/financial/cashflow/forecast', {
-        historical_months: 12,
-        forecast_months: forecastMonths,
-        method: 'exponential_smoothing'
-      });
-      return response.data;
-    }
+    queryFn: () => api.post<ForecastData>('/financial/cashflow/forecast', {
+      historical_months: 12,
+      forecast_months: forecastMonths,
+      method: 'exponential_smoothing'
+    })
   });
 
   // Mutations
   const createAgreementMutation = useMutation({
-    mutationFn: async (data: any) => {
-      const response = await api.post('/financial/agreements', data);
-      return response.data;
-    },
+    mutationFn: (data: Record<string, unknown>) => api.post<Agreement>('/financial/agreements', data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agreements'] });
       queryClient.invalidateQueries({ queryKey: ['agreement-revenue-summary'] });
@@ -457,10 +434,7 @@ const AgreementCashFlowDashboard: React.FC = () => {
   });
 
   const syncInvoicesMutation = useMutation({
-    mutationFn: async () => {
-      const response = await api.post('/financial/cashflow/sync-invoices');
-      return response.data;
-    },
+    mutationFn: () => api.post<{ success: boolean }>('/financial/cashflow/sync-invoices'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cashflow-summary'] });
       queryClient.invalidateQueries({ queryKey: ['cashflow-projections'] });
@@ -685,9 +659,9 @@ const AgreementCashFlowDashboard: React.FC = () => {
           {/* Expiring Agreements */}
           <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
             <h3 className="text-lg font-semibold mb-4">הסכמים שעומדים להסתיים</h3>
-            {revenueSummary?.expiring_soon?.length > 0 ? (
+            {(revenueSummary?.expiring_soon?.length ?? 0) > 0 ? (
               <div className="space-y-3">
-                {revenueSummary.expiring_soon.map((agreement: any) => (
+                {revenueSummary?.expiring_soon?.map((agreement: any) => (
                   <div key={agreement.agreement_id} className="flex justify-between items-center p-3 bg-orange-50 rounded-lg">
                     <div>
                       <p className="font-medium">{agreement.title}</p>
@@ -844,14 +818,14 @@ const AgreementCashFlowDashboard: React.FC = () => {
           </div>
 
           {/* Alerts */}
-          {cashFlowSummary?.low_balance_months?.length > 0 && (
+          {(cashFlowSummary?.low_balance_months?.length ?? 0) > 0 && (
             <div className="bg-red-50 border border-red-200 rounded-xl p-4">
               <div className="flex items-start gap-3">
                 <AlertTriangle className="h-5 w-5 text-red-600 mt-0.5" />
                 <div>
                   <h4 className="font-medium text-red-800">התראה: יתרה שלילית צפויה</h4>
                   <p className="text-sm text-red-600 mt-1">
-                    בחודשים הבאים צפויה יתרה שלילית: {cashFlowSummary.low_balance_months.join(', ')}
+                    בחודשים הבאים צפויה יתרה שלילית: {cashFlowSummary?.low_balance_months?.join(', ')}
                   </p>
                 </div>
               </div>

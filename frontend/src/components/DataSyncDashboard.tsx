@@ -7,12 +7,9 @@ import {
   CreditCard,
   DollarSign,
   Users,
-  Clock,
-  TrendingUp,
   Database,
   Calendar,
   Package,
-  Percent,
   ArrowRightLeft
 } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -55,16 +52,14 @@ export const DataSyncDashboard: React.FC = () => {
   const { data: vatData } = useQuery({
     queryKey: ['vatRate'],
     queryFn: async () => {
-      const response = await api.get('/api/sync/sumit/vat-rate');
-      return response.data;
+      return api.get<{ vat_rate: number }>('/api/sync/sumit/vat-rate');
     }
   });
 
   // סנכרון מסמכים
   const syncDocumentsMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.post('/api/sync/sumit/documents', syncDateRange);
-      return response.data;
+      return api.post<SyncResult>('/api/sync/sumit/documents', syncDateRange);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
@@ -74,8 +69,7 @@ export const DataSyncDashboard: React.FC = () => {
   // סנכרון תשלומים
   const syncPaymentsMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.post('/api/sync/sumit/payments', syncDateRange);
-      return response.data;
+      return api.post<SyncResult>('/api/sync/sumit/payments', syncDateRange);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
@@ -85,8 +79,7 @@ export const DataSyncDashboard: React.FC = () => {
   // סנכרון עסקאות סליקה
   const syncBillingMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.post('/api/sync/sumit/billing', syncDateRange);
-      return response.data;
+      return api.post<SyncResult>('/api/sync/sumit/billing', syncDateRange);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
@@ -97,8 +90,7 @@ export const DataSyncDashboard: React.FC = () => {
   const { data: debtsData, refetch: refetchDebts, isLoading: debtsLoading } = useQuery({
     queryKey: ['debts'],
     queryFn: async () => {
-      const response = await api.get('/api/sync/sumit/debts');
-      return response.data;
+      return api.get<{ total_receivable: number; total_payable: number; debt_items: DebtItem[] }>('/api/sync/sumit/debts');
     },
     enabled: false
   });
@@ -107,8 +99,7 @@ export const DataSyncDashboard: React.FC = () => {
   const { data: incomeItemsData, refetch: refetchIncomeItems, isLoading: incomeItemsLoading } = useQuery({
     queryKey: ['incomeItems'],
     queryFn: async () => {
-      const response = await api.get('/api/sync/sumit/income-items');
-      return response.data;
+      return api.get<{ income_items: IncomeItem[] }>('/api/sync/sumit/income-items');
     },
     enabled: false
   });
@@ -117,8 +108,7 @@ export const DataSyncDashboard: React.FC = () => {
   const [exchangeResult, setExchangeResult] = useState<{ from: string; to: string; rate: number } | null>(null);
   const exchangeRateMutation = useMutation({
     mutationFn: async (params: { from: string; to: string }) => {
-      const response = await api.get(`/api/sync/sumit/exchange-rate?from_currency=${params.from}&to_currency=${params.to}`);
-      return response.data;
+      return api.get<{ from_currency: string; to_currency: string; rate: number }>(`/api/sync/sumit/exchange-rate?from_currency=${params.from}&to_currency=${params.to}`);
     },
     onSuccess: (data) => {
       setExchangeResult({ from: data.from_currency, to: data.to_currency, rate: data.rate });
@@ -128,8 +118,12 @@ export const DataSyncDashboard: React.FC = () => {
   // סנכרון מלא
   const fullSyncMutation = useMutation({
     mutationFn: async () => {
-      const response = await api.post('/api/sync/sumit/full', syncDateRange);
-      return response.data;
+      return api.post<{
+        documents: SyncResult;
+        payments: SyncResult;
+        billing: SyncResult;
+        debts: { count: number };
+      }>('/api/sync/sumit/full', syncDateRange);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
@@ -146,8 +140,7 @@ export const DataSyncDashboard: React.FC = () => {
   const renderSyncCard = (
     title: string,
     icon: React.ReactNode,
-    mutation: any,
-    result?: SyncResult | null
+    mutation: any
   ) => (
     <div className="bg-white rounded-xl shadow-sm p-6">
       <div className="flex items-center justify-between mb-4">
@@ -420,7 +413,7 @@ export const DataSyncDashboard: React.FC = () => {
             </button>
           </div>
 
-          {incomeItemsData?.income_items?.length > 0 && (
+          {(incomeItemsData?.income_items?.length ?? 0) > 0 && (
             <div className="max-h-60 overflow-y-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -431,7 +424,7 @@ export const DataSyncDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {incomeItemsData.income_items.map((item: IncomeItem) => (
+                  {incomeItemsData?.income_items?.map((item: IncomeItem) => (
                     <tr key={item.id} className="border-b hover:bg-gray-50">
                       <td className="py-2 font-medium">{item.name}</td>
                       <td className="py-2">{formatCurrency(item.price)}</td>

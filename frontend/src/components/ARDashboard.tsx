@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   BarChart,
@@ -14,13 +14,6 @@ import {
   Legend,
 } from 'recharts';
 import api from '../services/api';
-
-interface AgingBucket {
-  bucket: string;
-  amount: number;
-  count: number;
-  percentage: number;
-}
 
 interface CustomerAging {
   customer_id: string;
@@ -45,15 +38,25 @@ interface PaymentReminder {
 
 const AGING_COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#7C3AED'];
 
-export const ARDashboard: React.FC = () => {
-  const [selectedCustomer, setSelectedCustomer] = useState<string | null>(null);
+interface AgingData {
+  buckets: Record<string, { amount: number; count: number; percentage: number }>;
+  total_receivables: number;
+  customers: CustomerAging[];
+}
 
+interface CollectionForecast {
+  expected_30_days: number;
+  expected_60_days: number;
+  expected_90_days: number;
+}
+
+export const ARDashboard: React.FC = () => {
   // Fetch aging report
   const { data: agingData, isLoading: loadingAging } = useQuery({
     queryKey: ['ar-aging'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ar/aging');
-      return response.data.data;
+      const response = await api.get<AgingData>('/api/financial/ar/aging');
+      return response;
     },
   });
 
@@ -61,17 +64,17 @@ export const ARDashboard: React.FC = () => {
   const { data: reminders, isLoading: loadingReminders } = useQuery({
     queryKey: ['payment-reminders'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ar/payment-reminders');
-      return response.data.data as PaymentReminder[];
+      const response = await api.get<PaymentReminder[]>('/api/financial/ar/payment-reminders');
+      return response;
     },
   });
 
   // Fetch collection forecast
-  const { data: forecast, isLoading: loadingForecast } = useQuery({
+  const { data: forecast } = useQuery({
     queryKey: ['collection-forecast'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ar/collection-forecast');
-      return response.data.data;
+      const response = await api.get<CollectionForecast>('/api/financial/ar/collection-forecast');
+      return response;
     },
   });
 
@@ -114,7 +117,7 @@ export const ARDashboard: React.FC = () => {
     ...data,
   })) : [];
 
-  const overdue = agingData?.total_receivables - (agingData?.buckets?.current?.amount || 0);
+  const overdue = (agingData?.total_receivables ?? 0) - (agingData?.buckets?.current?.amount || 0);
   const overduePercentage = agingData?.total_receivables ? (overdue / agingData.total_receivables * 100) : 0;
 
   return (
@@ -176,7 +179,7 @@ export const ARDashboard: React.FC = () => {
               <YAxis tickFormatter={(v) => `₪${(v / 1000).toFixed(0)}K`} />
               <Tooltip formatter={(value: number) => formatCurrency(value)} />
               <Bar dataKey="amount" fill="#3B82F6">
-                {bucketData.map((entry, index) => (
+                {bucketData.map((_entry, index) => (
                   <Cell key={`cell-${index}`} fill={AGING_COLORS[index % AGING_COLORS.length]} />
                 ))}
               </Bar>
@@ -199,7 +202,7 @@ export const ARDashboard: React.FC = () => {
                 outerRadius={100}
                 label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
               >
-                {bucketData.map((entry, index) => (
+                {bucketData.map((_entry, index) => (
                   <Cell key={`cell-${index}`} fill={AGING_COLORS[index % AGING_COLORS.length]} />
                 ))}
               </Pie>
@@ -214,7 +217,7 @@ export const ARDashboard: React.FC = () => {
       <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
         <h2 className="text-xl font-bold text-gray-900 mb-4">סיכום גיול לפי תקופה</h2>
         <div className="grid grid-cols-5 gap-4">
-          {bucketData.map((bucket, index) => (
+          {bucketData.map((bucket, _index) => (
             <div
               key={bucket.bucket}
               className={`p-4 rounded-lg border ${getBucketColor(bucket.bucket)}`}
@@ -270,9 +273,9 @@ export const ARDashboard: React.FC = () => {
                     {formatCurrency(customer.total)}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm">
-                    <button 
-                      onClick={() => setSelectedCustomer(customer.customer_id)}
+                    <button
                       className="text-blue-600 hover:text-blue-800"
+                      type="button"
                     >
                       פרטים
                     </button>

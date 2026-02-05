@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  LineChart,
   Line,
   XAxis,
   YAxis,
@@ -20,13 +19,12 @@ import {
   Brain,
   Target,
   AlertCircle,
-  ChevronRight,
   RefreshCw,
   Zap,
   BarChart3,
   Minus,
 } from 'lucide-react';
-import { api } from '../services/api';
+import api from '../services/api';
 
 interface ForecastResult {
   date: string;
@@ -101,10 +99,10 @@ const ForecastingDashboard: React.FC = () => {
   const { data: revenueForecast, isLoading: loadingRevenue } = useQuery<ForecastResult[]>({
     queryKey: ['revenue-forecast', forecastPeriods, forecastMethod],
     queryFn: async () => {
-      const response = await api.get(
+      const response = await api.get<{ data: ForecastResult[] }>(
         `/cashflow/forecast/revenue?periods=${forecastPeriods}&method=${forecastMethod}`
       );
-      return response.data;
+      return response.data as ForecastResult[];
     },
   });
 
@@ -112,10 +110,10 @@ const ForecastingDashboard: React.FC = () => {
   const { data: expenseForecast, isLoading: loadingExpense } = useQuery<ForecastResult[]>({
     queryKey: ['expense-forecast', forecastPeriods, forecastMethod],
     queryFn: async () => {
-      const response = await api.get(
+      const response = await api.get<{ data: ForecastResult[] }>(
         `/cashflow/forecast/expenses?periods=${forecastPeriods}&method=${forecastMethod}`
       );
-      return response.data;
+      return response.data as ForecastResult[];
     },
   });
 
@@ -123,10 +121,10 @@ const ForecastingDashboard: React.FC = () => {
   const { data: cashFlowForecast, isLoading: loadingCashFlow } = useQuery<CashFlowForecast[]>({
     queryKey: ['cashflow-forecast', forecastPeriods],
     queryFn: async () => {
-      const response = await api.get(
+      const response = await api.get<{ data: CashFlowForecast[] }>(
         `/cashflow/forecast/cash-flow?periods=${forecastPeriods}&current_balance=0`
       );
-      return response.data;
+      return response.data as CashFlowForecast[];
     },
   });
 
@@ -134,20 +132,20 @@ const ForecastingDashboard: React.FC = () => {
   const { data: scenarios, isLoading: loadingScenarios } = useQuery<ScenarioData>({
     queryKey: ['scenarios', forecastPeriods],
     queryFn: async () => {
-      const response = await api.get(
+      const response = await api.get<{ data: ScenarioData }>(
         `/cashflow/forecast/scenarios?periods=${forecastPeriods}&current_balance=0`
       );
-      return response.data;
+      return response.data as ScenarioData;
     },
     enabled: showScenarios,
   });
 
   // Fetch trend analysis
-  const { data: trends, isLoading: loadingTrends } = useQuery<TrendAnalysis>({
+  const { data: trends } = useQuery<TrendAnalysis>({
     queryKey: ['trends'],
     queryFn: async () => {
-      const response = await api.get('/cashflow/forecast/trends?months=12');
-      return response.data;
+      const response = await api.get<{ data: TrendAnalysis }>('/cashflow/forecast/trends?months=12');
+      return response.data as TrendAnalysis;
     },
   });
 
@@ -155,17 +153,17 @@ const ForecastingDashboard: React.FC = () => {
   const { data: mlForecast, isLoading: loadingML } = useQuery<MLForecast>({
     queryKey: ['ml-forecast', forecastPeriods],
     queryFn: async () => {
-      const response = await api.get(`/cashflow/forecast/ml/ensemble?periods=${forecastPeriods}`);
-      return response.data;
+      const response = await api.get<{ data: MLForecast }>(`/cashflow/forecast/ml/ensemble?periods=${forecastPeriods}`);
+      return response.data as MLForecast;
     },
   });
 
   // Fetch forecast accuracy
-  const { data: accuracy } = useQuery({
+  const { data: accuracy } = useQuery<{ mape: number }>({
     queryKey: ['forecast-accuracy'],
     queryFn: async () => {
-      const response = await api.get('/cashflow/forecast/accuracy?test_months=3');
-      return response.data;
+      const response = await api.get<{ data: { mape: number } }>('/cashflow/forecast/accuracy?test_months=3');
+      return response.data as { mape: number };
     },
   });
 
@@ -191,22 +189,22 @@ const ForecastingDashboard: React.FC = () => {
   }));
 
   // Prepare scenario data for chart
-  const scenarioChartData = scenarios?.expected.map((exp, idx) => ({
+  const scenarioChartData = scenarios?.expected.map((exp, _idx) => ({
     date: exp.date,
     expected: exp.projected_balance,
-    optimistic: scenarios.optimistic[idx]?.projected_balance || 0,
-    pessimistic: scenarios.pessimistic[idx]?.projected_balance || 0,
+    optimistic: scenarios.optimistic[_idx]?.projected_balance || 0,
+    pessimistic: scenarios.pessimistic[_idx]?.projected_balance || 0,
   }));
 
   // Prepare ML forecast data
-  const mlChartData = mlForecast?.ensemble.map((item, idx) => ({
+  const mlChartData = mlForecast?.ensemble.map((item, _idx) => ({
     date: item.date,
     ensemble: item.predicted_value,
     ensemble_lower: item.lower_bound,
     ensemble_upper: item.upper_bound,
-    lstm: mlForecast.lstm[idx]?.predicted_value || 0,
-    prophet: mlForecast.prophet[idx]?.predicted_value || 0,
-    xgboost: mlForecast.xgboost[idx]?.predicted_value || 0,
+    lstm: mlForecast.lstm[_idx]?.predicted_value || 0,
+    prophet: mlForecast.prophet[_idx]?.predicted_value || 0,
+    xgboost: mlForecast.xgboost[_idx]?.predicted_value || 0,
   }));
 
   const getTrendIcon = (trend: string) => {
@@ -629,8 +627,8 @@ const ForecastingDashboard: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {cashFlowForecast?.map((row, idx) => (
-                <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
+              {cashFlowForecast?.map((row, _idx) => (
+                <tr key={_idx} className="border-b border-gray-100 hover:bg-gray-50">
                   <td className="py-3 px-4 font-medium">{row.date}</td>
                   <td className="py-3 px-4 text-green-600">{formatCurrency(row.projected_inflows)}</td>
                   <td className="py-3 px-4 text-red-600">{formatCurrency(row.projected_outflows)}</td>

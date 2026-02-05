@@ -12,8 +12,6 @@ import {
   Pie,
   Cell,
   Legend,
-  LineChart,
-  Line,
 } from 'recharts';
 import api from '../services/api';
 
@@ -50,8 +48,8 @@ export const BudgetDashboard: React.FC = () => {
   const { data: budgetData, isLoading: loadingBudget } = useQuery({
     queryKey: ['budget-vs-actual', selectedPeriod],
     queryFn: async () => {
-      const response = await api.get('/api/financial/budget/vs-actual');
-      return response.data.data as BudgetComparison[];
+      const response = await api.get<BudgetComparison[]>('/api/financial/budget/vs-actual');
+      return response;
     },
   });
 
@@ -59,16 +57,20 @@ export const BudgetDashboard: React.FC = () => {
   const { data: alerts, isLoading: loadingAlerts } = useQuery({
     queryKey: ['budget-alerts'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/budget/alerts');
-      return response.data.data as BudgetAlert[];
+      const response = await api.get<BudgetAlert[]>('/api/financial/budget/alerts');
+      return response;
     },
   });
 
   // Scenario analysis mutation
   const scenarioMutation = useMutation({
     mutationFn: async (params: typeof scenarioParams) => {
-      const response = await api.post('/api/financial/budget/scenario', params);
-      return response.data.data;
+      const response = await api.post<{
+        projected_revenue: number;
+        projected_expenses: number;
+        projected_net_income: number;
+      }>('/api/financial/budget/scenario', params);
+      return response;
     },
   });
 
@@ -248,7 +250,7 @@ export const BudgetDashboard: React.FC = () => {
                 outerRadius={100}
                 label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
               >
-                {budgetData?.map((entry, index) => (
+                {budgetData?.map((_entry, index) => (
                   <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>

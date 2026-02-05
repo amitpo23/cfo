@@ -2,24 +2,19 @@ import React, { useState } from 'react';
 import {
   FileText,
   Download,
-  Calendar,
   TrendingUp,
   TrendingDown,
   DollarSign,
-  PieChart,
   BarChart3,
   RefreshCw,
   ChevronDown,
   ChevronUp,
-  FileSpreadsheet,
   Building2,
   Wallet,
   AlertCircle
 } from 'lucide-react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import {
-  AreaChart,
-  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -109,6 +104,7 @@ interface CashFlowProjectionReport {
   ending_balance: number;
   minimum_balance: number;
   runway_months: number;
+  average_monthly_burn: number;
 }
 
 const formatCurrency = (amount: number) => {
@@ -143,10 +139,9 @@ export const ReportsDashboard: React.FC = () => {
   const { data: plReport, isLoading: plLoading, refetch: refetchPL } = useQuery({
     queryKey: ['profitLoss', startDate, endDate],
     queryFn: async () => {
-      const response = await api.get('/api/reports/profit-loss', {
+      return await api.get<ProfitLossReport>('/api/reports/profit-loss', {
         params: { start_date: startDate, end_date: endDate }
       });
-      return response.data as ProfitLossReport;
     },
     enabled: activeReport === 'profit-loss'
   });
@@ -155,10 +150,9 @@ export const ReportsDashboard: React.FC = () => {
   const { data: bsReport, isLoading: bsLoading, refetch: refetchBS } = useQuery({
     queryKey: ['balanceSheet', endDate],
     queryFn: async () => {
-      const response = await api.get('/api/reports/balance-sheet', {
+      return await api.get<BalanceSheetReport>('/api/reports/balance-sheet', {
         params: { as_of_date: endDate }
       });
-      return response.data as BalanceSheetReport;
     },
     enabled: activeReport === 'balance-sheet'
   });
@@ -167,10 +161,9 @@ export const ReportsDashboard: React.FC = () => {
   const { data: cfReport, isLoading: cfLoading, refetch: refetchCF } = useQuery({
     queryKey: ['cashFlowProjection', projectionMonths],
     queryFn: async () => {
-      const response = await api.get('/api/reports/cash-flow-projection', {
+      return await api.get<CashFlowProjectionReport>('/api/reports/cash-flow-projection', {
         params: { months: projectionMonths }
       });
-      return response.data as CashFlowProjectionReport;
     },
     enabled: activeReport === 'cash-flow-projection'
   });
@@ -180,7 +173,7 @@ export const ReportsDashboard: React.FC = () => {
     mutationFn: async (type: ReportType) => {
       let url = '';
       let filename = '';
-      
+
       if (type === 'profit-loss') {
         url = `/api/reports/profit-loss/export?start_date=${startDate}&end_date=${endDate}`;
         filename = `profit_loss_${startDate}_${endDate}.xlsx`;
@@ -191,14 +184,14 @@ export const ReportsDashboard: React.FC = () => {
         url = `/api/reports/cash-flow-projection/export?months=${projectionMonths}`;
         filename = `cash_flow_projection.xlsx`;
       }
-      
-      const response = await api.get(url, { responseType: 'blob' });
-      
+
+      const blob = await api.get<Blob>(url, { responseType: 'blob' });
+
       // הורדת הקובץ
-      const blob = new Blob([response.data], {
+      const blobData = new Blob([blob], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
-      const downloadUrl = window.URL.createObjectURL(blob);
+      const downloadUrl = window.URL.createObjectURL(blobData);
       const link = document.createElement('a');
       link.href = downloadUrl;
       link.download = filename;
@@ -369,8 +362,8 @@ export const ReportsDashboard: React.FC = () => {
 
     const chartData = [
       { name: 'הכנסות', value: plReport.total_revenue, fill: '#22c55e' },
-      { name: 'עלות מכר', value: Math.abs(plReport.cost_of_goods_sold.reduce((s, i) => s + i.amount, 0)), fill: '#ef4444' },
-      { name: 'הוצאות תפעול', value: Math.abs(plReport.operating_expenses.reduce((s, i) => s + i.amount, 0)), fill: '#f59e0b' },
+      { name: 'עלות מכר', value: Math.abs(plReport.cost_of_goods_sold.reduce((s: number, i: ProfitLossItem) => s + i.amount, 0)), fill: '#ef4444' },
+      { name: 'הוצאות תפעול', value: Math.abs(plReport.operating_expenses.reduce((s: number, i: ProfitLossItem) => s + i.amount, 0)), fill: '#f59e0b' },
       { name: 'רווח נקי', value: plReport.net_income, fill: plReport.net_income >= 0 ? '#3b82f6' : '#dc2626' }
     ];
 
@@ -426,7 +419,7 @@ export const ReportsDashboard: React.FC = () => {
                 <YAxis tickFormatter={(v) => `₪${(v/1000).toFixed(0)}K`} />
                 <Tooltip formatter={(v: number) => formatCurrency(v)} />
                 <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                  {chartData.map((entry, index) => (
+                  {chartData.map((entry, index: number) => (
                     <Cell key={index} fill={entry.fill} />
                   ))}
                 </Bar>
@@ -453,7 +446,7 @@ export const ReportsDashboard: React.FC = () => {
               <div className="px-4 pb-4">
                 <table className="w-full">
                   <tbody>
-                    {plReport.revenue.map((item, i) => (
+                    {plReport.revenue.map((item: ProfitLossItem, i: number) => (
                       <tr key={i} className="border-t">
                         <td className="py-2 pr-4">{item.category_hebrew}</td>
                         <td className="py-2 text-left">{formatCurrency(item.amount)}</td>
@@ -484,7 +477,7 @@ export const ReportsDashboard: React.FC = () => {
               <div className="px-4 pb-4">
                 <table className="w-full">
                   <tbody>
-                    {plReport.cost_of_goods_sold.map((item, i) => (
+                    {plReport.cost_of_goods_sold.map((item: ProfitLossItem, i: number) => (
                       <tr key={i} className="border-t">
                         <td className="py-2 pr-4">{item.category_hebrew}</td>
                         <td className="py-2 text-left">{formatCurrency(item.amount)}</td>
@@ -520,7 +513,7 @@ export const ReportsDashboard: React.FC = () => {
               <div className="px-4 pb-4">
                 <table className="w-full">
                   <tbody>
-                    {plReport.operating_expenses.map((item, i) => (
+                    {plReport.operating_expenses.map((item: ProfitLossItem, i: number) => (
                       <tr key={i} className="border-t">
                         <td className="py-2 pr-4">{item.category_hebrew}</td>
                         <td className="py-2 text-left">{formatCurrency(item.amount)}</td>
@@ -604,7 +597,7 @@ export const ReportsDashboard: React.FC = () => {
             </button>
             {expandedSections.assets && (
               <div className="px-4 pb-4">
-                {bsReport.current_assets.map((item, i) => (
+                {bsReport.current_assets.map((item: BalanceSheetItem, i: number) => (
                   <div key={i} className="flex justify-between py-2 border-t">
                     <span>{item.name_hebrew}</span>
                     <span>{formatCurrency(item.amount)}</span>
@@ -620,7 +613,7 @@ export const ReportsDashboard: React.FC = () => {
               <span>נכסים קבועים</span>
               <span>{formatCurrency(bsReport.total_fixed_assets)}</span>
             </div>
-            {bsReport.fixed_assets.map((item, i) => (
+            {bsReport.fixed_assets.map((item: BalanceSheetItem, i: number) => (
               <div key={i} className="flex justify-between py-1 text-sm text-gray-600">
                 <span>{item.name_hebrew}</span>
                 <span>{formatCurrency(item.amount)}</span>
@@ -657,7 +650,7 @@ export const ReportsDashboard: React.FC = () => {
             </button>
             {expandedSections.liabilities && (
               <div className="px-4 pb-4">
-                {bsReport.current_liabilities.map((item, i) => (
+                {bsReport.current_liabilities.map((item: BalanceSheetItem, i: number) => (
                   <div key={i} className="flex justify-between py-2 border-t">
                     <span>{item.name_hebrew}</span>
                     <span>{formatCurrency(item.amount)}</span>
@@ -697,7 +690,7 @@ export const ReportsDashboard: React.FC = () => {
             </button>
             {expandedSections.equity && (
               <div className="px-4 pb-4">
-                {bsReport.equity.map((item, i) => (
+                {bsReport.equity.map((item: BalanceSheetItem, i: number) => (
                   <div key={i} className="flex justify-between py-2 border-t">
                     <span>{item.name_hebrew}</span>
                     <span>{formatCurrency(item.amount)}</span>
@@ -744,7 +737,7 @@ export const ReportsDashboard: React.FC = () => {
     }
 
     // נתונים לגרף
-    const chartData = cfReport.projections.map(p => ({
+    const chartData = cfReport.projections.map((p: CashFlowProjectionItem) => ({
       month: p.month,
       inflows: p.inflows,
       outflows: p.outflows,
@@ -822,7 +815,7 @@ export const ReportsDashboard: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {cfReport.projections.map((proj, i) => (
+                {cfReport.projections.map((proj: CashFlowProjectionItem, i: number) => (
                   <tr key={i} className={`border-t ${proj.closing_balance < 0 ? 'bg-red-50' : ''}`}>
                     <td className="p-3 font-medium">{proj.month}</td>
                     <td className="p-3">{formatCurrency(proj.opening_balance)}</td>

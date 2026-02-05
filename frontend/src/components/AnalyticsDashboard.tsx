@@ -22,7 +22,7 @@ import { TrendingUp, TrendingDown, DollarSign, Users, FileText, CreditCard } fro
 import apiService from '../services/api';
 
 export const AnalyticsDashboard: React.FC = () => {
-  const { data: balance } = useQuery({
+  const { data: _balance } = useQuery({
     queryKey: ['balance'],
     queryFn: () => apiService.getBalance(),
   });
@@ -120,7 +120,7 @@ export const AnalyticsDashboard: React.FC = () => {
                 fill="#8884d8"
                 dataKey="value"
               >
-                {documentTypeData.map((entry, index) => (
+                {documentTypeData.map((_entry, index) => (
                   <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>

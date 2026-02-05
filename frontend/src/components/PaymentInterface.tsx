@@ -3,7 +3,7 @@
  */
 import React, { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { CreditCard, Calendar, DollarSign, Check, X } from 'lucide-react';
+import { CreditCard, DollarSign } from 'lucide-react';
 import apiService from '../services/api';
 
 interface Payment {
@@ -63,9 +63,23 @@ const ChargeForm: React.FC = () => {
     holder_name: '',
   });
 
-  const chargeMutation = useMutation({
-    mutationFn: (data: any) => apiService.chargeCustomer(data),
-    onSuccess: (data) => {
+  interface ChargeData {
+    customer_id: string;
+    amount: number;
+    currency: string;
+    description: string;
+    card: {
+      card_number: string;
+      expiry_month: string;
+      expiry_year: string;
+      cvv: string;
+      holder_name: string;
+    };
+  }
+
+  const chargeMutation = useMutation<unknown, Error, ChargeData>({
+    mutationFn: (data) => apiService.chargeCustomer(data),
+    onSuccess: () => {
       alert('Payment processed successfully!');
       // Reset form
       setFormData({
@@ -79,7 +93,7 @@ const ChargeForm: React.FC = () => {
         holder_name: '',
       });
     },
-    onError: (error) => {
+    onError: () => {
       alert('Payment failed. Please try again.');
     },
   });
@@ -256,11 +270,18 @@ const ChargeForm: React.FC = () => {
 const PaymentHistory: React.FC = () => {
   const { data: payments, isLoading } = useQuery<Payment[]>({
     queryKey: ['payments'],
-    queryFn: () => apiService.listPayments(),
+    queryFn: async (): Promise<Payment[]> => {
+      const response = await apiService.listPayments();
+      return response as Payment[];
+    },
   });
 
   if (isLoading) {
     return <div className="text-center py-12">Loading...</div>;
+  }
+
+  if (!payments || payments.length === 0) {
+    return <div className="text-center py-12 text-gray-500">No payments found</div>;
   }
 
   return (
@@ -286,7 +307,7 @@ const PaymentHistory: React.FC = () => {
           </tr>
         </thead>
         <tbody className="bg-white divide-y divide-gray-200">
-          {payments?.map((payment) => (
+          {payments.map((payment: Payment) => (
             <tr key={payment.payment_id} className="hover:bg-gray-50">
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                 {new Date(payment.created_at).toLocaleDateString()}

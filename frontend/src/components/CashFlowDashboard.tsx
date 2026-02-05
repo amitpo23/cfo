@@ -3,32 +3,30 @@ import { useQuery } from '@tanstack/react-query';
 import {
   BarChart,
   Bar,
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
   PieChart,
   Pie,
   Cell,
   AreaChart,
   Area,
+  LineChart,
+  Line,
+  Legend,
 } from 'recharts';
 import {
-  TrendingUp,
-  TrendingDown,
-  DollarSign,
   ArrowUpRight,
   ArrowDownRight,
+  DollarSign,
   Calendar,
   RefreshCw,
   AlertTriangle,
   CheckCircle,
 } from 'lucide-react';
-import { api } from '../services/api';
+import api from '../services/api';
 
 const COLORS = ['#10B981', '#EF4444', '#3B82F6', '#F59E0B', '#8B5CF6', '#EC4899'];
 
@@ -73,49 +71,36 @@ const CashFlowDashboard: React.FC = () => {
   // Fetch monthly cash flow
   const { data: monthlyCashFlow, isLoading: loadingMonthly } = useQuery<MonthlyCashFlow[]>({
     queryKey: ['monthly-cashflow', timeRange],
-    queryFn: async () => {
-      const response = await api.get(`/cashflow/monthly?months=${timeRange}`);
-      return response.data;
-    },
+    queryFn: () => api.get<MonthlyCashFlow[]>(`/cashflow/monthly?months=${timeRange}`),
   });
 
   // Fetch daily cash position
   const { data: dailyCashPosition, isLoading: loadingDaily } = useQuery<DailyCashPosition[]>({
     queryKey: ['daily-cashflow'],
-    queryFn: async () => {
-      const response = await api.get('/cashflow/daily?days=30');
-      return response.data;
-    },
+    queryFn: () => api.get<DailyCashPosition[]>('/cashflow/daily?days=30'),
   });
 
   // Fetch burn rate
-  const { data: burnRate, isLoading: loadingBurn } = useQuery<BurnRate>({
+  const { data: burnRate } = useQuery<BurnRate>({
     queryKey: ['burn-rate'],
-    queryFn: async () => {
-      const response = await api.get('/cashflow/burn-rate?months=3');
-      return response.data;
-    },
+    queryFn: () => api.get<BurnRate>('/cashflow/burn-rate?months=3'),
   });
 
   // Fetch liquidity ratios
   const { data: liquidityRatios, isLoading: loadingRatios } = useQuery<LiquidityRatios>({
     queryKey: ['liquidity-ratios'],
-    queryFn: async () => {
-      const response = await api.get('/cashflow/liquidity-ratios');
-      return response.data;
-    },
+    queryFn: () => api.get<LiquidityRatios>('/cashflow/liquidity-ratios'),
   });
 
   // Fetch cash flow by category
-  const { data: categoryData, isLoading: loadingCategory } = useQuery({
+  const { data: categoryData, isLoading: loadingCategory } = useQuery<Record<string, { net: number }>>({
     queryKey: ['cashflow-category'],
-    queryFn: async () => {
+    queryFn: () => {
       const today = new Date();
       const startDate = new Date(today.getFullYear(), today.getMonth() - 6, 1);
-      const response = await api.get(
+      return api.get<Record<string, { net: number }>>(
         `/cashflow/by-category?start_date=${startDate.toISOString().split('T')[0]}&end_date=${today.toISOString().split('T')[0]}`
       );
-      return response.data;
     },
   });
 
@@ -126,10 +111,6 @@ const CashFlowDashboard: React.FC = () => {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(value);
-  };
-
-  const formatPercent = (value: number) => {
-    return `${value.toFixed(2)}%`;
   };
 
   // Calculate summary stats
@@ -338,10 +319,10 @@ const CashFlowDashboard: React.FC = () => {
                   dataKey="value"
                   label={({ name }) => name}
                 >
-                  {categoryPieData.map((entry, index) => (
+                  {categoryPieData.map((_entry, index) => (
                     <Cell
                       key={`cell-${index}`}
-                      fill={entry.isPositive ? COLORS[0] : COLORS[1]}
+                      fill={_entry.isPositive ? COLORS[0] : COLORS[1]}
                     />
                   ))}
                 </Pie>

@@ -5,17 +5,12 @@ import {
   CheckCircle,
   AlertCircle,
   TrendingUp,
-  TrendingDown,
   RefreshCw,
-  Calendar,
-  CreditCard,
   PieChart,
   Repeat
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  AreaChart,
-  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -25,8 +20,7 @@ import {
   Pie,
   Cell,
   BarChart,
-  Bar,
-  Legend
+  Bar
 } from 'recharts';
 import api from '../services/api';
 
@@ -116,6 +110,16 @@ interface RecurringTransaction {
   category: string;
 }
 
+interface SpendingPatternsResponse {
+  patterns?: SpendingPattern[];
+  total_spending?: number;
+  transaction_count?: number;
+}
+
+interface RecurringResponse {
+  recurring_transactions?: RecurringTransaction[];
+}
+
 export const BankStatementDashboard: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [bankFormat, setBankFormat] = useState('auto');
@@ -127,36 +131,33 @@ export const BankStatementDashboard: React.FC = () => {
   const queryClient = useQueryClient();
 
   // שליפת דפוסי הוצאות
-  const { data: spendingPatterns, isLoading: patternsLoading } = useQuery({
+  const { data: spendingPatterns, isLoading: patternsLoading } = useQuery<SpendingPatternsResponse>({
     queryKey: ['spendingPatterns'],
     queryFn: async () => {
-      const response = await api.get('/api/sync/bank/spending-patterns');
-      return response.data;
+      return api.get<SpendingPatternsResponse>('/api/sync/bank/spending-patterns');
     }
   });
 
   // שליפת עסקאות חוזרות
-  const { data: recurringData, isLoading: recurringLoading } = useQuery({
+  const { data: recurringData, isLoading: recurringLoading } = useQuery<RecurringResponse>({
     queryKey: ['recurringTransactions'],
     queryFn: async () => {
-      const response = await api.get('/api/sync/bank/recurring');
-      return response.data;
+      return api.get<RecurringResponse>('/api/sync/bank/recurring');
     }
   });
 
   // מוטציה לייבוא דף בנק
-  const importMutation = useMutation({
+  const importMutation = useMutation<ImportResult, Error, File>({
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('bank_format', bankFormat);
       formData.append('auto_categorize', String(autoCategorize));
       formData.append('create_transactions', String(createTransactions));
-      
-      const response = await api.post('/api/sync/bank/import', formData, {
+
+      return api.post<ImportResult>('/api/sync/bank/import', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      return response.data;
     },
     onSuccess: (data) => {
       setImportResult(data);
@@ -166,16 +167,15 @@ export const BankStatementDashboard: React.FC = () => {
   });
 
   // מוטציה לניתוח בלבד (ללא שמירה)
-  const parseMutation = useMutation({
+  const parseMutation = useMutation<ImportResult, Error, File>({
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('bank_format', bankFormat);
-      
-      const response = await api.post('/api/sync/bank/parse', formData, {
+
+      return api.post<ImportResult>('/api/sync/bank/parse', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      return response.data;
     },
     onSuccess: (data) => {
       setImportResult(data);
@@ -451,8 +451,8 @@ export const BankStatementDashboard: React.FC = () => {
                           outerRadius={80}
                           label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
                         >
-                          {categoryPieData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          {categoryPieData.map((_entry, index) => (
+                            <Cell key={`cell-${index}`} fill={_entry.color} />
                           ))}
                         </Pie>
                         <Tooltip formatter={(value: number) => formatCurrency(value)} />
@@ -533,7 +533,7 @@ export const BankStatementDashboard: React.FC = () => {
               <div className="flex items-center justify-center py-12">
                 <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
               </div>
-            ) : spendingPatterns?.patterns?.length > 0 ? (
+            ) : (spendingPatterns?.patterns ?? []).length > 0 ? (
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={patternBarData} layout="vertical">
@@ -557,26 +557,26 @@ export const BankStatementDashboard: React.FC = () => {
           {/* Summary Stats */}
           <div className="bg-white rounded-xl shadow-sm p-6">
             <h2 className="text-xl font-semibold mb-4">סיכום הוצאות</h2>
-            {spendingPatterns?.patterns?.length > 0 ? (
+            {(spendingPatterns?.patterns ?? []).length > 0 ? (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-blue-50 p-4 rounded-lg">
                     <p className="text-sm text-blue-600">סה"כ הוצאות</p>
                     <p className="text-2xl font-bold text-blue-700">
-                      {formatCurrency(spendingPatterns.total_spending)}
+                      {formatCurrency(spendingPatterns?.total_spending ?? 0)}
                     </p>
                   </div>
                   <div className="bg-purple-50 p-4 rounded-lg">
                     <p className="text-sm text-purple-600">מספר עסקאות</p>
                     <p className="text-2xl font-bold text-purple-700">
-                      {spendingPatterns.transaction_count}
+                      {spendingPatterns?.transaction_count}
                     </p>
                   </div>
                 </div>
 
                 {/* Category List */}
                 <div className="space-y-2 mt-4">
-                  {spendingPatterns.patterns.map((pattern: SpendingPattern, index: number) => (
+                  {(spendingPatterns?.patterns || []).map((pattern: SpendingPattern, index: number) => (
                     <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                       <div className="flex items-center gap-3">
                         <div 
@@ -616,9 +616,9 @@ export const BankStatementDashboard: React.FC = () => {
             <div className="flex items-center justify-center py-12">
               <RefreshCw className="w-8 h-8 animate-spin text-blue-600" />
             </div>
-          ) : recurringData?.recurring_transactions?.length > 0 ? (
+          ) : (recurringData?.recurring_transactions ?? []).length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {recurringData.recurring_transactions.map((item: RecurringTransaction, index: number) => (
+              {(recurringData?.recurring_transactions || []).map((item: RecurringTransaction, index: number) => (
                 <div key={index} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex-1">
