@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
+from ..dependencies import get_current_org_id
 from ...models import (
     Alert,
     AlertStatus,
@@ -31,7 +32,6 @@ from ...services.dashboard_service import DashboardService
 
 router = APIRouter()
 
-DEFAULT_ORG_ID = 1
 
 
 class InsightStatusUpdate(BaseModel):
@@ -43,7 +43,7 @@ class InsightStatusUpdate(BaseModel):
 @router.post("/tasks")
 async def create_task(
     payload: TaskCreate,
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     task = Task(
@@ -69,7 +69,7 @@ async def create_task(
 @router.get("/tasks")
 async def list_tasks(
     status: Optional[str] = None,
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     query = db.query(Task).filter(Task.organization_id == org_id)
@@ -128,7 +128,7 @@ async def update_task(
 @router.get("/alerts")
 async def list_alerts(
     status: Optional[str] = None,
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     query = db.query(Alert).filter(Alert.organization_id == org_id)
@@ -177,7 +177,7 @@ async def update_alert(
 
 @router.post("/alerts/evaluate")
 async def evaluate_alerts(
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """Manually trigger alert evaluation."""
@@ -191,7 +191,7 @@ async def evaluate_alerts(
 @router.post("/brain/analyze")
 async def run_cfo_brain_analysis(
     create_tasks: bool = Query(True),
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """Run the internal CFO brain and persist actionable insights."""
@@ -204,7 +204,7 @@ async def list_cfo_insights(
     status: str = Query("active"),
     severity: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """List persisted CFO insights."""
@@ -216,7 +216,7 @@ async def list_cfo_insights(
 async def update_cfo_insight_status(
     insight_id: int,
     payload: InsightStatusUpdate,
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """Acknowledge or resolve a CFO insight."""
@@ -231,7 +231,7 @@ async def update_cfo_insight_status(
 async def list_cfo_memory(
     memory_type: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """List CFO brain memory facts."""
@@ -244,7 +244,7 @@ async def list_cfo_memory(
 @router.post("/notes")
 async def create_note(
     payload: NoteCreate,
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     note = Note(
@@ -269,7 +269,7 @@ async def create_note(
 async def list_notes(
     entity_type: str = Query(...),
     entity_id: int = Query(...),
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     notes = db.query(Note).filter(
@@ -293,7 +293,7 @@ async def list_notes(
 @router.post("/budgets")
 async def create_budget(
     payload: BudgetCreate,
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     budget = Budget(
@@ -320,7 +320,7 @@ async def create_budget(
 async def list_budgets(
     year: Optional[int] = None,
     month: Optional[int] = None,
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     query = db.query(Budget).filter(Budget.organization_id == org_id)
@@ -348,7 +348,7 @@ async def list_budgets(
 async def export_report(
     report_type: str,
     format: str = Query("csv"),
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """

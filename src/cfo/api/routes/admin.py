@@ -11,7 +11,7 @@ from ...models import (
     User, Organization, AuditLog,
     UserCreate, UserUpdate, UserResponse, UserLogin, Token,
     OrganizationCreate, OrganizationUpdate, OrganizationResponse,
-    UserRole
+    UserRole, IntegrationType
 )
 from ...auth import verify_password, get_password_hash, create_access_token
 from ..dependencies import (
@@ -65,13 +65,33 @@ async def register(
     # registered user bootstraps the system as admin, everyone after that
     # starts as a regular user and is promoted by an admin.
     is_first_user = db.query(User).first() is None
+
+    # Every self-registered user gets an organization of their own (and is
+    # its admin), so integrations/credentials are isolated per tenant. The
+    # first user attaches to the default org, which may use env credentials.
+    organization_id = user_data.organization_id
+    if organization_id is None:
+        if is_first_user:
+            organization_id = 1
+        else:
+            org = Organization(
+                name=f"{user_data.full_name}",
+                business_type="financial_management",
+                integration_type=IntegrationType.MANUAL,
+                settings={"self_registered": True},
+                is_active=True,
+            )
+            db.add(org)
+            db.flush()
+            organization_id = org.id
+
     new_user = User(
         email=user_data.email,
         password_hash=get_password_hash(user_data.password),
         full_name=user_data.full_name,
         phone=user_data.phone,
-        role=UserRole.ADMIN if is_first_user else UserRole.USER,
-        organization_id=user_data.organization_id or 1,
+        role=UserRole.ADMIN if is_first_user or user_data.organization_id is None else UserRole.USER,
+        organization_id=organization_id,
     )
     
     db.add(new_user)

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
+from ..dependencies import get_current_org_id
 from ...models import SyncRun, SyncStatus, IntegrationConnection
 from ...config import settings
 from ...services.sync_engine import SyncEngine, get_connector_for_org
@@ -17,7 +18,6 @@ from ...services.alert_engine import AlertEngine
 
 router = APIRouter()
 
-DEFAULT_ORG_ID = 1
 
 
 class OpenFinanceConfigRequest(BaseModel):
@@ -28,9 +28,36 @@ class OpenFinanceConfigRequest(BaseModel):
     oauth_url: Optional[str] = None
 
 
+class SumitConfigRequest(BaseModel):
+    api_key: str = Field(..., min_length=1)
+    company_id: Optional[str] = None
+
+
+def _upsert_connection(db: Session, org_id: int, source: str, credentials: dict, entities: list):
+    conn = db.query(IntegrationConnection).filter(
+        IntegrationConnection.organization_id == org_id,
+        IntegrationConnection.source == source,
+    ).first()
+    if conn:
+        conn.status = "active"
+        conn.credentials_encrypted = json.dumps(credentials)
+    else:
+        conn = IntegrationConnection(
+            organization_id=org_id,
+            source=source,
+            status="active",
+            credentials_encrypted=json.dumps(credentials),
+            config={"entities": entities},
+        )
+        db.add(conn)
+    db.commit()
+    db.refresh(conn)
+    return conn
+
+
 @router.get("/integration/status")
 async def integration_status(
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """Return safe configuration status without exposing secret values."""
@@ -53,15 +80,18 @@ async def integration_status(
         "ai": ["OPENAI_API_KEY"],
     }
 
+    # Env credentials only apply to the default organization; every other
+    # tenant must configure its own credentials.
+    env_allowed = org_id == 1
     configured = {
         "production_database": not settings.database_url.startswith("sqlite:"),
         "security": settings.jwt_secret_key != "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING",
-        "sumit": bool(settings.sumit_api_key),
-        "open_finance": all([
+        "sumit": connections.get("sumit") == "active" or (env_allowed and bool(settings.sumit_api_key)),
+        "open_finance": connections.get("open_finance") == "active" or (env_allowed and all([
             settings.open_finance_client_id,
             settings.open_finance_client_secret,
             settings.open_finance_user_id,
-        ]),
+        ])),
         "ai": bool(settings.openai_api_key),
     }
 
@@ -89,7 +119,7 @@ async def integration_status(
 @router.post("/integration/open-finance/configure")
 async def configure_open_finance(
     request: OpenFinanceConfigRequest,
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """
@@ -98,11 +128,6 @@ async def configure_open_finance(
     The secret is intentionally never returned in the response. In production,
     replace this JSON storage with encryption/KMS before exposing broadly.
     """
-    conn = db.query(IntegrationConnection).filter(
-        IntegrationConnection.organization_id == org_id,
-        IntegrationConnection.source == "open_finance",
-    ).first()
-
     credentials = {
         "client_id": request.client_id,
         "client_secret": request.client_secret,
@@ -113,21 +138,32 @@ async def configure_open_finance(
     if request.oauth_url:
         credentials["oauth_url"] = request.oauth_url
 
-    if conn:
-        conn.status = "active"
-        conn.credentials_encrypted = json.dumps(credentials)
-    else:
-        conn = IntegrationConnection(
-            organization_id=org_id,
-            source="open_finance",
-            status="active",
-            credentials_encrypted=json.dumps(credentials),
-            config={"entities": ["accounts", "bank_transactions"]},
-        )
-        db.add(conn)
+    conn = _upsert_connection(db, org_id, "open_finance", credentials, ["accounts", "bank_transactions"])
 
-    db.commit()
-    db.refresh(conn)
+    return {
+        "id": conn.id,
+        "organization_id": org_id,
+        "source": conn.source,
+        "status": conn.status,
+        "configured": True,
+    }
+
+
+@router.post("/integration/sumit/configure")
+async def configure_sumit(
+    request: SumitConfigRequest,
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """Store per-organization SUMIT credentials (never returned in responses)."""
+    credentials = {"api_key": request.api_key}
+    if request.company_id:
+        credentials["company_id"] = request.company_id
+
+    conn = _upsert_connection(
+        db, org_id, "sumit", credentials,
+        ["customers", "invoices", "bills", "payments", "bank_transactions"],
+    )
 
     return {
         "id": conn.id,
@@ -140,7 +176,7 @@ async def configure_open_finance(
 
 @router.post("/integration/test")
 async def test_connection(
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     source: Optional[str] = Query(None, description="Optional integration source, e.g. open_finance or sumit"),
     db: Session = Depends(get_db_session),
 ):
@@ -163,7 +199,7 @@ async def test_connection(
 @router.post("/sync/run")
 async def trigger_sync(
     entity_types: Optional[str] = Query(None, description="Comma-separated: invoices,bills,payments"),
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     source: Optional[str] = Query(None, description="Optional integration source, e.g. open_finance or sumit"),
     db: Session = Depends(get_db_session),
 ):
@@ -211,7 +247,7 @@ async def trigger_sync(
 @router.get("/sync/runs")
 async def list_sync_runs(
     limit: int = Query(20, ge=1, le=100),
-    org_id: int = Query(DEFAULT_ORG_ID),
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """List recent sync runs."""

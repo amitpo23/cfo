@@ -46,6 +46,62 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
     mutationFn: () => apiService.post('/integration/test'),
   });
 
+  const { data: integrationStatus } = useQuery<{
+    configured: Record<string, boolean>;
+    connections: Record<string, string>;
+  }>({
+    queryKey: ['integration-status'],
+    queryFn: () => apiService.get('/integration/status'),
+  });
+
+  const [sumitKey, setSumitKey] = React.useState('');
+  const [sumitCompany, setSumitCompany] = React.useState('');
+  const [ofClientId, setOfClientId] = React.useState('');
+  const [ofClientSecret, setOfClientSecret] = React.useState('');
+  const [ofUserId, setOfUserId] = React.useState('');
+
+  const sumitConfigMutation = useMutation({
+    mutationFn: () =>
+      apiService.post('/integration/sumit/configure', {
+        api_key: sumitKey,
+        company_id: sumitCompany || undefined,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['integration-status'] });
+      setSumitKey('');
+      setSumitCompany('');
+    },
+  });
+
+  const ofConfigMutation = useMutation({
+    mutationFn: () =>
+      apiService.post('/integration/open-finance/configure', {
+        client_id: ofClientId,
+        client_secret: ofClientSecret,
+        user_id: ofUserId,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['integration-status'] });
+      setOfClientId('');
+      setOfClientSecret('');
+      setOfUserId('');
+    },
+  });
+
+  const inputClass = `w-full px-3 py-2 rounded-xl border text-sm ${
+    darkMode
+      ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'
+      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-400'
+  }`;
+
+  const configuredBadge = (ok?: boolean) => (
+    <span className={`text-xs px-2 py-0.5 rounded-full ${
+      ok ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+    }`}>
+      {ok ? 'Configured' : 'Not configured'}
+    </span>
+  );
+
   const cardClass = `p-6 rounded-2xl ${
     darkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-200'
   }`;
@@ -121,6 +177,90 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
               <span className="text-sm">Syncing...</span>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Integration Credentials */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className={cardClass}>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">SUMIT Credentials</h2>
+            {configuredBadge(integrationStatus?.configured?.sumit)}
+          </div>
+          <div className="space-y-3">
+            <input
+              type="password"
+              value={sumitKey}
+              onChange={(e) => setSumitKey(e.target.value)}
+              placeholder="SUMIT API Key"
+              className={inputClass}
+            />
+            <input
+              type="text"
+              value={sumitCompany}
+              onChange={(e) => setSumitCompany(e.target.value)}
+              placeholder="Company ID"
+              className={inputClass}
+            />
+            <button
+              type="button"
+              onClick={() => sumitConfigMutation.mutate()}
+              disabled={!sumitKey || sumitConfigMutation.isPending}
+              className="w-full px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium disabled:opacity-50"
+            >
+              {sumitConfigMutation.isPending ? 'Saving...' : 'Save SUMIT Credentials'}
+            </button>
+            {sumitConfigMutation.isSuccess && (
+              <p className="text-sm text-green-600">Credentials saved for your organization.</p>
+            )}
+            {sumitConfigMutation.isError && (
+              <p className="text-sm text-red-600">Saving failed. Check the values and try again.</p>
+            )}
+          </div>
+        </div>
+
+        <div className={cardClass}>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Open Finance Credentials</h2>
+            {configuredBadge(integrationStatus?.configured?.open_finance)}
+          </div>
+          <div className="space-y-3">
+            <input
+              type="text"
+              value={ofClientId}
+              onChange={(e) => setOfClientId(e.target.value)}
+              placeholder="Client ID"
+              className={inputClass}
+            />
+            <input
+              type="password"
+              value={ofClientSecret}
+              onChange={(e) => setOfClientSecret(e.target.value)}
+              placeholder="Client Secret"
+              className={inputClass}
+            />
+            <input
+              type="text"
+              value={ofUserId}
+              onChange={(e) => setOfUserId(e.target.value)}
+              placeholder="User ID"
+              className={inputClass}
+            />
+            <button
+              type="button"
+              onClick={() => ofConfigMutation.mutate()}
+              disabled={!ofClientId || !ofClientSecret || !ofUserId || ofConfigMutation.isPending}
+              className="w-full px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium disabled:opacity-50"
+            >
+              {ofConfigMutation.isPending ? 'Saving...' : 'Save Open Finance Credentials'}
+            </button>
+            {ofConfigMutation.isSuccess && (
+              <p className="text-sm text-green-600">Credentials saved for your organization.</p>
+            )}
+            {ofConfigMutation.isError && (
+              <p className="text-sm text-red-600">Saving failed. Check the values and try again.</p>
+            )}
+          </div>
         </div>
       </div>
 

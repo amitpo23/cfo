@@ -606,11 +606,15 @@ def get_connector_for_org(
         source = preferred_source or (org.integration_type.value if org.integration_type else "manual")
         creds = org.api_credentials or {}
 
+    # Env credentials belong to the default organization only — other
+    # tenants must configure their own via /integration/{source}/configure.
+    env_allowed = organization_id == 1
+
     if source == "sumit":
         from .sumit_connector import SumitConnector
         from ..config import settings
-        api_key = creds.get("api_key") or settings.sumit_api_key
-        company_id = creds.get("company_id") or settings.sumit_company_id
+        api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
+        company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
         if not api_key:
             raise ValueError("SUMIT API key not configured")
         connector = SumitConnector(api_key=api_key, company_id=company_id)
@@ -620,9 +624,9 @@ def get_connector_for_org(
         from .open_finance_connector import OpenFinanceConnector
         from ..config import settings
 
-        client_id = creds.get("client_id") or settings.open_finance_client_id
-        client_secret = creds.get("client_secret") or settings.open_finance_client_secret
-        user_id = creds.get("user_id") or settings.open_finance_user_id
+        client_id = creds.get("client_id") or (settings.open_finance_client_id if env_allowed else None)
+        client_secret = creds.get("client_secret") or (settings.open_finance_client_secret if env_allowed else None)
+        user_id = creds.get("user_id") or (settings.open_finance_user_id if env_allowed else None)
         api_base_url = creds.get("api_base_url") or settings.open_finance_api_base_url
         oauth_url = creds.get("oauth_url") or settings.open_finance_oauth_url
 

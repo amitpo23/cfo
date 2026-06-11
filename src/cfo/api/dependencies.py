@@ -75,6 +75,17 @@ async def get_current_user(
     return user
 
 
+async def get_current_org_id(
+    current_user: User = Depends(get_current_user)
+) -> int:
+    """Organization scope of the authenticated user.
+
+    Routes must derive the tenant from the token, never from a
+    caller-controlled query parameter.
+    """
+    return current_user.organization_id or 1
+
+
 async def get_current_active_user(
     current_user: User = Depends(get_current_user)
 ) -> User:

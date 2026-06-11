@@ -1,0 +1,288 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e31]:
+    - complementary [ref=e32]:
+      - generic [ref=e34]:
+        - generic [ref=e36]: ₪
+        - generic [ref=e37]:
+          - heading "CFO System" [level=1] [ref=e38]
+          - paragraph [ref=e39]: Financial Management
+      - navigation [ref=e40]:
+        - generic [ref=e41]:
+          - generic [ref=e42]: CFO
+          - link "Command Center" [ref=e43] [cursor=pointer]:
+            - /url: /
+            - img [ref=e45]
+            - generic [ref=e51]: Command Center
+          - link "Cash Flow Projections & scenarios" [ref=e53] [cursor=pointer]:
+            - /url: /cashflow
+            - img [ref=e55]
+            - generic [ref=e59]:
+              - generic [ref=e60]: Cash Flow
+              - generic [ref=e61]: Projections & scenarios
+          - link "AR / Collections Aging & follow-up" [ref=e62] [cursor=pointer]:
+            - /url: /ar
+            - img [ref=e64]
+            - generic [ref=e67]:
+              - generic [ref=e68]: AR / Collections
+              - generic [ref=e69]: Aging & follow-up
+          - link "AP / Payables Bills & payments" [ref=e70] [cursor=pointer]:
+            - /url: /ap
+            - img [ref=e72]
+            - generic [ref=e74]:
+              - generic [ref=e75]: AP / Payables
+              - generic [ref=e76]: Bills & payments
+          - link "Budget Budget vs actual" [ref=e77] [cursor=pointer]:
+            - /url: /budget
+            - img [ref=e79]
+            - generic [ref=e83]:
+              - generic [ref=e84]: Budget
+              - generic [ref=e85]: Budget vs actual
+        - generic [ref=e86]:
+          - generic [ref=e87]: Operations
+          - link "Invoices Create & manage invoices" [ref=e88] [cursor=pointer]:
+            - /url: /invoices
+            - img [ref=e90]
+            - generic [ref=e94]:
+              - generic [ref=e95]: Invoices
+              - generic [ref=e96]: Create & manage invoices
+          - link "Payment Requests Requests & standing orders" [ref=e97] [cursor=pointer]:
+            - /url: /payment-requests
+            - img [ref=e99]
+            - generic [ref=e102]:
+              - generic [ref=e103]: Payment Requests
+              - generic [ref=e104]: Requests & standing orders
+          - link "Agreements Contracts & cash flow" [ref=e105] [cursor=pointer]:
+            - /url: /agreements
+            - img [ref=e107]
+            - generic [ref=e110]:
+              - generic [ref=e111]: Agreements
+              - generic [ref=e112]: Contracts & cash flow
+          - link "Payments Payment processing" [ref=e113] [cursor=pointer]:
+            - /url: /payments
+            - img [ref=e115]
+            - generic [ref=e117]:
+              - generic [ref=e118]: Payments
+              - generic [ref=e119]: Payment processing
+        - generic [ref=e120]:
+          - generic [ref=e121]: Monitoring
+          - link "Alerts & Tasks Action items" [ref=e122] [cursor=pointer]:
+            - /url: /alerts
+            - img [ref=e124]
+            - generic [ref=e127]:
+              - generic [ref=e128]: Alerts & Tasks
+              - generic [ref=e129]: Action items
+          - link "KPIs Performance metrics" [ref=e130] [cursor=pointer]:
+            - /url: /kpis
+            - img [ref=e132]
+            - generic [ref=e135]:
+              - generic [ref=e136]: KPIs
+              - generic [ref=e137]: Performance metrics
+          - link "Reports Generate & export" [ref=e138] [cursor=pointer]:
+            - /url: /reports
+            - img [ref=e140]
+            - generic [ref=e143]:
+              - generic [ref=e144]: Reports
+              - generic [ref=e145]: Generate & export
+        - generic [ref=e146]:
+          - generic [ref=e147]: Analysis
+          - link "Forecasting ML predictions" [ref=e148] [cursor=pointer]:
+            - /url: /forecasting
+            - img [ref=e150]
+            - generic [ref=e153]:
+              - generic [ref=e154]: Forecasting
+              - generic [ref=e155]: ML predictions
+          - link "AI Analytics AI-powered insights" [ref=e156] [cursor=pointer]:
+            - /url: /ai-analytics
+            - img [ref=e158]
+            - generic [ref=e161]:
+              - generic [ref=e162]: AI Analytics
+              - generic [ref=e163]: AI-powered insights
+          - link "Analytics Data analytics" [ref=e164] [cursor=pointer]:
+            - /url: /analytics
+            - img [ref=e166]
+            - generic [ref=e168]:
+              - generic [ref=e169]: Analytics
+              - generic [ref=e170]: Data analytics
+        - generic [ref=e171]:
+          - generic [ref=e172]: System
+          - link "Data Sync Sync runs & logs" [ref=e173] [cursor=pointer]:
+            - /url: /sync
+            - img [ref=e175]
+            - generic [ref=e179]:
+              - generic [ref=e180]: Data Sync
+              - generic [ref=e181]: Sync runs & logs
+          - link "Customers Customer management" [ref=e182] [cursor=pointer]:
+            - /url: /customers
+            - img [ref=e184]
+            - generic [ref=e189]:
+              - generic [ref=e190]: Customers
+              - generic [ref=e191]: Customer management
+          - link "Bank Import Bank statements" [ref=e192] [cursor=pointer]:
+            - /url: /bank
+            - img [ref=e194]
+            - generic [ref=e198]:
+              - generic [ref=e199]: Bank Import
+              - generic [ref=e200]: Bank statements
+          - link "Settings System settings" [ref=e201] [cursor=pointer]:
+            - /url: /settings
+            - img [ref=e203]
+            - generic [ref=e206]:
+              - generic [ref=e207]: Settings
+              - generic [ref=e208]: System settings
+      - button "Collapse" [ref=e210] [cursor=pointer]:
+        - img [ref=e211]
+        - generic [ref=e213]: Collapse
+    - generic [ref=e214]:
+      - banner [ref=e215]:
+        - generic [ref=e217]:
+          - img [ref=e218]
+          - textbox "Search customers, invoices, reports..." [ref=e221]
+        - generic [ref=e222]:
+          - button [ref=e223] [cursor=pointer]:
+            - img [ref=e224]
+          - button [ref=e226] [cursor=pointer]:
+            - img [ref=e227]
+          - button [ref=e231] [cursor=pointer]:
+            - img [ref=e232]
+          - button "Admin" [ref=e237] [cursor=pointer]:
+            - img [ref=e239]
+            - generic [ref=e242]: Admin
+            - img [ref=e243]
+      - main [ref=e245]:
+        - generic [ref=e246]:
+          - generic [ref=e247]:
+            - generic [ref=e248]:
+              - heading "CFO Command Center" [level=1] [ref=e249]
+              - paragraph [ref=e250]: No sync data yet
+            - button "Sync Now" [ref=e251] [cursor=pointer]:
+              - img [ref=e252]
+              - text: Sync Now
+          - generic [ref=e257]:
+            - generic [ref=e258]:
+              - img [ref=e261]
+              - paragraph [ref=e265]: ‏0 ‏₪
+              - paragraph [ref=e266]: Cash Balance
+              - paragraph [ref=e267]: Positive cash flow
+            - generic [ref=e268]:
+              - img [ref=e271]
+              - paragraph [ref=e274]: ‏0 ‏₪
+              - paragraph [ref=e275]: Month Revenue
+              - paragraph [ref=e276]: "Net profit: ‏0 ‏₪"
+            - generic [ref=e277]:
+              - img [ref=e280]
+              - paragraph [ref=e284]: ‏0 ‏₪
+              - paragraph [ref=e285]: AR Outstanding
+              - paragraph [ref=e286]: Nothing overdue
+            - generic [ref=e287]:
+              - img [ref=e290]
+              - paragraph [ref=e293]: ‏0 ‏₪
+              - paragraph [ref=e294]: AP Outstanding
+              - paragraph [ref=e295]: ‏0 ‏₪ due in 7 days
+          - generic [ref=e296]:
+            - generic [ref=e297]:
+              - generic [ref=e298]:
+                - heading "P&L Trend" [level=2] [ref=e299]
+                - link "Details" [ref=e300] [cursor=pointer]:
+                  - /url: /pnl
+                  - text: Details
+                  - img [ref=e301]
+              - generic [ref=e304]:
+                - img [ref=e305]:
+                  - generic [ref=e310]:
+                    - generic [ref=e312]: 2026-02
+                    - generic [ref=e314]: 2026-04
+                    - generic [ref=e316]: 2026-06
+                  - generic [ref=e318]:
+                    - generic [ref=e320]: 0k
+                    - generic [ref=e322]: 0k
+                    - generic [ref=e324]: 0k
+                    - generic [ref=e326]: 0k
+                    - generic [ref=e328]: 0k
+                - generic:
+                  - generic:
+                    - paragraph: 2026-05
+                    - list:
+                      - listitem: "Revenue : ‏0 ‏₪"
+                      - listitem: "Net Profit : ‏0 ‏₪"
+            - generic [ref=e329]:
+              - generic [ref=e330]:
+                - heading "Cash Flow Projection" [level=2] [ref=e331]
+                - link "Details" [ref=e332] [cursor=pointer]:
+                  - /url: /cashflow
+                  - text: Details
+                  - img [ref=e333]
+              - img [ref=e337]:
+                - generic [ref=e342]:
+                  - generic [ref=e344]: 6/11
+                  - generic [ref=e346]: 6/18
+                  - generic [ref=e348]: 6/25
+                  - generic [ref=e350]: 7/2
+                  - generic [ref=e352]: 7/9
+                  - generic [ref=e354]: 7/16
+                  - generic [ref=e356]: 7/30
+                - generic [ref=e358]:
+                  - generic [ref=e360]: 0k
+                  - generic [ref=e362]: 0k
+                  - generic [ref=e364]: 0k
+                  - generic [ref=e366]: 0k
+                  - generic [ref=e368]: 0k
+          - generic [ref=e369]:
+            - generic [ref=e370]:
+              - generic [ref=e371]:
+                - heading "Alerts" [level=2] [ref=e372]:
+                  - img [ref=e373]
+                  - text: Alerts
+                - link "View all" [ref=e375] [cursor=pointer]:
+                  - /url: /alerts
+              - generic [ref=e376]:
+                - img [ref=e377]
+                - paragraph [ref=e379]: No active alerts
+            - generic [ref=e380]:
+              - heading "Cash by Account" [level=2] [ref=e381]
+              - generic [ref=e382]:
+                - generic [ref=e383]:
+                  - generic [ref=e386]: Computed Balance
+                  - generic [ref=e387]: ‏0 ‏₪
+                - generic [ref=e388]:
+                  - generic [ref=e389]: Total
+                  - generic [ref=e390]: ‏0 ‏₪
+            - generic [ref=e391]:
+              - heading "Quick Actions" [level=2] [ref=e392]
+              - generic [ref=e393]:
+                - link "AR Aging Report" [ref=e394] [cursor=pointer]:
+                  - /url: /ar
+                  - generic [ref=e395]:
+                    - img [ref=e397]
+                    - generic [ref=e401]: AR Aging Report
+                  - img [ref=e402]
+                - link "AP Due Bills" [ref=e404] [cursor=pointer]:
+                  - /url: /ap
+                  - generic [ref=e405]:
+                    - img [ref=e407]
+                    - generic [ref=e410]: AP Due Bills
+                  - img [ref=e411]
+                - link "Cash Flow Forecast" [ref=e413] [cursor=pointer]:
+                  - /url: /cashflow
+                  - generic [ref=e414]:
+                    - img [ref=e416]
+                    - generic [ref=e418]: Cash Flow Forecast
+                  - img [ref=e419]
+                - link "Budget vs Actual" [ref=e421] [cursor=pointer]:
+                  - /url: /budget
+                  - generic [ref=e422]:
+                    - img [ref=e424]
+                    - generic [ref=e426]: Budget vs Actual
+                  - img [ref=e427]
+                - link "Task Board" [ref=e429] [cursor=pointer]:
+                  - /url: /tasks
+                  - generic [ref=e430]:
+                    - img [ref=e432]
+                    - generic [ref=e435]: Task Board
+                  - img [ref=e436]
+                - link "Sync Runs" [ref=e438] [cursor=pointer]:
+                  - /url: /sync
+                  - generic [ref=e439]:
+                    - img [ref=e441]
+                    - generic [ref=e446]: Sync Runs
+                  - img [ref=e447]
+  - generic [ref=e449]: 6/11

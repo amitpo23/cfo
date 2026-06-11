@@ -1,0 +1,185 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e31]:
+    - complementary [ref=e32]:
+      - generic [ref=e34]:
+        - generic [ref=e36]: ₪
+        - generic [ref=e37]:
+          - heading "CFO System" [level=1] [ref=e38]
+          - paragraph [ref=e39]: Financial Management
+      - navigation [ref=e40]:
+        - generic [ref=e41]:
+          - generic [ref=e42]: CFO
+          - link "Command Center CFO overview" [ref=e450] [cursor=pointer]:
+            - /url: /
+            - img [ref=e45]
+            - generic [ref=e50]:
+              - generic [ref=e51]: Command Center
+              - generic [ref=e451]: CFO overview
+          - link "Cash Flow Projections & scenarios" [ref=e53] [cursor=pointer]:
+            - /url: /cashflow
+            - img [ref=e55]
+            - generic [ref=e59]:
+              - generic [ref=e60]: Cash Flow
+              - generic [ref=e61]: Projections & scenarios
+          - link "AR / Collections Aging & follow-up" [ref=e62] [cursor=pointer]:
+            - /url: /ar
+            - img [ref=e64]
+            - generic [ref=e67]:
+              - generic [ref=e68]: AR / Collections
+              - generic [ref=e69]: Aging & follow-up
+          - link "AP / Payables Bills & payments" [ref=e70] [cursor=pointer]:
+            - /url: /ap
+            - img [ref=e72]
+            - generic [ref=e74]:
+              - generic [ref=e75]: AP / Payables
+              - generic [ref=e76]: Bills & payments
+          - link "Budget Budget vs actual" [ref=e77] [cursor=pointer]:
+            - /url: /budget
+            - img [ref=e79]
+            - generic [ref=e83]:
+              - generic [ref=e84]: Budget
+              - generic [ref=e85]: Budget vs actual
+        - generic [ref=e86]:
+          - generic [ref=e87]: Operations
+          - link "Invoices Create & manage invoices" [ref=e88] [cursor=pointer]:
+            - /url: /invoices
+            - img [ref=e90]
+            - generic [ref=e94]:
+              - generic [ref=e95]: Invoices
+              - generic [ref=e96]: Create & manage invoices
+          - link "Payment Requests Requests & standing orders" [ref=e97] [cursor=pointer]:
+            - /url: /payment-requests
+            - img [ref=e99]
+            - generic [ref=e102]:
+              - generic [ref=e103]: Payment Requests
+              - generic [ref=e104]: Requests & standing orders
+          - link "Agreements Contracts & cash flow" [ref=e105] [cursor=pointer]:
+            - /url: /agreements
+            - img [ref=e107]
+            - generic [ref=e110]:
+              - generic [ref=e111]: Agreements
+              - generic [ref=e112]: Contracts & cash flow
+          - link "Payments Payment processing" [ref=e113] [cursor=pointer]:
+            - /url: /payments
+            - img [ref=e115]
+            - generic [ref=e117]:
+              - generic [ref=e118]: Payments
+              - generic [ref=e119]: Payment processing
+        - generic [ref=e120]:
+          - generic [ref=e121]: Monitoring
+          - link "Alerts & Tasks Action items" [ref=e122] [cursor=pointer]:
+            - /url: /alerts
+            - img [ref=e124]
+            - generic [ref=e127]:
+              - generic [ref=e128]: Alerts & Tasks
+              - generic [ref=e129]: Action items
+          - link "KPIs Performance metrics" [ref=e130] [cursor=pointer]:
+            - /url: /kpis
+            - img [ref=e132]
+            - generic [ref=e135]:
+              - generic [ref=e136]: KPIs
+              - generic [ref=e137]: Performance metrics
+          - link "Reports Generate & export" [ref=e138] [cursor=pointer]:
+            - /url: /reports
+            - img [ref=e140]
+            - generic [ref=e143]:
+              - generic [ref=e144]: Reports
+              - generic [ref=e145]: Generate & export
+        - generic [ref=e146]:
+          - generic [ref=e147]: Analysis
+          - link "Forecasting ML predictions" [ref=e148] [cursor=pointer]:
+            - /url: /forecasting
+            - img [ref=e150]
+            - generic [ref=e153]:
+              - generic [ref=e154]: Forecasting
+              - generic [ref=e155]: ML predictions
+          - link "AI Analytics AI-powered insights" [ref=e156] [cursor=pointer]:
+            - /url: /ai-analytics
+            - img [ref=e158]
+            - generic [ref=e161]:
+              - generic [ref=e162]: AI Analytics
+              - generic [ref=e163]: AI-powered insights
+          - link "Analytics Data analytics" [ref=e164] [cursor=pointer]:
+            - /url: /analytics
+            - img [ref=e166]
+            - generic [ref=e168]:
+              - generic [ref=e169]: Analytics
+              - generic [ref=e170]: Data analytics
+        - generic [ref=e171]:
+          - generic [ref=e172]: System
+          - link "Data Sync" [ref=e452] [cursor=pointer]:
+            - /url: /sync
+            - img [ref=e175]
+            - generic [ref=e180]: Data Sync
+          - link "Customers Customer management" [ref=e182] [cursor=pointer]:
+            - /url: /customers
+            - img [ref=e184]
+            - generic [ref=e189]:
+              - generic [ref=e190]: Customers
+              - generic [ref=e191]: Customer management
+          - link "Bank Import Bank statements" [ref=e192] [cursor=pointer]:
+            - /url: /bank
+            - img [ref=e194]
+            - generic [ref=e198]:
+              - generic [ref=e199]: Bank Import
+              - generic [ref=e200]: Bank statements
+          - link "Settings System settings" [ref=e201] [cursor=pointer]:
+            - /url: /settings
+            - img [ref=e203]
+            - generic [ref=e206]:
+              - generic [ref=e207]: Settings
+              - generic [ref=e208]: System settings
+      - button "Collapse" [ref=e210] [cursor=pointer]:
+        - img [ref=e211]
+        - generic [ref=e213]: Collapse
+    - generic [ref=e214]:
+      - banner [ref=e215]:
+        - generic [ref=e217]:
+          - img [ref=e218]
+          - textbox "Search customers, invoices, reports..." [ref=e221]
+        - generic [ref=e222]:
+          - button [ref=e223] [cursor=pointer]:
+            - img [ref=e224]
+          - button [ref=e226] [cursor=pointer]:
+            - img [ref=e227]
+          - button [ref=e231] [cursor=pointer]:
+            - img [ref=e232]
+          - button "Admin" [ref=e237] [cursor=pointer]:
+            - img [ref=e239]
+            - generic [ref=e242]: Admin
+            - img [ref=e243]
+      - main [ref=e245]:
+        - generic [ref=e454]:
+          - heading "Data Sync" [level=1] [ref=e455]
+          - generic [ref=e456]:
+            - generic [ref=e457]:
+              - heading "Connection" [level=2] [ref=e458]
+              - button "Test Connection" [ref=e459] [cursor=pointer]
+            - generic [ref=e460]:
+              - heading "Sync Now" [level=2] [ref=e461]
+              - generic [ref=e462]:
+                - button "Full Sync" [ref=e463] [cursor=pointer]
+                - button "Invoices Only" [ref=e464] [cursor=pointer]
+                - button "Bills Only" [ref=e465] [cursor=pointer]
+                - button "Payments Only" [ref=e466] [cursor=pointer]
+                - button "Customers Only" [ref=e467] [cursor=pointer]
+                - button "Bank Transactions" [ref=e468] [cursor=pointer]
+          - generic [ref=e469]:
+            - heading "Sync History" [level=2] [ref=e470]
+            - generic [ref=e471]:
+              - table [ref=e472]:
+                - rowgroup [ref=e473]:
+                  - row "Status Source Type Entities Started Duration Results" [ref=e474]:
+                    - columnheader "Status" [ref=e475]
+                    - columnheader "Source" [ref=e476]
+                    - columnheader "Type" [ref=e477]
+                    - columnheader "Entities" [ref=e478]
+                    - columnheader "Started" [ref=e479]
+                    - columnheader "Duration" [ref=e480]
+                    - columnheader "Results" [ref=e481]
+                - rowgroup
+              - generic [ref=e482]:
+                - img [ref=e483]
+                - paragraph [ref=e488]: No sync runs yet
+                - paragraph [ref=e489]: Click "Full Sync" to pull data from your accounting system
+  - generic [ref=e449]: 6/11

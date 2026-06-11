@@ -1,0 +1,14 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - img [ref=e7]
+    - heading "CFO System" [level=1] [ref=e10]
+    - paragraph [ref=e11]: הרשמה למערכת
+  - generic [ref=e12]:
+    - textbox "שם מלא" [ref=e20]
+    - textbox "קוד הרשמה" [ref=e21]
+    - textbox "אימייל" [ref=e13]
+    - textbox "סיסמה" [ref=e14]
+    - button "הרשמה" [ref=e22] [cursor=pointer]:
+      - img [ref=e23]
+      - text: הרשמה
+  - button "יש לכם חשבון? התחברו כאן" [active] [ref=e26] [cursor=pointer]

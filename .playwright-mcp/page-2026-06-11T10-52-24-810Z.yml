@@ -1,0 +1,15 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - img [ref=e7]
+    - heading "CFO System" [level=1] [ref=e10]
+    - paragraph [ref=e11]: הרשמה למערכת
+  - generic [ref=e12]:
+    - textbox "שם מלא" [ref=e20]: E2E Test Admin
+    - textbox "קוד הרשמה" [ref=e21]
+    - textbox "אימייל" [ref=e13]: e2e-test@local.test
+    - textbox "סיסמה" [ref=e14]: local-e2e-pass-123
+    - generic [ref=e27]: ההרשמה נכשלה. נסו שוב.
+    - button "הרשמה" [ref=e22] [cursor=pointer]:
+      - img [ref=e28]
+      - text: הרשמה
+  - button "יש לכם חשבון? התחברו כאן" [ref=e26] [cursor=pointer]
