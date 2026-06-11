@@ -4,6 +4,7 @@ Pydantic models for SUMIT API requests and responses
 from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, date
+from datetime import date as date_type
 from decimal import Decimal
 
 
@@ -90,6 +91,15 @@ class DocumentResponse(BaseModel):
     issue_date: date
     due_date: Optional[date] = None
     pdf_url: Optional[str] = None
+    # Convenience aliases (populated from the SUMIT response) used by
+    # sync/connector services
+    id: Optional[str] = None
+    total: Optional[Decimal] = None
+    # Note: annotated via date_type because assigning a default to a field
+    # named "date" shadows the datetime.date name in the class namespace.
+    date: Optional[date_type] = None
+    customer_name: Optional[str] = None
+    currency: Optional[str] = None
 
 
 class SendDocumentRequest(BaseModel):
@@ -105,6 +115,7 @@ class DocumentListRequest(BaseModel):
     """List documents request"""
     customer_id: Optional[str] = None
     document_type: Optional[str] = None
+    document_types: Optional[List[str]] = None
     from_date: Optional[date] = None
     to_date: Optional[date] = None
     status: Optional[str] = None
@@ -163,6 +174,14 @@ class PaymentResponse(BaseModel):
     created_at: datetime
     authorization_number: Optional[str] = None
     last_4_digits: Optional[str] = None
+    # Convenience aliases (populated from the SUMIT response) used by
+    # sync/connector services
+    id: Optional[str] = None
+    customer_id: Optional[str] = None
+    date: Optional[datetime] = None
+    description: Optional[str] = None
+    payment_method: Optional[str] = None
+    reference: Optional[str] = None
 
 
 class PaymentMethodResponse(BaseModel):
@@ -247,6 +266,8 @@ class IncomeItemResponse(BaseModel):
     price: Decimal
     currency: str
     vat_rate: Optional[Decimal] = None
+    # Convenience alias used by sync services
+    id: Optional[str] = None
 
 
 # ==================== Recurring Payment Models ====================
