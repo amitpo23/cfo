@@ -19,6 +19,7 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [registrationCode, setRegistrationCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -31,7 +32,7 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
       const payload =
         mode === 'login'
           ? { email, password }
-          : { email, password, full_name: fullName };
+          : { email, password, full_name: fullName, registration_code: registrationCode || undefined };
       const { data } = await axios.post<TokenResponse>(`${API_BASE_URL}${endpoint}`, payload);
       localStorage.setItem('auth_token', data.access_token);
       onSuccess();
@@ -70,14 +71,23 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {mode === 'register' && (
-            <input
-              type="text"
-              required
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              placeholder="שם מלא"
-              className={inputClass}
-            />
+            <>
+              <input
+                type="text"
+                required
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="שם מלא"
+                className={inputClass}
+              />
+              <input
+                type="text"
+                value={registrationCode}
+                onChange={(e) => setRegistrationCode(e.target.value)}
+                placeholder="קוד הרשמה"
+                className={inputClass}
+              />
+            </>
           )}
           <input
             type="email"

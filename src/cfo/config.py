@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440  # 24 hours
+    # When set, /auth/register requires this code — keeps open registration
+    # closed on public deployments.
+    registration_secret: Optional[str] = None
     
     # Accounting Systems
     quickbooks_client_id: Optional[str] = None

@@ -39,6 +39,13 @@ async def register(
     db: Session = Depends(get_db_session)
 ):
     """הרשמת משתמש חדש"""
+    from ...config import settings
+    if settings.registration_secret and user_data.registration_code != settings.registration_secret:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration requires a valid registration code"
+        )
+
     existing_user = db.query(User).filter(User.email == user_data.email).first()
     if existing_user:
         raise HTTPException(

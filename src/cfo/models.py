@@ -713,6 +713,7 @@ class UserCreate(BaseModel):
     phone: Optional[str] = None
     role: UserRole = UserRole.USER
     organization_id: Optional[int] = None
+    registration_code: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
