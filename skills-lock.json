@@ -1,30 +1,162 @@
 {
   "version": 1,
   "skills": {
+    "boi-economic-data": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "skillPath": "boi-economic-data/SKILL.md",
+      "computedHash": "044f20e174405fd6d324218e0e18e40691c92c370647bcd2e5492479c3fcfae5"
+    },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "computedHash": "9e1c8b3103f92fa8092568a44fe64858de7c5c9dc65ce4bea8f168080e889cfd"
+    },
     "gws-israeli-business-sheets": {
       "source": "skills-il/tax-and-finance",
       "sourceType": "github",
       "computedHash": "17a0bb57f4fcb3134f0f17dc64024a5771802dc6c1a7def290de7bc3caa1a26b"
+    },
+    "il-invoice-organizer": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "skillPath": "il-invoice-organizer/SKILL.md",
+      "computedHash": "d53359406ef60682b7c1348e57b0cef7e0b036755662905bdfd3cb18cff91dab"
+    },
+    "israel-gov-api": {
+      "source": "skills-il/government-services",
+      "sourceType": "github",
+      "skillPath": "israel-gov-api/SKILL.md",
+      "computedHash": "e9d0be58cc8e3ce0634ccf3137f49056b30cef60616536027e80c6a2d6cb445c"
+    },
+    "israeli-annual-reports": {
+      "source": "skills-il/accounting",
+      "sourceType": "github",
+      "skillPath": "israeli-annual-reports/SKILL.md",
+      "computedHash": "99cc373821ad59c854ec8da89a7ace452f08898a116068c8f1bc3250e2405038"
     },
     "israeli-bank-connector": {
       "source": "skills-il/tax-and-finance",
       "sourceType": "github",
       "computedHash": "6c48b185cc5898c4b98c257beb45da23d000b666601230179ef83bfdd838a721"
     },
+    "israeli-bank-reconciliation": {
+      "source": "skills-il/accounting",
+      "sourceType": "github",
+      "skillPath": "israeli-bank-reconciliation/SKILL.md",
+      "computedHash": "8125cbfc9e19142c8f2e9161433365bd09900eb14a5da1e6c06e6f9ed4a794e7"
+    },
+    "israeli-bituach-leumi": {
+      "source": "skills-il/government-services",
+      "sourceType": "github",
+      "skillPath": "israeli-bituach-leumi/SKILL.md",
+      "computedHash": "ee1c2a007b9ca031834b3034e5a10c2017024aca41f2d09cb9db3d3da118d01e"
+    },
+    "israeli-bookkeeping-automation": {
+      "source": "skills-il/accounting",
+      "sourceType": "github",
+      "skillPath": "israeli-bookkeeping-automation/SKILL.md",
+      "computedHash": "dbe4de5671397144b6a704a241edfd8fa3fdc885a9ae10fa68d8e83ad3775195"
+    },
     "israeli-budget-planner": {
       "source": "skills-il/tax-and-finance",
       "sourceType": "github",
       "computedHash": "b6fe27bc64a4d8c105bb641aaf5b73339d8e78bdb8dde7dd5fb52cd2ee5cfac4"
+    },
+    "israeli-client-payment-chaser": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "skillPath": "israeli-client-payment-chaser/SKILL.md",
+      "computedHash": "d1cec11075309592f264e8a5ab2725385a5cbeecb754bafe075a404aa7bfa131"
+    },
+    "israeli-company-lookup": {
+      "source": "skills-il/government-services",
+      "sourceType": "github",
+      "skillPath": "israeli-company-lookup/SKILL.md",
+      "computedHash": "133ed26601f2b0aa2a6731ecdd8698dd89ffe07b572352d0bac338adc5375515"
+    },
+    "israeli-corporate-tax-strategy": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "skillPath": "israeli-corporate-tax-strategy/SKILL.md",
+      "computedHash": "8e0628fd24254f3bc7790ba5615ac4f4b97f0d78f9ceaca7e8b059afffd667e9"
+    },
+    "israeli-e-invoice": {
+      "source": "skills-il/accounting",
+      "sourceType": "github",
+      "skillPath": "israeli-e-invoice/SKILL.md",
+      "computedHash": "183f8330d63a22dd498e01c85aa0bd01afc8f42c5b3712eeddcfddd8bc34b976"
+    },
+    "israeli-expense-categorizer": {
+      "source": "skills-il/accounting",
+      "sourceType": "github",
+      "skillPath": "israeli-expense-categorizer/SKILL.md",
+      "computedHash": "04c4db5ed4169f55a67f1d9cea712d5aecf5601381e23542f946358de0919b85"
+    },
+    "israeli-financial-reports": {
+      "source": "skills-il/accounting",
+      "sourceType": "github",
+      "skillPath": "israeli-financial-reports/SKILL.md",
+      "computedHash": "adefba2ac70aa081824ae8ac7485a6d1bb4f0e0062ebc254d6f383ebdc5e5b50"
+    },
+    "israeli-freelancer-ops": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "skillPath": "israeli-freelancer-ops/SKILL.md",
+      "computedHash": "30d052daf45b541a513e28700b3591eb85af4ea5278fb36fd391d2516148fb80"
+    },
+    "israeli-gov-form-automator": {
+      "source": "skills-il/government-services",
+      "sourceType": "github",
+      "skillPath": "israeli-gov-form-automator/SKILL.md",
+      "computedHash": "c69e2b88b4c449b3d917569875a37159f92c907538890ab65a5a401974d39971"
+    },
+    "israeli-payment-orchestrator": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "skillPath": "israeli-payment-orchestrator/SKILL.md",
+      "computedHash": "4816d899e998dbd0cd019c7db233b31c48bde1cb2b15580f742d834d8156db9f"
+    },
+    "israeli-payroll-calculator": {
+      "source": "skills-il/accounting",
+      "sourceType": "github",
+      "skillPath": "israeli-payroll-calculator/SKILL.md",
+      "computedHash": "be177f9cd4856a3861d1cba0f93bf4dd09a2c081117707a4198fd443904394f2"
+    },
+    "israeli-price-quote-generator": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "skillPath": "israeli-price-quote-generator/SKILL.md",
+      "computedHash": "5cb9e850dcc91b8df8f471f8d50bc679b52775697e8d581d010859a0adc108fe"
+    },
+    "israeli-receipt-scanner": {
+      "source": "skills-il/accounting",
+      "sourceType": "github",
+      "skillPath": "israeli-receipt-scanner/SKILL.md",
+      "computedHash": "1267d8a721bbc00b0d75f975292a8bbb0cb7840d2e5ddaea1cfa7e2f03b17e6a"
     },
     "israeli-tax-returns": {
       "source": "skills-il/tax-and-finance",
       "sourceType": "github",
       "computedHash": "5d42221fab986acaf2ae0c3f641355e13786432036f6dbdf3478d739367eaab1"
     },
+    "israeli-tax-withholding": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "skillPath": "israeli-tax-withholding/SKILL.md",
+      "computedHash": "7bf704ef39a331f21a7dad333198b58204847f6a5449f59e6ea95ded56b26e22"
+    },
     "israeli-vat-reporting": {
       "source": "skills-il/tax-and-finance",
       "sourceType": "github",
       "computedHash": "8dfa20e5931cee18e1d91663ef78768ac8beb11e34cd1491002e4da519c28624"
+    },
+    "shekel-currency-converter": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "skillPath": "shekel-currency-converter/SKILL.md",
+      "computedHash": "f882e03556bf1a4919734206745599362f318278d25a75534c74850cf55cc6c6"
     }
   }
 }
