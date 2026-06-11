@@ -2,13 +2,16 @@
 Sync API routes.
 /api/sync/* for triggering sync, viewing runs, testing connections.
 """
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
 from ...models import SyncRun, SyncStatus, IntegrationConnection
+from ...config import settings
 from ...services.sync_engine import SyncEngine, get_connector_for_org
 from ...services.alert_engine import AlertEngine
 
@@ -17,14 +20,133 @@ router = APIRouter()
 DEFAULT_ORG_ID = 1
 
 
+class OpenFinanceConfigRequest(BaseModel):
+    client_id: str = Field(..., min_length=1)
+    client_secret: str = Field(..., min_length=1)
+    user_id: str = Field(..., min_length=1)
+    api_base_url: Optional[str] = None
+    oauth_url: Optional[str] = None
+
+
+@router.get("/integration/status")
+async def integration_status(
+    org_id: int = Query(DEFAULT_ORG_ID),
+    db: Session = Depends(get_db_session),
+):
+    """Return safe configuration status without exposing secret values."""
+    connections = {
+        conn.source: conn.status
+        for conn in db.query(IntegrationConnection).filter(
+            IntegrationConnection.organization_id == org_id,
+        ).all()
+    }
+
+    required = {
+        "production_database": ["DATABASE_URL"],
+        "security": ["JWT_SECRET_KEY"],
+        "sumit": ["SUMIT_API_KEY"],
+        "open_finance": [
+            "OPEN_FINANCE_CLIENT_ID",
+            "OPEN_FINANCE_CLIENT_SECRET",
+            "OPEN_FINANCE_USER_ID",
+        ],
+        "ai": ["OPENAI_API_KEY"],
+    }
+
+    configured = {
+        "production_database": not settings.database_url.startswith("sqlite:"),
+        "security": settings.jwt_secret_key != "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING",
+        "sumit": bool(settings.sumit_api_key),
+        "open_finance": all([
+            settings.open_finance_client_id,
+            settings.open_finance_client_secret,
+            settings.open_finance_user_id,
+        ]),
+        "ai": bool(settings.openai_api_key),
+    }
+
+    return {
+        "organization_id": org_id,
+        "configured": configured,
+        "missing": {
+            key: [] if value else required[key]
+            for key, value in configured.items()
+        },
+        "connections": connections,
+        "notes": {
+            "production_database": (
+                "Persistent database is configured."
+                if configured["production_database"]
+                else "SQLite on Vercel is temporary. Set DATABASE_URL for persistent data."
+            ),
+            "sumit": "Required for invoices, receipts, customers, payments, and accounting sync.",
+            "open_finance": "Required for bank/card transactions and reconciliation.",
+            "ai": "Optional; enables AI insights and smarter classification.",
+        },
+    }
+
+
+@router.post("/integration/open-finance/configure")
+async def configure_open_finance(
+    request: OpenFinanceConfigRequest,
+    org_id: int = Query(DEFAULT_ORG_ID),
+    db: Session = Depends(get_db_session),
+):
+    """
+    Store Open Finance credentials for the organization.
+
+    The secret is intentionally never returned in the response. In production,
+    replace this JSON storage with encryption/KMS before exposing broadly.
+    """
+    conn = db.query(IntegrationConnection).filter(
+        IntegrationConnection.organization_id == org_id,
+        IntegrationConnection.source == "open_finance",
+    ).first()
+
+    credentials = {
+        "client_id": request.client_id,
+        "client_secret": request.client_secret,
+        "user_id": request.user_id,
+    }
+    if request.api_base_url:
+        credentials["api_base_url"] = request.api_base_url
+    if request.oauth_url:
+        credentials["oauth_url"] = request.oauth_url
+
+    if conn:
+        conn.status = "active"
+        conn.credentials_encrypted = json.dumps(credentials)
+    else:
+        conn = IntegrationConnection(
+            organization_id=org_id,
+            source="open_finance",
+            status="active",
+            credentials_encrypted=json.dumps(credentials),
+            config={"entities": ["accounts", "bank_transactions"]},
+        )
+        db.add(conn)
+
+    db.commit()
+    db.refresh(conn)
+
+    return {
+        "id": conn.id,
+        "organization_id": org_id,
+        "source": conn.source,
+        "status": conn.status,
+        "configured": True,
+    }
+
+
 @router.post("/integration/test")
 async def test_connection(
     org_id: int = Query(DEFAULT_ORG_ID),
+    source: Optional[str] = Query(None, description="Optional integration source, e.g. open_finance or sumit"),
     db: Session = Depends(get_db_session),
 ):
     """Test the accounting API connection."""
     try:
-        connector, conn_id, source = get_connector_for_org(db, org_id)
+        connector, conn_id, source = get_connector_for_org(db, org_id, source)
         result = await connector.test_connection()
         await connector.close()
         return {
@@ -42,6 +164,7 @@ async def test_connection(
 async def trigger_sync(
     entity_types: Optional[str] = Query(None, description="Comma-separated: invoices,bills,payments"),
     org_id: int = Query(DEFAULT_ORG_ID),
+    source: Optional[str] = Query(None, description="Optional integration source, e.g. open_finance or sumit"),
     db: Session = Depends(get_db_session),
 ):
     """
@@ -50,7 +173,7 @@ async def trigger_sync(
     If omitted, syncs all entities.
     """
     try:
-        connector, conn_id, source = get_connector_for_org(db, org_id)
+        connector, conn_id, source = get_connector_for_org(db, org_id, source)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -64,7 +64,7 @@ class SumitIntegration(BaseIntegration):
     - Company Management
     """
     
-    BASE_URL = "https://api.sumit.co.il/v1"
+    BASE_URL = "https://api.sumit.co.il"
     
     def __init__(self, api_key: str, company_id: Optional[str] = None, **kwargs):
         """
@@ -80,7 +80,6 @@ class SumitIntegration(BaseIntegration):
         self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers={
-                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             },
             timeout=30.0
@@ -116,16 +115,25 @@ class SumitIntegration(BaseIntegration):
         self._log_request(method, endpoint, data)
         
         try:
-            # Add company_id to data if set
             if data is None:
                 data = {}
+            # SUMIT authenticates via Credentials in the request body for
+            # every endpoint — never skip injection or the request is sent
+            # unauthenticated.
+            credentials = {
+                "APIKey": self.api_key,
+            }
             if self.company_id:
-                data["company_id"] = self.company_id
-            
+                try:
+                    credentials["CompanyID"] = int(self.company_id)
+                except (TypeError, ValueError):
+                    credentials["CompanyID"] = self.company_id
+            data.setdefault("Credentials", credentials)
+
             response = await self.client.request(
                 method=method,
                 url=endpoint,
-                json=data if method in ["POST", "PUT", "PATCH"] else None,
+                json=data,
                 params=params
             )
             
@@ -146,8 +154,13 @@ class SumitIntegration(BaseIntegration):
     async def test_connection(self) -> bool:
         """Test API connection"""
         try:
-            await self._make_request("/ping", method="GET")
-            return True
+            result = await self._make_request("/website/companies/getdetails/")
+            # SUMIT returns HTTP 200 with an error envelope on bad
+            # credentials; Status == 0 is the only success signal.
+            status = result.get("Status") if isinstance(result, dict) else None
+            if status is not None:
+                return status in (0, "0", "Success")
+            return bool(result)
         except Exception as e:
             self.logger.error(f"Connection test failed: {e}")
             return False

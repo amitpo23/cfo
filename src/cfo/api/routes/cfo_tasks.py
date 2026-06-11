@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -25,11 +26,16 @@ from ...models import (
     TaskUpdate as TaskUpdateSchema,
 )
 from ...services.alert_engine import AlertEngine
+from ...services.cfo_brain_service import CFOBrainService
 from ...services.dashboard_service import DashboardService
 
 router = APIRouter()
 
 DEFAULT_ORG_ID = 1
+
+
+class InsightStatusUpdate(BaseModel):
+    status: str
 
 
 # ===== Tasks =====
@@ -178,6 +184,59 @@ async def evaluate_alerts(
     engine = AlertEngine(db, org_id)
     new_alerts = engine.evaluate_all()
     return {"new_alerts": len(new_alerts)}
+
+
+# ===== CFO Brain =====
+
+@router.post("/brain/analyze")
+async def run_cfo_brain_analysis(
+    create_tasks: bool = Query(True),
+    org_id: int = Query(DEFAULT_ORG_ID),
+    db: Session = Depends(get_db_session),
+):
+    """Run the internal CFO brain and persist actionable insights."""
+    brain = CFOBrainService(db, org_id)
+    return brain.run_analysis(create_tasks=create_tasks)
+
+
+@router.get("/brain/insights")
+async def list_cfo_insights(
+    status: str = Query("active"),
+    severity: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    org_id: int = Query(DEFAULT_ORG_ID),
+    db: Session = Depends(get_db_session),
+):
+    """List persisted CFO insights."""
+    brain = CFOBrainService(db, org_id)
+    return brain.list_insights(status=status, severity=severity, limit=limit)
+
+
+@router.patch("/brain/insights/{insight_id}")
+async def update_cfo_insight_status(
+    insight_id: int,
+    payload: InsightStatusUpdate,
+    org_id: int = Query(DEFAULT_ORG_ID),
+    db: Session = Depends(get_db_session),
+):
+    """Acknowledge or resolve a CFO insight."""
+    brain = CFOBrainService(db, org_id)
+    try:
+        return brain.update_insight_status(insight_id, payload.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/brain/memory")
+async def list_cfo_memory(
+    memory_type: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    org_id: int = Query(DEFAULT_ORG_ID),
+    db: Session = Depends(get_db_session),
+):
+    """List CFO brain memory facts."""
+    brain = CFOBrainService(db, org_id)
+    return brain.list_memory(memory_type=memory_type, limit=limit)
 
 
 # ===== Notes =====

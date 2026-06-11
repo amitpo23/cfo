@@ -18,7 +18,8 @@ from ..dependencies import (
     get_current_user, 
     get_super_admin, 
     get_organization_admin,
-    get_sumit_integration
+    get_sumit_integration,
+    require_admin
 )
 from ...integrations.sumit_integration import SumitIntegration
 from ...integrations.sumit_models import (
@@ -53,13 +54,17 @@ async def register(
                 detail="Organization not found"
             )
     
+    # Open registration must never honor a client-supplied role: the first
+    # registered user bootstraps the system as admin, everyone after that
+    # starts as a regular user and is promoted by an admin.
+    is_first_user = db.query(User).first() is None
     new_user = User(
         email=user_data.email,
         password_hash=get_password_hash(user_data.password),
         full_name=user_data.full_name,
         phone=user_data.phone,
-        role=user_data.role,
-        organization_id=user_data.organization_id
+        role=UserRole.ADMIN if is_first_user else UserRole.USER,
+        organization_id=user_data.organization_id or 1,
     )
     
     db.add(new_user)

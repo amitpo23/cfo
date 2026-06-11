@@ -1,0 +1,11 @@
+.venv
+frontend/node_modules
+node_modules
+.agents
+.claude
+*.db
+*.sqlite
+*.sqlite3
+__pycache__
+*.pyc
+.pytest_cache

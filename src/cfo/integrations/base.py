@@ -56,3 +56,7 @@ class BaseIntegration(ABC):
     def _log_error(self, error: Exception, context: str = ""):
         """Log API error"""
         self.logger.error(f"API Error: {context}", exc_info=error)
+
+
+# Backwards-compatible name used by older integration modules.
+BaseAccountingIntegration = BaseIntegration

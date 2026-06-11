@@ -3,19 +3,26 @@ Database connection and session management
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import NullPool
 from contextlib import contextmanager
 from typing import Generator
 
 from .config import settings
-from .models import Base
+from .models import Base, IntegrationType, Organization
+
+
+def _engine_kwargs():
+    kwargs = {"echo": settings.debug}
+    if "sqlite" in settings.database_url:
+        kwargs["connect_args"] = {"check_same_thread": False}
+    elif "postgresql+psycopg" in settings.database_url:
+        kwargs["connect_args"] = {"prepare_threshold": None}
+        kwargs["poolclass"] = NullPool
+    return kwargs
 
 
 # Create engine
-engine = create_engine(
-    settings.database_url,
-    echo=settings.debug,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.database_url else {}
-)
+engine = create_engine(settings.database_url, **_engine_kwargs())
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -24,6 +31,32 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db():
     """אתחול מסד הנתונים"""
     Base.metadata.create_all(bind=engine)
+    ensure_default_organization()
+
+
+def ensure_default_organization():
+    """Create a minimal default tenant for demo/serverless environments."""
+    db = SessionLocal()
+    try:
+        # Seed only into an empty table, without an explicit id: an explicit
+        # id=1 insert would leave the PostgreSQL identity sequence at 1 and
+        # break the next auto-id organization insert with a duplicate key.
+        if db.query(Organization).first():
+            return
+
+        db.add(Organization(
+            name="Demo Organization",
+            business_type="financial_management",
+            integration_type=IntegrationType.MANUAL,
+            settings={"seeded": True},
+            is_active=True,
+        ))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 @contextmanager

@@ -2,7 +2,7 @@
 Communications API routes
 Handles SMS, email, fax, and customer service
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 from typing import List, Optional
 
 from ...integrations.sumit_integration import SumitIntegration
@@ -113,8 +113,8 @@ async def send_fax(
 
 @router.post("/mail/send-letter")
 async def send_letter(
-    recipient: dict = Query(...),
-    content: str = Query(...),
+    recipient: dict = Body(...),
+    content: str = Body(...),
     sumit: SumitIntegration = Depends(get_sumit_integration),
     current_user: dict = Depends(get_current_user)
 ):

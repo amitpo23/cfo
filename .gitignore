@@ -26,6 +26,10 @@ env/
 ENV/
 .venv
 
+# Node
+node_modules/
+frontend/node_modules/
+
 # Environment Variables
 .env
 .env.local
@@ -60,3 +64,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 .vercel
+.env*.local
+
+# Supabase CLI artifacts
+supabase/.temp/

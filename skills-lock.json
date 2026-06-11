@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "skills": {
+    "gws-israeli-business-sheets": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "computedHash": "17a0bb57f4fcb3134f0f17dc64024a5771802dc6c1a7def290de7bc3caa1a26b"
+    },
+    "israeli-bank-connector": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "computedHash": "6c48b185cc5898c4b98c257beb45da23d000b666601230179ef83bfdd838a721"
+    },
+    "israeli-budget-planner": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "computedHash": "b6fe27bc64a4d8c105bb641aaf5b73339d8e78bdb8dde7dd5fb52cd2ee5cfac4"
+    },
+    "israeli-tax-returns": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "computedHash": "5d42221fab986acaf2ae0c3f641355e13786432036f6dbdf3478d739367eaab1"
+    },
+    "israeli-vat-reporting": {
+      "source": "skills-il/tax-and-finance",
+      "sourceType": "github",
+      "computedHash": "8dfa20e5931cee18e1d91663ef78768ac8beb11e34cd1491002e4da519c28624"
+    }
+  }
+}

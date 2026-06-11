@@ -52,7 +52,7 @@ const AdminDashboard: React.FC = () => {
   const { data: organizations, isLoading: loadingOrgs } = useQuery({
     queryKey: ['organizations'],
     queryFn: async () => {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('auth_token');
       const response = await axios.get<Organization[]>(`${API_BASE}/organizations`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -64,7 +64,7 @@ const AdminDashboard: React.FC = () => {
   const { data: users, isLoading: loadingUsers } = useQuery({
     queryKey: ['users'],
     queryFn: async () => {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('auth_token');
       const response = await axios.get<User[]>(`${API_BASE}/users`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -75,7 +75,7 @@ const AdminDashboard: React.FC = () => {
   // Create Organization Mutation
   const createOrgMutation = useMutation({
     mutationFn: async (data: Partial<Organization>) => {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('auth_token');
       return axios.post(`${API_BASE}/organizations`, data, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -90,7 +90,7 @@ const AdminDashboard: React.FC = () => {
   // Delete Organization Mutation
   const deleteOrgMutation = useMutation({
     mutationFn: async (id: number) => {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('auth_token');
       return axios.delete(`${API_BASE}/organizations/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });

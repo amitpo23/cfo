@@ -55,6 +55,8 @@ import CFOSyncDashboard from './components/CFOSyncDashboard';
 import CFOAlertsTasks from './components/CFOAlertsTasks';
 import CFOCashFlowProjection from './components/CFOCashFlowProjection';
 
+import Login from './components/Login';
+
 import './App.css';
 
 const queryClient = new QueryClient({
@@ -119,6 +121,11 @@ function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [authed, setAuthed] = useState(() => Boolean(localStorage.getItem('auth_token')));
+
+  if (!authed) {
+    return <Login darkMode={darkMode} onSuccess={() => setAuthed(true)} />;
+  }
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -409,9 +416,15 @@ const UserDropdown: React.FC<{ darkMode: boolean; onClose: () => void }> = ({ da
           <Settings size={18} />
           <span className="text-sm">Settings</span>
         </button>
-        <button className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition text-red-500 hover:bg-red-50 ${
-          darkMode ? 'hover:bg-red-900/20' : ''
-        }`}>
+        <button
+          onClick={() => {
+            localStorage.removeItem('auth_token');
+            window.location.href = '/';
+          }}
+          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition text-red-500 hover:bg-red-50 ${
+            darkMode ? 'hover:bg-red-900/20' : ''
+          }`}
+        >
           <LogOut size={18} />
           <span className="text-sm">Logout</span>
         </button>

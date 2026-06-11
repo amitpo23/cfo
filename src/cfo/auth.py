@@ -6,7 +6,7 @@ from typing import Optional
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 
-from ..config import settings
+from .config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -29,7 +29,12 @@ def get_password_hash(password: str) -> str:
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """יצירת JWT token"""
     to_encode = data.copy()
-    
+
+    # python-jose rejects a non-string "sub" claim on decode, which silently
+    # invalidates every token. Callers pass numeric user ids — stringify here.
+    if to_encode.get("sub") is not None:
+        to_encode["sub"] = str(to_encode["sub"])
+
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:

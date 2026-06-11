@@ -5,16 +5,24 @@ CFO Dashboard API routes.
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
 from ...services.dashboard_service import DashboardService
+from ...services.financial_control_service import FinancialControlService
 
 router = APIRouter()
 
 # Default org ID for single-tenant mode
 DEFAULT_ORG_ID = 1
+
+
+class ReconciliationApplyRequest(BaseModel):
+    bank_transaction_id: int = Field(..., ge=1)
+    entity_type: str
+    entity_id: int = Field(..., ge=1)
 
 
 @router.get("/dashboard/overview")
@@ -128,3 +136,71 @@ async def get_budget_variance(
         month = date.today().month
     svc = DashboardService(db, org_id)
     return svc.get_budget_variance(year, month)
+
+
+@router.get("/control/overview")
+async def get_financial_control_overview(
+    org_id: int = Query(DEFAULT_ORG_ID),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    db: Session = Depends(get_db_session),
+):
+    """Unified CFO control overview across books, bank data, and budget."""
+    svc = FinancialControlService(db, org_id)
+    return svc.get_control_overview(start_date=start_date, end_date=end_date)
+
+
+@router.get("/control/reconciliation/suggestions")
+async def get_reconciliation_suggestions(
+    org_id: int = Query(DEFAULT_ORG_ID),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    amount_tolerance: float = Query(1.0, ge=0),
+    date_tolerance_days: int = Query(7, ge=0, le=60),
+    db: Session = Depends(get_db_session),
+):
+    """Suggest matches between bank transactions and SUMIT/book records."""
+    svc = FinancialControlService(db, org_id)
+    return svc.suggest_bank_reconciliations(
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        amount_tolerance=amount_tolerance,
+        date_tolerance_days=date_tolerance_days,
+    )
+
+
+@router.post("/control/reconciliation/apply")
+async def apply_reconciliation(
+    request: ReconciliationApplyRequest,
+    org_id: int = Query(DEFAULT_ORG_ID),
+    db: Session = Depends(get_db_session),
+):
+    """Mark a bank transaction as reconciled with a chosen accounting entity."""
+    svc = FinancialControlService(db, org_id)
+    try:
+        return svc.apply_bank_reconciliation(
+            bank_transaction_id=request.bank_transaction_id,
+            entity_type=request.entity_type,
+            entity_id=request.entity_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/control/expenses")
+async def get_expense_control(
+    org_id: int = Query(DEFAULT_ORG_ID),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    limit: int = Query(12, ge=1, le=50),
+    db: Session = Depends(get_db_session),
+):
+    """Expense control by category for dashboards and budget review."""
+    svc = FinancialControlService(db, org_id)
+    return svc.get_expense_control(
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+    )

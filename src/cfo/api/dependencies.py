@@ -55,10 +55,13 @@ async def get_current_user(
     if payload is None:
         raise credentials_exception
     
-    user_id: int = payload.get("sub")
-    if user_id is None:
+    # "sub" is stored as a string in the JWT (python-jose requirement);
+    # convert back to the integer primary key before querying.
+    try:
+        user_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
         raise credentials_exception
-    
+
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise credentials_exception

@@ -31,16 +31,17 @@ class SumitConnector(AccountingConnector):
     def __init__(self, api_key: str, company_id: str):
         self.api_key = api_key
         self.company_id = company_id
-        self._client = None
 
     async def _get_client(self):
-        if self._client is None:
-            from ..integrations.sumit_integration import SumitIntegration
-            self._client = SumitIntegration(
-                api_key=self.api_key,
-                company_id=self.company_id,
-            )
-        return self._client
+        # A fresh instance per call: every fetch method wraps the client in
+        # `async with`, which closes the underlying httpx client on exit. A
+        # cached instance would be closed by the first fetch and break every
+        # subsequent one in the same sync run.
+        from ..integrations.sumit_integration import SumitIntegration
+        return SumitIntegration(
+            api_key=self.api_key,
+            company_id=self.company_id,
+        )
 
     async def test_connection(self) -> bool:
         try:
@@ -328,12 +329,8 @@ class SumitConnector(AccountingConnector):
         return FetchResult(items=[], has_more=False)
 
     async def close(self):
-        if self._client:
-            try:
-                await self._client.__aexit__(None, None, None)
-            except Exception:
-                pass
-            self._client = None
+        # Each fetch method opens and closes its own client via `async with`.
+        return None
 
     @staticmethod
     def _map_document_status(doc) -> str:

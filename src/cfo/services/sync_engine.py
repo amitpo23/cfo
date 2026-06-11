@@ -573,7 +573,11 @@ class SyncEngine:
         return "created"
 
 
-def get_connector_for_org(db: Session, organization_id: int) -> tuple:
+def get_connector_for_org(
+    db: Session,
+    organization_id: int,
+    preferred_source: Optional[str] = None,
+) -> tuple:
     """
     Factory: returns (connector, connection_id, source) for the org's active integration.
     """
@@ -584,17 +588,22 @@ def get_connector_for_org(db: Session, organization_id: int) -> tuple:
         raise ValueError(f"Organization {organization_id} not found")
 
     # Check IntegrationConnection first
-    conn = db.query(IntegrationConnection).filter(
+    conn_query = db.query(IntegrationConnection).filter(
         IntegrationConnection.organization_id == organization_id,
         IntegrationConnection.status == "active",
-    ).first()
+    )
+    if preferred_source:
+        conn_query = conn_query.filter(IntegrationConnection.source == preferred_source)
+    # Deterministic pick when several sources are active and no preference
+    # was given: oldest connection wins instead of arbitrary DB order.
+    conn = conn_query.order_by(IntegrationConnection.id).first()
 
     if conn:
         source = conn.source
         creds = json.loads(conn.credentials_encrypted) if conn.credentials_encrypted else {}
     else:
         # Fall back to org-level credentials
-        source = org.integration_type.value if org.integration_type else "manual"
+        source = preferred_source or (org.integration_type.value if org.integration_type else "manual")
         creds = org.api_credentials or {}
 
     if source == "sumit":
@@ -605,6 +614,36 @@ def get_connector_for_org(db: Session, organization_id: int) -> tuple:
         if not api_key:
             raise ValueError("SUMIT API key not configured")
         connector = SumitConnector(api_key=api_key, company_id=company_id)
+        return connector, conn.id if conn else None, source
+
+    if source == "open_finance":
+        from .open_finance_connector import OpenFinanceConnector
+        from ..config import settings
+
+        client_id = creds.get("client_id") or settings.open_finance_client_id
+        client_secret = creds.get("client_secret") or settings.open_finance_client_secret
+        user_id = creds.get("user_id") or settings.open_finance_user_id
+        api_base_url = creds.get("api_base_url") or settings.open_finance_api_base_url
+        oauth_url = creds.get("oauth_url") or settings.open_finance_oauth_url
+
+        missing = [
+            name for name, value in {
+                "OPEN_FINANCE_CLIENT_ID": client_id,
+                "OPEN_FINANCE_CLIENT_SECRET": client_secret,
+                "OPEN_FINANCE_USER_ID": user_id,
+            }.items()
+            if not value
+        ]
+        if missing:
+            raise ValueError(f"Open Finance credentials not configured: {', '.join(missing)}")
+
+        connector = OpenFinanceConnector(
+            client_id=client_id,
+            client_secret=client_secret,
+            user_id=user_id,
+            api_base_url=api_base_url,
+            oauth_url=oauth_url,
+        )
         return connector, conn.id if conn else None, source
 
     raise ValueError(f"No connector available for source: {source}")
