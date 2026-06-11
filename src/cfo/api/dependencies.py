@@ -174,12 +174,12 @@ def require_admin(current_user: dict = Depends(get_current_user)):
         current_user: Current user from JWT
         
     Returns:
-        User dict
-        
+        User object
+
     Raises:
         HTTPException: If user is not admin
     """
-    if current_user.get("role") != "admin":
+    if current_user.role not in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"

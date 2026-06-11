@@ -7,7 +7,7 @@ from .routes import (
     accounting, crm, payments, communications, admin,
     cashflow, sync, reports, financial_management, financial_operations
 )
-from .routes import cfo_dashboard, cfo_sync, cfo_tasks
+from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
@@ -54,6 +54,8 @@ app.include_router(
     cfo_tasks.router, prefix="/api", tags=["CFO Tasks & Alerts"],
     dependencies=[Depends(get_current_user)],
 )
+# Cron jobs authenticate with CRON_SECRET, not user tokens
+app.include_router(cron.router, prefix="/api", tags=["Scheduled Jobs"])
 
 
 @app.on_event("startup")

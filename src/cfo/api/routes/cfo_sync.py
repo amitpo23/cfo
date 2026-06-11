@@ -14,6 +14,7 @@ from ..dependencies import get_current_org_id
 from ...models import SyncRun, SyncStatus, IntegrationConnection
 from ...config import settings
 from ...services.sync_engine import SyncEngine, get_connector_for_org
+from ...services.credentials_vault import encrypt_credentials
 from ...services.alert_engine import AlertEngine
 
 router = APIRouter()
@@ -40,13 +41,13 @@ def _upsert_connection(db: Session, org_id: int, source: str, credentials: dict,
     ).first()
     if conn:
         conn.status = "active"
-        conn.credentials_encrypted = json.dumps(credentials)
+        conn.credentials_encrypted = encrypt_credentials(credentials)
     else:
         conn = IntegrationConnection(
             organization_id=org_id,
             source=source,
             status="active",
-            credentials_encrypted=json.dumps(credentials),
+            credentials_encrypted=encrypt_credentials(credentials),
             config={"entities": entities},
         )
         db.add(conn)

@@ -156,6 +156,43 @@ async def login(
     )
 
 
+@router.post("/db/migrate", tags=["Admin"])
+async def run_db_migrations(current_user: User = Depends(require_admin)):
+    """
+    Apply Alembic migrations (admin only).
+
+    Databases created before Alembic was introduced (via create_all) are
+    stamped to the baseline first, then upgraded.
+    """
+    from pathlib import Path
+
+    from alembic import command as alembic_command
+    from alembic.config import Config as AlembicConfig
+    from sqlalchemy import inspect as sa_inspect
+
+    from ...database import engine
+
+    root = Path(__file__).resolve().parents[4]
+    cfg = AlembicConfig(str(root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(root / "alembic"))
+
+    inspector = sa_inspect(engine)
+    tables = inspector.get_table_names()
+    if "users" in tables and "alembic_version" not in tables:
+        # Pre-Alembic database: schema already matches the baseline.
+        alembic_command.stamp(cfg, "head")
+        action = "stamped"
+    else:
+        alembic_command.upgrade(cfg, "head")
+        action = "upgraded"
+
+    with engine.connect() as conn:
+        from sqlalchemy import text
+        revision = conn.execute(text("select version_num from alembic_version")).scalar()
+
+    return {"action": action, "current_revision": revision}
+
+
 @router.get("/auth/me", response_model=UserResponse, tags=["Auth"])
 async def get_current_user_info(
     current_user: User = Depends(get_current_user)

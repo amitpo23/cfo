@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # When set, /auth/register requires this code — keeps open registration
     # closed on public deployments.
     registration_secret: Optional[str] = None
+    # Fernet key material for integration credentials at rest (falls back to
+    # jwt_secret_key when unset).
+    credentials_encryption_key: Optional[str] = None
+    # Shared secret for the scheduled-sync endpoint; Vercel Cron sends it as
+    # "Authorization: Bearer <CRON_SECRET>".
+    cron_secret: Optional[str] = None
     
     # Accounting Systems
     quickbooks_client_id: Optional[str] = None

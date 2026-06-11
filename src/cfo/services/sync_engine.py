@@ -45,6 +45,8 @@ from .connector_base import (
     NormalizedPayment,
 )
 
+from .credentials_vault import decrypt_credentials
+
 logger = logging.getLogger(__name__)
 
 
@@ -600,7 +602,7 @@ def get_connector_for_org(
 
     if conn:
         source = conn.source
-        creds = json.loads(conn.credentials_encrypted) if conn.credentials_encrypted else {}
+        creds = decrypt_credentials(conn.credentials_encrypted)
     else:
         # Fall back to org-level credentials
         source = preferred_source or (org.integration_type.value if org.integration_type else "manual")
