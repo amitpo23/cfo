@@ -17,12 +17,26 @@ class ApiService {
       },
     });
 
-    // Request interceptor for adding auth token
+    // Request interceptor: auth token + path normalization.
     this.client.interceptors.request.use(
       (config) => {
         const token = localStorage.getItem('auth_token');
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
+        }
+        // נרמול נתיב: בקומפוננטות יש שתי קונבנציות ('/api/financial/..' ו-'/ar/..')
+        // ועם baseURL='/api' ב-production נוצרת כפילות '/api/api/..' (404).
+        // מאחדים כאן כל בקשה ל-prefix יחיד '/api', ללא תלות ב-baseURL.
+        const url = config.url || '';
+        const baseRaw = config.baseURL || '';
+        if (!/^https?:\/\//i.test(url) && !/^https?:\/\//i.test(baseRaw)) {
+          const base = baseRaw.replace(/\/+$/, '');
+          let full = url.startsWith('/') ? url : '/' + url;
+          if (base && base !== '/api') full = base + full;
+          full = full.replace(/^\/api(\/api)+(\/|$)/, '/api$2'); // /api/api/.. -> /api/..
+          if (!full.startsWith('/api/') && full !== '/api') full = '/api' + full;
+          config.url = full;
+          config.baseURL = '';
         }
         return config;
       },
