@@ -259,6 +259,7 @@ class DashboardService:
             invoice_list.append({
                 "id": inv.id,
                 "invoice_number": inv.invoice_number,
+                "allocation_number": inv.allocation_number,
                 "customer": contact_name,
                 "amount": float(inv.total),
                 "balance": float(inv.balance),

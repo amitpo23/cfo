@@ -317,6 +317,8 @@ class Invoice(Base):
     source = Column(String(50), default="manual")
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
     invoice_number = Column(String(100), nullable=True)
+    # מספר הקצאה (חשבונית ישראל) — SUMIT מפיק מול רשות המסים; נמשך מ-AssignmentNumber.
+    allocation_number = Column(String(50), nullable=True)
     issue_date = Column(Date, nullable=True)
     due_date = Column(Date, nullable=True)
     status = Column(SQLEnum(InvoiceStatus), default=InvoiceStatus.DRAFT)

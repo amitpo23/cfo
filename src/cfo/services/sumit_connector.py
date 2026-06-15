@@ -223,6 +223,7 @@ class SumitConnector(AccountingConnector):
                         external_id=str(doc.id),
                         contact_external_id=str(doc.customer_id) if doc.customer_id else None,
                         invoice_number=getattr(doc, "document_number", None),
+                        allocation_number=getattr(doc, "allocation_number", None),
                         issue_date=doc.date if isinstance(doc.date, date) else None,
                         due_date=getattr(doc, "due_date", None),
                         status=status,

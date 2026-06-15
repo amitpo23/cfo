@@ -412,6 +412,8 @@ class SumitIntegration(BaseIntegration):
             date=issue,
             customer_name=doc.get("CustomerName"),
             currency=str(doc.get("Currency") or "ILS"),
+            allocation_number=(str(doc.get("AssignmentNumber")).strip()
+                               if doc.get("AssignmentNumber") else None),
         )
 
     def _payment_response(
@@ -677,6 +679,8 @@ class SumitIntegration(BaseIntegration):
             date=issue,
             customer_name=customer.get("Name"),
             currency=str(document.get("Currency") or "ILS"),
+            allocation_number=(str(document.get("AssignmentNumber")).strip()
+                               if document.get("AssignmentNumber") else None),
         )
 
     async def create_document(

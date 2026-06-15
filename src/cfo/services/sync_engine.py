@@ -325,6 +325,7 @@ class SyncEngine:
                 return "skipped"
             existing.contact_id = contact_id or existing.contact_id
             existing.invoice_number = item.invoice_number or existing.invoice_number
+            existing.allocation_number = item.allocation_number or existing.allocation_number
             existing.issue_date = item.issue_date
             existing.due_date = item.due_date
             existing.status = status
@@ -346,6 +347,7 @@ class SyncEngine:
             source=self.source,
             contact_id=contact_id,
             invoice_number=item.invoice_number,
+            allocation_number=item.allocation_number,
             issue_date=item.issue_date,
             due_date=item.due_date,
             status=status,
