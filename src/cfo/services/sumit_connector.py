@@ -53,6 +53,54 @@ class SumitConnector(AccountingConnector):
             logger.error("SUMIT connection test failed: %s", e)
             return False
 
+    async def list_stock(self):
+        """Passthrough to SUMIT stock list (used by the inventory sync)."""
+        client = await self._get_client()
+        async with client:
+            return await client.list_stock()
+
+    async def add_expense(self, expense_request):
+        """Passthrough: file an expense in SUMIT (used by expense filing)."""
+        client = await self._get_client()
+        async with client:
+            return await client.add_expense(expense_request)
+
+    async def list_documents(self, request):
+        """Passthrough: list SUMIT documents (used by pending-expense sync)."""
+        client = await self._get_client()
+        async with client:
+            return await client.list_documents(request)
+
+    async def move_document_to_books(self, document_id: str):
+        """Passthrough: finalize/approve a SUMIT draft document (file a pending expense)."""
+        client = await self._get_client()
+        async with client:
+            return await client.move_document_to_books(document_id)
+
+    async def cancel_document(self, document_id: str):
+        """Passthrough: cancel a SUMIT document (used to replace an auto-scanned draft)."""
+        client = await self._get_client()
+        async with client:
+            return await client.cancel_document(document_id)
+
+    async def get_document_pdf(self, document_id: str) -> bytes:
+        """Passthrough: fetch a document's scan/PDF (used by the OCR pipeline)."""
+        client = await self._get_client()
+        async with client:
+            return await client.get_document_pdf(document_id)
+
+    async def get_document_supplier(self, document_id: str):
+        """Passthrough: resolve a document's supplier/customer name via getdetails."""
+        client = await self._get_client()
+        async with client:
+            return await client.get_document_supplier(document_id)
+
+    async def get_document_supplier_details(self, document_id: str):
+        """Passthrough: resolve supplier name + tax id + VAT for a document."""
+        client = await self._get_client()
+        async with client:
+            return await client.get_document_supplier_details(document_id)
+
     async def fetch_accounts(
         self,
         updated_since: Optional[datetime] = None,

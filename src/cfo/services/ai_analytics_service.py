@@ -10,7 +10,7 @@ from enum import Enum
 import json
 from sqlalchemy.orm import Session
 
-from ..models import Transaction, Account
+from ..models import Transaction, Account, TransactionType
 from ..database import SessionLocal
 from ..config import settings
 
@@ -288,36 +288,97 @@ class AdvancedAIService:
         יצירת תובנות AI
         Generate AI Insights
         """
-        insights = []
-        
-        # 1. תובנות חיסכון בעלויות
-        cost_insights = self._generate_cost_insights()
-        insights.extend(cost_insights)
-        
-        # 2. הזדמנויות הכנסה
-        revenue_insights = self._generate_revenue_insights()
-        insights.extend(revenue_insights)
-        
-        # 3. התראות סיכון
-        risk_insights = self._generate_risk_insights()
-        insights.extend(risk_insights)
-        
-        # 4. טיפים ליעילות
-        efficiency_insights = self._generate_efficiency_insights()
-        insights.extend(efficiency_insights)
-        
-        # 5. תובנות מגמה
-        trend_insights = self._generate_trend_insights()
-        insights.extend(trend_insights)
-        
+        insights = self._real_insights()
+
         # סינון לפי focus_areas
         if focus_areas:
             insights = [i for i in insights if i.insight_type.value in focus_areas]
-        
+
         # מיון לפי עדיפות ואימפקט
         priority_order = {'high': 0, 'medium': 1, 'low': 2}
         insights.sort(key=lambda x: (priority_order.get(x.priority, 2), -x.impact_amount))
-        
+
+        return insights
+
+    def _real_insights(self) -> List["AIInsight"]:
+        """תובנות אמת הנגזרות מנתוני העסק בפועל."""
+        insights: List[AIInsight] = []
+
+        # סיכון אשראי/גבייה מתוך גיול חובות אמיתי
+        credit = self._assess_credit_risk()
+        if credit['at_risk_amount'] > 0:
+            insights.append(AIInsight(
+                insight_id='INS-AR-001',
+                insight_type=InsightType.RISK_ALERT,
+                title='חוב לקוחות בסיכון גבייה',
+                description=(
+                    f"₪{credit['at_risk_amount']:,.0f} בחובות בגיול גבוה "
+                    f"(מתוכם ₪{credit['over_90_days']:,.0f} מעל 90 יום)"
+                ),
+                impact_amount=float(credit['at_risk_amount']),
+                confidence=0.9,
+                priority='high' if credit['at_risk_amount'] > 50000 else 'medium',
+                actionable=True,
+                suggested_actions=['להפעיל תזכורות גבייה', 'לשקול הפרשה לחובות מסופקים'],
+                supporting_data=credit,
+                expires_at=None,
+            ))
+
+        # סיכון נזילות מתוך יחסים אמיתיים
+        liquidity = self._assess_liquidity_risk()
+        if liquidity['current_ratio'] and liquidity['current_ratio'] < 1.5:
+            insights.append(AIInsight(
+                insight_id='INS-LIQ-001',
+                insight_type=InsightType.RISK_ALERT,
+                title='יחס נזילות נמוך',
+                description=f"יחס שוטף {liquidity['current_ratio']:.2f} — מתחת לרצוי (1.5)",
+                impact_amount=0,
+                confidence=0.85,
+                priority='high' if liquidity['current_ratio'] < 1.0 else 'medium',
+                actionable=True,
+                suggested_actions=['לזרז גבייה', 'להאריך תנאי תשלום לספקים', 'לשקול מסגרת אשראי'],
+                supporting_data=liquidity,
+                expires_at=None,
+            ))
+
+        # ריכוז הוצאות — קטגוריה דומיננטית מתוך התנועות
+        from sqlalchemy import func
+        from datetime import date as _date, timedelta as _td
+        end = _date.today()
+        start = end - _td(days=90)
+        rows = (
+            self.db.query(Transaction.category, func.coalesce(func.sum(Transaction.amount), 0))
+            .filter(
+                Transaction.organization_id == self.organization_id,
+                Transaction.transaction_type == TransactionType.EXPENSE,
+                Transaction.transaction_date >= start,
+                Transaction.transaction_date <= end,
+            )
+            .group_by(Transaction.category)
+            .all()
+        )
+        total_exp = sum(float(a or 0) for _c, a in rows)
+        if total_exp > 0:
+            top_cat, top_amt = max(rows, key=lambda r: float(r[1] or 0))
+            share = float(top_amt or 0) / total_exp
+            if share > 0.4:
+                insights.append(AIInsight(
+                    insight_id='INS-COST-001',
+                    insight_type=InsightType.COST_SAVING,
+                    title='ריכוז הוצאות בקטגוריה אחת',
+                    description=(
+                        f"קטגוריית '{top_cat or 'ללא'}' מהווה {share*100:.0f}% מההוצאות "
+                        f"ב-90 הימים האחרונים"
+                    ),
+                    impact_amount=float(top_amt or 0),
+                    confidence=0.8,
+                    priority='medium',
+                    actionable=True,
+                    suggested_actions=['לבחון חוזי ספקים בקטגוריה זו', 'לבדוק חלופות זולות יותר'],
+                    supporting_data={'category': top_cat, 'amount': float(top_amt or 0), 'share': share},
+                    expires_at=None,
+                ))
+
         return insights
     
     def predict_metric(
@@ -428,7 +489,7 @@ class AdvancedAIService:
             description='5 הספקים הגדולים מהווים 60% מהרכישות - פוטנציאל לחיסכון 5-10%',
             expected_benefit=30000,
             implementation_cost=0,
-            roi=float('inf'),
+            roi=9999,  # עלות יישום אפסית = החזר השקעה גבוה מאוד
             effort_level='low',
             time_to_implement='1-4 שבועות',
             prerequisites=['נתוני רכישות', 'הצעות מתחרים'],
@@ -650,40 +711,83 @@ class AdvancedAIService:
         return []
     
     def _assess_liquidity_risk(self) -> Dict:
-        """הערכת סיכון נזילות"""
-        import random
+        """הערכת סיכון נזילות מנתונים אמיתיים (יחס שוטף/מהיר)."""
+        from sqlalchemy import func
+        from ..models import Invoice, Bill, InventoryItem
+
+        cash = float(self.db.query(func.coalesce(func.sum(Account.balance), 0))
+                     .filter(Account.organization_id == self.organization_id).scalar() or 0)
+        receivables = float(self.db.query(func.coalesce(func.sum(Invoice.balance), 0))
+                            .filter(Invoice.organization_id == self.organization_id,
+                                    Invoice.balance > 0).scalar() or 0)
+        inventory = float(self.db.query(
+            func.coalesce(func.sum(InventoryItem.quantity * InventoryItem.unit_cost), 0))
+            .filter(InventoryItem.organization_id == self.organization_id).scalar() or 0)
+        payables = float(self.db.query(func.coalesce(func.sum(Bill.balance), 0))
+                         .filter(Bill.organization_id == self.organization_id,
+                                 Bill.balance > 0).scalar() or 0)
+
+        current_assets = cash + receivables + inventory
+        current_ratio = (current_assets / payables) if payables else (2.0 if current_assets else 0)
+        quick_ratio = ((cash + receivables) / payables) if payables else (2.0 if (cash + receivables) else 0)
+        # ציון: יחס שוטף 2.0+ -> 100, 1.0 -> 50, מתחת -> נמוך
+        score = max(0, min(100, int(current_ratio * 50)))
         return {
-            'score': random.randint(50, 90),
-            'current_ratio': random.uniform(1.0, 2.5),
-            'quick_ratio': random.uniform(0.8, 2.0),
-            'trend': random.choice(['improving', 'stable', 'deteriorating'])
+            'score': score,
+            'current_ratio': current_ratio,
+            'quick_ratio': quick_ratio,
+            'trend': 'stable',
         }
-    
+
     def _assess_credit_risk(self) -> Dict:
-        """הערכת סיכון אשראי"""
-        import random
+        """הערכת סיכון אשראי מתוך גיול חובות לקוחות אמיתי."""
+        from .ar_service import AccountsReceivableService
+        aging = AccountsReceivableService(
+            self.db, organization_id=self.organization_id
+        ).get_aging_report()
+        over_90 = float(aging.days_91_120_total + aging.over_120_total)
+        at_risk = float(aging.risk_summary.get('total_at_risk', over_90))
         return {
-            'at_risk_amount': random.randint(20000, 150000),
-            'over_90_days': random.randint(10000, 50000),
-            'trend': random.choice(['improving', 'stable', 'deteriorating'])
+            'at_risk_amount': at_risk,
+            'over_90_days': over_90,
+            'trend': 'stable',
         }
-    
+
     def _assess_cashflow_risk(self) -> Dict:
-        """הערכת סיכון תזרים"""
-        import random
-        deficit_months = random.randint(0, 4)
+        """הערכת סיכון תזרים מתוך תחזית תזרים אמיתית."""
+        from .financial_reports_service import FinancialReportsService
+        projection = FinancialReportsService(self.db).generate_cash_flow_projection(
+            self.organization_id, months=6
+        )
+        deficit_months = sum(
+            1 for p in projection.projections if p.closing_balance < 0
+        )
+        total_deficit = float(sum(
+            -p.closing_balance for p in projection.projections if p.closing_balance < 0
+        ))
         return {
             'deficit_months': deficit_months,
-            'total_deficit': deficit_months * random.randint(20000, 50000)
+            'total_deficit': total_deficit,
         }
-    
+
     def _assess_concentration_risk(self) -> Dict:
-        """הערכת סיכון ריכוזיות"""
-        import random
-        top_pct = random.randint(15, 45)
+        """הערכת ריכוזיות לקוחות מתוך הכנסות אמיתיות לפי לקוח."""
+        from sqlalchemy import func
+        from ..models import Invoice
+
+        rows = (
+            self.db.query(Invoice.contact_id, func.coalesce(func.sum(Invoice.total), 0))
+            .filter(Invoice.organization_id == self.organization_id)
+            .group_by(Invoice.contact_id)
+            .all()
+        )
+        totals = [float(amount or 0) for _cid, amount in rows]
+        total_revenue = sum(totals)
+        top_revenue = max(totals) if totals else 0
+        top_pct = (top_revenue / total_revenue * 100) if total_revenue else 0
         return {
             'top_customer_percentage': top_pct,
-            'top_customer_revenue': top_pct * 10000
+            'top_customer_revenue': top_revenue,
         }
     
     def _generate_cost_insights(self) -> List[AIInsight]:

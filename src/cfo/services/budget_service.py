@@ -10,7 +10,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, extract
 
-from ..models import Transaction, Account
+from ..models import Transaction, Account, Budget
 from ..database import SessionLocal
 
 
@@ -125,32 +125,136 @@ class BudgetService:
     
     def create_budget(
         self,
-        year: int,
-        period: BudgetPeriod,
-        category_budgets: Dict[str, float],
-        name: Optional[str] = None
+        category: str,
+        planned_amount: float,
+        period_start: date,
+        period_end: Optional[date] = None,
+        notes: Optional[str] = None,
     ) -> Dict:
-        """
-        יצירת תקציב חדש
-        Create new budget
-        """
-        budget_id = f"{year}_{period.value}"
-        if name:
-            budget_id = f"{name}_{budget_id}"
-        
-        budget = {
-            'id': budget_id,
-            'name': name or f"תקציב {year}",
-            'year': year,
-            'period': period.value,
-            'categories': category_budgets,
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat(),
-            'status': 'active'
+        """יצירת/עדכון תקציב לקטגוריה (נשמר ב-DB, לפי שנה+חודש של תחילת התקופה)."""
+        year = period_start.year
+        month = period_start.month
+        row = (
+            self.db.query(Budget)
+            .filter(
+                Budget.organization_id == self.organization_id,
+                Budget.category_name == category,
+                Budget.year == year,
+                Budget.month == month,
+            )
+            .first()
+        )
+        if row is None:
+            row = Budget(
+                organization_id=self.organization_id,
+                category_name=category,
+                year=year,
+                month=month,
+            )
+            self.db.add(row)
+        row.budgeted_amount = planned_amount
+        row.notes = notes
+        self.db.commit()
+        self.db.refresh(row)
+        return {
+            "id": row.id,
+            "category": category,
+            "year": year,
+            "month": month,
+            "budgeted_amount": float(row.budgeted_amount or 0),
         }
-        
-        self._budgets[budget_id] = budget
-        return budget
+
+    def bulk_upsert(self, items: List[Dict]) -> Dict:
+        """הזנת תקציבים מרובים בבת אחת. כל פריט: {category, year, month, amount}."""
+        count = 0
+        for it in items:
+            category = it.get("category")
+            amount = it.get("amount")
+            year = it.get("year")
+            month = it.get("month")
+            if not category or year is None or month is None or amount is None:
+                continue
+            self.create_budget(
+                category=category,
+                planned_amount=float(amount),
+                period_start=date(int(year), int(month), 1),
+            )
+            count += 1
+        return {"saved": count}
+
+    def import_from_excel(self, content: bytes, default_year: Optional[int] = None) -> Dict:
+        """ייבוא תקציבים מקובץ Excel.
+
+        פורמט נתמך — שורת כותרת ואז שורות:
+        עמודה A=קטגוריה, B=שנה, C=חודש, D=סכום.
+        אם אין שנה/חודש בשורה — משתמשים ב-default_year והחודש הנוכחי.
+        """
+        try:
+            import openpyxl
+            import io
+        except ImportError:
+            raise ValueError("openpyxl required for Excel import")
+
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        ws = wb.active
+        items: List[Dict] = []
+        skipped = 0
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i == 0:
+                continue  # דילוג על שורת כותרת
+            if not row or row[0] is None:
+                continue
+            category = str(row[0]).strip()
+            year = row[1] if len(row) > 1 and row[1] else default_year
+            month = row[2] if len(row) > 2 and row[2] else None
+            amount = row[3] if len(row) > 3 else None
+            try:
+                if not category or year is None or month is None or amount is None:
+                    skipped += 1
+                    continue
+                items.append({
+                    "category": category,
+                    "year": int(year),
+                    "month": int(month),
+                    "amount": float(amount),
+                })
+            except (TypeError, ValueError):
+                skipped += 1
+        result = self.bulk_upsert(items)
+        result["skipped"] = skipped
+        return result
+
+    def export_template(self) -> bytes:
+        """תבנית Excel להזנת תקציב."""
+        import openpyxl
+        import io
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "תקציב"
+        ws.sheet_view.rightToLeft = True
+        ws.append(["קטגוריה", "שנה", "חודש", "סכום מתוכנן"])
+        today = date.today()
+        for cat in ("sales", "materials", "rent", "salaries", "marketing"):
+            ws.append([cat, today.year, today.month, 0])
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def _load_budgets(self, year: int, month: Optional[int]) -> Dict[str, float]:
+        """טעינת תקציבים מה-DB לתקופה. ריק -> ברירת מחדל."""
+        q = self.db.query(Budget).filter(
+            Budget.organization_id == self.organization_id,
+            Budget.year == year,
+        )
+        if month:
+            q = q.filter(Budget.month == month)
+        budgets: Dict[str, float] = {}
+        for row in q.all():
+            key = row.category_name or (str(row.category_id) if row.category_id else "כללי")
+            budgets[key] = budgets.get(key, 0) + float(row.budgeted_amount or 0)
+        # ללא fallback לתקציב-דמה: תקציב שלא הוגדר מחזיר ריק (אפסים כנים),
+        # כדי לא להציג יעדים מומצאים שהמשתמש לא הזין.
+        return budgets
     
     def get_budget_vs_actual(
         self,
@@ -188,10 +292,8 @@ class BudgetService:
         # שליפת נתוני ביצוע מהDB
         actuals = self._get_actual_by_category(start_date, end_date)
         
-        # טעינת תקציב
-        budget_id = f"{year}_{period.value}"
-        budget_data = self._budgets.get(budget_id, {})
-        category_budgets = budget_data.get('categories', self._get_default_budget())
+        # טעינת תקציב מה-DB
+        category_budgets = self._load_budgets(year, month)
         
         # חישוב לפי קטגוריה
         categories = []
@@ -396,9 +498,39 @@ class BudgetService:
                 assumptions=assumptions,
                 monthly_projections=monthly
             ))
-        
+
         return results
-    
+
+    def project_scenario(
+        self,
+        revenue_change_pct: float = 0,
+        expense_change_pct: float = 0,
+        base_year: Optional[int] = None,
+    ) -> Dict:
+        """תרחיש מותאם: השפעת שינוי באחוזי הכנסות/הוצאות על השורה התחתונה."""
+        from datetime import date as _date
+        base_summary = self.get_budget_vs_actual(year=base_year or _date.today().year)
+        revenue_ids = {'sales', 'revenue', 'services', 'other_income'}
+        base_revenue = sum(
+            c.actual_amount for c in base_summary.categories
+            if c.category_id in revenue_ids
+        )
+        base_expenses = sum(
+            c.actual_amount for c in base_summary.categories
+            if c.category_id not in revenue_ids
+        )
+        projected_revenue = base_revenue * (1 + revenue_change_pct / 100)
+        projected_expenses = base_expenses * (1 + expense_change_pct / 100)
+        return {
+            'base_revenue': base_revenue,
+            'base_expenses': base_expenses,
+            'projected_revenue': projected_revenue,
+            'projected_expenses': projected_expenses,
+            'projected_net_income': projected_revenue - projected_expenses,
+            'revenue_change_pct': revenue_change_pct,
+            'expense_change_pct': expense_change_pct,
+        }
+
     def get_budget_trend(
         self,
         category_id: str,

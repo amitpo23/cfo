@@ -386,7 +386,7 @@ class CashFlowService:
         if net_burn > 0:
             runway_months = float(current_balance / net_burn)
         else:
-            runway_months = float('inf')  # אין שריפת מזומנים
+            runway_months = 999.0  # אין שריפת מזומנים (ערך סופי תקין ל-JSON)
         
         return {
             'monthly_burn_rate': float(monthly_burn),
@@ -457,14 +457,14 @@ class CashFlowService:
             )
         ).scalar() or Decimal("0")
         
-        # יחס שוטף
-        current_ratio = float(current_assets / current_liabilities) if current_liabilities > 0 else float('inf')
-        
+        # יחס שוטף (999 = אין התחייבויות שוטפות; ערך סופי תקין ל-JSON)
+        current_ratio = float(current_assets / current_liabilities) if current_liabilities > 0 else 999.0
+
         # יחס מהיר (בהנחה ש-80% מהנכסים נזילים)
-        quick_ratio = float((current_assets * Decimal("0.8")) / current_liabilities) if current_liabilities > 0 else float('inf')
-        
+        quick_ratio = float((current_assets * Decimal("0.8")) / current_liabilities) if current_liabilities > 0 else 999.0
+
         # יחס מזומנים
-        cash_ratio = float((current_assets * Decimal("0.5")) / current_liabilities) if current_liabilities > 0 else float('inf')
+        cash_ratio = float((current_assets * Decimal("0.5")) / current_liabilities) if current_liabilities > 0 else 999.0
         
         return {
             'current_ratio': current_ratio,

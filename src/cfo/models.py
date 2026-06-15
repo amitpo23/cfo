@@ -287,6 +287,11 @@ class Contact(Base):
     tax_id = Column(String(50), nullable=True)
     address = Column(Text, nullable=True)
     currency = Column(String(10), default="ILS")
+    # Bank account details for Masav (מס"ב) supplier payments
+    bank_code = Column(String(2), nullable=True)            # קוד בנק
+    bank_branch = Column(String(3), nullable=True)          # מספר סניף
+    bank_account_number = Column(String(20), nullable=True) # מספר חשבון
+    bank_account_holder = Column(String(255), nullable=True)  # שם בעל החשבון (אם שונה משם הספק)
     raw_data = Column(JSON, nullable=True)  # original payload from source
     payload_hash = Column(String(64), nullable=True)  # SHA-256 of raw_data for change detection
     is_active = Column(Boolean, default=True)
@@ -404,6 +409,69 @@ class Payment(Base):
 
     __table_args__ = (
         Index("ix_payment_org_ext", "organization_id", "external_id", "source", unique=True),
+    )
+
+
+class InventoryItem(Base):
+    """Inventory / stock item — מלאי"""
+    __tablename__ = "inventory_items"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    external_id = Column(String(255), nullable=True)  # SUMIT item ID
+    source = Column(String(50), default="manual")
+    sku = Column(String(100), nullable=True)          # מק"ט
+    name = Column(String(255), nullable=False)        # שם הפריט
+    quantity = Column(Numeric(precision=12, scale=2), default=0)    # כמות במלאי
+    unit = Column(String(50), default="unit")         # יחידת מידה
+    unit_cost = Column(Numeric(precision=12, scale=2), default=0)   # עלות ליחידה
+    unit_price = Column(Numeric(precision=12, scale=2), default=0)  # מחיר מכירה
+    reorder_level = Column(Numeric(precision=12, scale=2), default=0)  # סף התראת מלאי נמוך
+    is_active = Column(Boolean, default=True)
+    raw_data = Column(JSON, nullable=True)
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_inventory_org_ext", "organization_id", "external_id", "source", unique=True),
+    )
+
+
+class Expense(Base):
+    """הוצאה לתיוק — supplier expense to be filed in SUMIT"""
+    __tablename__ = "expenses"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    external_id = Column(String(255), nullable=True)   # SUMIT document ID (when pulled)
+    source = Column(String(50), default="manual")
+    supplier_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
+    supplier_name = Column(String(255), nullable=False)
+    supplier_tax_id = Column(String(20), nullable=True)  # ח.פ/עוסק של הספק (נדרש ל-PCN874)
+    sumit_item_name = Column(String(255), nullable=True)  # שם פריט ההוצאה ב-SUMIT — אות הסיווג האמין
+    amount = Column(Numeric(precision=12, scale=2), nullable=False, default=0)  # before VAT
+    vat_amount = Column(Numeric(precision=12, scale=2), default=0)
+    total = Column(Numeric(precision=12, scale=2), default=0)
+    expense_date = Column(Date, nullable=False)
+    category = Column(String(100), nullable=True)
+    description = Column(Text, nullable=True)
+    receipt_file = Column(Text, nullable=True)         # base64 receipt (optional)
+    invoice_number = Column(String(100), nullable=True)
+    status = Column(String(20), default="pending")     # pending, filed, error
+    sumit_expense_id = Column(String(255), nullable=True)
+    filing_error = Column(Text, nullable=True)
+    raw_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+    supplier = relationship("Contact")
+
+    __table_args__ = (
+        Index("ix_expense_org_status", "organization_id", "status"),
+        Index("ix_expense_org_ext", "organization_id", "external_id", "source"),
     )
 
 

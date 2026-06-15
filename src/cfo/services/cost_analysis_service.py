@@ -10,7 +10,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 
-from ..models import Transaction, Account
+from ..models import Transaction, Account, TransactionType, Invoice, Contact
 from ..database import SessionLocal
 
 
@@ -482,40 +482,85 @@ class CostAnalysisService:
         
         return opportunities
     
+    # קטגוריות הנחשבות עלות ישירה / עלות המכר
+    DIRECT_CATEGORIES = {
+        "materials", "raw_materials", "cost_of_goods", "cogs",
+        "direct_labor", "inventory", "packaging", "shipping", "freight",
+    }
+    # קטגוריות בעלות התנהגות קבועה (השאר נחשבות משתנות)
+    FIXED_CATEGORIES = {
+        "rent", "salaries", "depreciation", "insurance", "lease", "subscription",
+    }
+
+    def _classify_cost(self, category: str):
+        cat = (category or "").lower()
+        cost_type = CostType.DIRECT if cat in self.DIRECT_CATEGORIES else CostType.INDIRECT
+        behavior = "fixed" if cat in self.FIXED_CATEGORIES else "variable"
+        return cost_type, behavior
+
+    def _expense_rows(self, start_date: date, end_date: date):
+        """סכומי הוצאה אמיתיים לפי קטגוריה בטווח."""
+        return (
+            self.db.query(
+                Transaction.category,
+                func.coalesce(func.sum(Transaction.amount), 0),
+            )
+            .filter(
+                Transaction.organization_id == self.organization_id,
+                Transaction.transaction_type == TransactionType.EXPENSE,
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date <= end_date,
+            )
+            .group_by(Transaction.category)
+            .all()
+        )
+
     def _get_costs(self, start_date: date, end_date: date) -> List[Dict]:
-        """שליפת עלויות"""
-        import random
-        return [
-            {'id': 'C001', 'name': 'Raw Materials', 'name_hebrew': 'חומרי גלם', 'type': CostType.DIRECT, 'cost_behavior': 'variable', 'amount': random.randint(100000, 150000), 'budget': 120000},
-            {'id': 'C002', 'name': 'Direct Labor', 'name_hebrew': 'עבודה ישירה', 'type': CostType.DIRECT, 'cost_behavior': 'variable', 'amount': random.randint(80000, 120000), 'budget': 100000},
-            {'id': 'C003', 'name': 'Rent', 'name_hebrew': 'שכירות', 'type': CostType.INDIRECT, 'cost_behavior': 'fixed', 'amount': 25000, 'budget': 25000},
-            {'id': 'C004', 'name': 'Utilities', 'name_hebrew': 'חשמל ומים', 'type': CostType.INDIRECT, 'cost_behavior': 'variable', 'amount': random.randint(5000, 8000), 'budget': 6000},
-            {'id': 'C005', 'name': 'Salaries', 'name_hebrew': 'משכורות הנהלה', 'type': CostType.INDIRECT, 'cost_behavior': 'fixed', 'amount': 60000, 'budget': 60000},
-            {'id': 'C006', 'name': 'Marketing', 'name_hebrew': 'שיווק', 'type': CostType.INDIRECT, 'cost_behavior': 'variable', 'amount': random.randint(15000, 25000), 'budget': 20000},
-            {'id': 'C007', 'name': 'Depreciation', 'name_hebrew': 'פחת', 'type': CostType.INDIRECT, 'cost_behavior': 'fixed', 'amount': 8000, 'budget': 8000},
-        ]
-    
-    def _get_cost_trends(self, months: int) -> List[Dict]:
-        """מגמות עלויות"""
-        import random
-        trends = []
-        base = 300000
-        
-        for i in range(months):
-            month = (date.today() - timedelta(days=30 * (months - i - 1))).strftime('%Y-%m')
-            trends.append({
-                'month': month,
-                'total_costs': base + random.randint(-20000, 20000),
-                'direct': base * 0.6 + random.randint(-10000, 10000),
-                'indirect': base * 0.4 + random.randint(-5000, 5000)
+        """שליפת עלויות אמיתיות מהתנועות, מקובצות לפי קטגוריה."""
+        rows = self._expense_rows(start_date, end_date)
+        costs = []
+        for i, (category, amount) in enumerate(rows, 1):
+            name = category or "ללא קטגוריה"
+            cost_type, behavior = self._classify_cost(category)
+            costs.append({
+                "id": f"C{i:03d}",
+                "name": name,
+                "name_hebrew": name,
+                "type": cost_type,
+                "cost_behavior": behavior,
+                "amount": float(amount or 0),
+                "budget": None,  # אין נתוני תקציב ברמת קטגוריה כאן
             })
-        
+        return costs
+
+    def _get_cost_trends(self, months: int) -> List[Dict]:
+        """מגמות עלויות חודשיות אמיתיות."""
+        trends = []
+        today = date.today()
+        for i in range(months):
+            ref = today - timedelta(days=30 * (months - i - 1))
+            m_start = ref.replace(day=1)
+            m_end = (m_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            rows = self._expense_rows(m_start, m_end)
+            direct = sum(
+                float(a or 0) for c, a in rows
+                if self._classify_cost(c)[0] == CostType.DIRECT
+            )
+            indirect = sum(
+                float(a or 0) for c, a in rows
+                if self._classify_cost(c)[0] == CostType.INDIRECT
+            )
+            trends.append({
+                "month": m_start.strftime("%Y-%m"),
+                "total_costs": direct + indirect,
+                "direct": direct,
+                "indirect": indirect,
+            })
         return trends
-    
+
     def _get_units_produced(self, start_date: date, end_date: date) -> int:
-        """יחידות שיוצרו"""
-        import random
-        return random.randint(5000, 10000)
+        """יחידות שיוצרו — לא נמדד במערכת כרגע."""
+        return 0
     
     def _get_profitability_data(
         self,
@@ -523,79 +568,133 @@ class CostAnalysisService:
         start_date: date,
         end_date: date
     ) -> List[Dict]:
-        """נתוני רווחיות"""
-        import random
-        
-        if dimension == ProfitabilityDimension.PRODUCT:
-            items = ['מוצר A', 'מוצר B', 'מוצר C', 'מוצר D', 'מוצר E']
-        elif dimension == ProfitabilityDimension.CUSTOMER:
-            items = ['לקוח ראשי', 'לקוח משני', 'לקוח קמעונאי', 'לקוח B2B', 'לקוח חדש']
-        elif dimension == ProfitabilityDimension.SERVICE:
-            items = ['שירות ייעוץ', 'שירות תמיכה', 'שירות הטמעה', 'שירות תחזוקה']
-        else:
-            items = ['יחידה 1', 'יחידה 2', 'יחידה 3']
-        
+        """נתוני רווחיות אמיתיים. לפי לקוח — מתוך חשבוניות; אחרת לפי קטגוריית הכנסה."""
+        if dimension == ProfitabilityDimension.CUSTOMER:
+            rows = (
+                self.db.query(
+                    Contact.id, Contact.name,
+                    func.coalesce(func.sum(Invoice.total), 0),
+                )
+                .join(Invoice, Invoice.contact_id == Contact.id)
+                .filter(
+                    Invoice.organization_id == self.organization_id,
+                    Invoice.issue_date >= start_date,
+                    Invoice.issue_date <= end_date,
+                )
+                .group_by(Contact.id, Contact.name)
+                .all()
+            )
+            # עלות ישירה כוללת מחולקת יחסית להכנסה (אין עלות לכל לקוח בנפרד)
+            total_direct = sum(
+                c["amount"] for c in self._get_costs(start_date, end_date)
+                if c["type"] == CostType.DIRECT
+            )
+            total_rev = sum(float(r[2] or 0) for r in rows) or 1
+            return [
+                {
+                    "id": str(cid),
+                    "name": name or "לקוח לא ידוע",
+                    "revenue": float(rev or 0),
+                    "direct_costs": total_direct * (float(rev or 0) / total_rev),
+                }
+                for cid, name, rev in rows
+            ]
+
+        # לפי מוצר/שירות/יחידה — לפי קטגוריות הכנסה בתנועות
+        rows = (
+            self.db.query(
+                Transaction.category,
+                func.coalesce(func.sum(Transaction.amount), 0),
+            )
+            .filter(
+                Transaction.organization_id == self.organization_id,
+                Transaction.transaction_type == TransactionType.INCOME,
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date <= end_date,
+            )
+            .group_by(Transaction.category)
+            .all()
+        )
+        total_direct = sum(
+            c["amount"] for c in self._get_costs(start_date, end_date)
+            if c["type"] == CostType.DIRECT
+        )
+        total_rev = sum(float(a or 0) for _c, a in rows) or 1
         return [
             {
-                'id': f'ITEM-{i}',
-                'name': name,
-                'revenue': random.randint(50000, 200000),
-                'direct_costs': random.randint(30000, 120000)
+                "id": f"ITEM-{i}",
+                "name": cat or "ללא קטגוריה",
+                "revenue": float(amount or 0),
+                "direct_costs": total_direct * (float(amount or 0) / total_rev),
             }
-            for i, name in enumerate(items)
+            for i, (cat, amount) in enumerate(rows)
         ]
-    
+
     def _get_product_data(self, product_id: str) -> Dict:
-        """נתוני מוצר"""
-        import random
+        """נתוני מוצר — לא נמדד ברמת מוצר במערכת כרגע."""
         return {
-            'id': product_id,
-            'name': f'מוצר {product_id}',
-            'selling_price': random.randint(100, 500),
-            'material_cost': random.randint(30, 150),
-            'labor_cost': random.randint(20, 80),
-            'overhead_cost': random.randint(10, 40),
-            'volume': random.randint(500, 2000)
+            "id": product_id,
+            "name": product_id,
+            "selling_price": 0,
+            "material_cost": 0,
+            "labor_cost": 0,
+            "overhead_cost": 0,
+            "volume": 0,
         }
-    
+
     def _get_all_products(self) -> List[Dict]:
-        """כל המוצרים"""
-        return [self._get_product_data(f'P{i}') for i in range(1, 6)]
-    
+        """כל המוצרים — אין רישום מוצרים נפרד."""
+        return []
+
     def _get_cogs_data(self, start_date: date, end_date: date) -> Dict:
-        """נתוני עלות המכר"""
-        import random
+        """נתוני עלות המכר אמיתיים — רכיבי עלות ישירה לפי קטגוריה."""
+        rows = self._expense_rows(start_date, end_date)
+        components = []
+        total = 0.0
+        for category, amount in rows:
+            if self._classify_cost(category)[0] != CostType.DIRECT:
+                continue
+            amt = float(amount or 0)
+            total += amt
+            components.append({"name": category or "ללא קטגוריה", "amount": amt})
+        for comp in components:
+            comp["percentage"] = (comp["amount"] / total * 100) if total else 0
         return {
-            'components': [
-                {'name': 'חומרי גלם', 'amount': random.randint(100000, 150000), 'percentage': 45},
-                {'name': 'עבודה ישירה', 'amount': random.randint(60000, 90000), 'percentage': 30},
-                {'name': 'תקורה ייצור', 'amount': random.randint(30000, 50000), 'percentage': 20},
-                {'name': 'אריזה והובלה', 'amount': random.randint(10000, 20000), 'percentage': 5}
-            ],
-            'by_category': {
-                'מוצר A': random.randint(50000, 80000),
-                'מוצר B': random.randint(40000, 70000),
-                'מוצר C': random.randint(30000, 50000)
-            },
-            'waste_percentage': random.uniform(2, 8)
+            "components": components,
+            "by_category": {c["name"]: c["amount"] for c in components},
+            "waste_percentage": 0,  # לא נמדד
         }
-    
+
     def _get_cogs_trends(self, months: int) -> List[Dict]:
-        """מגמות עלות המכר"""
-        import random
+        """מגמות עלות המכר חודשיות אמיתיות."""
         trends = []
-        
+        today = date.today()
         for i in range(months):
-            month = (date.today() - timedelta(days=30 * (months - i - 1))).strftime('%Y-%m')
+            ref = today - timedelta(days=30 * (months - i - 1))
+            m_start = ref.replace(day=1)
+            m_end = (m_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+            cogs = sum(
+                float(a or 0) for c, a in self._expense_rows(m_start, m_end)
+                if self._classify_cost(c)[0] == CostType.DIRECT
+            )
+            revenue = self._get_revenue(m_start, m_end)
             trends.append({
-                'month': month,
-                'cogs': random.randint(200000, 280000),
-                'cogs_percentage': random.uniform(55, 65)
+                "month": m_start.strftime("%Y-%m"),
+                "cogs": cogs,
+                "cogs_percentage": (cogs / revenue * 100) if revenue else 0,
             })
-        
         return trends
-    
+
     def _get_revenue(self, start_date: date, end_date: date) -> float:
-        """הכנסות"""
-        import random
-        return random.randint(400000, 600000)
+        """הכנסות אמיתיות מתוך התנועות."""
+        total = (
+            self.db.query(func.coalesce(func.sum(Transaction.amount), 0))
+            .filter(
+                Transaction.organization_id == self.organization_id,
+                Transaction.transaction_type == TransactionType.INCOME,
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date <= end_date,
+            )
+            .scalar()
+        )
+        return float(total or 0)

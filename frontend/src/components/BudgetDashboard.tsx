@@ -44,33 +44,50 @@ export const BudgetDashboard: React.FC = () => {
     expense_change_pct: 0,
   });
 
-  // Fetch budget vs actual
+  // Fetch budget vs actual — backend מחזיר {status, data: BudgetSummary}
   const { data: budgetData, isLoading: loadingBudget } = useQuery({
     queryKey: ['budget-vs-actual', selectedPeriod],
     queryFn: async () => {
-      const response = await api.get<BudgetComparison[]>('/api/financial/budget/vs-actual');
-      return response;
+      const res = await api.get<{ status: string; data: any }>('/api/financial/budget/vs-actual');
+      const categories: any[] = res?.data?.categories ?? [];
+      return categories.map((c: any): BudgetComparison => ({
+        category: c.category_hebrew || c.category_name || c.category_id,
+        planned: c.budget_amount ?? 0,
+        actual: c.actual_amount ?? 0,
+        variance: c.variance ?? 0,
+        variance_pct: c.variance_percentage ?? 0,
+        status: c.status,
+      }));
     },
   });
 
-  // Fetch budget alerts
+  // Fetch budget alerts — backend מחזיר {status, data: [...]}
   const { data: alerts, isLoading: loadingAlerts } = useQuery({
     queryKey: ['budget-alerts'],
     queryFn: async () => {
-      const response = await api.get<BudgetAlert[]>('/api/financial/budget/alerts');
-      return response;
+      const res = await api.get<{ status: string; data: any[] }>('/api/financial/budget/alerts');
+      const list: any[] = res?.data ?? [];
+      return list.map((a: any): BudgetAlert => ({
+        category: a.category,
+        alert_type: a.alert_type,
+        message: a.message,
+        severity: a.severity,
+        current_spend: a.actual_amount ?? 0,
+        budget: a.budget_amount ?? 0,
+        percentage_used: a.variance_percentage ?? 0,
+      }));
     },
   });
 
-  // Scenario analysis mutation
+  // Scenario analysis mutation — unwrap {status, data}
   const scenarioMutation = useMutation({
     mutationFn: async (params: typeof scenarioParams) => {
-      const response = await api.post<{
+      const res = await api.post<{ status: string; data: {
         projected_revenue: number;
         projected_expenses: number;
         projected_net_income: number;
-      }>('/api/financial/budget/scenario', params);
-      return response;
+      } }>('/api/financial/budget/scenario', params);
+      return res.data;
     },
   });
 

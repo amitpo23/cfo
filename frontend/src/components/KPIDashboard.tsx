@@ -56,8 +56,8 @@ export const KPIDashboard: React.FC = () => {
   const { data: kpiData, isLoading: loadingKPIs } = useQuery({
     queryKey: ['kpi-dashboard'],
     queryFn: async () => {
-      const response = await api.get<{ kpis: KPI[] }>('/api/financial/kpis');
-      return response;
+      const response = await api.get<{ data: { kpis: KPI[] } }>('/api/financial/kpis');
+      return response.data;
     },
   });
 
@@ -65,8 +65,8 @@ export const KPIDashboard: React.FC = () => {
   const { data: execSummary, isLoading: loadingSummary } = useQuery({
     queryKey: ['executive-summary'],
     queryFn: async () => {
-      const response = await api.get<ExecutiveSummary>('/api/financial/kpis/executive-summary');
-      return response;
+      const response = await api.get<{ data: ExecutiveSummary }>('/api/financial/kpis/executive-summary');
+      return response.data;
     },
   });
 
@@ -74,10 +74,10 @@ export const KPIDashboard: React.FC = () => {
   const { data: kpiTrends } = useQuery({
     queryKey: ['kpi-trends'],
     queryFn: async () => {
-      const response = await api.get<Record<string, Array<{ month: string; value: number }>>>('/api/financial/kpis/trends', {
+      const response = await api.get<{ data: Record<string, Array<{ month: string; value: number }>> }>('/api/financial/kpis/trends', {
         params: { kpi_names: ['revenue_growth', 'gross_margin', 'net_margin'] }
       });
-      return response;
+      return response.data;
     },
   });
 
@@ -85,8 +85,8 @@ export const KPIDashboard: React.FC = () => {
   const { data: benchmarkData } = useQuery({
     queryKey: ['industry-benchmark'],
     queryFn: async () => {
-      const response = await api.get<{ comparisons: Array<{ kpi_name: string; company_value: number; industry_avg: number }> }>('/api/financial/kpis/benchmark');
-      return response;
+      const response = await api.get<{ data: { comparisons: Array<{ kpi_name: string; company_value: number; industry_avg: number }> } }>('/api/financial/kpis/benchmark');
+      return response.data;
     },
   });
 

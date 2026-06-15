@@ -74,3 +74,35 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
             logger.warning("Brain analysis failed for org %s: %s", org_id, exc)
 
     return {"synced": len(results), "results": results}
+
+
+@router.get("/cron/enrich-expenses", dependencies=[Depends(_verify_cron_secret)])
+async def scheduled_enrich_expenses(db: Session = Depends(get_db_session)):
+    """העשרה מתמשכת של הוצאות (שם ספק + ח.פ) מ-SUMIT, באצווה חסומת-קצב.
+
+    רץ אצווה מוגבלת בכל הפעלה ונעצר בעדינות ב-rate-limit; קריאות חוזרות
+    משלימות בהדרגה את כל ההוצאות בלי לחרוג מהמכסה של SUMIT.
+    """
+    from ...services.expense_filing_service import ExpenseFilingService
+
+    targets = {
+        conn.organization_id
+        for conn in db.query(IntegrationConnection).filter(
+            IntegrationConnection.status == "active",
+            IntegrationConnection.source == "sumit",
+        ).all()
+    }
+    if settings.sumit_api_key:
+        targets.add(1)
+
+    results = []
+    for org_id in sorted(targets):
+        try:
+            res = await ExpenseFilingService(db, organization_id=org_id).resolve_supplier_names(
+                limit=200, delay=0.4
+            )
+            results.append({"organization_id": org_id, **res})
+        except Exception as exc:
+            logger.warning("Expense enrichment failed for org %s: %s", org_id, exc)
+            results.append({"organization_id": org_id, "error": str(exc)})
+    return {"enriched_orgs": len(results), "results": results}

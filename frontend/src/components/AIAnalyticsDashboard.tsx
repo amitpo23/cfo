@@ -75,8 +75,8 @@ export const AIAnalyticsDashboard: React.FC = () => {
   const { data: anomalies } = useQuery({
     queryKey: ['ai-anomalies'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ai/anomalies') as { data: { data: Anomaly[] } };
-      return response.data.data;
+      const response = await api.get('/api/financial/ai/anomalies') as { data: Anomaly[] };
+      return response.data;
     },
   });
 
@@ -84,8 +84,8 @@ export const AIAnalyticsDashboard: React.FC = () => {
   const { data: risks } = useQuery({
     queryKey: ['ai-risks'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ai/risks') as { data: { data: FinancialRisk[] } };
-      return response.data.data;
+      const response = await api.get('/api/financial/ai/risks') as { data: FinancialRisk[] };
+      return response.data;
     },
   });
 
@@ -93,8 +93,8 @@ export const AIAnalyticsDashboard: React.FC = () => {
   const { data: insights, isLoading: loadingInsights } = useQuery({
     queryKey: ['ai-insights'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ai/insights') as { data: { data: AIInsight[] } };
-      return response.data.data;
+      const response = await api.get('/api/financial/ai/insights') as { data: AIInsight[] };
+      return response.data;
     },
   });
 
@@ -102,16 +102,16 @@ export const AIAnalyticsDashboard: React.FC = () => {
   const { data: recommendations } = useQuery({
     queryKey: ['ai-recommendations'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ai/recommendations') as { data: { data: AIRecommendation[] } };
-      return response.data.data;
+      const response = await api.get('/api/financial/ai/recommendations') as { data: AIRecommendation[] };
+      return response.data;
     },
   });
 
   // AI Analysis mutation
   const analysisMutation = useMutation({
     mutationFn: async (question: string) => {
-      const response = await api.post('/api/financial/ai/analyze', { question }) as { data: { data: { analysis: string } } };
-      return response.data.data.analysis;
+      const response = await api.post('/api/financial/ai/analyze', { question }) as { data: { analysis: string } };
+      return response.data.analysis;
     },
     onSuccess: (analysis) => {
       setChatHistory([

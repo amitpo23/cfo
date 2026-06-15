@@ -10,7 +10,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 
-from ..models import Transaction, Account
+from ..models import Transaction, Account, Invoice, Contact, Payment
 from ..database import SessionLocal
 
 
@@ -560,54 +560,213 @@ class AccountsReceivableService:
         return trend
     
     def _get_open_invoices(self) -> List[Dict]:
-        """שליפת חשבוניות פתוחות"""
-        # בפרודקשן - מהDB או מ-SUMIT
-        # כאן נתונים לדוגמה
-        import random
-        invoices = []
-        
-        customers = [
-            ('C001', 'חברת אלפא בע"מ'),
-            ('C002', 'בטא טכנולוגיות'),
-            ('C003', 'גמא שירותים'),
-            ('C004', 'דלתא סחר'),
-            ('C005', 'הה מערכות')
-        ]
-        
-        for i in range(15):
-            cust = random.choice(customers)
-            days_ago = random.randint(5, 150)
-            inv_date = (date.today() - timedelta(days=days_ago)).isoformat()
-            
+        """שליפת חשבוניות פתוחות מהדאטאבייס (יתרה > 0)."""
+        rows = (
+            self.db.query(Invoice, Contact)
+            .outerjoin(Contact, Invoice.contact_id == Contact.id)
+            .filter(
+                Invoice.organization_id == self.organization_id,
+                Invoice.balance > 0,
+            )
+            .all()
+        )
+
+        invoices: List[Dict] = []
+        for inv, contact in rows:
+            ref_date = inv.issue_date or inv.due_date or date.today()
+            due_date = inv.due_date or ref_date
             invoices.append({
-                'number': f'INV-{1000 + i}',
-                'customer_id': cust[0],
-                'customer_name': cust[1],
-                'date': inv_date,
-                'due_date': (date.today() - timedelta(days=days_ago - 30)).isoformat(),
-                'amount': random.randint(5000, 50000)
+                'number': inv.invoice_number or inv.external_id or f'INV-{inv.id}',
+                # חשבוניות ללא ספק משויך מקובצות תחת מזהה אחד כדי לא לפצל את הדוח
+                'customer_id': str(inv.contact_id) if inv.contact_id else '0',
+                'customer_name': (contact.name if contact else None) or 'לקוח לא ידוע',
+                'date': ref_date.isoformat(),
+                'due_date': due_date.isoformat(),
+                'amount': float(inv.balance or 0),
             })
-        
         return invoices
-    
+
     def _get_payment_history(self, customer_id: str) -> Dict:
-        """היסטוריית תשלומים"""
-        import random
+        """היסטוריית תשלומים אמיתית של לקוח מתוך החשבוניות והתשלומים."""
+        contact = self._contact(customer_id)
+        name = contact.name if contact else f'לקוח {customer_id}'
+
+        invoices = (
+            self.db.query(Invoice)
+            .filter(
+                Invoice.organization_id == self.organization_id,
+                Invoice.contact_id == self._contact_id(customer_id),
+            )
+            .all()
+        )
+        total_volume = float(sum((inv.total or 0) for inv in invoices))
+
+        # אורך הקשר בחודשים מאז החשבונית הראשונה
+        issue_dates = [inv.issue_date for inv in invoices if inv.issue_date]
+        if issue_dates:
+            first = min(issue_dates)
+            relationship_months = max(1, (date.today() - first).days // 30)
+        else:
+            relationship_months = 0
+
+        # זמן תשלום בפועל ושיעור תשלום בזמן (מתוך חשבוניות ששולמו)
+        days_to_pay: List[int] = []
+        on_time = 0
+        considered = 0
+        for inv in invoices:
+            if not inv.due_date:
+                continue
+            pay = (
+                self.db.query(Payment)
+                .filter(
+                    Payment.organization_id == self.organization_id,
+                    Payment.invoice_id == inv.id,
+                )
+                .order_by(Payment.payment_date.desc())
+                .first()
+            )
+            if not pay:
+                continue
+            considered += 1
+            if inv.issue_date:
+                days_to_pay.append((pay.payment_date - inv.issue_date).days)
+            if pay.payment_date <= inv.due_date:
+                on_time += 1
+
+        avg_days_to_pay = sum(days_to_pay) / len(days_to_pay) if days_to_pay else 30
+        on_time_rate = (on_time / considered) if considered else 0.7
+
         return {
-            'customer_name': f'לקוח {customer_id}',
-            'on_time_rate': random.uniform(0.5, 1.0),
-            'total_volume': random.randint(50000, 500000),
-            'relationship_months': random.randint(6, 60),
-            'avg_days_to_pay': random.randint(25, 60)
+            'customer_name': name,
+            'on_time_rate': on_time_rate,
+            'total_volume': total_volume,
+            'relationship_months': relationship_months,
+            'avg_days_to_pay': avg_days_to_pay,
         }
-    
+
     def _get_customer_aging_data(self, customer_id: str) -> Dict:
-        """נתוני גיול לקוח"""
-        import random
+        """נתוני גיול אמיתיים ללקוח בודד מתוך חשבוניות פתוחות."""
+        buckets = {
+            'current': 0.0,
+            'days_31_60': 0.0,
+            'days_61_90': 0.0,
+            'days_91_120': 0.0,
+            'over_120': 0.0,
+        }
+        today = date.today()
+        invoices = (
+            self.db.query(Invoice)
+            .filter(
+                Invoice.organization_id == self.organization_id,
+                Invoice.contact_id == self._contact_id(customer_id),
+                Invoice.balance > 0,
+            )
+            .all()
+        )
+        for inv in invoices:
+            ref_date = inv.issue_date or inv.due_date or today
+            days = (today - ref_date).days
+            amount = float(inv.balance or 0)
+            if days <= 30:
+                buckets['current'] += amount
+            elif days <= 60:
+                buckets['days_31_60'] += amount
+            elif days <= 90:
+                buckets['days_61_90'] += amount
+            elif days <= 120:
+                buckets['days_91_120'] += amount
+            else:
+                buckets['over_120'] += amount
+        return buckets
+
+    def _contact_id(self, customer_id: str):
+        try:
+            return int(customer_id)
+        except (TypeError, ValueError):
+            return -1
+
+    def _contact(self, customer_id: str) -> Optional[Contact]:
+        return (
+            self.db.query(Contact)
+            .filter(
+                Contact.organization_id == self.organization_id,
+                Contact.id == self._contact_id(customer_id),
+            )
+            .first()
+        )
+
+    def get_invoices_status_report(self) -> Dict:
+        """דוח סטטוס חשבוניות אמיתי מה-DB: שולם / חלקי / לא שולם."""
+        invoices = (
+            self.db.query(Invoice)
+            .filter(Invoice.organization_id == self.organization_id)
+            .all()
+        )
+        buckets = {
+            "paid": {"count": 0, "total": 0.0, "balance": 0.0},
+            "partial": {"count": 0, "total": 0.0, "balance": 0.0},
+            "unpaid": {"count": 0, "total": 0.0, "balance": 0.0},
+        }
+        for inv in invoices:
+            total = float(inv.total or 0)
+            balance = float(inv.balance if inv.balance is not None else total)
+            paid = float(inv.paid_amount or 0)
+            if balance <= 0 and total > 0:
+                key = "paid"
+            elif paid > 0 and balance > 0:
+                key = "partial"
+            else:
+                key = "unpaid"
+            buckets[key]["count"] += 1
+            buckets[key]["total"] += total
+            buckets[key]["balance"] += balance
+        for b in buckets.values():
+            b["total"] = round(b["total"], 2)
+            b["balance"] = round(b["balance"], 2)
         return {
-            'current': random.randint(0, 30000),
-            'days_31_60': random.randint(0, 20000),
-            'days_61_90': random.randint(0, 10000),
-            'days_91_120': random.randint(0, 5000),
-            'over_120': random.randint(0, 3000)
+            "invoice_count": len(invoices),
+            "total_billed": round(sum(b["total"] for b in buckets.values()), 2),
+            "total_outstanding": round(
+                buckets["partial"]["balance"] + buckets["unpaid"]["balance"], 2
+            ),
+            "total_collected": round(
+                sum(float(i.paid_amount or 0) for i in invoices), 2
+            ),
+            "by_status": buckets,
+        }
+
+    def get_collection_forecast(self, days: int = 90) -> Dict:
+        """תחזית גבייה — סכום צפוי להיגבות לפי הסתברות גבייה לכל קטגוריית גיול."""
+        report = self.get_aging_report()
+        # הסתברות גבייה משוערת לפי ותק החוב
+        probabilities = {
+            'current': 0.95,
+            'days_31_60': 0.85,
+            'days_61_90': 0.70,
+            'days_91_120': 0.50,
+            'over_120': 0.25,
+        }
+        expected = (
+            report.current_total * probabilities['current']
+            + report.days_31_60_total * probabilities['days_31_60']
+            + report.days_61_90_total * probabilities['days_61_90']
+            + report.days_91_120_total * probabilities['days_91_120']
+            + report.over_120_total * probabilities['over_120']
+        )
+        return {
+            'forecast_days': days,
+            'total_outstanding': report.total_receivables,
+            'expected_collection': round(expected, 2),
+            'expected_collection_rate': (
+                round(expected / report.total_receivables, 4)
+                if report.total_receivables else 0
+            ),
+            'at_risk_amount': round(report.total_receivables - expected, 2),
+            'by_bucket': {
+                'current': round(report.current_total * probabilities['current'], 2),
+                'days_31_60': round(report.days_31_60_total * probabilities['days_31_60'], 2),
+                'days_61_90': round(report.days_61_90_total * probabilities['days_61_90'], 2),
+                'days_91_120': round(report.days_91_120_total * probabilities['days_91_120'], 2),
+                'over_120': round(report.over_120_total * probabilities['over_120'], 2),
+            },
         }

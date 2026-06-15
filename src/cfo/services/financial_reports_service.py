@@ -1029,3 +1029,92 @@ class FinancialReportsService:
                 seasonality[month] = 1.0
         
         return seasonality
+
+
+    def _monthly_series(self, organization_id: int, year: int) -> Dict[int, Dict[str, float]]:
+        """הכנסות/הוצאות לכל חודש בשנה נתונה."""
+        rows = (
+            self.db.query(
+                extract('month', Transaction.transaction_date),
+                Transaction.transaction_type,
+                func.coalesce(func.sum(Transaction.amount), 0),
+            )
+            .filter(
+                Transaction.organization_id == organization_id,
+                extract('year', Transaction.transaction_date) == year,
+            )
+            .group_by(
+                extract('month', Transaction.transaction_date),
+                Transaction.transaction_type,
+            )
+            .all()
+        )
+        series = {m: {"income": 0.0, "expense": 0.0} for m in range(1, 13)}
+        for month, ttype, amount in rows:
+            if month is None:
+                continue
+            key = "income" if ttype == TransactionType.INCOME else "expense"
+            series[int(month)][key] += float(amount or 0)
+        return series
+
+    def generate_year_comparison(
+        self,
+        organization_id: int,
+        year: Optional[int] = None,
+        end_date: Optional[date] = None,
+    ) -> Dict:
+        """דוח השוואת נתונים מול השנה הקודמת (אותה תקופה)."""
+        today = end_date or date.today()
+        cur_year = year or today.year
+        prev_year = cur_year - 1
+
+        # אותה תקופה בשתי השנים (מתחילת השנה ועד התאריך הנוכחי)
+        if cur_year == today.year:
+            cur_start, cur_end = date(cur_year, 1, 1), today
+            prev_start, prev_end = date(prev_year, 1, 1), today.replace(year=prev_year)
+        else:
+            cur_start, cur_end = date(cur_year, 1, 1), date(cur_year, 12, 31)
+            prev_start, prev_end = date(prev_year, 1, 1), date(prev_year, 12, 31)
+
+        cur = self.generate_profit_loss(organization_id, cur_start, cur_end, compare_previous=False)
+        prev = self.generate_profit_loss(organization_id, prev_start, prev_end, compare_previous=False)
+
+        def _delta(a: float, b: float) -> Dict:
+            a, b = float(a or 0), float(b or 0)
+            return {
+                "current": a,
+                "previous": b,
+                "change": a - b,
+                "change_pct": ((a - b) / b * 100) if b else 0,
+            }
+
+        metrics = {
+            "revenue": _delta(cur.total_revenue, prev.total_revenue),
+            "expenses": _delta(cur.total_expenses, prev.total_expenses),
+            "gross_profit": _delta(cur.gross_profit, prev.gross_profit),
+            "operating_income": _delta(cur.operating_income, prev.operating_income),
+            "net_income": _delta(cur.net_income, prev.net_income),
+        }
+
+        cur_series = self._monthly_series(organization_id, cur_year)
+        prev_series = self._monthly_series(organization_id, prev_year)
+        monthly = []
+        month_names = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
+                       "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"]
+        for m in range(1, 13):
+            monthly.append({
+                "month": m,
+                "month_name": month_names[m - 1],
+                "current_revenue": cur_series[m]["income"],
+                "previous_revenue": prev_series[m]["income"],
+                "current_expense": cur_series[m]["expense"],
+                "previous_expense": prev_series[m]["expense"],
+            })
+
+        return {
+            "current_year": cur_year,
+            "previous_year": prev_year,
+            "period": {"start": cur_start.isoformat(), "end": cur_end.isoformat()},
+            "metrics": metrics,
+            "monthly": monthly,
+        }

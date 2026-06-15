@@ -10,7 +10,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 
-from ..models import Transaction, Account
+from ..models import Transaction, Account, TransactionType
 from ..database import SessionLocal
 
 
@@ -141,7 +141,7 @@ class ComplianceReport:
 
 # שיעורי מס בישראל (2024)
 TAX_RATES = {
-    'vat': 0.17,  # 17% מע"מ
+    'vat': 0.18,  # 18% מע"מ (החל מ-1 בינואר 2025)
     'corporate_tax': 0.23,  # 23% מס חברות
     'withholding_supplier': 0.30,  # 30% ניכוי ספקים (ללא אישור)
     'withholding_contractor': 0.20,  # 20% ניכוי קבלנים
@@ -598,86 +598,83 @@ class TaxComplianceService:
             }
     
     def _get_vat_transactions(self, start_date: date, end_date: date) -> List[Dict]:
-        """שליפת עסקאות למע"מ"""
-        import random
-        transactions = []
-        
-        # מכירות
-        for i in range(15):
-            transactions.append({
-                'id': f'INV-{1000 + i}',
-                'date': (start_date + timedelta(days=random.randint(0, 28))).isoformat(),
-                'type': 'sale',
-                'description': f'מכירה {i + 1}',
-                'amount': random.randint(5000, 50000),
-                'vat_amount': random.randint(850, 8500),
-                'vat_type': random.choice(['taxable', 'taxable', 'taxable', 'exempt', 'zero']),
-                'customer': f'לקוח {i + 1}'
-            })
-        
-        # רכישות
-        for i in range(10):
-            amount = random.randint(2000, 30000)
-            transactions.append({
-                'id': f'PINV-{2000 + i}',
-                'date': (start_date + timedelta(days=random.randint(0, 28))).isoformat(),
-                'type': 'purchase',
-                'description': f'רכישה {i + 1}',
-                'amount': amount,
-                'vat_amount': amount * 0.17,
-                'vat_type': 'taxable',
-                'is_fixed_asset': random.random() > 0.8,
-                'supplier': f'ספק {i + 1}'
-            })
-        
+        """עסקאות מע"מ אמיתיות מהתנועות.
+
+        הערה: סכום התנועה משמש כבסיס לחיוב מע"מ (הערכה). לדיוק מלא נדרשות
+        תנועות עם קידוד מע"מ (חייב/פטור/אפס) ושדה מע"מ נפרד.
+        """
+        rate = TAX_RATES['vat']
+        rows = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.organization_id == self.organization_id,
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date <= end_date,
+            )
+            .all()
+        )
+        transactions: List[Dict] = []
+        for t in rows:
+            amount = float(t.amount or 0)
+            d = t.transaction_date.isoformat() if t.transaction_date else None
+            if t.transaction_type == TransactionType.INCOME:
+                transactions.append({
+                    'id': str(t.id),
+                    'date': d,
+                    'type': 'sale',
+                    'description': t.description or 'מכירה',
+                    'amount': amount,
+                    'vat_amount': amount * rate,
+                    'vat_type': 'taxable',
+                })
+            elif t.transaction_type == TransactionType.EXPENSE:
+                transactions.append({
+                    'id': str(t.id),
+                    'date': d,
+                    'type': 'purchase',
+                    'description': t.description or 'רכישה',
+                    'amount': amount,
+                    'vat_amount': amount * rate,
+                    'vat_type': 'taxable',
+                    'is_fixed_asset': False,
+                })
         return transactions
-    
+
     def _get_annual_profit_estimate(self, year: int) -> float:
-        """הערכת רווח שנתי"""
-        import random
-        return random.randint(300000, 600000)
-    
+        """הערכת רווח שנתי אמיתית: הכנסות פחות הוצאות לשנה."""
+        start = date(year, 1, 1)
+        end = date(year, 12, 31)
+        income = float(
+            self.db.query(func.coalesce(func.sum(Transaction.amount), 0))
+            .filter(
+                Transaction.organization_id == self.organization_id,
+                Transaction.transaction_type == TransactionType.INCOME,
+                Transaction.transaction_date >= start,
+                Transaction.transaction_date <= end,
+            ).scalar() or 0
+        )
+        expenses = float(
+            self.db.query(func.coalesce(func.sum(Transaction.amount), 0))
+            .filter(
+                Transaction.organization_id == self.organization_id,
+                Transaction.transaction_type == TransactionType.EXPENSE,
+                Transaction.transaction_date >= start,
+                Transaction.transaction_date <= end,
+            ).scalar() or 0
+        )
+        return income - expenses
+
     def _get_previous_payments(self, year: int, month: int, tax_type: TaxType) -> float:
-        """תשלומים קודמים"""
+        """תשלומים קודמים — לא נרשמים במערכת כרגע."""
         return 0
-    
+
     def _get_employee_data(self, year: int, month: int) -> List[Dict]:
-        """נתוני עובדים"""
-        import random
-        employees = []
-        
-        for i in range(5):
-            gross = random.randint(8000, 25000)
-            employees.append({
-                'id': f'EMP-{i + 1}',
-                'name': f'עובד {i + 1}',
-                'gross_salary': gross,
-                'income_tax': gross * 0.15,
-                'social_security_employee': gross * 0.12,
-                'health_tax': gross * 0.05,
-                'social_security_employer': gross * 0.0755,
-                'net_salary': gross * 0.68
-            })
-        
-        return employees
-    
+        """נתוני עובדים — אין מודול שכר במערכת; ריק עד לחיבור מקור שכר."""
+        return []
+
     def _get_supplier_withholding(self, year: int, month: int) -> List[Dict]:
-        """ניכויי ספקים"""
-        import random
-        suppliers = []
-        
-        for i in range(3):
-            amount = random.randint(5000, 20000)
-            suppliers.append({
-                'id': f'SUP-{i + 1}',
-                'name': f'ספק {i + 1}',
-                'type': random.choice(['supplier', 'contractor']),
-                'gross_amount': amount,
-                'withholding': amount * 0.3,
-                'net_payment': amount * 0.7
-            })
-        
-        return suppliers
+        """ניכויי מס במקור לספקים — לא נרשמים במערכת כרגע."""
+        return []
     
     def _format_shaam_file(self, report: VATReport) -> str:
         """פורמט שע"מ"""

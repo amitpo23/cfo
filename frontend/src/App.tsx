@@ -18,6 +18,8 @@ import {
   Brain,
   FileCheck,
   Banknote,
+  Package,
+  Landmark,
   ScrollText,
   ChevronLeft,
   ChevronRight,
@@ -47,6 +49,13 @@ import AIAnalyticsDashboard from './components/AIAnalyticsDashboard';
 import InvoicesDashboard from './components/InvoicesDashboard';
 import PaymentsDashboard from './components/PaymentsDashboard';
 import AgreementCashFlowDashboard from './components/AgreementCashFlowDashboard';
+import MasavDashboard from './components/MasavDashboard';
+import InventoryDashboard from './components/InventoryDashboard';
+import BankReportDashboard from './components/BankReportDashboard';
+import ExecutiveDashboard from './components/ExecutiveDashboard';
+import BudgetEntry from './components/BudgetEntry';
+import YearComparison from './components/YearComparison';
+import ExpenseFiling from './components/ExpenseFiling';
 
 // CFO Command Center Components
 import CFOOverview from './components/CFOOverview';
@@ -74,10 +83,13 @@ const navigationConfig = [
     section: 'CFO',
     items: [
       { to: '/', icon: LayoutDashboard, label: 'Command Center', description: 'CFO overview' },
+      { to: '/executive', icon: Gauge, label: 'דשבורד מנהלים', description: '8 פאנלים של מצב העסק' },
       { to: '/cashflow', icon: Wallet, label: 'Cash Flow', description: 'Projections & scenarios' },
       { to: '/ar', icon: Receipt, label: 'AR / Collections', description: 'Aging & follow-up' },
       { to: '/ap', icon: CreditCard, label: 'AP / Payables', description: 'Bills & payments' },
       { to: '/budget', icon: Target, label: 'Budget', description: 'Budget vs actual' },
+      { to: '/budget-entry', icon: Target, label: 'הזנת תקציב', description: 'הזנה ידנית / ייבוא Excel' },
+      { to: '/year-comparison', icon: BarChart3, label: 'השוואה שנתית', description: 'מול שנה קודמת' },
     ]
   },
   {
@@ -86,7 +98,10 @@ const navigationConfig = [
       { to: '/invoices', icon: FileCheck, label: 'Invoices', description: 'Create & manage invoices' },
       { to: '/payment-requests', icon: Banknote, label: 'Payment Requests', description: 'Requests & standing orders' },
       { to: '/agreements', icon: ScrollText, label: 'Agreements', description: 'Contracts & cash flow' },
+      { to: '/expenses', icon: Receipt, label: 'תיוק הוצאות', description: 'הוצאות ותיוקן ב-SUMIT' },
       { to: '/payments', icon: CreditCard, label: 'Payments', description: 'Payment processing' },
+      { to: '/masav', icon: Banknote, label: 'תשלומי ספקים (מס"ב)', description: 'יצירת קובץ מס"ב' },
+      { to: '/inventory', icon: Package, label: 'מלאי', description: 'דוח מלאי קיים' },
     ]
   },
   {
@@ -95,6 +110,7 @@ const navigationConfig = [
       { to: '/alerts', icon: Bell, label: 'Alerts & Tasks', description: 'Action items' },
       { to: '/kpis', icon: Gauge, label: 'KPIs', description: 'Performance metrics' },
       { to: '/reports', icon: FileSpreadsheet, label: 'Reports', description: 'Generate & export' },
+      { to: '/bank-report', icon: Landmark, label: 'דוח לבנק', description: 'דוח מצב עסקי לבנק' },
     ]
   },
   {
@@ -291,6 +307,13 @@ function App() {
                 <Route path="/invoices" element={<InvoicesDashboard />} />
                 <Route path="/payment-requests" element={<PaymentsDashboard />} />
                 <Route path="/agreements" element={<AgreementCashFlowDashboard />} />
+                <Route path="/masav" element={<MasavDashboard darkMode={darkMode} />} />
+                <Route path="/inventory" element={<InventoryDashboard darkMode={darkMode} />} />
+                <Route path="/bank-report" element={<BankReportDashboard darkMode={darkMode} />} />
+                <Route path="/executive" element={<ExecutiveDashboard darkMode={darkMode} />} />
+                <Route path="/budget-entry" element={<BudgetEntry darkMode={darkMode} />} />
+                <Route path="/year-comparison" element={<YearComparison darkMode={darkMode} />} />
+                <Route path="/expenses" element={<ExpenseFiling darkMode={darkMode} />} />
               </Routes>
             </main>
           </div>

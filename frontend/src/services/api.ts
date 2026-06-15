@@ -400,6 +400,182 @@ class ApiService {
     return this.get('/reports/templates');
   }
 
+  // ==================== Masav (מס"ב) Supplier Payments ====================
+
+  async getMasavSettings() {
+    return this.get('/masav/settings');
+  }
+
+  async saveMasavSettings(settings: {
+    institution_code: string;
+    sending_institution: string;
+    institution_name: string;
+  }) {
+    return this.post('/masav/settings', settings);
+  }
+
+  async previewMasav(payment_date: string, bill_ids?: number[]) {
+    return this.post('/masav/preview', { payment_date, bill_ids: bill_ids ?? null });
+  }
+
+  async downloadMasav(payment_date: string, bill_ids?: number[]) {
+    const response = await this.client.post(
+      '/masav/generate',
+      { payment_date, bill_ids: bill_ids ?? null },
+      { responseType: 'blob' }
+    );
+    const blob = new Blob([response.data], { type: 'text/plain' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `masav_${payment_date.replace(/-/g, '')}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    return { skipped: Number(response.headers['x-masav-skipped'] || 0) };
+  }
+
+  // ==================== Expense Filing (תיוק הוצאות) ====================
+
+  async listExpenses(status?: string) {
+    return this.get(`/expenses${status ? `?status=${status}` : ''}`);
+  }
+
+  async createExpense(data: {
+    supplier_name: string;
+    amount: number;
+    vat_amount?: number;
+    total?: number;
+    expense_date: string;
+    category?: string;
+    description?: string;
+    invoice_number?: string;
+  }) {
+    return this.post('/expenses', data);
+  }
+
+  async updateExpense(expenseId: number, data: {
+    supplier_name?: string;
+    amount?: number;
+    vat_amount?: number;
+    category?: string;
+  }) {
+    const response = await this.client.patch(`/expenses/${expenseId}`, data);
+    return response.data;
+  }
+
+  async fileExpense(expenseId: number) {
+    return this.post(`/expenses/${expenseId}/file`);
+  }
+
+  async syncPendingExpenses() {
+    return this.post('/expenses/sync-pending');
+  }
+
+  async resolveSuppliers(limit?: number) {
+    return this.post(`/expenses/resolve-suppliers${limit ? `?limit=${limit}` : ''}`);
+  }
+
+  async getPcn874Readiness() {
+    return this.get('/expenses/pcn874-readiness');
+  }
+
+  async classifyExpenses() {
+    return this.post('/expenses/classify');
+  }
+
+  async fileAllExpenses() {
+    return this.post('/expenses/file-all');
+  }
+
+  // ==================== Budget Entry & Year Comparison ====================
+
+  async saveBudgetsBulk(items: Array<{ category: string; year: number; month: number; amount: number }>) {
+    return this.post('/financial/budget/bulk', { items });
+  }
+
+  async downloadBudgetTemplate() {
+    const response = await this.client.get('/financial/budget/template', { responseType: 'blob' });
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'budget_template.xlsx';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  async importBudgetExcel(file: File) {
+    const form = new FormData();
+    form.append('file', file);
+    const response = await this.client.post('/financial/budget/import', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  }
+
+  async getYearComparison(year?: number) {
+    return this.get(`/reports/year-comparison${year ? `?year=${year}` : ''}`);
+  }
+
+  // ==================== Executive Dashboard ====================
+
+  async getExecutiveDashboard() {
+    return this.get('/dashboard/executive');
+  }
+
+  async getFeesReport() {
+    return this.get('/dashboard/fees');
+  }
+
+  // ==================== Bank Status Report (דוח לבנק) ====================
+
+  async getBankStatusReport() {
+    return this.get('/reports/bank-status');
+  }
+
+  async downloadBankStatusReport() {
+    const response = await this.client.get('/reports/bank-status/export', {
+      responseType: 'blob',
+    });
+    const blob = new Blob([response.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `bank_status_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  }
+
+  // ==================== Inventory (מלאי) ====================
+
+  async getInventoryReport() {
+    return this.get('/inventory/report');
+  }
+
+  async saveInventoryItem(item: {
+    id?: number;
+    sku?: string;
+    name: string;
+    unit?: string;
+    quantity?: number;
+    unit_cost?: number;
+    unit_price?: number;
+    reorder_level?: number;
+  }) {
+    return this.post('/inventory/items', item);
+  }
+
+  async syncInventory() {
+    return this.post('/inventory/sync');
+  }
+
   // ==================== Dashboard & Analytics ====================
 
   async getDashboardStats() {

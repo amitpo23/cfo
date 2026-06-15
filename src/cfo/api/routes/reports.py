@@ -49,7 +49,7 @@ async def get_profit_loss(
     הפקת דוח רווח והפסד
     Generate Profit & Loss Statement
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = FinancialReportsService(db)
     
     # קביעת תאריכים ברירת מחדל
@@ -87,7 +87,7 @@ async def generate_profit_loss(
     הפקת דוח רווח והפסד עם תאריכים מותאמים
     Generate Profit & Loss with custom dates
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = FinancialReportsService(db)
     
     report = service.generate_profit_loss(
@@ -111,7 +111,7 @@ async def export_profit_loss_excel(
     ייצוא דוח רווח והפסד ל-Excel
     Export Profit & Loss to Excel
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = FinancialReportsService(db)
     
     if not end_date:
@@ -149,7 +149,7 @@ async def get_balance_sheet(
     הפקת מאזן / דוח כספי
     Generate Balance Sheet
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = FinancialReportsService(db)
     
     if not as_of_date:
@@ -174,7 +174,7 @@ async def export_balance_sheet_excel(
     ייצוא מאזן ל-Excel
     Export Balance Sheet to Excel
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = FinancialReportsService(db)
     
     if not as_of_date:
@@ -209,7 +209,7 @@ async def get_cash_flow_projection(
     הפקת תזרים מזומנים חזוי לבנק
     Generate Projected Cash Flow for Bank
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = FinancialReportsService(db)
     
     report = service.generate_cash_flow_projection(
@@ -231,7 +231,7 @@ async def generate_cash_flow_projection(
     הפקת תזרים חזוי עם פרמטרים מותאמים
     Generate Projected Cash Flow with custom parameters
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = FinancialReportsService(db)
     
     report = service.generate_cash_flow_projection(
@@ -254,7 +254,7 @@ async def export_cash_flow_projection_excel(
     ייצוא תזרים חזוי ל-Excel
     Export Projected Cash Flow to Excel
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = FinancialReportsService(db)
     
     report = service.generate_cash_flow_projection(
@@ -285,7 +285,7 @@ async def get_financial_summary(
     סיכום פיננסי מהיר
     Quick Financial Summary
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = FinancialReportsService(db)
     
     today = date.today()
@@ -372,3 +372,55 @@ async def get_available_reports():
             }
         ]
     }
+
+
+# ============= Bank Status Report =============
+
+@router.get("/bank-status")
+async def get_bank_status_report(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """דוח מצב עסקי לבנק (רווח והפסד, מאזן, מזומנים, חייבים/זכאים)."""
+    org_id = (current_user.organization_id or 1)
+    from ...services.bank_report_service import BankReportService
+    report = BankReportService(db, organization_id=org_id).generate(start_date, end_date)
+    return {"status": "success", "data": report}
+
+
+@router.get("/bank-status/export")
+async def export_bank_status_report(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """ייצוא דוח המצב לבנק כקובץ Excel."""
+    org_id = (current_user.organization_id or 1)
+    from ...services.bank_report_service import BankReportService
+    service = BankReportService(db, organization_id=org_id)
+    report = service.generate(start_date, end_date)
+    excel_bytes = service.to_excel(report)
+    filename = f"bank_status_{report['period']['end']}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+# ============= Year-over-Year Comparison =============
+
+@router.get("/year-comparison")
+async def get_year_comparison(
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """דוח השוואת נתונים מול השנה הקודמת (הכנסות, הוצאות, רווח, חודשי)."""
+    org_id = (current_user.organization_id or 1)
+    service = FinancialReportsService(db)
+    data = service.generate_year_comparison(org_id, year=year)
+    return {"status": "success", "data": data}

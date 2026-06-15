@@ -657,50 +657,91 @@ class KPIService:
         except (ZeroDivisionError, KeyError):
             return 0
     
+    def _period_start(self, as_of_date: date, period: str) -> date:
+        if period == "monthly":
+            return as_of_date.replace(day=1)
+        if period == "quarterly":
+            q_start = ((as_of_date.month - 1) // 3) * 3 + 1
+            return as_of_date.replace(month=q_start, day=1)
+        return as_of_date.replace(month=1, day=1)  # yearly / ytd
+
+    def _balance_snapshot(self) -> Dict:
+        """מצב נכסים/התחייבויות נוכחי — מקור אמת משותף עם דוח הבנק."""
+        from .balance_snapshot import compute_balance_snapshot
+        return compute_balance_snapshot(self.db, self.organization_id)
+
     def _get_financial_data(self, as_of_date: date, period: str) -> Dict:
-        """שליפת נתונים פיננסיים"""
-        # בפרודקשן - מהDB
-        import random
-        base_revenue = 500000 + random.randint(-50000, 50000)
-        
+        """שליפת נתונים פיננסיים אמיתיים (P&L + מצב מאזני) מהדאטאבייס."""
+        from .financial_reports_service import FinancialReportsService
+
+        start = self._period_start(as_of_date, period)
+        reports = FinancialReportsService(self.db)
+        pl = reports.generate_profit_loss(
+            self.organization_id, start, as_of_date, compare_previous=False
+        )
+
+        revenue = float(pl.total_revenue or 0)
+        cogs = float((pl.total_revenue or 0) - (pl.gross_profit or 0))
+        operating_income = float(pl.operating_income or 0)
+        net_income = float(pl.net_income or 0)
+
+        bal = self._balance_snapshot()
+
+        # צמיחה מול התקופה הקודמת באותו אורך
+        span = max(1, (as_of_date - start).days)
+        prev_end = start - timedelta(days=1)
+        prev_start = prev_end - timedelta(days=span)
+        prev_pl = reports.generate_profit_loss(
+            self.organization_id, prev_start, prev_end, compare_previous=False
+        )
+        prev_rev = float(prev_pl.total_revenue or 0)
+        prev_profit = float(prev_pl.net_income or 0)
+        revenue_growth = ((revenue - prev_rev) / prev_rev * 100) if prev_rev else 0.0
+        profit_growth = ((net_income - prev_profit) / prev_profit * 100) if prev_profit else 0.0
+
         return {
-            'revenue': base_revenue,
-            'cogs': base_revenue * 0.6,
-            'operating_income': base_revenue * 0.2,
-            'net_income': base_revenue * 0.12,
-            'total_assets': base_revenue * 2,
-            'current_assets': base_revenue * 0.8,
-            'current_liabilities': base_revenue * 0.4,
-            'equity': base_revenue * 0.8,
-            'cash': base_revenue * 0.3,
-            'receivables': base_revenue * 0.25,
-            'payables': base_revenue * 0.2,
-            'inventory': base_revenue * 0.15,
-            'depreciation': base_revenue * 0.03,
-            'total_debt': base_revenue * 0.5,
-            'interest_expense': base_revenue * 0.02,
-            'purchases': base_revenue * 0.5,
-            'revenue_growth': random.uniform(5, 15),
-            'profit_growth': random.uniform(3, 12),
-            'customer_growth': random.uniform(2, 8)
+            "revenue": revenue,
+            "cogs": cogs,
+            "operating_income": operating_income,
+            "net_income": net_income,
+            "total_assets": bal["total_assets"],
+            "current_assets": bal["current_assets"],
+            "current_liabilities": bal["current_liabilities"],
+            "equity": bal["equity"],
+            "cash": bal["cash"],
+            "receivables": bal["receivables"],
+            "payables": bal["payables"],
+            "inventory": bal["inventory"],
+            "depreciation": 0.0,        # אין רישום פחת נפרד
+            "total_debt": bal["total_debt"],
+            "interest_expense": 0.0,    # אין רישום הוצאות ריבית נפרד
+            "purchases": cogs,
+            "revenue_growth": revenue_growth,
+            "profit_growth": profit_growth,
+            "customer_growth": 0.0,     # דורש snapshot היסטורי של לקוחות
         }
-    
+
     def _get_financial_snapshot(self, as_of_date: date) -> FinancialSnapshot:
-        """תמונת מצב פיננסית"""
-        data = self._get_financial_data(as_of_date, 'monthly')
-        
+        """תמונת מצב פיננסית אמיתית (MTD + YTD)."""
+        mtd = self._get_financial_data(as_of_date, "monthly")
+        ytd = self._get_financial_data(as_of_date, "yearly")
+        expenses_mtd = mtd["revenue"] - mtd["net_income"]
+        expenses_ytd = ytd["revenue"] - ytd["net_income"]
+        burn_rate = expenses_mtd - mtd["revenue"]  # חיובי = שריפת מזומן
+        runway = (mtd["cash"] / burn_rate) if burn_rate > 0 else 999
+
         return FinancialSnapshot(
             date=as_of_date.isoformat(),
-            revenue_mtd=data['revenue'],
-            revenue_ytd=data['revenue'] * 10,
-            expenses_mtd=data['cogs'] + data['operating_income'] * 0.5,
-            expenses_ytd=(data['cogs'] + data['operating_income'] * 0.5) * 10,
-            net_income_mtd=data['net_income'],
-            net_income_ytd=data['net_income'] * 10,
-            cash_balance=data['cash'],
-            receivables=data['receivables'],
-            payables=data['payables'],
-            working_capital=data['current_assets'] - data['current_liabilities'],
-            burn_rate=(data['cogs'] + data['operating_income'] * 0.5) - data['revenue'],
-            runway_months=12 if data['net_income'] > 0 else data['cash'] / max(1, data['cogs'] / 12)
+            revenue_mtd=mtd["revenue"],
+            revenue_ytd=ytd["revenue"],
+            expenses_mtd=expenses_mtd,
+            expenses_ytd=expenses_ytd,
+            net_income_mtd=mtd["net_income"],
+            net_income_ytd=ytd["net_income"],
+            cash_balance=mtd["cash"],
+            receivables=mtd["receivables"],
+            payables=mtd["payables"],
+            working_capital=mtd["current_assets"] - mtd["current_liabilities"],
+            burn_rate=burn_rate,
+            runway_months=runway,
         )

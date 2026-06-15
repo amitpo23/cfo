@@ -76,6 +76,9 @@ _DOCUMENT_TYPE_TO_SUMIT = {
     "quote": "PriceQuotation",
     "price_quotation": "PriceQuotation",
     "order": "Order",
+    # הזמנת רכש / הזמנת עבודה — SUMIT מייצג שתיהן כ-Order (הזמנה).
+    "purchase_order": "Order",
+    "work_order": "Order",
     "delivery_note": "DeliveryNote",
     "payment_request": "PaymentRequest",
     "expense": "ExpenseInvoice",
@@ -217,7 +220,11 @@ class SumitIntegration(BaseIntegration):
 
         except httpx.HTTPStatusError as e:
             self._log_error(e, f"HTTP error on {endpoint}")
-            raise Exception(f"SUMIT API error: {e.response.text}")
+            # כולל את קוד הסטטוס בהודעה — ל-403 (rate limit) התגובה לרוב ריקה,
+            # וקוראים מסתמכים על זיהוי "403" בטקסט כדי לבצע backoff.
+            raise Exception(
+                f"SUMIT API error {e.response.status_code}: {e.response.text}"
+            )
         except Exception as e:
             self._log_error(e, f"Request failed on {endpoint}")
             raise
@@ -787,6 +794,52 @@ class SumitIntegration(BaseIntegration):
         result = dict(data)
         result["expense_id"] = str(document_id) if document_id is not None else None
         return result
+
+    async def get_document_supplier(self, document_id: str) -> str:
+        """Return the supplier/customer name on a document (from getdetails)."""
+        details = await self.get_document_supplier_details(document_id)
+        return details["name"]
+
+    async def get_document_supplier_details(self, document_id: str) -> Dict[str, Any]:
+        """Return supplier name + tax id (CompanyNumber) + VAT + total for a
+        document — everything PCN874 needs, only reachable via getdetails.
+        """
+        data = await self._post(
+            "/accounting/documents/getdetails/",
+            {"DocumentID": self._to_int(document_id)}
+        )
+        document = data.get("Document") or {}
+        customer = document.get("Customer") or {}
+        items = data.get("Items") or []
+        # מע"מ: קודם סכימת Items, ואז fallback לשדות ברמת מסמך שמכילים 'vat'
+        vat = Decimal("0")
+        for it in items:
+            vat += Decimal(str(it.get("VAT") or 0))
+        if vat == 0:
+            for k, v in document.items():
+                if "vat" in k.lower() and v:
+                    try:
+                        vat = abs(Decimal(str(v)))
+                        break
+                    except Exception:
+                        pass
+        total = abs(Decimal(str(document.get("DocumentValue") or 0)))
+        # שם פריט ההוצאה ב-SUMIT (למשל "הוצאות נסיעה") — אות הסיווג האמין,
+        # נבחר הפריט הראשון עם שם לא-ריק.
+        item_name = ""
+        for it in items:
+            nm = ((it.get("Item") or {}).get("Name") or "").strip()
+            if nm:
+                item_name = nm
+                break
+        return {
+            "name": (customer.get("Name") or "").strip(),
+            "tax_id": str(customer.get("CompanyNumber") or "").strip(),
+            "vat": float(vat),
+            "total": float(total),
+            "no_vat": bool(customer.get("NoVAT")),
+            "item_name": item_name,
+        }
 
     async def cancel_document(self, document_id: str) -> Dict[str, Any]:
         """

@@ -759,7 +759,7 @@ class BankStatementService:
         grouped = {}
         for tx in transactions:
             # נורמליזציה של התיאור
-            desc_key = re.sub(r'\d+', '#', tx.description.lower().strip())
+            desc_key = re.sub(r'\d+', '#', (tx.description or '').lower().strip())
             amount_key = round(float(tx.amount), 0)
             
             key = f"{desc_key}_{amount_key}"
