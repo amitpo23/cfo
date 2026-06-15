@@ -51,12 +51,24 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
         try:
             engine = SyncEngine(db, connector, org_id, resolved, conn_id)
             run = await engine.run_full_sync()
-            results.append({
+            result = {
                 "organization_id": org_id,
                 "source": resolved,
                 "status": run.status.value if run.status else None,
                 "counts": run.counts,
-            })
+            }
+            # SyncEngine ממלא Invoice/Bill (AR/AP). את טבלת Transaction
+            # (בסיס רווח-והפסד/תזרים/מאזן) ממלא DataSyncService — חייב לרוץ גם
+            # הוא אחרת הדוחות הכספיים לא יתעדכנו. רק עבור SUMIT.
+            if resolved == "sumit":
+                try:
+                    from ...services.data_sync_service import DataSyncService
+                    svc = DataSyncService(db, org_id)
+                    result["transactions"] = await svc.sync_all()
+                except Exception as exc:
+                    logger.warning("Transaction sync failed for org %s: %s", org_id, exc)
+                    result["transactions_error"] = str(exc)
+            results.append(result)
         except Exception as exc:
             logger.error("Scheduled sync failed for org %s source %s: %s", org_id, source, exc)
             results.append({"organization_id": org_id, "source": source, "error": str(exc)})

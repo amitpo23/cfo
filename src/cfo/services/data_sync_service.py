@@ -31,32 +31,32 @@ class DataSyncService:
         self._sumit: Optional[SumitIntegration] = None
     
     async def _get_sumit(self) -> SumitIntegration:
-        """Get or create SUMIT integration instance"""
-        if self._sumit is None:
-            # קבלת credentials מהארגון
-            org = self.db.query(Organization).filter(
-                Organization.id == self.organization_id
-            ).first()
-            
-            if org and org.api_credentials:
-                api_key = org.api_credentials.get('api_key') or settings.sumit_api_key
-                company_id = org.api_credentials.get('company_id') or settings.sumit_company_id
-            else:
-                api_key = settings.sumit_api_key
-                company_id = settings.sumit_company_id
-            
-            if not api_key:
-                raise ValueError("SUMIT API key not configured")
-            
-            self._sumit = SumitIntegration(api_key=api_key, company_id=company_id)
-        
-        return self._sumit
-    
+        """Return a FRESH SUMIT integration each call.
+
+        Every sync method wraps the client in `async with sumit:`, which closes
+        the underlying httpx client on exit. A cached instance would be closed
+        by the first sync step and break every subsequent one in the same run
+        ("Cannot send a request, as the client has been closed").
+        """
+        org = self.db.query(Organization).filter(
+            Organization.id == self.organization_id
+        ).first()
+
+        if org and org.api_credentials:
+            api_key = org.api_credentials.get('api_key') or settings.sumit_api_key
+            company_id = org.api_credentials.get('company_id') or settings.sumit_company_id
+        else:
+            api_key = settings.sumit_api_key
+            company_id = settings.sumit_company_id
+
+        if not api_key:
+            raise ValueError("SUMIT API key not configured")
+
+        return SumitIntegration(api_key=api_key, company_id=company_id)
+
     async def close(self):
-        """Close SUMIT connection"""
-        if self._sumit:
-            await self._sumit.__aexit__(None, None, None)
-            self._sumit = None
+        """No-op: each sync step opens and closes its own client via async-with."""
+        self._sumit = None
     
     # ============= Document Sync =============
     
@@ -79,12 +79,15 @@ class DataSyncService:
         
         async with sumit:
             # שליפת מסמכים
+            # limit גבוה — בלי זה SUMIT מחזיר ~100 מסמכים, וההוצאות הרבות
+            # "דוחפות" את חשבוניות ההכנסה מחוץ לעמוד הראשון (revenue=0 שגוי).
             request = DocumentListRequest(
                 from_date=from_date,
                 to_date=to_date,
-                document_types=document_types
+                document_types=document_types,
+                limit=2000,
             )
-            
+
             documents = await sumit.list_documents(request)
             
             synced_count = 0

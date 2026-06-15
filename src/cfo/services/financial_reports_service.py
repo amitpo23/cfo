@@ -239,20 +239,28 @@ class FinancialReportsService:
         
         # הפרדת עלות מכר מהוצאות תפעוליות
         cogs_categories = ['cost_of_goods', 'materials', 'direct_labor']
+        # הוצאות לא-תפעוליות (מימון בלבד). הקטגוריה "other" היא קוד-מחדל
+        # להוצאה תפעולית לא-מסווגת — היא נשארת בתפעוליות ואינה "הוצאה אחרת".
+        non_operating_exp_categories = ['interest_expense']
         cogs_items = [i for i in expense_items if i.category in cogs_categories]
-        operating_items = [i for i in expense_items if i.category not in cogs_categories]
-        
+        other_expense_items = [i for i in expense_items if i.category in non_operating_exp_categories]
+        # תפעוליות = כל מה שאינו COGS ואינו לא-תפעולי (קבוצות זרות — בלי כפל-מנייה).
+        operating_items = [
+            i for i in expense_items
+            if i.category not in cogs_categories
+            and i.category not in non_operating_exp_categories
+        ]
+
         total_cogs = sum(item.amount for item in cogs_items)
         gross_profit = total_revenue - total_cogs
         gross_margin = (gross_profit / total_revenue * 100) if total_revenue else 0
-        
+
         total_operating = sum(item.amount for item in operating_items)
         operating_income = gross_profit - total_operating
         operating_margin = (operating_income / total_revenue * 100) if total_revenue else 0
-        
-        # הכנסות והוצאות אחרות
+
+        # הכנסות והוצאות אחרות (לא-תפעוליות)
         other_income_items = [i for i in revenue_items if i.category in ['interest_income', 'other_income']]
-        other_expense_items = [i for i in operating_items if i.category in ['interest_expense', 'other']]
         
         # רווח לפני מס
         total_other_income = sum(i.amount for i in other_income_items)
@@ -268,7 +276,7 @@ class FinancialReportsService:
         for item in revenue_items:
             item.percentage = (item.amount / total_revenue * 100) if total_revenue else 0
         
-        total_expenses = total_cogs + total_operating
+        total_expenses = total_cogs + total_operating + total_other_expense
         for item in expense_items:
             item.percentage = (item.amount / total_expenses * 100) if total_expenses else 0
         
