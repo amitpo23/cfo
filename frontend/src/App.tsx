@@ -96,6 +96,7 @@ const navigationConfig = [
     section: 'Operations',
     items: [
       { to: '/invoices', icon: FileCheck, label: 'Invoices', description: 'Create & manage invoices' },
+      { to: '/documents', icon: ScrollText, label: 'הוצאת מסמכים', description: 'חשבונית/הצעת מחיר/הזמנה/תעודת משלוח' },
       { to: '/payment-requests', icon: Banknote, label: 'Payment Requests', description: 'Requests & standing orders' },
       { to: '/agreements', icon: ScrollText, label: 'Agreements', description: 'Contracts & cash flow' },
       { to: '/expenses', icon: Receipt, label: 'תיוק הוצאות', description: 'הוצאות ותיוקן ב-SUMIT' },
