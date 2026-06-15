@@ -904,7 +904,10 @@ class SumitIntegration(BaseIntegration):
         Returns:
             List of debt records
         """
-        payload: Dict[str, Any] = {}
+        # DebitSource/CreditSource הם שדות-חובה (enum מספרי) שבוחרים אילו סוגי
+        # מסמכים נספרים כחיוב/זיכוי (אחרת ה-API מחזיר "שדה חסר: DebitSource").
+        # 2/1 מחזיר את רשומות החוב; ערכים אחרים (1/1, 2/2) החזירו 0 בבדיקה.
+        payload: Dict[str, Any] = {"DebitSource": 2, "CreditSource": 1}
         if request.include_paid:
             payload["IncludeDraftDocuments"] = True
         data = await self._post("/accounting/documents/getdebtreport/", payload)

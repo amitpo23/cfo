@@ -2,7 +2,7 @@
  * Document Creation and Management Component
  */
 import React, { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Download, Send, X } from 'lucide-react';
 import { format } from 'date-fns';
 import apiService from '../services/api';
@@ -75,7 +75,7 @@ export const DocumentManager: React.FC = () => {
 
       {/* Filter Tabs */}
       <div className="mb-6 flex gap-2 border-b border-gray-200">
-        {['all', 'invoice', 'receipt', 'quote', 'credit_note'].map((type) => (
+        {['all', 'invoice', 'receipt', 'proforma', 'quote', 'order', 'purchase_order', 'work_order', 'delivery_note', 'credit_note'].map((type) => (
           <button
             key={type}
             onClick={() => setFilterType(type)}
@@ -184,10 +184,65 @@ export const DocumentManager: React.FC = () => {
   );
 };
 
+const DOCUMENT_TYPES: { value: string; label: string }[] = [
+  { value: 'invoice', label: 'חשבונית מס' },
+  { value: 'receipt', label: 'קבלה' },
+  { value: 'invoice_receipt', label: 'חשבונית מס קבלה' },
+  { value: 'proforma', label: 'חשבונית עסקה' },
+  { value: 'quote', label: 'הצעת מחיר' },
+  { value: 'order', label: 'הזמנה' },
+  { value: 'purchase_order', label: 'הזמנת רכש' },
+  { value: 'work_order', label: 'הזמנת עבודה' },
+  { value: 'delivery_note', label: 'תעודת משלוח' },
+  { value: 'credit_note', label: 'חשבונית זיכוי' },
+];
+
 const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [items, setItems] = useState<DocumentItem[]>([
     { description: '', quantity: 1, price: 0 },
   ]);
+  const [documentType, setDocumentType] = useState('invoice');
+  const [customerName, setCustomerName] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
+  const [sendToSumit, setSendToSumit] = useState(true);
+
+  const queryClient = useQueryClient();
+  const createMutation = useMutation({
+    mutationFn: () =>
+      apiService.post('/financial/documents', {
+        document_type: documentType,
+        customer_id: customerName,
+        customer_name: customerName,
+        customer_email: customerEmail || undefined,
+        send_to_sumit: sendToSumit,
+        send_email: Boolean(customerEmail),
+        items: items
+          .filter((it) => it.description.trim())
+          .map((it) => ({
+            description: it.description,
+            quantity: it.quantity,
+            unit_price: it.price,
+            vat_rate: 18,
+            discount: 0,
+          })),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents'] });
+      alert('המסמך הופק בהצלחה');
+      onClose();
+    },
+    onError: (err: unknown) => {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        'הפקת המסמך נכשלה';
+      alert(msg);
+    },
+  });
+
+  const canSubmit =
+    customerName.trim().length > 0 &&
+    items.some((it) => it.description.trim()) &&
+    !createMutation.isPending;
 
   const addItem = () => {
     setItems([...items, { description: '', quantity: 1, price: 0 }]);
@@ -213,22 +268,53 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
           <div className="grid grid-cols-2 gap-4 mb-6">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Document Type
+                סוג מסמך
               </label>
-              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500">
-                <option value="invoice">Invoice</option>
-                <option value="receipt">Receipt</option>
-                <option value="quote">Quote</option>
-                <option value="credit_note">Credit Note</option>
+              <select
+                value={documentType}
+                onChange={(e) => setDocumentType(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                {DOCUMENT_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
               </select>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Customer
+                לקוח / ספק
               </label>
-              <select className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500">
-                <option value="">Select customer...</option>
-              </select>
+              <input
+                type="text"
+                placeholder="שם הלקוח/ספק"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                אימייל לשליחה (אופציונלי)
+              </label>
+              <input
+                type="email"
+                placeholder="example@domain.com"
+                value={customerEmail}
+                onChange={(e) => setCustomerEmail(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+            <div className="flex items-end">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={sendToSumit}
+                  onChange={(e) => setSendToSumit(e.target.checked)}
+                />
+                הפקה ב-SUMIT
+              </label>
             </div>
           </div>
 
@@ -305,10 +391,14 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
               onClick={onClose}
               className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
             >
-              Cancel
+              ביטול
             </button>
-            <button className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition">
-              Create Document
+            <button
+              onClick={() => createMutation.mutate()}
+              disabled={!canSubmit}
+              className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {createMutation.isPending ? 'מפיק...' : 'הפק מסמך'}
             </button>
           </div>
         </div>
