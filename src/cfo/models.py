@@ -626,6 +626,10 @@ class BankTransaction(Base):
     matched_entity_type = Column(String(50), nullable=True)  # invoice, bill, payment
     matched_entity_id = Column(Integer, nullable=True)
     is_reconciled = Column(Boolean, default=False)
+    reconciliation_dispatch_status = Column(String(30), default="not_sent")
+    reconciliation_dispatched_at = Column(DateTime, nullable=True)
+    external_reconciliation_id = Column(String(255), nullable=True)
+    reconciliation_error = Column(Text, nullable=True)
     raw_data = Column(JSON, nullable=True)
     payload_hash = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -946,6 +950,12 @@ class UserLogin(BaseModel):
     """התחברות למערכת"""
     email: EmailStr
     password: str
+
+
+class GoogleLogin(BaseModel):
+    """Google Sign-In token exchange"""
+    id_token: str
+    registration_code: Optional[str] = None
 
 
 class Token(BaseModel):

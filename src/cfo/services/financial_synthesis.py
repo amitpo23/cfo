@@ -216,6 +216,48 @@ def link_payments_organization(db, organization_id: int, *, persist: bool = True
     return result
 
 
+def compute_vat_position(
+    db, organization_id: int, *, start=None, end=None
+) -> dict[str, Any]:
+    """Canonical VAT position from the books (document-actual tax fields).
+
+    Single source of truth for output/input VAT. Reads the real `tax`/`vat_amount`
+    fields on Invoice/Bill/Expense (more accurate than estimating amount×rate on the
+    generic Transaction table). Optional [start, end] bounds make it period-scoped;
+    omit both for the all-time running position used by the synthesis dashboard.
+    """
+    from ..models import Invoice, Bill, Expense
+
+    def _in_period(d) -> bool:
+        if d is None:
+            return start is None and end is None  # undated rows only count all-time
+        if start is not None and d < start:
+            return False
+        if end is not None and d > end:
+            return False
+        return True
+
+    inv = db.query(Invoice).filter(Invoice.organization_id == organization_id).all()
+    bills = db.query(Bill).filter(Bill.organization_id == organization_id).all()
+    exps = db.query(Expense).filter(Expense.organization_id == organization_id).all()
+
+    output_vat = sum(float(r.tax or 0) for r in inv
+                     if _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
+    input_vat = (
+        sum(float(r.tax or 0) for r in bills
+            if _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
+        + sum(float(getattr(r, "vat_amount", 0) or 0) for r in exps
+              if _in_period(getattr(r, "expense_date", None)))
+    )
+    net = round(output_vat - input_vat, 2)
+    return {
+        "output_vat": round(output_vat, 2),
+        "input_vat": round(input_vat, 2),
+        "net_vat": net,
+        "direction": "לתשלום" if net >= 0 else "להחזר",
+    }
+
+
 def synthesize_organization(db, organization_id: int) -> dict[str, Any]:
     from ..models import BankTransaction, Invoice, Bill, Expense, InvoiceStatus, BillStatus
 
@@ -247,10 +289,10 @@ def synthesize_organization(db, organization_id: int) -> dict[str, Any]:
     unpaid_invoice_ids = {r.id for r in invoice_rows if r.status != paid_invoice}
     unpaid_bill_ids = {r.id for r in bill_rows if r.status != paid_bill}
 
-    # VAT position from the books.
-    output_vat = sum(float(r.tax or 0) for r in invoice_rows)
-    input_vat = (sum(float(r.tax or 0) for r in bill_rows)
-                 + sum(float(getattr(r, "vat_amount", 0) or 0) for r in expense_rows))
+    # VAT position from the books — single canonical source (document-actual tax).
+    vat = compute_vat_position(db, organization_id)
+    output_vat = vat["output_vat"]
+    input_vat = vat["input_vat"]
 
     return build_synthesis(
         bank_txns, invoices, bills, expenses,

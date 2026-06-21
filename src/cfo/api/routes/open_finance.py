@@ -9,10 +9,11 @@ thin pass-throughs over `OpenFinanceClient`; the value-add endpoints are
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import date, datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -22,7 +23,7 @@ from ...config import settings
 from ...models import BankConnection, BankTransaction, CfoInsight
 from ...services.open_finance_client import OpenFinanceClient, OpenFinanceError
 from ...services.credentials_vault import decrypt_credentials
-from ...services import bank_insights, bank_reconciliation
+from ...services import bank_insights, bank_reconciliation, reconciliation_dispatch
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -372,6 +373,17 @@ async def reconcile(
     db: Session = Depends(get_db_session),
 ):
     return bank_reconciliation.reconcile_organization(db, org_id, persist=persist)
+
+
+@router.post("/reconcile/sumit-dispatch")
+async def dispatch_reconciliation_to_sumit(
+    dry_run: bool = Query(False),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    return await reconciliation_dispatch.dispatch_reconciliation_to_sumit(
+        db, org_id, dry_run=dry_run
+    )
 
 
 # ====================================================================== #
@@ -776,8 +788,18 @@ async def send_whatsapp(body: dict = Body(...), org_id: int = Depends(get_curren
 # WEBHOOKS — Open Finance event receiver (no signature scheme documented)
 # ====================================================================== #
 @router.post("/webhooks")
-async def webhook(request: Request, db: Session = Depends(get_db_session)):
+async def webhook(
+    request: Request,
+    x_webhook_secret: Optional[str] = Header(None),
+    db: Session = Depends(get_db_session),
+):
     """Receive Connection/Payment/Session events and update local state."""
+    if settings.open_finance_webhook_secret and not secrets.compare_digest(
+        x_webhook_secret or "",
+        settings.open_finance_webhook_secret,
+    ):
+        raise HTTPException(401, "invalid webhook credentials")
+
     try:
         event = await request.json()
     except Exception:  # noqa: BLE001

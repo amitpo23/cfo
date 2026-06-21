@@ -2,6 +2,7 @@
 Configuration management for CFO system
 """
 import os
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
@@ -25,6 +26,12 @@ class Settings(BaseSettings):
     app_url: str = "https://cfo-2.vercel.app" if os.getenv("VERCEL") else "http://localhost:8000"
     debug: bool = False
     log_level: str = "INFO"
+    auto_create_db: bool = False if os.getenv("VERCEL") else True
+    cors_allowed_origins: str = (
+        "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173"
+        if not os.getenv("VERCEL")
+        else "https://cfo-2.vercel.app"
+    )
     
     # Database
     database_url: str = "sqlite:////tmp/cfo.db" if os.getenv("VERCEL") else "sqlite:///./cfo.db"
@@ -61,6 +68,10 @@ class Settings(BaseSettings):
     open_finance_user_id: Optional[str] = None
     open_finance_api_base_url: str = "https://api.open-finance.ai/v2"
     open_finance_oauth_url: str = "https://api.open-finance.ai/oauth/token"
+    open_finance_webhook_secret: Optional[str] = None
+
+    # Google Sign-In
+    google_client_id: Optional[str] = None
     
     # OpenAI
     openai_api_key: Optional[str] = None
@@ -78,6 +89,53 @@ class Settings(BaseSettings):
     # Reports
     reports_output_dir: str = "./reports"
     timezone: str = "Asia/Jerusalem"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def default_empty_database_url(cls, value):
+        if value == "":
+            return "sqlite:////tmp/cfo.db" if os.getenv("VERCEL") else "sqlite:///./cfo.db"
+        return value
+
+    @field_validator("jwt_secret_key", mode="before")
+    @classmethod
+    def default_empty_jwt_secret(cls, value):
+        if value == "":
+            return "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING"
+        return value
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [
+            origin.strip()
+            for origin in self.cors_allowed_origins.split(",")
+            if origin.strip()
+        ]
+
+    @model_validator(mode="after")
+    def validate_production_settings(self):
+        if not os.getenv("VERCEL"):
+            return self
+
+        errors = []
+        if not self.database_url or self.database_url.startswith("sqlite:"):
+            errors.append("DATABASE_URL must point to a persistent production database")
+        if (
+            not self.jwt_secret_key
+            or self.jwt_secret_key == "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING"
+            or len(self.jwt_secret_key) < 32
+        ):
+            errors.append("JWT_SECRET_KEY must be a long random production secret")
+        if not self.credentials_encryption_key or len(self.credentials_encryption_key) < 32:
+            errors.append("CREDENTIALS_ENCRYPTION_KEY must be a separate long random secret")
+        if not self.cron_secret:
+            errors.append("CRON_SECRET must be configured for scheduled jobs")
+        if not self.open_finance_webhook_secret:
+            errors.append("OPEN_FINANCE_WEBHOOK_SECRET must be configured")
+
+        if errors:
+            raise ValueError("Invalid production configuration: " + "; ".join(errors))
+        return self
 
 
 settings = Settings()

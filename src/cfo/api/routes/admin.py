@@ -5,11 +5,12 @@ Admin API routes
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
+import secrets
 
 from ...database import get_db_session
 from ...models import (
     User, Organization, AuditLog,
-    UserCreate, UserUpdate, UserResponse, UserLogin, Token,
+    UserCreate, UserUpdate, UserResponse, UserLogin, GoogleLogin, Token,
     OrganizationCreate, OrganizationUpdate, OrganizationResponse,
     UserRole, IntegrationType
 )
@@ -33,28 +34,41 @@ router = APIRouter()
 
 # ==================== Authentication ====================
 
-@router.post("/auth/register", response_model=Token, status_code=status.HTTP_201_CREATED, tags=["Auth"])
-async def register(
-    user_data: UserCreate,
-    db: Session = Depends(get_db_session)
-):
-    """הרשמת משתמש חדש"""
+def _assert_registration_allowed(registration_code: Optional[str]):
     from ...config import settings
-    if settings.registration_secret and user_data.registration_code != settings.registration_secret:
+    from os import getenv
+
+    if getenv("VERCEL") and not settings.registration_secret:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Self-registration is disabled in production"
+        )
+    if settings.registration_secret and registration_code != settings.registration_secret:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registration requires a valid registration code"
         )
 
-    existing_user = db.query(User).filter(User.email == user_data.email).first()
+
+def _create_self_registered_user(
+    db: Session,
+    *,
+    email: str,
+    full_name: str,
+    password_hash: str,
+    phone: Optional[str] = None,
+    organization_id: Optional[int] = None,
+) -> User:
+    requested_organization_id = organization_id
+    existing_user = db.query(User).filter(User.email == email).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
     
-    if user_data.organization_id:
-        org = db.query(Organization).filter(Organization.id == user_data.organization_id).first()
+    if organization_id:
+        org = db.query(Organization).filter(Organization.id == organization_id).first()
         if not org:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -69,13 +83,12 @@ async def register(
     # Every self-registered user gets an organization of their own (and is
     # its admin), so integrations/credentials are isolated per tenant. The
     # first user attaches to the default org, which may use env credentials.
-    organization_id = user_data.organization_id
     if organization_id is None:
         if is_first_user:
             organization_id = 1
         else:
             org = Organization(
-                name=f"{user_data.full_name}",
+                name=f"{full_name}",
                 business_type="financial_management",
                 integration_type=IntegrationType.MANUAL,
                 settings={"self_registered": True},
@@ -86,24 +99,98 @@ async def register(
             organization_id = org.id
 
     new_user = User(
-        email=user_data.email,
-        password_hash=get_password_hash(user_data.password),
-        full_name=user_data.full_name,
-        phone=user_data.phone,
-        role=UserRole.ADMIN if is_first_user or user_data.organization_id is None else UserRole.USER,
+        email=email,
+        password_hash=password_hash,
+        full_name=full_name,
+        phone=phone,
+        role=UserRole.ADMIN if is_first_user or requested_organization_id is None else UserRole.USER,
         organization_id=organization_id,
     )
     
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    
-    access_token = create_access_token(data={"sub": new_user.id, "role": new_user.role.value})
-    
+    return new_user
+
+
+def _token_for_user(user: User) -> Token:
+    access_token = create_access_token(data={"sub": user.id, "role": user.role.value})
     return Token(
         access_token=access_token,
-        user=UserResponse.model_validate(new_user)
+        user=UserResponse.model_validate(user)
     )
+
+
+@router.post("/auth/register", response_model=Token, status_code=status.HTTP_201_CREATED, tags=["Auth"])
+async def register(
+    user_data: UserCreate,
+    db: Session = Depends(get_db_session)
+):
+    """הרשמת משתמש חדש"""
+    _assert_registration_allowed(user_data.registration_code)
+    new_user = _create_self_registered_user(
+        db,
+        email=user_data.email,
+        full_name=user_data.full_name,
+        password_hash=get_password_hash(user_data.password),
+        phone=user_data.phone,
+        organization_id=user_data.organization_id,
+    )
+    return _token_for_user(new_user)
+
+
+@router.post("/auth/google", response_model=Token, tags=["Auth"])
+async def google_login(
+    login_data: GoogleLogin,
+    db: Session = Depends(get_db_session),
+):
+    """Login or register with a verified Google ID token."""
+    from ...config import settings
+    import httpx
+
+    if not settings.google_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Google Sign-In is not configured"
+        )
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": login_data.id_token},
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Google token")
+
+    payload = resp.json()
+    if payload.get("aud") != settings.google_client_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google token audience mismatch")
+    if str(payload.get("email_verified")).lower() != "true":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Google email is not verified")
+
+    email = payload.get("email")
+    if not email:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google token missing email")
+
+    user = db.query(User).filter(User.email == email).first()
+    if user:
+        if not user.is_active:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is disabled")
+        from datetime import datetime
+        user.last_login = datetime.utcnow()
+        db.commit()
+        db.refresh(user)
+        return _token_for_user(user)
+
+    _assert_registration_allowed(login_data.registration_code)
+    full_name = payload.get("name") or email.split("@", 1)[0]
+    new_user = _create_self_registered_user(
+        db,
+        email=email,
+        full_name=full_name,
+        password_hash=get_password_hash(secrets.token_urlsafe(32)),
+    )
+    return _token_for_user(new_user)
 
 
 @router.post("/auth/login", response_model=Token, tags=["Auth"])

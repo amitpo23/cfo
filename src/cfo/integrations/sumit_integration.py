@@ -384,10 +384,33 @@ class SumitIntegration(BaseIntegration):
             created_at=datetime.now(),
         )
 
+    @staticmethod
+    def _extract_vat(doc: Dict[str, Any]) -> Optional[Decimal]:
+        """Return an explicit VAT amount from a SUMIT list record, or None.
+
+        SUMIT's list payload historically omits VAT, but guard for variants that
+        expose it so a real value always wins over derivation.
+        """
+        for key in ("VAT", "Vat", "VATAmount", "VatAmount", "DocumentVAT",
+                    "TotalVAT", "VAT_Amount"):
+            if doc.get(key) is not None:
+                try:
+                    return Decimal(str(doc.get(key)))
+                except (TypeError, ValueError):
+                    continue
+        return None
+
     def _document_response_from_list(self, doc: Dict[str, Any]) -> DocumentResponse:
         """Build a DocumentResponse from a /accounting/documents/list/ record."""
         total = Decimal(str(doc.get("DocumentValue") or 0))
         issue = self._parse_date(doc.get("Date")) or date.today()
+        # SUMIT's list payload returns only the VAT-inclusive gross. Prefer an
+        # explicit VAT field if the response ever carries one; otherwise recover the
+        # split deterministically from the gross + date so downstream VAT isn't zeroed.
+        vat_amount = self._extract_vat(doc)
+        if vat_amount is None:
+            from ..services.vat_utils import split_inclusive
+            _subtotal, vat_amount = split_inclusive(total, issue)
         if doc.get("IsDraft"):
             status = "draft"
         elif doc.get("IsClosed"):
@@ -401,7 +424,7 @@ class SumitIntegration(BaseIntegration):
             document_type=self._unmap_document_type(doc.get("Type")),
             customer_id=str(doc.get("CustomerID") or ""),
             total_amount=total,
-            vat_amount=Decimal("0"),
+            vat_amount=vat_amount,
             status=status,
             issue_date=issue,
             due_date=self._parse_date(doc.get("DueDate")),
