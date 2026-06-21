@@ -79,6 +79,7 @@ import CFOAPDashboard from './components/CFOAPDashboard';
 import CFOSyncDashboard from './components/CFOSyncDashboard';
 import CFOAlertsTasks from './components/CFOAlertsTasks';
 import CFOCashFlowProjection from './components/CFOCashFlowProjection';
+import CashFlowDashboard from './components/CashFlowDashboard';
 
 import Login from './components/Login';
 
@@ -101,6 +102,7 @@ const navigationConfig = [
       { to: '/', icon: LayoutDashboard, label: 'Command Center', description: 'CFO overview' },
       { to: '/executive', icon: Gauge, label: 'דשבורד מנהלים', description: '8 פאנלים של מצב העסק' },
       { to: '/cashflow', icon: Wallet, label: 'Cash Flow', description: 'Projections & scenarios' },
+      { to: '/cashflow-detail', icon: TrendingUp, label: 'תזרים — מפורט', description: 'חודשי/יומי, burn-rate ויחסי נזילות' },
       { to: '/ar', icon: Receipt, label: 'AR / Collections', description: 'Aging & follow-up' },
       { to: '/ap', icon: CreditCard, label: 'AP / Payables', description: 'Bills & payments' },
       { to: '/budget', icon: Target, label: 'Budget', description: 'Budget vs actual' },
@@ -311,6 +313,7 @@ function App() {
                 {/* CFO Command Center */}
                 <Route path="/" element={<CFOOverview darkMode={darkMode} />} />
                 <Route path="/cashflow" element={<CFOCashFlowProjection darkMode={darkMode} />} />
+                <Route path="/cashflow-detail" element={<CashFlowDashboard />} />
                 <Route path="/ar" element={<CFOARDashboard darkMode={darkMode} />} />
                 <Route path="/ap" element={<CFOAPDashboard darkMode={darkMode} />} />
                 <Route path="/alerts" element={<CFOAlertsTasks darkMode={darkMode} />} />
