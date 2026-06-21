@@ -98,9 +98,13 @@ class BalanceSheetReport:
     # בדיקת איזון
     total_liabilities_and_equity: float
     is_balanced: bool
-    
+
     def to_dict(self) -> Dict:
-        return asdict(self)
+        data = asdict(self)
+        # Derived from synced documents — not the official books (parity with ledger_service).
+        data["derived"] = True
+        data["disclaimer"] = "נגזר מהמסמכים — לא הספרים הרשמיים. לבדיקת רו\"ח."
+        return data
 
 
 @dataclass
