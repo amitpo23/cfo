@@ -98,9 +98,12 @@ async def list_tasks(
 async def update_task(
     task_id: int,
     payload: TaskUpdateSchema,
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
-    task = db.query(Task).get(task_id)
+    task = db.query(Task).filter(
+        Task.id == task_id, Task.organization_id == org_id,
+    ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -158,9 +161,12 @@ async def list_alerts(
 async def update_alert(
     alert_id: int,
     payload: AlertUpdate,
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
-    alert = db.query(Alert).get(alert_id)
+    alert = db.query(Alert).filter(
+        Alert.id == alert_id, Alert.organization_id == org_id,
+    ).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 

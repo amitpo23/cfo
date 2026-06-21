@@ -276,10 +276,13 @@ async def list_sync_runs(
 @router.get("/sync/runs/{run_id}")
 async def get_sync_run(
     run_id: int,
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """Get details of a specific sync run."""
-    run = db.query(SyncRun).get(run_id)
+    run = db.query(SyncRun).filter(
+        SyncRun.id == run_id, SyncRun.organization_id == org_id,
+    ).first()
     if not run:
         raise HTTPException(status_code=404, detail="Sync run not found")
 

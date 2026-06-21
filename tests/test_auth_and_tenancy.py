@@ -97,3 +97,29 @@ def test_cron_runs_with_secret(client):
     assert resp.status_code == 200
     body = resp.json()
     assert "synced" in body and isinstance(body["results"], list)
+
+
+# --- Cross-tenant isolation: PATCH routes must be org-scoped (P0) ----------
+def test_cannot_patch_another_orgs_task(client, owner, fresh_org):
+    """A task created by org A must not be modifiable by org B."""
+    r = client.post("/api/tasks", json={"title": "Owner task"}, headers=owner["headers"])
+    assert r.status_code == 200, r.text
+    task_id = r.json()["id"]
+
+    other = fresh_org()
+    hijack = client.patch(f"/api/tasks/{task_id}", json={"title": "hijacked"},
+                          headers=other["headers"])
+    assert hijack.status_code == 404, hijack.text
+
+    own = client.patch(f"/api/tasks/{task_id}", json={"title": "renamed"},
+                       headers=owner["headers"])
+    assert own.status_code == 200, own.text
+    assert own.json()["title"] == "renamed"
+
+
+def test_cannot_read_another_orgs_sync_run(client, owner, fresh_org):
+    """GET /sync/runs/{id} must be org-scoped — a missing/foreign run is 404."""
+    other = fresh_org()
+    # An arbitrary run id that does not belong to `other` must not leak.
+    resp = client.get("/api/sync/runs/999999", headers=other["headers"])
+    assert resp.status_code == 404, resp.text
