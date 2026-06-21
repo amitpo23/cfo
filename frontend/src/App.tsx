@@ -22,6 +22,9 @@ import {
   Landmark,
   Sparkles,
   Calculator,
+  BookOpen,
+  FileWarning,
+  Cpu,
   ScrollText,
   ChevronLeft,
   ChevronRight,
@@ -48,6 +51,10 @@ import AdminClientsDashboard from './components/AdminClientsDashboard';
 import CalculatorsDashboard from './components/CalculatorsDashboard';
 import PayrollDashboard from './components/PayrollDashboard';
 import OpenFinanceOpsDashboard from './components/OpenFinanceOpsDashboard';
+import LedgerDashboard from './components/LedgerDashboard';
+import DailyReportsDashboard from './components/DailyReportsDashboard';
+import AnnualReportsDashboard from './components/AnnualReportsDashboard';
+import EngineDashboard from './components/EngineDashboard';
 import ReportsDashboard from './components/ReportsDashboard';
 import BudgetDashboard from './components/BudgetDashboard';
 import KPIDashboard from './components/KPIDashboard';
@@ -68,6 +75,7 @@ import ExpenseFiling from './components/ExpenseFiling';
 // CFO Command Center Components
 import CFOOverview from './components/CFOOverview';
 import CFOARDashboard from './components/CFOARDashboard';
+import CFOAPDashboard from './components/CFOAPDashboard';
 import CFOSyncDashboard from './components/CFOSyncDashboard';
 import CFOAlertsTasks from './components/CFOAlertsTasks';
 import CFOCashFlowProjection from './components/CFOCashFlowProjection';
@@ -120,11 +128,15 @@ const navigationConfig = [
       { to: '/kpis', icon: Gauge, label: 'KPIs', description: 'Performance metrics' },
       { to: '/reports', icon: FileSpreadsheet, label: 'Reports', description: 'Generate & export' },
       { to: '/bank-report', icon: Landmark, label: 'דוח לבנק', description: 'דוח מצב עסקי לבנק' },
+      { to: '/engine', icon: Cpu, label: 'המנוע המאחד', description: 'מרכז בקרה אחד מעל הכל — סטטוס, הנה"ח, סינתזה ודוחות' },
       { to: '/bank-insights', icon: Sparkles, label: 'תובנות בנק', description: 'אנומליות, מנויים, עמלות וחיסכון מדפי הבנק' },
       { to: '/office', icon: Building2, label: 'ניהול משרד', description: 'תיקי לקוחות, סנכרון רוחבי והתאמות נדרשות' },
       { to: '/admin-clients', icon: Database, label: 'אדמין — כל הלקוחות', description: 'תצוגת על של כל תיקי הלקוחות' },
       { to: '/calculators', icon: Calculator, label: 'מחשבונים', description: 'חישובי שכר/מס/ב"ל דטרמיניסטיים, בלי צ\'אט' },
       { to: '/payroll', icon: Users, label: 'שכר', description: 'עובדים, תלושים ודוח 102/126' },
+      { to: '/ledger', icon: BookOpen, label: 'הנה"ח כפולה', description: 'מאזן בוחן, פקודות יומן וכרטסת — נגזר מהמסמכים' },
+      { to: '/daily-reports', icon: TrendingUp, label: 'דוחות יומיים', description: 'רווח/הפסד מצטבר, גיול חובות וספקים תוך-חודשי' },
+      { to: '/annual-reports', icon: FileWarning, label: 'דוחות שנתיים', description: 'טיוטת 1301 (יחיד) / 1214 (חברה) — לבדיקת רו"ח' },
       { to: '/of-ops', icon: CreditCard, label: 'Open Finance תפעול', description: 'תשלומים, אשראי, לקוחות וסוחרים' },
     ]
   },
@@ -300,7 +312,7 @@ function App() {
                 <Route path="/" element={<CFOOverview darkMode={darkMode} />} />
                 <Route path="/cashflow" element={<CFOCashFlowProjection darkMode={darkMode} />} />
                 <Route path="/ar" element={<CFOARDashboard darkMode={darkMode} />} />
-                <Route path="/ap" element={<CFOARDashboard darkMode={darkMode} />} />
+                <Route path="/ap" element={<CFOAPDashboard darkMode={darkMode} />} />
                 <Route path="/alerts" element={<CFOAlertsTasks darkMode={darkMode} />} />
                 <Route path="/tasks" element={<CFOAlertsTasks darkMode={darkMode} />} />
                 <Route path="/sync" element={<CFOSyncDashboard darkMode={darkMode} />} />
@@ -321,6 +333,10 @@ function App() {
                 <Route path="/calculators" element={<CalculatorsDashboard />} />
                 <Route path="/payroll" element={<PayrollDashboard />} />
                 <Route path="/of-ops" element={<OpenFinanceOpsDashboard />} />
+                <Route path="/ledger" element={<LedgerDashboard />} />
+                <Route path="/daily-reports" element={<DailyReportsDashboard />} />
+                <Route path="/annual-reports" element={<AnnualReportsDashboard />} />
+                <Route path="/engine" element={<EngineDashboard />} />
                 <Route path="/analytics" element={<AnalyticsDashboard />} />
                 <Route path="/settings" element={<SettingsPage darkMode={darkMode} />} />
 
