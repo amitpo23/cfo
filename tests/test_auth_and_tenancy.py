@@ -1,3 +1,4 @@
+import pytest
 def test_health(client):
     assert client.get("/api/health").json() == {"status": "healthy"}
 
@@ -123,3 +124,18 @@ def test_cannot_read_another_orgs_sync_run(client, owner, fresh_org):
     # An arbitrary run id that does not belong to `other` must not leak.
     resp = client.get("/api/sync/runs/999999", headers=other["headers"])
     assert resp.status_code == 404, resp.text
+
+
+# --- NULL organization_id must be rejected, not silently defaulted (P0) -----
+def test_null_org_id_is_rejected():
+    import asyncio
+    from fastapi import HTTPException
+    from cfo.api.dependencies import get_current_org_id
+    from cfo.models import User
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(get_current_org_id(User(organization_id=None)))
+    assert exc.value.status_code == 403
+
+    # a real org passes through unchanged
+    assert asyncio.run(get_current_org_id(User(organization_id=5))) == 5

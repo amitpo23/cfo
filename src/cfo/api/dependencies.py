@@ -82,8 +82,17 @@ async def get_current_org_id(
 
     Routes must derive the tenant from the token, never from a
     caller-controlled query parameter.
+
+    A user with no organization (e.g. a super-admin row) must NOT silently fall
+    back to org 1 — that would read/write another tenant's data. Reject instead;
+    such users must select an org explicitly via an admin path.
     """
-    return current_user.organization_id or 1
+    if current_user.organization_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not scoped to an organization",
+        )
+    return current_user.organization_id
 
 
 async def get_current_active_user(
