@@ -194,11 +194,18 @@ class Account(Base):
     balance = Column(Numeric(precision=10, scale=2), default=0)
     currency = Column(String, default="ILS")
     external_id = Column(String, nullable=True)  # ID ממערכת חיצונית
+    # Provenance — distinguishes SUMIT synthesized accounts from real Open Finance
+    # bank accounts so the two sources coexist without external_id collisions.
+    source = Column(String(50), default="manual")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     organization = relationship("Organization", back_populates="accounts")
     transactions = relationship("Transaction", back_populates="account")
+
+    __table_args__ = (
+        Index("ix_account_org_ext_source", "organization_id", "external_id", "source", unique=True),
+    )
 
 
 class Transaction(Base):
@@ -243,6 +250,131 @@ class IntegrationConnection(Base):
 
     __table_args__ = (
         Index("ix_integration_org_source", "organization_id", "source", unique=True),
+    )
+
+
+class BankConnection(Base):
+    """A bank/card consent link established through Open Finance (one per bank).
+
+    Tracks the consent-journey lifecycle so the UI can launch `connect_url`, show
+    status, and trigger refreshes. The org-level API credentials live in
+    `IntegrationConnection`; this row is the per-bank consent state under it.
+    """
+    __tablename__ = "bank_connections"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    source = Column(String(50), default="open_finance")
+    connection_id = Column(String(255), nullable=True)  # Open Finance connection id
+    provider_id = Column(String(100), nullable=True)    # providerFriendlyId (bank)
+    bank_name = Column(String(255), nullable=True)
+    status = Column(String(40), default="INACTIVE")     # Open Finance connection status
+    connect_url = Column(Text, nullable=True)           # hosted consent journey link
+    psu_id = Column(String(64), nullable=True)
+    expiry_date = Column(DateTime, nullable=True)
+    accounts_count = Column(Integer, nullable=True)
+    transactions_count = Column(Integer, nullable=True)
+    last_refresh_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    raw_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_bankconn_org_conn", "organization_id", "connection_id", unique=True),
+        Index("ix_bankconn_org_status", "organization_id", "status"),
+    )
+
+
+class SumitCompany(Base):
+    """A SUMIT company file (תיק חברה) managed by an accounting office.
+
+    Supports the multi-company "ניהול משרד" model: one office organization can
+    manage many SUMIT company files. Each file syncs into a `target_organization`
+    (its own tenant by default), enabling cross-company (רוחבי) synthesis rollups.
+    """
+    __tablename__ = "sumit_companies"
+
+    id = Column(Integer, primary_key=True)
+    # The managing office organization.
+    office_organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    # SUMIT company id (e.g. 844329067).
+    company_id = Column(String(50), nullable=False)
+    name = Column(String(255), nullable=True)
+    status = Column(String(20), default="active")  # active, inactive
+    # Where this file's books/bank data land (defaults to the office org).
+    target_organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    raw_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    office_organization = relationship("Organization", foreign_keys=[office_organization_id])
+
+    __table_args__ = (
+        Index("ix_sumitco_office_company", "office_organization_id", "company_id", unique=True),
+    )
+
+
+class Employee(Base):
+    """An employee for the payroll module (org-scoped)."""
+    __tablename__ = "employees"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    tax_id = Column(String(20), nullable=True)             # תעודת זהות
+    email = Column(String(255), nullable=True)
+    phone = Column(String(50), nullable=True)
+    gross_salary = Column(Numeric(precision=12, scale=2), default=0)   # monthly gross
+    credit_points = Column(Numeric(precision=4, scale=2), default=2.25)  # נקודות זיכוי
+    pension_pct = Column(Numeric(precision=4, scale=2), default=6.0)
+    start_date = Column(Date, nullable=True)
+    # Bank details for salary payment via Masav.
+    bank_code = Column(String(2), nullable=True)
+    bank_branch = Column(String(3), nullable=True)
+    bank_account_number = Column(String(20), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+    payslips = relationship("Payslip", back_populates="employee")
+
+    __table_args__ = (
+        Index("ix_employee_org", "organization_id", "is_active"),
+    )
+
+
+class Payslip(Base):
+    """A generated payslip (תלוש שכר) for an employee for a given month."""
+    __tablename__ = "payslips"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    gross = Column(Numeric(precision=12, scale=2), default=0)
+    income_tax = Column(Numeric(precision=12, scale=2), default=0)
+    ni_employee = Column(Numeric(precision=12, scale=2), default=0)
+    health_tax = Column(Numeric(precision=12, scale=2), default=0)
+    pension_employee = Column(Numeric(precision=12, scale=2), default=0)
+    net = Column(Numeric(precision=12, scale=2), default=0)
+    employer_ni = Column(Numeric(precision=12, scale=2), default=0)
+    employer_pension = Column(Numeric(precision=12, scale=2), default=0)
+    employer_severance = Column(Numeric(precision=12, scale=2), default=0)
+    employer_cost = Column(Numeric(precision=12, scale=2), default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+    employee = relationship("Employee", back_populates="payslips")
+
+    __table_args__ = (
+        Index("ix_payslip_unique", "organization_id", "employee_id", "year", "month", unique=True),
+        Index("ix_payslip_period", "organization_id", "year", "month"),
     )
 
 

@@ -22,6 +22,27 @@ from .connector_base import (
 logger = logging.getLogger(__name__)
 
 
+def _derive_subtotal_tax(doc, total: Decimal) -> tuple[Decimal, Decimal]:
+    """Derive (subtotal, tax) for a SUMIT document.
+
+    SUMIT documents are VAT-inclusive. When the document exposes an explicit
+    ``vat_amount`` we trust it; otherwise we recover the split deterministically
+    via :func:`vat_utils.split_inclusive` instead of zeroing VAT (which would
+    silently under-report VAT in the derived ledger / VAT report / P&L).
+    """
+    raw_vat = getattr(doc, "vat_amount", None)
+    if raw_vat is None:
+        from .vat_utils import split_inclusive
+        doc_day = getattr(doc, "date", None)
+        if not isinstance(doc_day, date):
+            doc_day = date.today()
+        return split_inclusive(total, doc_day)
+    tax = Decimal(str(raw_vat or 0))
+    raw_subtotal = getattr(doc, "subtotal", None)
+    subtotal = Decimal(str(raw_subtotal)) if raw_subtotal is not None else (total - tax)
+    return subtotal, tax
+
+
 class SumitConnector(AccountingConnector):
     """
     Connector for SUMIT accounting system.
@@ -219,6 +240,7 @@ class SumitConnector(AccountingConnector):
                     total = Decimal(str(doc.total or 0))
                     paid = Decimal(str(getattr(doc, "paid_amount", 0) or 0))
 
+                    subtotal, tax = _derive_subtotal_tax(doc, total)
                     invoices.append(NormalizedInvoice(
                         external_id=str(doc.id),
                         contact_external_id=str(doc.customer_id) if doc.customer_id else None,
@@ -228,8 +250,8 @@ class SumitConnector(AccountingConnector):
                         due_date=getattr(doc, "due_date", None),
                         status=status,
                         currency=getattr(doc, "currency", "ILS") or "ILS",
-                        subtotal=Decimal(str(getattr(doc, "subtotal", total))),
-                        tax=Decimal(str(getattr(doc, "vat_amount", 0) or 0)),
+                        subtotal=subtotal,
+                        tax=tax,
                         total=total,
                         paid_amount=paid,
                         balance=total - paid,
@@ -270,6 +292,7 @@ class SumitConnector(AccountingConnector):
                     total = Decimal(str(doc.total or 0))
                     paid = Decimal(str(getattr(doc, "paid_amount", 0) or 0))
 
+                    subtotal, tax = _derive_subtotal_tax(doc, total)
                     bills.append(NormalizedBill(
                         external_id=str(doc.id),
                         vendor_external_id=str(doc.customer_id) if doc.customer_id else None,
@@ -278,8 +301,8 @@ class SumitConnector(AccountingConnector):
                         due_date=getattr(doc, "due_date", None),
                         status="received",
                         currency=getattr(doc, "currency", "ILS") or "ILS",
-                        subtotal=Decimal(str(getattr(doc, "subtotal", total))),
-                        tax=Decimal(str(getattr(doc, "vat_amount", 0) or 0)),
+                        subtotal=subtotal,
+                        tax=tax,
                         total=total,
                         paid_amount=paid,
                         balance=total - paid,

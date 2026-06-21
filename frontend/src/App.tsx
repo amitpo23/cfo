@@ -20,6 +20,8 @@ import {
   Banknote,
   Package,
   Landmark,
+  Sparkles,
+  Calculator,
   ScrollText,
   ChevronLeft,
   ChevronRight,
@@ -40,6 +42,12 @@ import PaymentInterface from './components/PaymentInterface';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
 import ForecastingDashboard from './components/ForecastingDashboard';
 import BankStatementDashboard from './components/BankStatementDashboard';
+import BankInsightsDashboard from './components/BankInsightsDashboard';
+import OfficeDashboard from './components/OfficeDashboard';
+import AdminClientsDashboard from './components/AdminClientsDashboard';
+import CalculatorsDashboard from './components/CalculatorsDashboard';
+import PayrollDashboard from './components/PayrollDashboard';
+import OpenFinanceOpsDashboard from './components/OpenFinanceOpsDashboard';
 import ReportsDashboard from './components/ReportsDashboard';
 import BudgetDashboard from './components/BudgetDashboard';
 import KPIDashboard from './components/KPIDashboard';
@@ -112,6 +120,12 @@ const navigationConfig = [
       { to: '/kpis', icon: Gauge, label: 'KPIs', description: 'Performance metrics' },
       { to: '/reports', icon: FileSpreadsheet, label: 'Reports', description: 'Generate & export' },
       { to: '/bank-report', icon: Landmark, label: 'דוח לבנק', description: 'דוח מצב עסקי לבנק' },
+      { to: '/bank-insights', icon: Sparkles, label: 'תובנות בנק', description: 'אנומליות, מנויים, עמלות וחיסכון מדפי הבנק' },
+      { to: '/office', icon: Building2, label: 'ניהול משרד', description: 'תיקי לקוחות, סנכרון רוחבי והתאמות נדרשות' },
+      { to: '/admin-clients', icon: Database, label: 'אדמין — כל הלקוחות', description: 'תצוגת על של כל תיקי הלקוחות' },
+      { to: '/calculators', icon: Calculator, label: 'מחשבונים', description: 'חישובי שכר/מס/ב"ל דטרמיניסטיים, בלי צ\'אט' },
+      { to: '/payroll', icon: Users, label: 'שכר', description: 'עובדים, תלושים ודוח 102/126' },
+      { to: '/of-ops', icon: CreditCard, label: 'Open Finance תפעול', description: 'תשלומים, אשראי, לקוחות וסוחרים' },
     ]
   },
   {
@@ -301,6 +315,12 @@ function App() {
                 <Route path="/ai-analytics" element={<AIAnalyticsDashboard />} />
                 <Route path="/reports" element={<ReportsDashboard />} />
                 <Route path="/bank" element={<BankStatementDashboard />} />
+                <Route path="/bank-insights" element={<BankInsightsDashboard />} />
+                <Route path="/office" element={<OfficeDashboard />} />
+                <Route path="/admin-clients" element={<AdminClientsDashboard />} />
+                <Route path="/calculators" element={<CalculatorsDashboard />} />
+                <Route path="/payroll" element={<PayrollDashboard />} />
+                <Route path="/of-ops" element={<OpenFinanceOpsDashboard />} />
                 <Route path="/analytics" element={<AnalyticsDashboard />} />
                 <Route path="/settings" element={<SettingsPage darkMode={darkMode} />} />
 

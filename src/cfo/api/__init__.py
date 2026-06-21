@@ -8,6 +8,7 @@ from .routes import (
     cashflow, sync, reports, financial_management, financial_operations
 )
 from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses
+from .routes import open_finance, office, calculators, payroll
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
@@ -73,6 +74,28 @@ app.include_router(
     cfo_tasks.router, prefix="/api", tags=["CFO Tasks & Alerts"],
     dependencies=[Depends(get_current_user)],
 )
+# Open Finance — full integration + bank intelligence. Per-route auth via
+# get_current_org_id; the /webhooks route is intentionally public (Open Finance
+# posts events to it and no signature scheme is documented).
+app.include_router(
+    open_finance.router, prefix="/api/open-finance", tags=["Open Finance"],
+)
+
+# Accounting-office (multi-company) + cross-source synthesis
+app.include_router(
+    office.router, prefix="/api", tags=["Office & Synthesis"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Deterministic calculators — public utility, no auth, no org data
+app.include_router(calculators.router, prefix="/api", tags=["Calculators"])
+
+# Payroll — employees, payslips, Form 102/126
+app.include_router(
+    payroll.router, prefix="/api", tags=["Payroll"],
+    dependencies=[Depends(get_current_user)],
+)
+
 # Cron jobs authenticate with CRON_SECRET, not user tokens
 app.include_router(cron.router, prefix="/api", tags=["Scheduled Jobs"])
 

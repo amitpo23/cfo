@@ -202,6 +202,7 @@ class SyncEngine:
         existing = self.db.query(Account).filter(
             Account.organization_id == self.org_id,
             Account.external_id == item.external_id,
+            Account.source == self.source,
         ).first()
 
         account_type_map = {
@@ -227,6 +228,7 @@ class SyncEngine:
         account = Account(
             organization_id=self.org_id,
             external_id=item.external_id,
+            source=self.source,
             name=item.name,
             account_type=acct_type,
             balance=item.balance,

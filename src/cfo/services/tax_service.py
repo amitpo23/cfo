@@ -669,8 +669,9 @@ class TaxComplianceService:
         return 0
 
     def _get_employee_data(self, year: int, month: int) -> List[Dict]:
-        """נתוני עובדים — אין מודול שכר במערכת; ריק עד לחיבור מקור שכר."""
-        return []
+        """נתוני עובדים מהמודול שכר (תלושים שהופקו) עבור דוח 102."""
+        from .payroll_service import employee_withholding_rows
+        return employee_withholding_rows(self.db, self.organization_id, year, month)
 
     def _get_supplier_withholding(self, year: int, month: int) -> List[Dict]:
         """ניכויי מס במקור לספקים — לא נרשמים במערכת כרגע."""
