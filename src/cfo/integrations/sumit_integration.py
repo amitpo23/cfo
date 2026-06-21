@@ -971,9 +971,17 @@ class SumitIntegration(BaseIntegration):
             [request.document_type] if request.document_type else None
         )
         if type_names:
-            payload["DocumentTypes"] = [
-                self._map_document_type(t) for t in type_names
-            ]
+            # SUMIT's documents/list accepts the numeric Accounting_Typed_DocumentType
+            # codes directly (e.g. 0=Invoice, 5=Receipt, 15=ExpenseInvoice). Filtering by
+            # those numeric codes is reliable; the enum *name* filter is not (e.g.
+            # "ExpenseInvoice" returns nothing). Pass an int through unchanged; map names.
+            def _doc_type(t):
+                if isinstance(t, int):
+                    return t
+                if isinstance(t, str) and t.lstrip("-").isdigit():
+                    return int(t)
+                return self._map_document_type(t)
+            payload["DocumentTypes"] = [_doc_type(t) for t in type_names]
         if request.from_date:
             payload["DateFrom"] = request.from_date.isoformat()
         if request.to_date:

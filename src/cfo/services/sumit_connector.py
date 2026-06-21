@@ -210,6 +210,41 @@ class SumitConnector(AccountingConnector):
         # Vendors will be created from expense documents
         return FetchResult(items=[], has_more=False)
 
+    async def _list_documents_all(self, client, type_code: str,
+                                  updated_since: Optional[datetime],
+                                  page_size: int = 200, max_pages: int = 500):
+        """Fetch ALL SUMIT documents of one numeric type, paginating to the end.
+
+        Two correctness fixes over a single capped call:
+        - full sync (updated_since=None) reaches back years, not just 365 days, so
+          earlier-in-the-year history is not silently dropped;
+        - pages are walked until exhausted (SUMIT's default page size caps a single
+          call at ~100), de-duplicated by document id, with guards against an
+          offset that never advances.
+        """
+        from ..integrations.sumit_models import DocumentListRequest
+        from_date = updated_since.date() if updated_since else date(2015, 1, 1)
+        all_docs, seen, offset = [], set(), 0
+        for _ in range(max_pages):
+            page = await client.list_documents(DocumentListRequest(
+                from_date=from_date, to_date=date.today(),
+                document_types=[type_code], limit=page_size, offset=offset,
+            ))
+            if not page:
+                break
+            before = len(seen)
+            for d in page:
+                did = str(getattr(d, "id", "") or "")
+                if did and did not in seen:
+                    seen.add(did)
+                    all_docs.append(d)
+            offset += len(page)
+            if len(seen) == before:  # offset ignored or nothing new — stop
+                break
+            if len(page) < page_size:  # genuine last (partial) page
+                break
+        return all_docs
+
     async def fetch_invoices(
         self,
         updated_since: Optional[datetime] = None,
@@ -219,20 +254,10 @@ class SumitConnector(AccountingConnector):
         try:
             client = await self._get_client()
             async with client:
-                from ..integrations.sumit_models import DocumentListRequest
-
-                from_date = (
-                    updated_since.date()
-                    if updated_since
-                    else date.today() - timedelta(days=365)
-                )
-
-                request = DocumentListRequest(
-                    from_date=from_date,
-                    to_date=date.today(),
-                    document_types=["invoice", "tax_invoice", "receipt", "credit_invoice"],
-                )
-                documents = await client.list_documents(request)
+                # SUMIT numeric DocumentType code 0 = Invoice (income/sales documents).
+                # Filtering by the enum *name* proved unreliable; the numeric code is exact.
+                # Paginated + full-history fetch (see _list_documents_all).
+                documents = await self._list_documents_all(client, "0", updated_since)
 
                 invoices = []
                 for doc in documents:
@@ -272,20 +297,11 @@ class SumitConnector(AccountingConnector):
         try:
             client = await self._get_client()
             async with client:
-                from ..integrations.sumit_models import DocumentListRequest
-
-                from_date = (
-                    updated_since.date()
-                    if updated_since
-                    else date.today() - timedelta(days=365)
-                )
-
-                request = DocumentListRequest(
-                    from_date=from_date,
-                    to_date=date.today(),
-                    document_types=["expense", "expense_invoice"],
-                )
-                documents = await client.list_documents(request)
+                # SUMIT numeric DocumentType code 15 = ExpenseInvoice (supplier/expense
+                # documents). The name "ExpenseInvoice" returns nothing; the numeric code
+                # is the reliable filter for purchase/expense documents.
+                # Paginated + full-history fetch (see _list_documents_all).
+                documents = await self._list_documents_all(client, "15", updated_since)
 
                 bills = []
                 for doc in documents:
