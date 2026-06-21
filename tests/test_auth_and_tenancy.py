@@ -139,3 +139,12 @@ def test_null_org_id_is_rejected():
 
     # a real org passes through unchanged
     assert asyncio.run(get_current_org_id(User(organization_id=5))) == 5
+
+
+# --- SUMIT direct routes must use per-org vault, not env for other tenants (P0)
+def test_sumit_routes_reject_unconfigured_tenant(client, fresh_org):
+    """A non-default org with no SUMIT connection must NOT fall back to env creds."""
+    other = fresh_org()  # org != 1
+    resp = client.get("/api/accounting/documents", headers=other["headers"])
+    assert resp.status_code == 400, resp.text
+    assert "SUMIT" in resp.text
