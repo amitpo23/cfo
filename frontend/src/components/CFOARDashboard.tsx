@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -42,9 +42,6 @@ interface AgingResponse {
 }
 
 const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
-  const [noteText, setNoteText] = useState('');
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
-
   const { data: aging, isLoading } = useQuery({
     queryKey: ['ar-aging'],
     queryFn: () => apiService.get<AgingResponse>('/ar/aging'),
@@ -58,25 +55,6 @@ const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
 
   const handleExport = () => {
     window.open('/api/reports/ar_aging?format=csv', '_blank');
-  };
-
-  const handleAddNote = async (customerId: string) => {
-    if (!noteText.trim()) return;
-    await apiService.post('/notes', {
-      entity_type: 'customer',
-      entity_id: customerId,
-      text: noteText,
-    });
-    setNoteText('');
-    setSelectedCustomerId(null);
-  };
-
-  const handleCreateTask = async (customerId: string, customerName: string) => {
-    await apiService.post('/tasks', {
-      title: `Follow up on receivable — ${customerName}`,
-      entity_type: 'customer',
-      entity_id: customerId,
-    });
   };
 
   const fmt = (n: number) =>
@@ -173,78 +151,31 @@ const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
                 <th className="text-right py-3 px-2 text-sm font-medium">Oldest (days)</th>
                 <th className="text-left py-3 px-2 text-sm font-medium">Risk</th>
                 <th className="text-left py-3 px-2 text-sm font-medium">Collection</th>
-                <th className="text-left py-3 px-2 text-sm font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
               {customers.map((c) => {
                 const overdue = num(c.total_outstanding) - num(c.current);
                 return (
-                  <React.Fragment key={c.customer_id}>
-                    <tr className={`border-b ${darkMode ? 'border-gray-700' : 'border-gray-100'} hover:${darkMode ? 'bg-gray-700' : 'bg-gray-50'}`}>
-                      <td className="py-3 px-2 text-sm">{c.customer_name || c.customer_id}</td>
-                      <td className="py-3 px-2 text-sm text-right font-semibold">{fmt(num(c.total_outstanding))}</td>
-                      <td className="py-3 px-2 text-sm text-right">{fmt(num(c.current))}</td>
-                      <td className="py-3 px-2 text-sm text-right">{fmt(overdue)}</td>
-                      <td className="py-3 px-2 text-sm text-right">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          num(c.oldest_invoice_days) > 60
-                            ? 'bg-red-100 text-red-700'
-                            : num(c.oldest_invoice_days) > 30
-                              ? 'bg-yellow-100 text-yellow-700'
-                              : 'bg-green-100 text-green-700'
-                        }`}>
-                          {num(c.oldest_invoice_days)} days
-                        </span>
-                      </td>
-                      <td className="py-3 px-2 text-sm capitalize">{c.credit_risk}</td>
-                      <td className="py-3 px-2 text-sm capitalize">{c.collection_status}</td>
-                      <td className="py-3 px-2 text-sm">
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedCustomerId(
-                              selectedCustomerId === c.customer_id ? null : c.customer_id
-                            )}
-                            className="text-blue-500 hover:text-blue-600 text-xs"
-                          >
-                            Note
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleCreateTask(c.customer_id, c.customer_name || c.customer_id)}
-                            className="text-green-500 hover:text-green-600 text-xs"
-                          >
-                            Task
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                    {selectedCustomerId === c.customer_id && (
-                      <tr>
-                        <td colSpan={8} className="py-2 px-4">
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              value={noteText}
-                              onChange={(e) => setNoteText(e.target.value)}
-                              placeholder="Add a note..."
-                              className={`flex-1 px-3 py-2 rounded-lg border text-sm ${
-                                darkMode ? 'bg-gray-700 border-gray-600' : 'border-gray-300'
-                              }`}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleAddNote(c.customer_id)}
-                              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm"
-                            >
-                              Save
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
+                  <tr key={c.customer_id} className={`border-b ${darkMode ? 'border-gray-700' : 'border-gray-100'} hover:${darkMode ? 'bg-gray-700' : 'bg-gray-50'}`}>
+                    <td className="py-3 px-2 text-sm">{c.customer_name || c.customer_id}</td>
+                    <td className="py-3 px-2 text-sm text-right font-semibold">{fmt(num(c.total_outstanding))}</td>
+                    <td className="py-3 px-2 text-sm text-right">{fmt(num(c.current))}</td>
+                    <td className="py-3 px-2 text-sm text-right">{fmt(overdue)}</td>
+                    <td className="py-3 px-2 text-sm text-right">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        num(c.oldest_invoice_days) > 60
+                          ? 'bg-red-100 text-red-700'
+                          : num(c.oldest_invoice_days) > 30
+                            ? 'bg-yellow-100 text-yellow-700'
+                            : 'bg-green-100 text-green-700'
+                      }`}>
+                        {num(c.oldest_invoice_days)} days
+                      </span>
+                    </td>
+                    <td className="py-3 px-2 text-sm capitalize">{c.credit_risk}</td>
+                    <td className="py-3 px-2 text-sm capitalize">{c.collection_status}</td>
+                  </tr>
                 );
               })}
             </tbody>
