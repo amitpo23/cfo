@@ -8,7 +8,7 @@ from .routes import (
     cashflow, sync, reports, financial_management, financial_operations
 )
 from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses
-from .routes import open_finance, office, calculators, payroll
+from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
@@ -24,17 +24,24 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Include existing routers
-app.include_router(accounting.router, prefix="/api/accounting", tags=["Accounting"])
-app.include_router(crm.router, prefix="/api/crm", tags=["CRM"])
-app.include_router(payments.router, prefix="/api/payments", tags=["Payments"])
-app.include_router(communications.router, prefix="/api/communications", tags=["Communications"])
+# SUMIT pass-through routers — every route already injects get_sumit_integration
+# (which is org-scoped + authenticated), but pin auth at the mount too so a future
+# route added without that dependency can't be exposed unauthenticated.
+app.include_router(accounting.router, prefix="/api/accounting", tags=["Accounting"],
+                   dependencies=[Depends(get_current_user)])
+app.include_router(crm.router, prefix="/api/crm", tags=["CRM"],
+                   dependencies=[Depends(get_current_user)])
+app.include_router(payments.router, prefix="/api/payments", tags=["Payments"],
+                   dependencies=[Depends(get_current_user)])
+app.include_router(communications.router, prefix="/api/communications", tags=["Communications"],
+                   dependencies=[Depends(get_current_user)])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 app.include_router(cashflow.router, prefix="/api/cashflow", tags=["Cash Flow & Forecasting"])
 app.include_router(sync.router, prefix="/api", tags=["Data Sync & Bank Import"])
@@ -43,7 +50,10 @@ app.include_router(
     financial_management.router, prefix="/api", tags=["Financial Management"],
     dependencies=[Depends(get_current_user)],
 )
-app.include_router(financial_operations.router, prefix="/api", tags=["Financial Operations"])
+app.include_router(
+    financial_operations.router, prefix="/api", tags=["Financial Operations"],
+    dependencies=[Depends(get_current_user)],
+)
 app.include_router(
     masav.router, prefix="/api", tags=["Masav Payments"],
     dependencies=[Depends(get_current_user)],
@@ -96,6 +106,30 @@ app.include_router(
     dependencies=[Depends(get_current_user)],
 )
 
+# Derived double-entry shadow ledger — organization-scoped, not the official books
+app.include_router(
+    ledger.router, prefix="/api", tags=["Ledger (Derived)"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Daily-cumulative intra-month reports — organization-scoped, derived
+app.include_router(
+    daily_reports.router, prefix="/api", tags=["Daily Reports (Derived)"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Annual tax-return DRAFTS (1301/1214) — organization-scoped, draft-only
+app.include_router(
+    annual_reports.router, prefix="/api", tags=["Annual Reports (Draft)"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# The unifying engine — one command surface over all services
+app.include_router(
+    engine.router, prefix="/api", tags=["Unifying Engine"],
+    dependencies=[Depends(get_current_user)],
+)
+
 # Cron jobs authenticate with CRON_SECRET, not user tokens
 app.include_router(cron.router, prefix="/api", tags=["Scheduled Jobs"])
 
@@ -103,7 +137,8 @@ app.include_router(cron.router, prefix="/api", tags=["Scheduled Jobs"])
 @app.on_event("startup")
 async def startup_event():
     """Initialize database tables on startup."""
-    init_db()
+    if settings.auto_create_db:
+        init_db()
 
 
 @app.get("/")
