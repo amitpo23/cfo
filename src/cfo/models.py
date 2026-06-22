@@ -288,6 +288,36 @@ class BankConnection(Base):
     )
 
 
+class OpenFinancePayment(Base):
+    """A payment initiated/tracked through the Open Finance PIS surface.
+
+    Distinct from the SUMIT-billing ``Payment`` model — this mirrors Open
+    Finance's Payment resource (``paymentId`` + status lifecycle). Rows are
+    upserted from the Payment Status Change webhook, which carries
+    ``{paymentId, paymentStatus, userId, orgId, ...}`` but no amount/currency
+    (those are populated later from ``GET /payments/{id}/status``), so amount and
+    currency are nullable. The unique ``(organization_id, external_payment_id)``
+    constraint makes webhook delivery idempotent.
+    """
+    __tablename__ = "open_finance_payments"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    external_payment_id = Column(String(255), nullable=False, index=True)  # Open Finance paymentId
+    status = Column(String(40), nullable=True)  # Payment.status enum (ACCC, RJCT, PENDING, ...)
+    amount = Column(Numeric(precision=14, scale=2), nullable=True)
+    currency = Column(String(10), nullable=True)
+    raw_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_ofpayment_org_ext", "organization_id", "external_payment_id", unique=True),
+    )
+
+
 class SumitCompany(Base):
     """A SUMIT company file (תיק חברה) managed by an accounting office.
 

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, RefreshCw, Banknote, Repeat, TrendingUp, PiggyBank,
   Copy, ShieldAlert, Sparkles, Link2, CheckCircle2, XCircle, Loader2,
+  Scale, LineChart, Briefcase,
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -33,6 +34,9 @@ const TYPE_ICON: Record<string, any> = {
   savings_opportunity: PiggyBank,
   anomaly: AlertTriangle,
   risk_signal: ShieldAlert,
+  aggregate_balance: Scale,
+  portfolio_summary: Briefcase,
+  portfolio_position: LineChart,
 };
 
 const SEVERITY_STYLE: Record<string, string> = {
@@ -147,7 +151,7 @@ export default function BankInsightsDashboard() {
             <Sparkles className="text-indigo-600" /> תובנות בנק
           </h1>
           <p className="text-slate-500 text-sm mt-1">
-            ניתוח דפי הבנק — חיובים כפולים, מנויים, עמלות, חריגות והזדמנויות חיסכון.
+            ניתוח דפי הבנק — חיובים כפולים, מנויים, עמלות, חריגות, מאזן חודשי ותיק השקעות.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">

@@ -17,6 +17,9 @@ Insights produced:
   * savings_opportunity     — discretionary categories worth cutting
   * anomaly                 — unusually large/odd charge vs personal baseline
   * risk_signal             — NSF / bounced cheques / foreclosure from monthly report
+  * aggregate_balance       — bank-computed monthly income vs spend (server-side aggregate)
+  * portfolio_summary       — total securities portfolio value (extended-securities)
+  * portfolio_position      — losing / over-concentrated investment position
 
 All amounts follow the convention: positive = inflow, negative = outflow.
 """
@@ -170,6 +173,7 @@ def generate_insights(
     transactions: Iterable[Txn],
     *,
     monthly_report: Optional[dict] = None,
+    securities: Optional[dict] = None,
     today: Optional[date] = None,
 ) -> list[dict[str, Any]]:
     txns = sorted(transactions, key=lambda t: t.date)
@@ -186,6 +190,9 @@ def generate_insights(
         insights += detect_anomalies(txns)
     if monthly_report:
         insights += detect_risk_signals(monthly_report)
+        insights += detect_aggregate_balance_insights(monthly_report, today=today)
+    if securities:
+        insights += detect_portfolio_insights(securities)
     return insights
 
 
@@ -479,6 +486,145 @@ def detect_risk_signals(monthly_report: dict) -> list[dict]:
     return out
 
 
+def detect_aggregate_balance_insights(monthly_report: dict, *, today: Optional[date] = None) -> list[dict]:
+    """Server-side monthly aggregate cash-flow from the Open Finance monthly report.
+
+    Unlike ``forecast_cashflow`` (which projects from per-transaction data we hold),
+    this reads the bank-computed ``openBankingReportBalances.incomes/expenses`` totals
+    — the bank's own monthly income vs. spend view — and surfaces the net position.
+    Risk *count* fields (nsf, canceledChecks, ...) are handled by ``detect_risk_signals``;
+    here we deal in magnitudes only.
+    """
+    balances = (monthly_report or {}).get("openBankingReportBalances") or {}
+    incomes = balances.get("incomes") or {}
+    expenses = balances.get("expenses") or {}
+    income = _float(incomes.get("total")) if isinstance(incomes, dict) else 0.0
+    expense = _float(expenses.get("total")) if isinstance(expenses, dict) else 0.0
+    if income <= 0 and expense <= 0:
+        return []
+    net = round(income - expense, 2)
+    if net < 0:
+        sev = SEV_CRIT if (income > 0 and expense >= income * 1.25) else SEV_HIGH
+        sign, verb = "מינוס", "גירעון"
+    else:
+        sev = SEV_INFO
+        sign, verb = "פלוס", "עודף"
+    return [_insight(
+        insight_type="aggregate_balance",
+        severity=sev,
+        title=f"מאזן חודשי (נתוני בנק): {verb} {_money(abs(net), 'ILS')}",
+        message=(
+            f"לפי הדוח החודשי של הבנק נכנסו {_money(round(income, 2), 'ILS')} "
+            f"ויצאו {_money(round(expense, 2), 'ILS')} — {verb} של "
+            f"{sign} {_money(abs(net), 'ILS')}."
+        ),
+        evidence={
+            "income": round(income, 2), "expense": round(expense, 2), "net": net,
+            "income_from_salary": _float(incomes.get("incomeFromSalary")) if isinstance(incomes, dict) else 0.0,
+        },
+        recommended_action=(
+            "ההוצאות עוקפות את ההכנסות החודשיות — בדוק הוצאות קבועות וצמצם."
+            if net < 0 else
+            "יש עודף חודשי — שקול להפנות אותו לחיסכון/השקעה."
+        ),
+        # Keyed to the month (a single current-month "state" insight), NOT to the
+        # magnitudes — mid-month income/expense grow on each fetch, so a value-based
+        # key would spawn a new row every run instead of updating in place.
+        fingerprint_parts=["aggbal", _month_tag(today)],
+    )]
+
+
+def detect_portfolio_insights(securities: dict, *, loss_pct: float = -10.0,
+                              concentration: float = 0.4) -> list[dict]:
+    """Investment-portfolio insights from the Open Finance ``extended-securities`` payload.
+
+    Shape (per docs/open-finance/API_REFERENCE.md):
+        { positions[...], totalPositionsValue, orders[...] }
+    Position field names beyond those are undocumented, so parsing is defensive over
+    common variants (securityName/paperName/name; marketValue/value; profitLossPct/...).
+    Emits a one-line ``portfolio_summary`` plus ``portfolio_position`` alerts for any
+    position with a notable loss or that dominates the portfolio (concentration risk).
+    """
+    securities = securities or {}
+    positions = securities.get("positions") or []
+    if not isinstance(positions, list) or not positions:
+        return []
+
+    def _name(p: dict) -> str:
+        return str(p.get("securityName") or p.get("paperName") or p.get("name")
+                   or p.get("symbol") or "נייר ערך")
+
+    def _value(p: dict) -> float:
+        return _float(p.get("marketValue") if p.get("marketValue") is not None
+                      else p.get("value"))
+
+    def _pnl_pct(p: dict):
+        for k in ("profitLossPct", "profitLossPercent", "yieldPct", "returnPct"):
+            if isinstance(p, dict) and p.get(k) is not None:
+                return _float(p.get(k))
+        return None
+
+    total = _float(securities.get("totalPositionsValue"))
+    if total <= 0:
+        total = round(sum(_value(p) for p in positions if isinstance(p, dict)), 2)
+
+    out: list[dict] = [_insight(
+        insight_type="portfolio_summary",
+        severity=SEV_INFO,
+        title=f"תיק ניירות ערך: {_money(round(total, 2), 'ILS')} ({len(positions)} פוזיציות)",
+        message=(
+            f"שווי תיק ההשקעות שלך מסתכם ב-{_money(round(total, 2), 'ILS')} "
+            f"על פני {len(positions)} פוזיציות (נתוני Open Finance)."
+        ),
+        evidence={"total_value": round(total, 2), "positions": len(positions)},
+        recommended_action="עקוב אחר פיזור התיק והתאמתו לרמת הסיכון שלך.",
+        fingerprint_parts=["portsum"],
+    )]
+
+    # Collect flagged positions, surfacing big losses (high severity) ahead of
+    # mere concentration (medium) so the most urgent alert lands first.
+    flagged: list[tuple] = []
+    for p in positions:
+        if not isinstance(p, dict):
+            continue
+        pnl = _pnl_pct(p)
+        value = _value(p)
+        share = (value / total) if total > 0 else 0.0
+        big_loss = pnl is not None and pnl <= loss_pct
+        concentrated = share >= concentration and total > 0
+        if not (big_loss or concentrated):
+            continue
+        flagged.append((p, value, pnl, share, big_loss, concentrated))
+
+    for p, value, pnl, share, big_loss, concentrated in sorted(
+        flagged, key=lambda f: (not f[4], (f[2] if f[2] is not None else 0.0)),
+    ):
+        name = _name(p)
+        reasons: list[str] = []
+        if big_loss:
+            reasons.append(f"הפסד של {abs(round(pnl, 1))}%")
+        if concentrated:
+            reasons.append(f"ריכוז של {round(share * 100)}% מהתיק")
+        out.append(_insight(
+            insight_type="portfolio_position",
+            severity=SEV_HIGH if big_loss else SEV_MED,
+            title=f"פוזיציה לתשומת לב: {name}",
+            message=(
+                f"\"{name}\" ({_money(round(value, 2), 'ILS')}) — "
+                f"{', '.join(reasons)}. כדאי לבחון את ההחזקה."
+            ),
+            evidence={
+                "security": name, "value": round(value, 2),
+                "profit_loss_pct": pnl, "portfolio_share": round(share, 3),
+            },
+            recommended_action=(
+                "שקול איזון מחדש או צמצום חשיפה לפוזיציה זו."
+            ),
+            fingerprint_parts=["portpos", name.strip().lower()],
+        ))
+    return out
+
+
 # ---------------------------------------------------------------------- #
 # helpers
 # ---------------------------------------------------------------------- #
@@ -499,6 +645,11 @@ def _insight(*, insight_type, severity, title, message, evidence,
 def _money(amount: float, currency: str = "ILS") -> str:
     symbol = {"ILS": "₪", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, currency + " ")
     return f"{symbol}{amount:,.0f}" if float(amount).is_integer() else f"{symbol}{amount:,.2f}"
+
+
+def _month_tag(d: Optional[date]) -> str:
+    d = d or date.today()
+    return f"{d.year}-{d.month:02d}"
 
 
 def _days_in_month(year: int, month: int) -> int:

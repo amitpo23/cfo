@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
@@ -20,7 +21,10 @@ from sqlalchemy.orm import Session
 from ...database import get_db_session
 from ..dependencies import get_current_org_id
 from ...config import settings
-from ...models import BankConnection, BankTransaction, CfoInsight
+from ...models import (
+    BankConnection, BankTransaction, CfoInsight, IntegrationConnection,
+    OpenFinancePayment,
+)
 from ...services.open_finance_client import OpenFinanceClient, OpenFinanceError
 from ...services.credentials_vault import decrypt_credentials
 from ...services import bank_insights, bank_reconciliation, reconciliation_dispatch
@@ -32,7 +36,7 @@ router = APIRouter()
 BANK_INSIGHT_TYPES = {
     "duplicate_charge", "subscription", "installment_ending", "bank_fees",
     "category_spike", "cashflow_forecast", "savings_opportunity", "anomaly",
-    "risk_signal",
+    "risk_signal", "aggregate_balance", "portfolio_summary", "portfolio_position",
 }
 
 
@@ -307,21 +311,32 @@ async def generate_insights(
         for r in rows if r.transaction_date is not None
     ]
 
-    # The monthly report is an optional enrichment; insights are still generated
-    # from stored transactions even when Open Finance credentials are absent.
+    # Server-side enrichment (monthly report + securities) is optional; insights are
+    # still generated from stored transactions even when Open Finance credentials are
+    # absent or the calls fail. One client is reused for both fetches.
     monthly = None
+    securities = None
     if include_monthly_report:
         client = None
         try:
             client = get_open_finance_client(db, org_id)
-            monthly = await client.get_monthly_report()
-        except Exception as exc:  # noqa: BLE001
-            logger.info("monthly report unavailable for insights: %s", exc)
+            try:
+                monthly = await client.get_monthly_report()
+            except Exception as exc:  # noqa: BLE001
+                logger.info("monthly report unavailable for insights: %s", exc)
+            try:
+                securities = await client.get_extended_securities()
+            except Exception as exc:  # noqa: BLE001
+                logger.info("extended-securities unavailable for insights: %s", exc)
+        except Exception as exc:  # noqa: BLE001 — client build failed (no creds)
+            logger.info("Open Finance client unavailable for insights: %s", exc)
         finally:
             if client is not None:
                 await client.close()
 
-    insights = bank_insights.generate_insights(txns, monthly_report=monthly)
+    insights = bank_insights.generate_insights(
+        txns, monthly_report=monthly, securities=securities,
+    )
     created, updated = _upsert_insights(db, org_id, insights)
     # Batch-level sign sanity check — surfaces a flipped-convention provider the
     # moment real bank data flows (raw sign stays primary; we don't force it).
@@ -805,6 +820,7 @@ async def webhook(
     except Exception:  # noqa: BLE001
         raise HTTPException(400, "invalid JSON")
 
+    # --- Connection Status Change: {connectionId, connectionStatus, bankName, ...}
     connection_id = event.get("connectionId")
     if connection_id:
         row = db.query(BankConnection).filter(
@@ -820,6 +836,30 @@ async def webhook(
                 row.last_error = err["message"]
             row.last_refresh_at = datetime.utcnow()
             db.commit()
+
+    # --- Payment Status Change: {paymentId, paymentStatus, userId, orgId, ...}
+    # No connectionId on payment events; the org is resolved via the OF user_id
+    # stored in the org's IntegrationConnection credentials (env fallback = org 1).
+    payment_id = event.get("paymentId")
+    if payment_id:
+        org_id = _resolve_org_from_of_user(db, event.get("userId"))
+        # Fallback: if the event also carries a connectionId mapping to a known
+        # BankConnection, use that org (defensive — payment events normally omit
+        # connectionId, but this honours a richer/legacy payload shape).
+        if org_id is None and connection_id:
+            conn = db.query(BankConnection).filter(
+                BankConnection.connection_id == connection_id,
+            ).first()
+            if conn:
+                org_id = conn.organization_id
+        if org_id is None:
+            logger.info(
+                "Open Finance payment webhook unattributable (paymentId=%s, userId=%s) — skipping",
+                payment_id, event.get("userId"),
+            )
+        else:
+            _upsert_open_finance_payment(db, org_id, payment_id, event)
+
     logger.info("Open Finance webhook received: keys=%s", list(event.keys()))
     return {"received": True}
 
@@ -827,6 +867,70 @@ async def webhook(
 # ---------------------------------------------------------------------- #
 # helpers
 # ---------------------------------------------------------------------- #
+def _resolve_org_from_of_user(db: Session, of_user_id: Optional[str]) -> Optional[int]:
+    """Map an Open Finance ``userId`` to a local organization_id.
+
+    The OF ``orgId`` in the webhook is Open Finance's own tenant id (a different
+    namespace from our ``Organization.id``) and must NOT be used as a FK. The
+    linking key the rest of the integration uses is the OF ``user_id`` stored in
+    the org's IntegrationConnection credentials. For org 1 we also honour the
+    env-configured user id, mirroring ``get_open_finance_client``.
+    """
+    if not of_user_id:
+        return None
+    rows = (
+        db.query(IntegrationConnection)
+        .filter(IntegrationConnection.source == "open_finance")
+        .all()
+    )
+    for conn in rows:
+        creds = decrypt_credentials(conn.credentials_encrypted) or {}
+        cred_user = creds.get("user_id")
+        if not cred_user and conn.organization_id == 1:
+            cred_user = settings.open_finance_user_id
+        if cred_user and str(cred_user) == str(of_user_id):
+            return conn.organization_id
+    return None
+
+
+def _upsert_open_finance_payment(db: Session, org_id: int, payment_id: str, event: dict) -> None:
+    """Idempotently upsert an OpenFinancePayment from a webhook event.
+
+    Only fields actually present in the event are written, so a status-only
+    delivery never clobbers an amount/currency populated from a status poll.
+    """
+    row = (
+        db.query(OpenFinancePayment)
+        .filter(
+            OpenFinancePayment.organization_id == org_id,
+            OpenFinancePayment.external_payment_id == payment_id,
+        )
+        .first()
+    )
+    if row is None:
+        row = OpenFinancePayment(
+            organization_id=org_id, external_payment_id=payment_id,
+        )
+        db.add(row)
+
+    status = event.get("paymentStatus") or event.get("status")
+    if status is not None:
+        row.status = status
+    # amount/currency are not in the standard Payment Status Change webhook, but
+    # honour them if a richer payload ever carries them.
+    amount = event.get("amount")
+    if amount is not None:
+        try:
+            row.amount = Decimal(str(amount))
+        except (InvalidOperation, ValueError):
+            logger.info("OF payment %s: unparseable amount %r", payment_id, amount)
+    currency = event.get("currency")
+    if currency is not None:
+        row.currency = currency
+    row.raw_data = event
+    db.commit()
+
+
 def _upsert_insights(db: Session, org_id: int, insights: list[dict]) -> tuple[int, int]:
     created = updated = 0
     for ins in insights:

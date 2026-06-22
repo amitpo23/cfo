@@ -147,3 +147,102 @@ def test_sign_validator_flags_inverted_convention():
 def test_sign_validator_returns_none_below_min_sample():
     txns = [_cat_txn(i, -10000, "SALARY") for i in range(3)]
     assert bank_insights.validate_sign_convention(txns) is None
+
+
+# ---------------------------------------------------------------------- #
+# Server-side aggregate detectors (item 2.2)
+# ---------------------------------------------------------------------- #
+def test_portfolio_insight_from_extended_securities():
+    securities = {
+        "totalPositionsValue": 250000,
+        "positions": [
+            {"securityName": "Apple", "marketValue": 120000, "profitLossPct": 18.0},
+            {"securityName": "טבע", "marketValue": 90000, "profitLossPct": -25.0},
+            {"securityName": "Bond X", "marketValue": 40000, "profitLossPct": 1.0},
+        ],
+        "orders": [],
+    }
+    out = _by_type(bank_insights.detect_portfolio_insights(securities))
+    assert "portfolio_summary" in out
+    summary = out["portfolio_summary"][0]
+    assert summary["evidence"]["total_value"] == 250000
+    assert summary["evidence"]["positions"] == 3
+    # A single large losing position is surfaced as a concentration/loss alert.
+    assert "portfolio_position" in out
+    loser = out["portfolio_position"][0]
+    assert loser["evidence"]["security"] == "טבע"
+    assert loser["evidence"]["profit_loss_pct"] == -25.0
+
+
+def test_portfolio_insights_empty_payload_returns_nothing():
+    assert bank_insights.detect_portfolio_insights({}) == []
+    assert bank_insights.detect_portfolio_insights(None) == []
+    assert bank_insights.detect_portfolio_insights({"positions": []}) == []
+
+
+def test_aggregate_balance_insight_negative_cashflow():
+    report = {
+        "openBankingReportBalances": {
+            "incomes": {"total": 18000, "incomeFromSalary": 18000},
+            "expenses": {"total": 23000, "regularExpensesSum": 20000},
+        }
+    }
+    out = _by_type(bank_insights.detect_aggregate_balance_insights(report))
+    assert "aggregate_balance" in out
+    ev = out["aggregate_balance"][0]["evidence"]
+    assert ev["income"] == 18000 and ev["expense"] == 23000
+    assert ev["net"] == -5000
+    assert out["aggregate_balance"][0]["severity"] in ("high", "critical")
+
+
+def test_aggregate_balance_insight_positive_surplus():
+    report = {
+        "openBankingReportBalances": {
+            "incomes": {"total": 25000},
+            "expenses": {"total": 18000},
+        }
+    }
+    out = _by_type(bank_insights.detect_aggregate_balance_insights(report))
+    assert "aggregate_balance" in out
+    assert out["aggregate_balance"][0]["evidence"]["net"] == 7000
+
+
+def test_aggregate_balance_insight_empty_returns_nothing():
+    assert bank_insights.detect_aggregate_balance_insights({}) == []
+    assert bank_insights.detect_aggregate_balance_insights(None) == []
+    # Both totals zero/absent → no actionable insight.
+    assert bank_insights.detect_aggregate_balance_insights(
+        {"openBankingReportBalances": {"incomes": {}, "expenses": {}}}
+    ) == []
+
+
+def test_aggregate_balance_fingerprint_stable_across_magnitude_change():
+    # Mid-month income/expense grow on each fetch; the fingerprint must stay stable
+    # (keyed to the month) so re-runs UPDATE the row instead of spawning duplicates.
+    from datetime import date as _date
+    r1 = {"openBankingReportBalances": {"incomes": {"total": 18000}, "expenses": {"total": 23000}}}
+    r2 = {"openBankingReportBalances": {"incomes": {"total": 18000}, "expenses": {"total": 24000}}}
+    fp1 = bank_insights.detect_aggregate_balance_insights(r1, today=_date(2026, 6, 10))[0]["fingerprint"]
+    fp2 = bank_insights.detect_aggregate_balance_insights(r2, today=_date(2026, 6, 20))[0]["fingerprint"]
+    assert fp1 == fp2
+    # A different month yields a distinct fingerprint.
+    fp3 = bank_insights.detect_aggregate_balance_insights(r1, today=_date(2026, 7, 1))[0]["fingerprint"]
+    assert fp3 != fp1
+
+
+def test_generate_insights_wires_securities_and_balances():
+    securities = {
+        "totalPositionsValue": 100000,
+        "positions": [{"securityName": "Apple", "marketValue": 100000, "profitLossPct": 5.0}],
+    }
+    report = {
+        "openBankingReportBalances": {
+            "incomes": {"total": 10000},
+            "expenses": {"total": 12000},
+        }
+    }
+    out = _by_type(bank_insights.generate_insights(
+        [], monthly_report=report, securities=securities,
+    ))
+    assert "portfolio_summary" in out
+    assert "aggregate_balance" in out
