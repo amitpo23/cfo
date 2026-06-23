@@ -62,6 +62,14 @@ interface CheckoutResponse {
   note?: string;
 }
 
+interface BillingStatusResponse {
+  provider: 'stripe' | 'mock';
+  production: boolean;
+  ready: boolean;
+  missing: string[];
+  supports: string[];
+}
+
 const plans = [
   {
     id: 'company_up_to_2_5m',
@@ -212,6 +220,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkout, setCheckout] = useState<CheckoutResponse | null>(null);
+  const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
 
   const selectedPlanName = useMemo(
@@ -227,6 +236,21 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
 
   const checkoutSessionId = checkout?.checkout_session_id;
   const paymentStatus = checkout?.payment_status;
+
+  useEffect(() => {
+    let cancelled = false;
+    axios
+      .get<BillingStatusResponse>(`${API_BASE_URL}/admin/billing/status`)
+      .then(({ data }) => {
+        if (!cancelled) setBillingStatus(data);
+      })
+      .catch(() => {
+        if (!cancelled) setBillingStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const prepareCheckout = async () => {
     setError(null);
@@ -652,6 +676,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               loading={loading}
               googleButtonRef={googleButtonRef}
               checkout={checkout}
+              billingStatus={billingStatus}
               checkoutLoading={checkoutLoading}
               onPrepareCheckout={prepareCheckout}
               onSubmit={handleSubmit}
@@ -857,6 +882,7 @@ function SignupForm({
   loading,
   googleButtonRef,
   checkout,
+  billingStatus,
   checkoutLoading,
   onPrepareCheckout,
   onSubmit,
@@ -884,11 +910,14 @@ function SignupForm({
   loading: boolean;
   googleButtonRef: React.RefObject<HTMLDivElement>;
   checkout: CheckoutResponse | null;
+  billingStatus: BillingStatusResponse | null;
   checkoutLoading: boolean;
   onPrepareCheckout: () => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
   const hasCheckout = Boolean(checkout?.checkout_session_id);
+  const liveBillingReady = billingStatus?.ready ?? false;
+  const billingBlocked = billingStatus?.production && !billingStatus.ready;
 
   return (
     <form onSubmit={onSubmit} className="rounded-2xl bg-white p-6 text-slate-950 shadow-2xl">
@@ -919,6 +948,19 @@ function SignupForm({
           </LandingSelect>
           <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
             <div className="mb-3 text-sm font-semibold">תשלום מאובטח</div>
+            <div className={`mb-3 rounded-lg border px-3 py-2 text-xs leading-5 ${
+              liveBillingReady
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : billingBlocked
+                  ? 'border-amber-200 bg-amber-50 text-amber-800'
+                  : 'border-blue-200 bg-blue-50 text-blue-800'
+            }`}>
+              {liveBillingReady
+                ? 'גבייה חיה פעילה: כרטיס אשראי וארנקים דיגיטליים זמינים ב-checkout.'
+                : billingBlocked
+                  ? 'גבייה חיה עדיין מחכה להגדרת סודות תשלום, Price IDs ואימות דומיין לארנקים דיגיטליים.'
+                  : 'ב-preview/local אפשר לבדוק onboarding עם checkout מדומה; בפרודקשן נדרש חיבור תשלום חי.'}
+            </div>
             <div className="grid grid-cols-3 gap-2 text-xs">
               {[
                 ['apple_pay', 'Apple Pay'],
@@ -980,6 +1022,7 @@ function SignupForm({
           <div>מחזור: {annualRevenue === 'up_to_2_5m' ? 'עד 2.5 מיליון ש"ח' : 'מעל 2.5 מיליון ש"ח'}</div>
           <div>תשלום: {paymentTemplates.find((template) => template.id === paymentTemplate)?.label}</div>
           <div>Checkout: {hasCheckout ? 'מוכן לפתיחת tenant' : 'טרם הוכן'}</div>
+          <div>גבייה חיה: {liveBillingReady ? 'פעילה' : billingBlocked ? 'דורשת הגדרות בפרודקשן' : 'מצב בדיקה/הכנה'}</div>
           <div>דוח שנתי: {annualReportRequested ? 'כלול כתבנית שירות' : 'לא נבחר כרגע'}</div>
         </div>
       )}

@@ -37,6 +37,7 @@ import {
   Sun,
   HelpCircle,
   ChevronDown,
+  ClipboardCheck,
 } from 'lucide-react';
 
 // Dashboard Components
@@ -57,6 +58,7 @@ import DailyReportsDashboard from './components/DailyReportsDashboard';
 import AnnualReportsDashboard from './components/AnnualReportsDashboard';
 import EngineDashboard from './components/EngineDashboard';
 import BusinessMenuDashboard from './components/BusinessMenuDashboard';
+import SumitCoverageDashboard from './components/SumitCoverageDashboard';
 import ReportsDashboard from './components/ReportsDashboard';
 import BudgetDashboard from './components/BudgetDashboard';
 import KPIDashboard from './components/KPIDashboard';
@@ -133,6 +135,7 @@ const navigationConfig = [
       { to: '/reports', icon: FileSpreadsheet, label: 'Reports', description: 'Generate & export' },
       { to: '/bank-report', icon: Landmark, label: 'דוח לבנק', description: 'דוח מצב עסקי לבנק' },
       { to: '/business-menu', icon: LayoutGrid, label: 'תפריט יכולות', description: 'סילבוס מלא של כל מה שהמערכת עושה לעסק — עם סטטוס חי' },
+      { to: '/sumit-coverage', icon: ClipboardCheck, label: 'כיסוי מודולי SUMIT', description: 'מפת API: מוכן, חלקי, חסום' },
       { to: '/engine', icon: Cpu, label: 'המנוע המאחד', description: 'מרכז בקרה אחד מעל הכל — סטטוס, הנה"ח, סינתזה ודוחות' },
       { to: '/bank-insights', icon: Sparkles, label: 'תובנות בנק', description: 'אנומליות, מנויים, עמלות וחיסכון מדפי הבנק' },
       { to: '/office', icon: Building2, label: 'ניהול משרד', description: 'תיקי לקוחות, סנכרון רוחבי והתאמות נדרשות' },
@@ -344,6 +347,7 @@ function App() {
                 <Route path="/annual-reports" element={<AnnualReportsDashboard />} />
                 <Route path="/engine" element={<EngineDashboard />} />
                 <Route path="/business-menu" element={<BusinessMenuDashboard />} />
+                <Route path="/sumit-coverage" element={<SumitCoverageDashboard darkMode={darkMode} />} />
                 <Route path="/analytics" element={<AnalyticsDashboard />} />
                 <Route path="/settings" element={<SettingsPage darkMode={darkMode} />} />
 

@@ -45,6 +45,16 @@ def test_billing_checkout_returns_self_service_session(client):
     assert body["payment_status"] in {"mock_ready", "checkout_started", "paid"}
 
 
+def test_billing_status_reports_missing_stripe_configuration(client):
+    resp = client.get("/api/admin/billing/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ready"] is False
+    assert "STRIPE_SECRET_KEY" in body["missing"]
+    assert "STRIPE_PRICE_COMPANY_UP_TO_2_5M" in body["missing"]
+    assert "apple_pay" not in body["supports"]
+
+
 def test_checkout_session_opens_isolated_tenant_without_registration_code(client, owner):
     checkout = client.post("/api/admin/billing/checkout", json={
         "selected_plan": "company_above_2_5m",
@@ -90,6 +100,7 @@ def test_mock_checkout_is_disabled_on_production(client, monkeypatch):
         "payment_template": "card",
     })
     assert resp.status_code == 503
+    assert "STRIPE_SECRET_KEY" in resp.json()["detail"]
 
 
 def test_preview_mock_checkout_opens_isolated_tenant(client, monkeypatch):

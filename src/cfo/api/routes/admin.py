@@ -42,6 +42,12 @@ PLAN_PRICE_FALLBACKS = {
     "office": {"monthly_ils": None, "label": "רצף Office"},
 }
 
+STRIPE_PRICE_ENV_BY_PLAN = {
+    "company_up_to_2_5m": "STRIPE_PRICE_COMPANY_UP_TO_2_5M",
+    "company_above_2_5m": "STRIPE_PRICE_COMPANY_ABOVE_2_5M",
+    "office": "STRIPE_PRICE_OFFICE",
+}
+
 
 class CheckoutCreate(BaseModel):
     selected_plan: str
@@ -126,6 +132,40 @@ def _stripe_price_id(plan_id: str) -> Optional[str]:
     }.get(plan_id)
 
 
+def _billing_readiness() -> dict:
+    from ...config import settings
+    from os import getenv
+
+    price_ids = {
+        "company_up_to_2_5m": settings.stripe_price_company_up_to_2_5m,
+        "company_above_2_5m": settings.stripe_price_company_above_2_5m,
+        "office": settings.stripe_price_office,
+    }
+    configured = {
+        "stripe_secret_key": bool(settings.stripe_secret_key),
+        **{env_name.lower(): bool(price_ids[plan_id]) for plan_id, env_name in STRIPE_PRICE_ENV_BY_PLAN.items()},
+    }
+    missing = []
+    if not settings.stripe_secret_key:
+        missing.append("STRIPE_SECRET_KEY")
+    missing.extend(env_name for plan_id, env_name in STRIPE_PRICE_ENV_BY_PLAN.items() if not price_ids[plan_id])
+
+    ready = not missing
+    production = getenv("VERCEL_ENV") == "production"
+    return {
+        "provider": "stripe" if ready else "mock" if not production else "stripe",
+        "production": production,
+        "ready": ready,
+        "configured": configured,
+        "missing": missing,
+        "supports": ["card", "apple_pay", "google_pay"] if ready else [],
+        "notes": [
+            "Apple Pay and Google Pay are shown by Stripe Checkout when payment methods are enabled on the Stripe account.",
+            "Apple Pay requires registering and verifying the production domain in Stripe.",
+        ],
+    }
+
+
 async def _create_stripe_checkout(body: CheckoutCreate) -> Optional[dict]:
     from ...config import settings
     import httpx
@@ -150,6 +190,9 @@ async def _create_stripe_checkout(body: CheckoutCreate) -> Optional[dict]:
         "metadata[payment_template]": body.payment_template,
         "metadata[annual_report_requested]": str(body.annual_report_requested).lower(),
         "allow_promotion_codes": "true",
+        "automatic_payment_methods[enabled]": "true",
+        "billing_address_collection": "auto",
+        "locale": "he",
     }
     if body.email:
         form["customer_email"] = body.email
@@ -176,6 +219,12 @@ async def _create_stripe_checkout(body: CheckoutCreate) -> Optional[dict]:
     }
 
 
+@router.get("/billing/status", tags=["Billing"])
+async def get_billing_status():
+    """Expose checkout readiness for the public signup screen."""
+    return _billing_readiness()
+
+
 @router.post("/billing/checkout", tags=["Billing"])
 async def create_billing_checkout(body: CheckoutCreate):
     """Create a signup checkout session before tenant registration."""
@@ -188,9 +237,14 @@ async def create_billing_checkout(body: CheckoutCreate):
 
     from os import getenv
     if getenv("VERCEL_ENV") == "production":
+        readiness = _billing_readiness()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Stripe checkout is not configured for production",
+            detail=(
+                "התשלום בפרודקשן עדיין לא הופעל. חסרים משתני סביבה: "
+                + ", ".join(readiness["missing"])
+                + ". אחרי הגדרת Stripe Price IDs ואימות הדומיין, Apple Pay/Google Pay יופיעו ב-checkout."
+            ),
         )
 
     session_id = "mock_" + secrets.token_urlsafe(18)
