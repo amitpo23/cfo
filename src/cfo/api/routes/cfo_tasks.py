@@ -222,13 +222,24 @@ async def list_cfo_insights(
 async def list_financial_recommendations(
     status: str = Query("active"),
     limit: int = Query(50, ge=1, le=200),
-    refresh: bool = Query(False),
     org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """User-facing financial recommendations derived from live org data."""
     brain = CFOBrainService(db, org_id)
-    return brain.list_recommendations(status=status, limit=limit, refresh=refresh)
+    return brain.list_recommendations(status=status, limit=limit, refresh=False)
+
+
+@router.post("/brain/recommendations/refresh")
+async def refresh_financial_recommendations(
+    status: str = Query("active"),
+    limit: int = Query(50, ge=1, le=200),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """Run analysis, persist insights/tasks, then return current recommendations."""
+    brain = CFOBrainService(db, org_id)
+    return brain.list_recommendations(status=status, limit=limit, refresh=True)
 
 
 @router.patch("/brain/insights/{insight_id}")

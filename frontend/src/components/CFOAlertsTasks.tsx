@@ -108,7 +108,7 @@ const CFOAlertsTasks: React.FC<Props> = ({ darkMode }) => {
   });
 
   const refreshRecommendations = useMutation({
-    mutationFn: () => apiService.get('/brain/recommendations?status=active&limit=30&refresh=true'),
+    mutationFn: () => apiService.post('/brain/recommendations/refresh?status=active&limit=30'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['financial-recommendations'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });

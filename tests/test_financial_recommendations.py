@@ -105,8 +105,8 @@ def test_recommendations_refresh_from_live_data(client, fresh_org):
     org = fresh_org()
     _seed_recommendation_data(org["org_id"])
 
-    response = client.get(
-        "/api/brain/recommendations?refresh=true",
+    response = client.post(
+        "/api/brain/recommendations/refresh",
         headers=org["headers"],
     )
 
@@ -135,12 +135,12 @@ def test_recommendations_are_org_scoped(client, fresh_org):
     empty = fresh_org()
     _seed_recommendation_data(seeded["org_id"])
 
-    seeded_resp = client.get(
-        "/api/brain/recommendations?refresh=true",
+    seeded_resp = client.post(
+        "/api/brain/recommendations/refresh",
         headers=seeded["headers"],
     )
-    empty_resp = client.get(
-        "/api/brain/recommendations?refresh=true",
+    empty_resp = client.post(
+        "/api/brain/recommendations/refresh",
         headers=empty["headers"],
     )
 
