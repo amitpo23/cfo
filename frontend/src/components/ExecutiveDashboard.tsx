@@ -2,9 +2,10 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   TrendingUp, Building2, AlertTriangle, Target, PieChart,
-  Lightbulb, Percent, Brain,
+  Lightbulb, Percent, Brain, Gauge,
 } from 'lucide-react';
 import apiService from '../services/api';
+import { AgentPanel, FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
 
 interface Props {
   darkMode?: boolean;
@@ -20,8 +21,6 @@ const fmt = (v: number) => `₪${Math.round(v || 0).toLocaleString()}`;
 const pct = (v: number) => `${((v || 0) * 100).toFixed(1)}%`;
 
 const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
-  const card = darkMode ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-200';
-
   const { data, isLoading } = useQuery({
     queryKey: ['executive-dashboard'],
     queryFn: async () => {
@@ -31,14 +30,14 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
   });
 
   const panels: Record<string, Panel> = data?.panels || {};
+  const profitLoss = panels.profit_loss?.data || {};
+  const bank = panels.bank_reconciliation?.data || {};
+  const budget = panels.budget_vs_actual?.data || {};
+  const fees = panels.fees?.data || {};
 
   const Card: React.FC<{ icon: any; title: string; panel?: Panel; children: (d: any) => React.ReactNode }> =
     ({ icon: Icon, title, panel, children }) => (
-      <div className={`rounded-xl border p-5 ${card}`}>
-        <div className="flex items-center gap-2 mb-3">
-          <Icon className="w-5 h-5 text-blue-600" />
-          <h2 className="font-semibold">{title}</h2>
-        </div>
+      <FinanceCard darkMode={darkMode} icon={Icon} title={title}>
         {!panel ? (
           <div className="text-gray-400 text-sm">—</div>
         ) : !panel.ok ? (
@@ -46,7 +45,7 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
         ) : (
           children(panel.data)
         )}
-      </div>
+      </FinanceCard>
     );
 
   const Row: React.FC<{ label: string; value: string; warn?: boolean }> = ({ label, value, warn }) => (
@@ -61,10 +60,52 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
   }
 
   return (
-    <div dir="rtl" className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">דשבורד מנהלים</h1>
-        <p className="text-sm text-gray-500">תמונת מצב מלאה של העסק במבט אחד</p>
+    <FinancePageShell
+      darkMode={darkMode}
+      eyebrow="Executive Control"
+      title="דשבורד מנהלים"
+      description="מסך הנהלה שמחליף דוח סטטי: רווח והפסד, התאמות בנק, תקציב, עמלות, חריגות והמלצות פעולה בזמן אמת."
+      icon={Gauge}
+      metrics={[
+        { label: 'רווח נקי', value: fmt(profitLoss.net_income || 0), tone: (profitLoss.net_income || 0) >= 0 ? 'emerald' : 'rose' },
+        { label: 'תנועות לא מותאמות', value: String(bank.unreconciled_count ?? 0), tone: (bank.unreconciled_count ?? 0) > 0 ? 'amber' : 'emerald' },
+        { label: 'סטיית תקציב', value: `${(budget.variance_percentage || 0).toFixed(1)}%`, tone: (budget.variance_percentage || 0) < -5 ? 'rose' : 'blue' },
+        { label: 'עמלות', value: fmt(fees.total_fees || 0), tone: 'slate' },
+      ]}
+    >
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+        <MetricCard
+          darkMode={darkMode}
+          icon={TrendingUp}
+          label="רווחיות"
+          value={fmt(profitLoss.total_revenue || 0)}
+          detail={`הוצאות: ${fmt(profitLoss.total_expenses || 0)}`}
+          tone="emerald"
+        />
+        <MetricCard
+          darkMode={darkMode}
+          icon={Building2}
+          label="התאמות"
+          value={String(bank.unreconciled_count ?? 0)}
+          detail={`חשבוניות באיחור: ${fmt(bank.overdue_invoices_amount || 0)}`}
+          tone={(bank.unreconciled_count ?? 0) > 0 ? 'amber' : 'emerald'}
+        />
+        <MetricCard
+          darkMode={darkMode}
+          icon={Target}
+          label="תקציב"
+          value={fmt(budget.total_actual || 0)}
+          detail={`תקציב: ${fmt(budget.total_budget || 0)}`}
+          tone="blue"
+        />
+        <MetricCard
+          darkMode={darkMode}
+          icon={Brain}
+          label="הזדמנויות"
+          value={String((panels.ai_opportunities?.data?.insights || []).length)}
+          detail="תובנות לשיפור רווחיות ותפעול"
+          tone="slate"
+        />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -179,7 +220,21 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
           )}
         </Card>
       </div>
-    </div>
+
+      <AgentPanel
+        darkMode={darkMode}
+        insights={[
+          {
+            title: 'פחות תלות בסגירת חודש',
+            text: 'הדשבורד מציג רווחיות, התאמות וחריגות תוך כדי עבודה, כדי לקבל החלטות לפני שהחודש נסגר.',
+          },
+          {
+            title: 'המלצות לשיפור רווחיות',
+            text: `${fmt(fees.total_fees || 0)} בעמלות מזוהות. הסוכן בודק עמלות, חריגות תקציב ושחיקת מרווחים.`,
+          },
+        ]}
+      />
+    </FinancePageShell>
   );
 };
 

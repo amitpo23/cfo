@@ -389,10 +389,23 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
                 מחלקת כספים אוטונומית לעסק שלך.
               </h1>
               <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-                רצף רואה את הכסף מקצה לקצה: מי שילם, מי חייב, מה עומד לצאת,
-                אילו תנועות דורשות התאמה ומה מצב הרווחיות היום. הסוכן הפיננסי
-                מסביר מה קרה, מה מסוכן ומה הפעולה הנכונה הבאה.
+                רצף מחליפה את עבודת הנהלת החשבונות השוטפת בטכנולוגיה שמבצעת עבורך
+                התאמות, סיווגים, גבייה, תשלומים ודוחות. במקום לחכות לסוף חודש,
+                אתה יודע בכל יום מי שילם, מי חייב, מה עומד לצאת ומה מצב הרווחיות.
               </p>
+              <div className="mt-5 grid gap-2 text-sm font-medium text-slate-700 sm:grid-cols-2">
+                {[
+                  'חיסכון בעלויות הנהלת חשבונות ותפעול כספים',
+                  'רווח והפסד יומי, תזרים ודוחות לבנק',
+                  'התאמות בנק אוטומטיות וזיהוי חריגות',
+                  'סוכן פיננסי שמסביר מה לעשות עכשיו',
+                ].map((item) => (
+                  <div key={item} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                    <Check className="h-4 w-4 shrink-0 text-emerald-600" />
+                    <span>{item}</span>
+                  </div>
+                ))}
+              </div>
               <div className="mt-8 flex flex-wrap gap-3">
                 <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-5 py-3 font-semibold text-white shadow-sm hover:bg-slate-800">
                   הרשמה ובחירת תוכנית <UserPlus className="h-4 w-4" />
@@ -415,10 +428,10 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
         <section className="border-b border-slate-200 bg-slate-950 text-white">
           <div className="mx-auto grid max-w-7xl gap-0 px-5 py-6 md:grid-cols-4">
             {[
-              ['Autonomous finance', 'פחות עבודה ידנית במחלקת כספים'],
+              ['Autonomous finance', 'מחליף עבודת הנהלת חשבונות שוטפת'],
               ['Daily P&L', 'רווח והפסד יומי ולא רק בסוף חודש'],
               ['Auto reconciliation', 'התאמות בנק ותיעוד פעולות'],
-              ['Action center', 'סוכן המלצות ומשימות לביצוע'],
+              ['Cost control', 'פחות עלויות תפעול ויותר שליטה'],
             ].map(([title, text]) => (
               <div key={title} className="border-white/10 py-4 md:border-l md:px-6">
                 <div className="text-sm font-semibold text-blue-200">{title}</div>
@@ -432,7 +445,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           <SectionHeading
             eyebrow="מה יש בפנים"
             title="המערכת שעושה את עבודת הכספים השוטפת"
-            text="רצף לא רק מציגה נתונים. היא מזהה פערים, מתאימה תנועות, מסמנת חריגות, מנהלת גבייה, מכינה דוחות ונותנת הוראות פעולה ברורות."
+            text="רצף לא רק מציגה נתונים. היא מבצעת את העבודה: מזהה פערים, מתאימה תנועות, מסמנת חריגות, מנהלת גבייה, מכינה דוחות ונותנת הוראות פעולה ברורות."
           />
           <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {capabilityGroups.map((group) => (
@@ -457,11 +470,11 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
                 <div className="flex items-center gap-3">
                   <ShieldCheck className="h-6 w-6 text-emerald-600" />
-                  <h3 className="text-xl font-bold">הנהלת חשבונות שוטפת בלי עבודה ידנית</h3>
+                  <h3 className="text-xl font-bold">הנהלת חשבונות שוטפת בלי צוות פנימי כבד</h3>
                 </div>
                 <p className="mt-3 leading-7 text-slate-600">
                   המערכת מבצעת סיווג, התאמה, מעקב גבייה, בקרת ספקים והכנת דוחות שוטפים.
-                  במקום לרדוף אחרי אקסלים, העסק מקבל תמונת מצב יומית ופעולות מוכנות לאישור.
+                  במקום לרדוף אחרי אקסלים וצוות תפעולי יקר, העסק מקבל תמונת מצב יומית ופעולות מוכנות לאישור.
                 </p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
@@ -481,8 +494,8 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
         <section className="mx-auto max-w-7xl px-5 py-16">
           <SectionHeading
             eyebrow="הסוכן הפיננסי"
-            title="לא רק דשבורד. מנהל כספים שמדבר איתך."
-            text="הסוכן מנתח תנועות, גבייה, הוצאות, רווחיות ותזרים. הוא יודע להסביר למה המספר השתנה, איפה יש סיכון ומה הפעולה המומלצת."
+            title="לא רק דשבורד. מנהל כספים דיגיטלי שמדבר איתך."
+            text="הסוכן מנתח תנועות, גבייה, הוצאות, רווחיות ותזרים. הוא מסביר למה המספר השתנה, איפה יש סיכון ומה הפעולה המומלצת כדי לנהל את העסק טוב יותר."
           />
           <div className="mt-8 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
             <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">

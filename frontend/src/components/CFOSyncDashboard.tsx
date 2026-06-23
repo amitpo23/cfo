@@ -1,7 +1,8 @@
 import React from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Loader2 } from 'lucide-react';
+import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Loader2, Database, ShieldCheck } from 'lucide-react';
 import apiService from '../services/api';
+import { FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
 
 interface Props {
   darkMode: boolean;
@@ -102,10 +103,6 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
     </span>
   );
 
-  const cardClass = `p-6 rounded-2xl ${
-    darkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-200'
-  }`;
-
   const statusIcon = (status: string) => {
     switch (status) {
       case 'completed': return <CheckCircle size={18} className="text-green-500" />;
@@ -126,13 +123,68 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
   ];
 
   return (
-    <div className={`p-6 space-y-6 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-      <h1 className="text-3xl font-bold">Data Sync</h1>
+    <FinancePageShell
+      darkMode={darkMode}
+      eyebrow="Data Operations"
+      title="סנכרון וחיבורי נתונים"
+      description="מרכז הפעלה שמוודא שהמערכת מקבלת נתונים, מריצה סנכרונים, בודקת חיבורים ושומרת היסטוריית ריצות לכל ארגון בנפרד."
+      icon={Database}
+      metrics={[
+        { label: 'הנהלת חשבונות', value: integrationStatus?.configured?.sumit ? 'מחובר' : 'לא מוגדר', tone: integrationStatus?.configured?.sumit ? 'emerald' : 'amber' },
+        { label: 'נתוני בנק', value: integrationStatus?.configured?.open_finance ? 'מחובר' : 'לא מוגדר', tone: integrationStatus?.configured?.open_finance ? 'emerald' : 'amber' },
+        { label: 'ריצות אחרונות', value: String(runs?.length || 0), tone: 'blue' },
+        { label: 'מצב אבטחה', value: integrationStatus?.configured?.security ? 'תקין' : 'לבדיקה', tone: integrationStatus?.configured?.security ? 'emerald' : 'rose' },
+      ]}
+      actions={
+        <button
+          type="button"
+          onClick={() => testMutation.mutate()}
+          disabled={testMutation.isPending}
+          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {testMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
+          בדוק חיבורים
+        </button>
+      }
+    >
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+        <MetricCard
+          darkMode={darkMode}
+          icon={Database}
+          label="מסמכים"
+          value={integrationStatus?.configured?.sumit ? 'מוכן' : 'דורש הגדרה'}
+          detail="חשבוניות, קבלות, ספקים ותשלומים"
+          tone={integrationStatus?.configured?.sumit ? 'emerald' : 'amber'}
+        />
+        <MetricCard
+          darkMode={darkMode}
+          icon={RefreshCw}
+          label="תנועות בנק"
+          value={integrationStatus?.configured?.open_finance ? 'מוכן' : 'דורש הגדרה'}
+          detail="תנועות, התאמות ותובנות בנק"
+          tone={integrationStatus?.configured?.open_finance ? 'emerald' : 'amber'}
+        />
+        <MetricCard
+          darkMode={darkMode}
+          icon={Clock}
+          label="רענון"
+          value="5 שניות"
+          detail="היסטוריית ריצות מתעדכנת אוטומטית"
+          tone="blue"
+        />
+        <MetricCard
+          darkMode={darkMode}
+          icon={AlertTriangle}
+          label="שגיאות"
+          value={String((runs || []).filter((run) => run.status === 'failed').length)}
+          detail="ריצות שנכשלו בתצוגה האחרונה"
+          tone={(runs || []).some((run) => run.status === 'failed') ? 'rose' : 'emerald'}
+        />
+      </div>
 
       {/* Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className={cardClass}>
-          <h2 className="text-lg font-semibold mb-4">Connection</h2>
+        <FinanceCard darkMode={darkMode} title="בדיקת חיבורים" subtitle="בדיקה מול ה־backend לפי ההרשאות והארגון הנוכחי" icon={ShieldCheck}>
           <button
             type="button"
             onClick={() => testMutation.mutate()}
@@ -150,10 +202,9 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
               {testMutation.data.message}
             </div>
           )}
-        </div>
+        </FinanceCard>
 
-        <div className={cardClass}>
-          <h2 className="text-lg font-semibold mb-4">Sync Now</h2>
+        <FinanceCard darkMode={darkMode} title="הרצת סנכרון" subtitle="בחר סוג נתונים והריץ רענון יזום" icon={RefreshCw}>
           <div className="grid grid-cols-2 gap-2">
             {syncTypes.map((st) => (
               <button
@@ -177,12 +228,12 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
               <span className="text-sm">Syncing...</span>
             </div>
           )}
-        </div>
+        </FinanceCard>
       </div>
 
       {/* Integration Credentials */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className={cardClass}>
+        <FinanceCard darkMode={darkMode}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">SUMIT Credentials</h2>
             {configuredBadge(integrationStatus?.configured?.sumit)}
@@ -217,9 +268,9 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
               <p className="text-sm text-red-600">Saving failed. Check the values and try again.</p>
             )}
           </div>
-        </div>
+        </FinanceCard>
 
-        <div className={cardClass}>
+        <FinanceCard darkMode={darkMode}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">Open Finance Credentials</h2>
             {configuredBadge(integrationStatus?.configured?.open_finance)}
@@ -261,12 +312,11 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
               <p className="text-sm text-red-600">Saving failed. Check the values and try again.</p>
             )}
           </div>
-        </div>
+        </FinanceCard>
       </div>
 
       {/* Sync Runs */}
-      <div className={cardClass}>
-        <h2 className="text-lg font-semibold mb-4">Sync History</h2>
+      <FinanceCard darkMode={darkMode} title="היסטוריית סנכרון" subtitle="כל ריצה מתועדת עם מקור, סוג, משך ותוצאות" icon={Clock}>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -336,8 +386,8 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </FinanceCard>
+    </FinancePageShell>
   );
 };
 

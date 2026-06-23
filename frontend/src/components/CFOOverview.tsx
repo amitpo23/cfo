@@ -8,9 +8,10 @@ import {
 import {
   Wallet, TrendingUp, AlertTriangle,
   FileCheck, Receipt, ArrowRight, RefreshCw, Clock,
-  DollarSign, Activity, Shield,
+  DollarSign, Activity, Shield, Gauge, Sparkles, Landmark, CheckCircle2,
 } from 'lucide-react';
 import apiService from '../services/api';
+import { AgentPanel, FinanceCard, FinancePageShell, MetricCard, formatILS } from './finance-ui';
 
 interface CFOOverviewProps {
   darkMode: boolean;
@@ -116,24 +117,22 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
   const fmt = (n: number) =>
     new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(n);
 
-  const cardClass = `p-6 rounded-2xl ${
-    darkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-200'
-  } shadow-sm`;
-
   const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
 
   return (
-    <div className={`p-6 space-y-6 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">CFO Command Center</h1>
-          <p className={`text-sm mt-1 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-            {lastSync
-              ? `Last synced: ${new Date(lastSync).toLocaleString()}`
-              : 'No sync data yet'}
-          </p>
-        </div>
+    <FinancePageShell
+      darkMode={darkMode}
+      eyebrow="Command Center"
+      title="מרכז שליטה פיננסי"
+      description="תמונה יומית של הכסף: יתרות, גבייה, ספקים, רווחיות, תזרים וסיכונים. המטרה היא להחליף עבודת מעקב ידנית בפעולות מוכנות לאישור."
+      icon={Gauge}
+      metrics={[
+        { label: 'יתרת מזומן', value: fmt(cashBalance), tone: 'blue' },
+        { label: 'רווח נקי חודש', value: fmt(monthNetProfit), tone: monthNetProfit >= 0 ? 'emerald' : 'rose' },
+        { label: 'חובות באיחור', value: fmt(arOverdue), tone: arOverdue > 0 ? 'amber' : 'emerald' },
+        { label: 'התראות פעילות', value: String(alerts.length), tone: alerts.length ? 'rose' : 'emerald' },
+      ]}
+      actions={
         <button
           type="button"
           onClick={handleSyncNow}
@@ -141,56 +140,70 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium"
         >
           <RefreshCw size={18} />
-          Sync Now
+          סנכרן עכשיו
         </button>
+      }
+    >
+      <div className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-200 bg-white text-slate-600'}`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm">
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            {lastSync ? `עדכון אחרון: ${new Date(lastSync).toLocaleString('he-IL')}` : 'עדיין אין נתוני סנכרון. הרץ סנכרון כדי לקבל תמונה מלאה.'}
+          </div>
+          <div className="text-sm font-medium">המערכת מזהה פערים ומייצרת משימות גבייה, תשלום והתאמה.</div>
+        </div>
       </div>
 
       {/* Top KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <KPICard
+        <MetricCard
           darkMode={darkMode}
-          icon={<Wallet size={24} />}
-          label="Cash Balance"
+          icon={Wallet}
+          label="יתרה זמינה"
           value={fmt(cashBalance)}
-          sublabel={runwayMonths != null ? `${runwayMonths} months runway` : 'Positive cash flow'}
-          color="blue"
+          detail={runwayMonths != null ? `${runwayMonths} חודשי runway` : 'תזרים חיובי'}
+          tone="blue"
         />
-        <KPICard
+        <MetricCard
           darkMode={darkMode}
-          icon={<TrendingUp size={24} />}
-          label="Month Revenue"
+          icon={TrendingUp}
+          label="הכנסות החודש"
           value={fmt(monthRevenue)}
-          sublabel={`Net profit: ${fmt(monthNetProfit)}`}
-          color="green"
+          detail={`רווח נקי: ${fmt(monthNetProfit)}`}
+          tone="emerald"
         />
-        <KPICard
+        <MetricCard
           darkMode={darkMode}
-          icon={<FileCheck size={24} />}
-          label="AR Outstanding"
+          icon={FileCheck}
+          label="לקוחות חייבים"
           value={fmt(arTotal)}
-          sublabel={arOverdue > 0 ? `${fmt(arOverdue)} overdue` : 'Nothing overdue'}
-          color={arOverdue > 0 ? 'red' : 'green'}
+          detail={arOverdue > 0 ? `${fmt(arOverdue)} באיחור` : 'אין איחור מהותי'}
+          tone={arOverdue > 0 ? 'rose' : 'emerald'}
         />
-        <KPICard
+        <MetricCard
           darkMode={darkMode}
-          icon={<Receipt size={24} />}
-          label="AP Outstanding"
+          icon={Receipt}
+          label="ספקים לתשלום"
           value={fmt(apTotal)}
-          sublabel={`${fmt(apDue7)} due in 7 days`}
-          color="yellow"
+          detail={`${fmt(apDue7)} ל-7 ימים הקרובים`}
+          tone="amber"
         />
       </div>
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* P&L Trend */}
-        <div className={cardClass}>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">P&L Trend</h2>
+        <FinanceCard
+          darkMode={darkMode}
+          title="רווח והפסד יומי/חודשי"
+          subtitle="הכנסות מול רווח נקי, כדי להבין אם העסק באמת מרוויח בזמן אמת"
+          icon={TrendingUp}
+          action={
             <Link to="/pnl" className="text-blue-500 text-sm hover:text-blue-600 flex items-center gap-1">
-              Details <ArrowRight size={14} />
+              פירוט <ArrowRight size={14} />
             </Link>
-          </div>
+          }
+        >
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={pnlData || []}>
               <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#374151' : '#e5e7eb'} />
@@ -208,16 +221,20 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
               <Bar dataKey="net_profit" fill="#10b981" radius={[4, 4, 0, 0]} name="Net Profit" />
             </BarChart>
           </ResponsiveContainer>
-        </div>
+        </FinanceCard>
 
         {/* Cash Flow Projection */}
-        <div className={cardClass}>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">Cash Flow Projection</h2>
+        <FinanceCard
+          darkMode={darkMode}
+          title="תחזית תזרים"
+          subtitle="יתרה צפויה, כסף נכנס וכסף יוצא כדי לדעת לפני שנוצר לחץ בבנק"
+          icon={Landmark}
+          action={
             <Link to="/cashflow" className="text-blue-500 text-sm hover:text-blue-600 flex items-center gap-1">
-              Details <ArrowRight size={14} />
+              פירוט <ArrowRight size={14} />
             </Link>
-          </div>
+          }
+        >
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={cashflowData || []}>
               <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? '#374151' : '#e5e7eb'} />
@@ -244,20 +261,21 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
               <Line type="monotone" dataKey="expected_outflows" stroke="#ef4444" strokeWidth={1} strokeDasharray="5 5" dot={false} name="Outflows" />
             </LineChart>
           </ResponsiveContainer>
-        </div>
+        </FinanceCard>
       </div>
 
       {/* Bottom Row: Alerts + Cash Accounts + Quick Links */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Alerts */}
-        <div className={cardClass}>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <AlertTriangle size={20} className="text-yellow-500" />
-              Alerts
-            </h2>
+        <FinanceCard
+          darkMode={darkMode}
+          title="התראות ומשימות"
+          subtitle="מה צריך טיפול לפני סוף היום"
+          icon={AlertTriangle}
+          action={
             <Link to="/alerts" className="text-blue-500 text-sm hover:text-blue-600">View all</Link>
-          </div>
+          }
+        >
           {alerts.length === 0 ? (
             <div className={`text-center py-8 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
               <Shield size={32} className="mx-auto mb-2 opacity-50" />
@@ -286,11 +304,10 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
               ))}
             </div>
           )}
-        </div>
+        </FinanceCard>
 
         {/* Cash by Account */}
-        <div className={cardClass}>
-          <h2 className="text-lg font-semibold mb-4">Cash by Account</h2>
+        <FinanceCard darkMode={darkMode} title="יתרות לפי חשבון" subtitle="פיזור מזומנים ותזרים זמין" icon={DollarSign}>
           {cashByAccount.length === 0 ? (
             <div className={`text-center py-8 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
               <DollarSign size={32} className="mx-auto mb-2 opacity-50" />
@@ -319,19 +336,18 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
               </div>
             </div>
           )}
-        </div>
+        </FinanceCard>
 
         {/* Quick Navigation */}
-        <div className={cardClass}>
-          <h2 className="text-lg font-semibold mb-4">Quick Actions</h2>
+        <FinanceCard darkMode={darkMode} title="פעולות מהירות" subtitle="מעבר למסכים שמחליפים עבודה ידנית" icon={Sparkles}>
           <div className="space-y-2">
             {[
-              { to: '/ar', label: 'AR Aging Report', icon: <FileCheck size={18} />, color: 'text-blue-500' },
-              { to: '/ap', label: 'AP Due Bills', icon: <Receipt size={18} />, color: 'text-green-500' },
-              { to: '/cashflow', label: 'Cash Flow Forecast', icon: <Activity size={18} />, color: 'text-purple-500' },
-              { to: '/budget', label: 'Budget vs Actual', icon: <DollarSign size={18} />, color: 'text-yellow-500' },
-              { to: '/tasks', label: 'Task Board', icon: <Clock size={18} />, color: 'text-red-500' },
-              { to: '/sync', label: 'Sync Runs', icon: <RefreshCw size={18} />, color: 'text-cyan-500' },
+              { to: '/ar', label: 'מי חייב לנו', icon: <FileCheck size={18} />, color: 'text-blue-500' },
+              { to: '/ap', label: 'מה אנחנו חייבים', icon: <Receipt size={18} />, color: 'text-green-500' },
+              { to: '/cashflow', label: 'תחזית תזרים', icon: <Activity size={18} />, color: 'text-purple-500' },
+              { to: '/budget', label: 'תקציב מול ביצוע', icon: <DollarSign size={18} />, color: 'text-yellow-500' },
+              { to: '/tasks', label: 'משימות סוכן', icon: <Clock size={18} />, color: 'text-red-500' },
+              { to: '/sync', label: 'סטטוס נתונים', icon: <RefreshCw size={18} />, color: 'text-cyan-500' },
             ].map((item) => (
               <Link
                 key={item.to}
@@ -348,45 +364,23 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
               </Link>
             ))}
           </div>
-        </div>
+        </FinanceCard>
       </div>
-    </div>
-  );
-};
 
-
-// KPI Card sub-component
-interface KPICardProps {
-  darkMode: boolean;
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  sublabel: string;
-  color: string;
-}
-
-const KPICard: React.FC<KPICardProps> = ({ darkMode, icon, label, value, sublabel, color }) => {
-  const colorMap: Record<string, string> = {
-    blue: 'bg-blue-100 text-blue-600',
-    green: 'bg-green-100 text-green-600',
-    yellow: 'bg-yellow-100 text-yellow-600',
-    red: 'bg-red-100 text-red-600',
-    purple: 'bg-purple-100 text-purple-600',
-  };
-
-  return (
-    <div className={`p-6 rounded-2xl ${
-      darkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-200'
-    } shadow-sm hover:shadow-lg transition-shadow`}>
-      <div className="flex items-start justify-between mb-4">
-        <div className={`p-3 rounded-xl ${colorMap[color] || colorMap.blue}`}>
-          {icon}
-        </div>
-      </div>
-      <p className={`text-2xl font-bold mb-1 ${darkMode ? 'text-white' : 'text-gray-900'}`}>{value}</p>
-      <p className={`text-sm font-medium ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{label}</p>
-      <p className={`text-xs mt-1 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>{sublabel}</p>
-    </div>
+      <AgentPanel
+        darkMode={darkMode}
+        insights={[
+          {
+            title: 'גבייה לפני תשלומי ספקים',
+            text: `${formatILS(arOverdue || arTotal)} עומדים לגבייה. הסוכן ממליץ לתעדף לקוחות באיחור לפני תשלומי השבוע.`,
+          },
+          {
+            title: 'שמירה על runway',
+            text: runwayMonths != null ? `בקצב הנוכחי יש ${runwayMonths} חודשי runway. בדקו הוצאות חוזרות לפני אישור תשלומים.` : 'לאחר סנכרון נתונים תופיע תחזית runway מלאה.',
+          },
+        ]}
+      />
+    </FinancePageShell>
   );
 };
 
