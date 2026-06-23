@@ -674,8 +674,95 @@ class TaxComplianceService:
         return employee_withholding_rows(self.db, self.organization_id, year, month)
 
     def _get_supplier_withholding(self, year: int, month: int) -> List[Dict]:
-        """ניכויי מס במקור לספקים — לא נרשמים במערכת כרגע."""
-        return []
+        """ניכויי מס במקור לספקים — מחושב מהמסמכים לפי שיעור הניכוי שהוגדר לכל ספק.
+
+        רק ספקים שסומנו במפורש בשיעור ניכוי > 0 (Contact.withholding_rate) נכללים —
+        רוב הספקים פטורים (יש אישור ניכוי), ולכן ברירת המחדל היא ריק עד שמסמנים ספק.
+        """
+        from ..models import Expense, Bill, Contact
+
+        start = date(year, month, 1)
+        if month == 12:
+            end = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end = date(year, month + 1, 1) - timedelta(days=1)
+
+        contacts = {c.id: c for c in self.db.query(Contact).filter(
+            Contact.organization_id == self.organization_id).all()}
+
+        def _rate(contact) -> float:
+            return float(getattr(contact, "withholding_rate", 0) or 0) if contact else 0.0
+
+        out: List[Dict] = []
+
+        for exp in self.db.query(Expense).filter(
+                Expense.organization_id == self.organization_id).all():
+            d = getattr(exp, "expense_date", None)
+            if not (d and start <= d <= end):
+                continue
+            contact = contacts.get(getattr(exp, "supplier_id", None))
+            rate = _rate(contact)
+            if rate <= 0:
+                continue
+            base = float(getattr(exp, "amount", 0) or 0)  # net of VAT
+            out.append({
+                "type": "contractor" if rate <= 0.20 else "supplier",
+                "supplier": getattr(exp, "supplier_name", None) or (contact.name if contact else ""),
+                "tax_id": getattr(exp, "supplier_tax_id", None) or (contact.tax_id if contact else None),
+                "amount": round(base, 2),
+                "rate": rate,
+                "withholding": round(base * rate, 2),
+            })
+
+        for bill in self.db.query(Bill).filter(
+                Bill.organization_id == self.organization_id).all():
+            d = getattr(bill, "issue_date", None) or getattr(bill, "due_date", None)
+            if not (d and start <= d <= end):
+                continue
+            contact = contacts.get(getattr(bill, "vendor_id", None))
+            rate = _rate(contact)
+            if rate <= 0:
+                continue
+            base = float(getattr(bill, "subtotal", 0) or 0)
+            out.append({
+                "type": "contractor" if rate <= 0.20 else "supplier",
+                "supplier": contact.name if contact else "",
+                "tax_id": contact.tax_id if contact else None,
+                "amount": round(base, 2),
+                "rate": rate,
+                "withholding": round(base * rate, 2),
+            })
+
+        return out
+
+    def generate_856(self, year: int) -> Dict:
+        """דוח 856 שנתי — סיכום ניכויי מס במקור מספקים, מקובץ לפי ספק.
+
+        טיוטה לאימות מול רו"ח: מבוסס על הספקים שסומנו בשיעור ניכוי והמסמכים בשנה.
+        """
+        by_supplier: Dict[str, Dict] = {}
+        total_base = total_wh = 0.0
+        for month in range(1, 13):
+            for row in self._get_supplier_withholding(year, month):
+                key = row.get("tax_id") or row["supplier"]
+                agg = by_supplier.setdefault(key, {
+                    "supplier": row["supplier"], "tax_id": row.get("tax_id"),
+                    "rate": row["rate"], "amount": 0.0, "withholding": 0.0})
+                agg["amount"] = round(agg["amount"] + row["amount"], 2)
+                agg["withholding"] = round(agg["withholding"] + row["withholding"], 2)
+                total_base += row["amount"]
+                total_wh += row["withholding"]
+        return {
+            "form": "856",
+            "title": "דוח שנתי על ניכויים מספקים (856)",
+            "year": year,
+            "suppliers": sorted(by_supplier.values(), key=lambda s: s["withholding"], reverse=True),
+            "supplier_count": len(by_supplier),
+            "total_base": round(total_base, 2),
+            "total_withholding": round(total_wh, 2),
+            "draft": True,
+            "disclaimer": "טיוטת 856 — מבוססת על ספקים שסומנו בשיעור ניכוי. לבדיקת רו\"ח.",
+        }
     
     def _format_shaam_file(self, report: VATReport) -> str:
         """פורמט שע"מ"""

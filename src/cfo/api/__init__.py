@@ -8,7 +8,7 @@ from .routes import (
     cashflow, sync, reports, financial_management, financial_operations
 )
 from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses
-from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine
+from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
@@ -127,6 +127,18 @@ app.include_router(
 # The unifying engine — one command surface over all services
 app.include_router(
     engine.router, prefix="/api", tags=["Unifying Engine"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Per-business capability menu / syllabus — organization-scoped
+app.include_router(
+    business.router, prefix="/api", tags=["Business Menu"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Onboarding data-mapping checklist — status + manual re-run, organization-scoped
+app.include_router(
+    onboarding.router, prefix="/api", tags=["Onboarding"],
     dependencies=[Depends(get_current_user)],
 )
 

@@ -61,6 +61,19 @@ def vat_report(
     return daily_reports_service.vat_report(db, org_id, year, month)
 
 
+@router.get("/daily-reports/pcn874")
+def pcn874_file(
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+    company_vat_id: str = Query("000000000"),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """PCN874 detailed-VAT file (fixed-width draft) for the period."""
+    from ...services import pcn874
+    return pcn874.build_pcn874(db, org_id, year, month, company_vat_id=company_vat_id)
+
+
 @router.get("/daily-reports/suppliers")
 def suppliers(
     year: int = Query(...),

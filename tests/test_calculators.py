@@ -4,10 +4,11 @@ import pytest
 from cfo.services import calculators as C
 
 
-def test_registry_has_16_calculators():
-    assert len(C.CALCULATORS) == 16
+def test_registry_has_all_calculators():
+    # 16 original + 3 expense-deduction calculators.
+    assert len(C.CALCULATORS) == 19
     listed = C.list_calculators()
-    assert len(listed) == 16
+    assert len(listed) == 19
     assert all("fields" in c and "title" in c for c in listed)
 
 
@@ -103,3 +104,18 @@ def test_run_dispatch_ignores_unknown_inputs():
 def test_run_unknown_calculator_raises():
     with pytest.raises(KeyError):
         C.run("nope", {})
+
+
+def test_deduction_calculators_registered_and_compute():
+    from cfo.services import calculators
+    ids = {c["id"] for c in calculators.list_calculators()}
+    assert {"vehicle_deduction", "home_office_deduction", "phone_internet_deduction"} <= ids
+    # business ratio applied: 30000 * 15000/20000 = 22500
+    veh = calculators.run("vehicle_deduction", {"annual_cost": 30000, "business_km": 15000, "total_km": 20000})
+    assert veh[-1]["value"] == 22500.0
+    # home: 60000 * 15/100 = 9000
+    home = calculators.run("home_office_deduction", {"annual_home_cost": 60000, "office_area_sqm": 15, "total_area_sqm": 100})
+    assert home[-1]["value"] == 9000.0
+    # phone: 6000 * 70% = 4200
+    phone = calculators.run("phone_internet_deduction", {"annual_cost": 6000, "business_pct": 70})
+    assert phone[-1]["value"] == 4200.0

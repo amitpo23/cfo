@@ -26,6 +26,7 @@ CHART: dict[str, dict[str, str]] = {
     "1300": {"name": "מע\"מ תשומות", "type": "asset"},
     "2100": {"name": "ספקים", "type": "liability"},
     "2200": {"name": "מע\"מ עסקאות", "type": "liability"},
+    "3000": {"name": "הון ויתרות פתיחה", "type": "equity"},
     "4000": {"name": "הכנסות", "type": "revenue"},
     "5000": {"name": "הוצאות", "type": "expense"},
 }
@@ -179,14 +180,89 @@ def post_payment(pay) -> Optional[Entry]:
 
 
 # ---------------------------------------------------------------------- #
+# Opening balances (carry-forward)
+# ---------------------------------------------------------------------- #
+def opening_entry(db, organization_id: int) -> Optional[Entry]:
+    """Build a single balanced opening-balance entry from stored opening balances.
+
+    Any residual (so debits == credits) is auto-plugged to the equity account 3000,
+    keeping the trial-balance invariant intact even with partial opening data.
+    """
+    from ..models import LedgerOpeningBalance
+
+    rows = db.query(LedgerOpeningBalance).filter(
+        LedgerOpeningBalance.organization_id == organization_id).all()
+    if not rows:
+        return None
+    as_of = min((r.as_of for r in rows if r.as_of), default=None)
+    e = Entry(entry_date=as_of, memo="יתרות פתיחה", source_ref="opening")
+    total_debit = total_credit = 0.0
+    for r in rows:
+        d, c = float(r.debit or 0), float(r.credit or 0)
+        if d == 0 and c == 0:
+            continue
+        e.lines.append(Line(r.account_code, debit=d, credit=c,
+                            description=CHART.get(r.account_code, {}).get("name", "")))
+        total_debit += d
+        total_credit += c
+    residual = round(total_debit - total_credit, 2)
+    if abs(residual) >= 0.01:
+        # Plug to equity so the opening entry balances (DR if credits exceed debits).
+        if residual > 0:
+            e.lines.append(Line("3000", credit=residual, description="הון פתיחה (איזון)"))
+        else:
+            e.lines.append(Line("3000", debit=-residual, description="הון פתיחה (איזון)"))
+    return e if e.lines else None
+
+
+def set_opening_balances(db, organization_id: int, as_of: date,
+                         balances: list[dict[str, Any]]) -> dict[str, Any]:
+    """Replace the org's opening balances. balances: [{account, debit, credit}]."""
+    from ..models import LedgerOpeningBalance
+
+    db.query(LedgerOpeningBalance).filter(
+        LedgerOpeningBalance.organization_id == organization_id).delete()
+    for b in balances:
+        code = str(b.get("account") or b.get("account_code") or "").strip()
+        if code not in CHART:
+            continue
+        db.add(LedgerOpeningBalance(
+            organization_id=organization_id, account_code=code, as_of=as_of,
+            debit=float(b.get("debit") or 0), credit=float(b.get("credit") or 0)))
+    db.commit()
+    return get_opening_balances(db, organization_id)
+
+
+def get_opening_balances(db, organization_id: int) -> dict[str, Any]:
+    from ..models import LedgerOpeningBalance
+
+    rows = db.query(LedgerOpeningBalance).filter(
+        LedgerOpeningBalance.organization_id == organization_id).all()
+    items = [{"account": r.account_code,
+              "name": CHART.get(r.account_code, {}).get("name", r.account_code),
+              "as_of": r.as_of.isoformat() if r.as_of else None,
+              "debit": float(r.debit or 0), "credit": float(r.credit or 0)} for r in rows]
+    return {"items": items, "count": len(items)}
+
+
+# ---------------------------------------------------------------------- #
 # Public API
 # ---------------------------------------------------------------------- #
 def build_journal(db, organization_id: int, *, start: Optional[date] = None,
-                  end: Optional[date] = None) -> list[Entry]:
-    """Derive the full balanced journal for the period from synced documents."""
+                  end: Optional[date] = None, include_opening: bool = True) -> list[Entry]:
+    """Derive the full balanced journal for the period from synced documents.
+
+    Includes the opening-balance entry (carry-forward) when `include_opening` and its
+    date falls within [start, end] — so position reports (trial balance / balance
+    sheet) reflect carried-forward balances, not just in-period movement.
+    """
     from ..models import Invoice, Bill, Expense, Payment
 
     entries: list[Entry] = []
+    if include_opening:
+        opening = opening_entry(db, organization_id)
+        if opening and _in_period(opening.entry_date, start, end):
+            entries.append(opening)
 
     for inv in db.query(Invoice).filter(Invoice.organization_id == organization_id).all():
         status = getattr(inv.status, "value", inv.status)
@@ -307,21 +383,22 @@ def balance_sheet(db, organization_id: int, *, start: Optional[date] = None,
                   end: Optional[date] = None) -> dict[str, Any]:
     """מאזן נגזר — assets / liabilities / equity from the ledger.
 
-    Equity is retained earnings (revenue − expenses) for the period. The accounting
-    identity Assets = Liabilities + Equity holds by construction because the trial
-    balance balances. NOTE: derived from document movements only — there are NO
-    opening balances (e.g. the bank account shows only document-driven cash flow,
-    not a real starting balance), so this is a directional statement, לבדיקת רו"ח.
+    Equity = opening equity (carried-forward balances) + retained earnings
+    (revenue − expenses). The identity Assets = Liabilities + Equity holds by
+    construction because the trial balance balances. When opening balances are set,
+    this reflects a real starting position; without them it is document-movement only.
     """
     tb = trial_balance(db, organization_id, start=start, end=end)
     assets, liabilities = [], []
-    revenue = expenses = 0.0
+    revenue = expenses = opening_equity = 0.0
     for a in tb["accounts"]:
         bal = a["debit"] - a["credit"]
         if a["type"] == "asset":
             assets.append({"account": a["account"], "name": a["name"], "balance": round(bal, 2)})
         elif a["type"] == "liability":
             liabilities.append({"account": a["account"], "name": a["name"], "balance": round(-bal, 2)})
+        elif a["type"] == "equity":
+            opening_equity += -bal
         elif a["type"] == "revenue":
             revenue += -bal
         elif a["type"] == "expense":
@@ -330,14 +407,17 @@ def balance_sheet(db, organization_id: int, *, start: Optional[date] = None,
     total_assets = round(sum(x["balance"] for x in assets), 2)
     total_liabilities = round(sum(x["balance"] for x in liabilities), 2)
     retained_earnings = round(revenue - expenses, 2)
-    total_equity_and_liabilities = round(total_liabilities + retained_earnings, 2)
+    opening_equity = round(opening_equity, 2)
+    total_equity = round(opening_equity + retained_earnings, 2)
+    total_equity_and_liabilities = round(total_liabilities + total_equity, 2)
     return {
         "period": tb["period"],
         "assets": assets,
         "total_assets": total_assets,
         "liabilities": liabilities,
         "total_liabilities": total_liabilities,
-        "equity": {"retained_earnings": retained_earnings},
+        "equity": {"opening_equity": opening_equity, "retained_earnings": retained_earnings,
+                   "total_equity": total_equity},
         "total_equity_and_liabilities": total_equity_and_liabilities,
         "balanced": abs(total_assets - total_equity_and_liabilities) < 0.01,
         "derived": True,

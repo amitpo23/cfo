@@ -270,6 +270,9 @@ class AccountsReceivableService:
             else:
                 collection_status = CollectionStatus.NOT_STARTED
             
+            # מסגרת אשראי נגזרת מהתנהגות (לא מספר קבוע מזויף) + תאריך תשלום אחרון אמיתי.
+            credit_limit = self._behavioral_credit_limit(cust_id)
+            credit_used_pct = (total / credit_limit * 100) if credit_limit > 0 else 0.0
             customer = CustomerAging(
                 customer_id=cust_id,
                 customer_name=data['customer_name'],
@@ -279,12 +282,12 @@ class AccountsReceivableService:
                 days_91_120=data['days_91_120'],
                 over_120=data['over_120'],
                 total_outstanding=total,
-                credit_limit=100000,  # ברירת מחדל
-                credit_used_percentage=(total / 100000) * 100,
+                credit_limit=credit_limit,
+                credit_used_percentage=round(credit_used_pct, 1),
                 credit_risk=risk,
                 oldest_invoice_date=oldest_date,
                 oldest_invoice_days=oldest_days,
-                last_payment_date=None,
+                last_payment_date=self._last_payment_date(cust_id),
                 collection_status=collection_status,
                 invoices=data['invoices']
             )
@@ -473,7 +476,7 @@ class AccountsReceivableService:
                 reminder_id=f"REM-{customer.customer_id}-{datetime.now().strftime('%Y%m%d')}",
                 customer_id=customer.customer_id,
                 customer_name=customer.customer_name,
-                customer_email=f"{customer.customer_id}@example.com",
+                customer_email=(lambda c: c.email if c else None)(self._contact(customer.customer_id)),
                 invoice_numbers=invoice_numbers,
                 total_amount=customer.total_outstanding,
                 days_overdue=customer.oldest_invoice_days,
@@ -536,27 +539,56 @@ class AccountsReceivableService:
         
         return actions
     
-    def get_dso_trend(self, months: int = 12) -> List[Dict]:
+    def get_dso_trend(self, months: int = 12, target_dso: int = 30) -> List[Dict]:
+        """מגמת DSO אמיתית — ממוצע ימי-תשלום של חשבוניות ששולמו בכל חודש.
+
+        DSO_m = ממוצע (תאריך תשלום − תאריך הפקה) על התשלומים שהתקבלו באותו חודש.
+        חודש ללא תשלומים נושא את ה-DSO הידוע האחרון (carry-forward), ברירת מחדל היעד.
         """
-        מגמת DSO (Days Sales Outstanding)
-        DSO Trend
-        """
-        trend = []
+        from calendar import monthrange
         today = date.today()
-        
-        for i in range(months - 1, -1, -1):
-            month_date = today - timedelta(days=i * 30)
-            
-            # חישוב DSO לכל חודש (פשוט)
-            dso = 35 + (i % 5) * 3  # לדוגמה
-            
+        trend: List[Dict] = []
+        last_known = float(target_dso)
+
+        # רשימת (חודש ראשון בחודש) אחורה מהיום.
+        year, month = today.year, today.month
+        periods: List[date] = []
+        for _ in range(months):
+            periods.append(date(year, month, 1))
+            month -= 1
+            if month == 0:
+                month = 12
+                year -= 1
+        periods.reverse()
+
+        for first in periods:
+            last_day = date(first.year, first.month, monthrange(first.year, first.month)[1])
+            rows = (
+                self.db.query(Payment, Invoice)
+                .join(Invoice, Payment.invoice_id == Invoice.id)
+                .filter(
+                    Payment.organization_id == self.organization_id,
+                    Payment.payment_date >= first,
+                    Payment.payment_date <= last_day,
+                )
+                .all()
+            )
+            days = [
+                (pay.payment_date - inv.issue_date).days
+                for pay, inv in rows
+                if pay.payment_date and inv.issue_date
+            ]
+            if days:
+                last_known = round(sum(days) / len(days), 1)
+            dso = last_known
             trend.append({
-                'month': month_date.strftime('%Y-%m'),
+                'month': first.strftime('%Y-%m'),
                 'dso': dso,
-                'target_dso': 30,
-                'variance': dso - 30
+                'target_dso': target_dso,
+                'variance': round(dso - target_dso, 1),
+                'sample': len(days),
             })
-        
+
         return trend
     
     def _get_open_invoices(self) -> List[Dict]:
@@ -643,6 +675,36 @@ class AccountsReceivableService:
             'relationship_months': relationship_months,
             'avg_days_to_pay': avg_days_to_pay,
         }
+
+    def _last_payment_date(self, customer_id: str) -> Optional[str]:
+        """תאריך התשלום האחרון של הלקוח בפועל (מתוך רשומות התשלומים)."""
+        cid = self._contact_id(customer_id)
+        if not cid:
+            return None
+        pay = (
+            self.db.query(Payment)
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .filter(
+                Payment.organization_id == self.organization_id,
+                Invoice.contact_id == cid,
+            )
+            .order_by(Payment.payment_date.desc())
+            .first()
+        )
+        return pay.payment_date.isoformat() if pay and pay.payment_date else None
+
+    def _behavioral_credit_limit(self, customer_id: str) -> float:
+        """מסגרת אשראי נגזרת מהתנהגות אמיתית: ~חודשיים מחזור, מתואם לשיעור תשלום בזמן.
+
+        אין מסגרת מוגדרת במערכת, ולכן זו המלצה מבוססת-נתונים (לא מספר קבוע מזויף).
+        """
+        hist = self._get_payment_history(customer_id)
+        months = max(1, hist.get('relationship_months') or 1)
+        monthly_volume = (hist.get('total_volume') or 0) / months
+        on_time = hist.get('on_time_rate', 0.7)
+        # שני חודשי חשיפה, מתואם להתנהגות תשלום (0.5–1.0).
+        limit = monthly_volume * 2 * (0.5 + 0.5 * on_time)
+        return round(limit, 2)
 
     def _get_customer_aging_data(self, customer_id: str) -> Dict:
         """נתוני גיול אמיתיים ללקוח בודד מתוך חשבוניות פתוחות."""

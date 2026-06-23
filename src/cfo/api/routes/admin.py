@@ -58,6 +58,10 @@ def _create_self_registered_user(
     password_hash: str,
     phone: Optional[str] = None,
     organization_id: Optional[int] = None,
+    selected_plan: Optional[str] = None,
+    annual_revenue: Optional[str] = None,
+    annual_report_requested: Optional[bool] = None,
+    payment_template: Optional[str] = None,
 ) -> User:
     requested_organization_id = organization_id
     existing_user = db.query(User).filter(User.email == email).first()
@@ -91,12 +95,31 @@ def _create_self_registered_user(
                 name=f"{full_name}",
                 business_type="financial_management",
                 integration_type=IntegrationType.MANUAL,
-                settings={"self_registered": True},
+                settings={
+                    "self_registered": True,
+                    "selected_plan": selected_plan or "company_above_2_5m",
+                    "annual_revenue": annual_revenue or "up_to_2_5m",
+                    "annual_report_requested": annual_report_requested if annual_report_requested is not None else True,
+                    "payment_template": payment_template or "credit_card",
+                    "brand": "rezef",
+                },
                 is_active=True,
             )
             db.add(org)
             db.flush()
             organization_id = org.id
+
+    if selected_plan or annual_revenue or annual_report_requested is not None or payment_template:
+        org = db.query(Organization).filter(Organization.id == organization_id).first()
+        if org:
+            org.settings = {
+                **(org.settings or {}),
+                "selected_plan": selected_plan or (org.settings or {}).get("selected_plan") or "company_above_2_5m",
+                "annual_revenue": annual_revenue or "up_to_2_5m",
+                "annual_report_requested": annual_report_requested if annual_report_requested is not None else True,
+                "payment_template": payment_template or "credit_card",
+                "brand": "rezef",
+            }
 
     new_user = User(
         email=email,
@@ -135,6 +158,10 @@ async def register(
         password_hash=get_password_hash(user_data.password),
         phone=user_data.phone,
         organization_id=user_data.organization_id,
+        selected_plan=user_data.selected_plan,
+        annual_revenue=user_data.annual_revenue,
+        annual_report_requested=user_data.annual_report_requested,
+        payment_template=user_data.payment_template,
     )
     return _token_for_user(new_user)
 
@@ -189,6 +216,10 @@ async def google_login(
         email=email,
         full_name=full_name,
         password_hash=get_password_hash(secrets.token_urlsafe(32)),
+        selected_plan=login_data.selected_plan,
+        annual_revenue=login_data.annual_revenue,
+        annual_report_requested=login_data.annual_report_requested,
+        payment_template=login_data.payment_template,
     )
     return _token_for_user(new_user)
 

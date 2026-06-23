@@ -389,6 +389,46 @@ def _bool(name, label, default=False):
     return {"name": name, "label": label, "type": "boolean", "default": default}
 
 
+def vehicle_deduction(*, annual_cost: float, business_km: float, total_km: float) -> list[dict]:
+    """ניכוי הוצאות רכב — לפי שיעור השימוש העסקי (ק"מ עסקי / ק"מ כולל).
+
+    כפוף לתקנות ניכוי הוצאות רכב (מגבלות ותקרות) — לאימות מול רו"ח לשנת הדיווח.
+    """
+    ratio = (business_km / total_km) if total_km else 0.0
+    deductible = annual_cost * ratio
+    return [
+        _row("הוצאות רכב שנתיות", annual_cost),
+        _row("ק\"מ עסקי", business_km, "ק\"מ"),
+        _row("ק\"מ כולל", total_km, "ק\"מ"),
+        _row("שיעור שימוש עסקי", round(ratio * 100, 1), "%"),
+        _row("הוצאה מוכרת (אומדן)", deductible),
+    ]
+
+
+def home_office_deduction(*, annual_home_cost: float, office_area_sqm: float,
+                          total_area_sqm: float) -> list[dict]:
+    """ניכוי משרד-בית — חלק יחסי של הוצאות הבית לפי שטח המשרד."""
+    ratio = (office_area_sqm / total_area_sqm) if total_area_sqm else 0.0
+    deductible = annual_home_cost * ratio
+    return [
+        _row("הוצאות בית שנתיות", annual_home_cost),
+        _row("שטח משרד", office_area_sqm, "מ\"ר"),
+        _row("שטח כולל", total_area_sqm, "מ\"ר"),
+        _row("שיעור שימוש עסקי", round(ratio * 100, 1), "%"),
+        _row("הוצאה מוכרת (אומדן)", deductible),
+    ]
+
+
+def phone_internet_deduction(*, annual_cost: float, business_pct: float) -> list[dict]:
+    """ניכוי טלפון/אינטרנט — לפי אחוז השימוש העסקי שהוצהר."""
+    deductible = annual_cost * (business_pct / 100.0)
+    return [
+        _row("הוצאות תקשורת שנתיות", annual_cost),
+        _row("אחוז שימוש עסקי", business_pct, "%"),
+        _row("הוצאה מוכרת (אומדן)", deductible),
+    ]
+
+
 CALCULATORS: dict[str, dict[str, Any]] = {
     "net_salary": {
         "title": "נטו מהמשכורת", "category": "שכר", "fn": net_salary,
@@ -461,6 +501,23 @@ CALCULATORS: dict[str, dict[str, Any]] = {
     "bagrut_grade": {
         "title": "ציון סופי בבגרות", "category": "חינוך", "fn": bagrut_grade,
         "fields": [{"name": "subjects", "label": "מקצועות (ציון/יחידות)", "type": "subjects"}],
+    },
+    "vehicle_deduction": {
+        "title": "ניכוי הוצאות רכב", "category": "ניכויי הוצאה", "fn": vehicle_deduction,
+        "fields": [_num("annual_cost", "הוצאות רכב שנתיות"),
+                   _num("business_km", "ק\"מ עסקי", None, "ק\"מ"),
+                   _num("total_km", "ק\"מ כולל", None, "ק\"מ")],
+    },
+    "home_office_deduction": {
+        "title": "ניכוי משרד-בית", "category": "ניכויי הוצאה", "fn": home_office_deduction,
+        "fields": [_num("annual_home_cost", "הוצאות בית שנתיות"),
+                   _num("office_area_sqm", "שטח משרד", None, "מ\"ר"),
+                   _num("total_area_sqm", "שטח כולל", None, "מ\"ר")],
+    },
+    "phone_internet_deduction": {
+        "title": "ניכוי טלפון/אינטרנט", "category": "ניכויי הוצאה", "fn": phone_internet_deduction,
+        "fields": [_num("annual_cost", "הוצאות תקשורת שנתיות"),
+                   _num("business_pct", "אחוז שימוש עסקי", 50, "%")],
     },
 }
 

@@ -25,6 +25,7 @@ import {
   BookOpen,
   FileWarning,
   Cpu,
+  LayoutGrid,
   ScrollText,
   ChevronLeft,
   ChevronRight,
@@ -55,6 +56,7 @@ import LedgerDashboard from './components/LedgerDashboard';
 import DailyReportsDashboard from './components/DailyReportsDashboard';
 import AnnualReportsDashboard from './components/AnnualReportsDashboard';
 import EngineDashboard from './components/EngineDashboard';
+import BusinessMenuDashboard from './components/BusinessMenuDashboard';
 import ReportsDashboard from './components/ReportsDashboard';
 import BudgetDashboard from './components/BudgetDashboard';
 import KPIDashboard from './components/KPIDashboard';
@@ -81,7 +83,7 @@ import CFOAlertsTasks from './components/CFOAlertsTasks';
 import CFOCashFlowProjection from './components/CFOCashFlowProjection';
 import CashFlowDashboard from './components/CashFlowDashboard';
 
-import Login from './components/Login';
+import RezefLanding from './components/RezefLanding';
 
 import './App.css';
 
@@ -130,6 +132,7 @@ const navigationConfig = [
       { to: '/kpis', icon: Gauge, label: 'KPIs', description: 'Performance metrics' },
       { to: '/reports', icon: FileSpreadsheet, label: 'Reports', description: 'Generate & export' },
       { to: '/bank-report', icon: Landmark, label: 'דוח לבנק', description: 'דוח מצב עסקי לבנק' },
+      { to: '/business-menu', icon: LayoutGrid, label: 'תפריט יכולות', description: 'סילבוס מלא של כל מה שהמערכת עושה לעסק — עם סטטוס חי' },
       { to: '/engine', icon: Cpu, label: 'המנוע המאחד', description: 'מרכז בקרה אחד מעל הכל — סטטוס, הנה"ח, סינתזה ודוחות' },
       { to: '/bank-insights', icon: Sparkles, label: 'תובנות בנק', description: 'אנומליות, מנויים, עמלות וחיסכון מדפי הבנק' },
       { to: '/office', icon: Building2, label: 'ניהול משרד', description: 'תיקי לקוחות, סנכרון רוחבי והתאמות נדרשות' },
@@ -169,7 +172,7 @@ function App() {
   const [authed, setAuthed] = useState(() => Boolean(localStorage.getItem('auth_token')));
 
   if (!authed) {
-    return <Login darkMode={darkMode} onSuccess={() => setAuthed(true)} />;
+    return <RezefLanding darkMode={darkMode} onSuccess={() => setAuthed(true)} />;
   }
 
   return (
@@ -186,8 +189,8 @@ function App() {
                 </div>
                 {!sidebarCollapsed && (
                   <div>
-                    <h1 className={`text-xl font-bold ${darkMode ? 'text-white' : 'text-gray-800'}`}>CFO System</h1>
-                    <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>Financial Management</p>
+                    <h1 className={`text-xl font-bold ${darkMode ? 'text-white' : 'text-gray-800'}`}>רצף Rezef</h1>
+                    <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>CFO Operating System</p>
                   </div>
                 )}
               </div>
@@ -340,6 +343,7 @@ function App() {
                 <Route path="/daily-reports" element={<DailyReportsDashboard />} />
                 <Route path="/annual-reports" element={<AnnualReportsDashboard />} />
                 <Route path="/engine" element={<EngineDashboard />} />
+                <Route path="/business-menu" element={<BusinessMenuDashboard />} />
                 <Route path="/analytics" element={<AnalyticsDashboard />} />
                 <Route path="/settings" element={<SettingsPage darkMode={darkMode} />} />
 

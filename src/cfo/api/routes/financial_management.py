@@ -490,6 +490,35 @@ async def generate_withholding_report(
     return {"status": "success", "data": vars(report)}
 
 
+@router.get("/tax/856")
+async def generate_856_report(
+    year: int = Query(...),
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """דוח 856 שנתי — ניכויים מספקים (טיוטה)."""
+    service = TaxComplianceService(db, organization_id=org_id)
+    return {"status": "success", "data": service.generate_856(year)}
+
+
+@router.post("/contacts/{contact_id}/withholding-rate")
+async def set_contact_withholding_rate(
+    contact_id: int,
+    rate: float = Query(..., ge=0, le=1),
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """קביעת שיעור ניכוי מס במקור לספק (0 = יש אישור; 0.30/0.20 ללא אישור)."""
+    from ...models import Contact
+    contact = db.query(Contact).filter(
+        Contact.id == contact_id, Contact.organization_id == org_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="ספק לא נמצא")
+    contact.withholding_rate = rate
+    db.commit()
+    return {"status": "success", "contact_id": contact_id, "withholding_rate": rate}
+
+
 @router.get("/tax/calendar")
 async def get_tax_calendar(
     year: int = Query(default=None),

@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
@@ -79,6 +79,27 @@ def get_balance_sheet(
 ):
     start, end = _period(year, month)
     return ledger_service.balance_sheet(db, org_id, start=start, end=end)
+
+
+@router.get("/ledger/opening-balances")
+def get_opening_balances(
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    return ledger_service.get_opening_balances(db, org_id)
+
+
+@router.post("/ledger/opening-balances")
+def set_opening_balances(
+    payload: dict = Body(...),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """Set opening balances. Body: {as_of: 'YYYY-MM-DD', balances: [{account, debit, credit}]}."""
+    from datetime import datetime
+    as_of_raw = payload.get("as_of")
+    as_of = datetime.fromisoformat(as_of_raw).date() if as_of_raw else datetime.utcnow().date()
+    return ledger_service.set_opening_balances(db, org_id, as_of, payload.get("balances", []))
 
 
 @router.get("/ledger/chart")

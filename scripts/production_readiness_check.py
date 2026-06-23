@@ -92,6 +92,8 @@ def check_database() -> tuple[list[Check], dict[str, Any]]:
     url = env_value("DATABASE_URL")
     if not url:
         return [Check("database:connect", False, "DATABASE_URL is empty")], {}
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
 
     kwargs: dict[str, Any] = {}
     if url.startswith("sqlite:"):

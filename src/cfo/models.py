@@ -434,6 +434,39 @@ class SyncRun(Base):
     )
 
 
+class OnboardingTask(Base):
+    """One codified data-mapping step in a business's onboarding checklist.
+
+    When a business connects an integration, a fixed list of ingestion steps
+    (onboarding_service.ONBOARDING_STEPS) is materialized as one row per step. The
+    pipeline runs them in order and re-runs incomplete/failed steps until the whole
+    checklist completes — i.e. every part of the business's data is mapped AND
+    reconciled against the source. Persisted so progress survives restarts and the
+    same checklist runs identically for every new business.
+    """
+    __tablename__ = "onboarding_tasks"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    source = Column(String(50), nullable=False)  # sumit, open_finance
+    step = Column(String(64), nullable=False)  # codified step key
+    seq = Column(Integer, default=0)  # run/display order
+    status = Column(String(20), default="pending")  # pending, running, completed, failed, skipped
+    result = Column(JSON, default={})  # counts/totals/reconciliation for the step
+    error = Column(Text, nullable=True)
+    attempts = Column(Integer, default=0)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_onboarding_org_source_step", "organization_id", "source", "step", unique=True),
+    )
+
+
 class Contact(Base):
     """Normalized customer/vendor record"""
     __tablename__ = "contacts"
@@ -447,6 +480,9 @@ class Contact(Base):
     email = Column(String(255), nullable=True)
     phone = Column(String(50), nullable=True)
     tax_id = Column(String(50), nullable=True)
+    # שיעור ניכוי מס במקור לספק (0 = יש אישור ניכוי/פטור; 0.30 ספק ללא אישור, 0.20 קבלן).
+    # ברירת מחדל 0 — דיווח 856 כולל רק ספקים שסומנו במפורש כחייבי ניכוי.
+    withholding_rate = Column(Numeric(precision=5, scale=4), default=0)
     address = Column(Text, nullable=True)
     currency = Column(String(10), default="ILS")
     # Bank account details for Masav (מס"ב) supplier payments
@@ -827,6 +863,71 @@ class CashflowAssumption(Base):
     organization = relationship("Organization")
 
 
+class LedgerOpeningBalance(Base):
+    """Opening balance per account for the derived ledger (carry-forward).
+
+    One row per (org, account_code) effective `as_of`. Stored as signed debit/credit;
+    the ledger injects a single balanced opening entry (auto-plugging any residual to
+    the equity account) so the trial balance stays balanced. See ledger_service.
+    """
+    __tablename__ = "ledger_opening_balances"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    account_code = Column(String(10), nullable=False)
+    as_of = Column(Date, nullable=False)
+    debit = Column(Numeric(precision=14, scale=2), default=0)
+    credit = Column(Numeric(precision=14, scale=2), default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "account_code", name="uq_opening_balance"),
+    )
+
+
+class CashflowAgreement(Base):
+    """Persisted agreement for the agreement-based cash-flow service.
+
+    The service keeps rich dataclasses in memory; this table is their durable store
+    (one JSON blob per agreement) so agreements survive restarts. See
+    services/agreement_cashflow_service.py.
+    """
+    __tablename__ = "cashflow_agreements"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    agreement_id = Column(String(50), nullable=False)
+    data = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "agreement_id", name="uq_cashflow_agreement"),
+    )
+
+
+class CashflowEntry(Base):
+    """Persisted cash-flow entry (income/expense, actual/forecast) for the service."""
+    __tablename__ = "cashflow_entries"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    entry_id = Column(String(50), nullable=False)
+    data = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "entry_id", name="uq_cashflow_entry"),
+    )
+
+
 class AlertRule(Base):
     """Configurable alert rules"""
     __tablename__ = "alert_rules"
@@ -950,6 +1051,10 @@ class UserCreate(BaseModel):
     role: UserRole = UserRole.USER
     organization_id: Optional[int] = None
     registration_code: Optional[str] = None
+    selected_plan: Optional[str] = None
+    annual_revenue: Optional[str] = None
+    annual_report_requested: Optional[bool] = None
+    payment_template: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
@@ -986,6 +1091,10 @@ class GoogleLogin(BaseModel):
     """Google Sign-In token exchange"""
     id_token: str
     registration_code: Optional[str] = None
+    selected_plan: Optional[str] = None
+    annual_revenue: Optional[str] = None
+    annual_report_requested: Optional[bool] = None
+    payment_template: Optional[str] = None
 
 
 class Token(BaseModel):

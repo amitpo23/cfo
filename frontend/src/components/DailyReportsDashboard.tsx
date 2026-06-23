@@ -3,7 +3,7 @@
  * Derived from synced SUMIT documents.
  */
 import { useEffect, useState } from 'react';
-import { TrendingUp, Loader2, Clock, Building2 } from 'lucide-react';
+import { TrendingUp, Loader2, Clock, Building2, Download } from 'lucide-react';
 import api from '../services/api';
 
 interface PLDay { date: string; revenue_cum: number; expense_cum: number; profit_cum: number; }
@@ -49,6 +49,20 @@ export default function DailyReportsDashboard() {
     } finally { setLoading(false); }
   };
 
+  const downloadPcn874 = async () => {
+    try {
+      const r = await api.get<{ content: string; filename: string }>(
+        `/api/daily-reports/pcn874?year=${year}&month=${month}`);
+      const blob = new Blob([r.content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = r.filename; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'שגיאה בהפקת PCN874');
+    }
+  };
+
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [year, month]);
 
   const maxProfit = pl ? Math.max(1, ...pl.days.map((d) => Math.abs(d.profit_cum))) : 1;
@@ -77,12 +91,16 @@ export default function DailyReportsDashboard() {
                 <h2 className="font-semibold">דוח מע"מ — {vat.period}</h2>
                 <span className="text-xs text-slate-400">להגשה עד {vat.due_date}</span>
               </div>
-              <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+              <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm items-center">
                 <span>עסקאות: {fmt(vat.output_vat)} ({vat.sales_documents} מסמכים)</span>
                 <span>תשומות: {fmt(vat.input_vat)} ({vat.purchase_documents} מסמכים)</span>
                 <span className={`font-bold ${vat.net_vat >= 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
                   {vat.direction} {fmt(vat.amount_to_report)}
                 </span>
+                <button onClick={downloadPcn874}
+                  className="ms-auto inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-700">
+                  <Download className="w-3.5 h-3.5" /> הורד PCN874 (טיוטה)
+                </button>
               </div>
               <p className="text-xs text-slate-400 mt-2">{vat.disclaimer}</p>
             </div>

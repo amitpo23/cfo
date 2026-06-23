@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     def default_empty_database_url(cls, value):
         if value == "":
             return "sqlite:////tmp/cfo.db" if os.getenv("VERCEL") else "sqlite:///./cfo.db"
+        if isinstance(value, str) and value.startswith("postgresql://"):
+            return "postgresql+psycopg://" + value[len("postgresql://"):]
         return value
 
     @field_validator("jwt_secret_key", mode="before")

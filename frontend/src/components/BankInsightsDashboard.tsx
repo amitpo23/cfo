@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, RefreshCw, Banknote, Repeat, TrendingUp, PiggyBank,
   Copy, ShieldAlert, Sparkles, Link2, CheckCircle2, XCircle, Loader2,
-  Scale, LineChart, Briefcase,
+  Scale, LineChart, Briefcase, Send, FileCheck2,
 } from 'lucide-react';
 import api from '../services/api';
 
@@ -22,6 +22,30 @@ interface Insight {
   recommended_action: string;
   status: string;
   created_at: string | null;
+}
+
+interface ReconciliationResult {
+  matched_count: number;
+  txn_count: number;
+  unmatched_txns?: number[];
+  unmatched_docs?: Array<Record<string, any>>;
+}
+
+interface SumitDispatchResult {
+  local_reconciliation: ReconciliationResult;
+  dry_run: boolean;
+  dispatched: number;
+  confirmed: number;
+  failed: number;
+  unsupported: number;
+  items: Array<{
+    bank_transaction_id: number;
+    matched_entity_type?: string;
+    matched_entity_id?: number;
+    status: 'pending' | 'confirmed' | 'failed' | 'unsupported' | string;
+    error?: string;
+    skipped?: boolean;
+  }>;
 }
 
 const TYPE_ICON: Record<string, any> = {
@@ -59,6 +83,8 @@ export default function BankInsightsDashboard() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [reconciliation, setReconciliation] = useState<ReconciliationResult | null>(null);
+  const [sumitDispatch, setSumitDispatch] = useState<SumitDispatchResult | null>(null);
 
   const loadInsights = async () => {
     setLoading(true);
@@ -120,9 +146,34 @@ export default function BankInsightsDashboard() {
       const res = await api.post<{ matched_count: number; txn_count: number }>(
         '/api/open-finance/reconcile'
       );
+      setReconciliation(res);
       setNotice(`הותאמו ${res.matched_count} מתוך ${res.txn_count} תנועות בנק.`);
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'שגיאה בהתאמת בנקים');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const dispatchToSumit = async (dryRun = false) => {
+    setBusy(dryRun ? 'dispatch-dry-run' : 'dispatch');
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.post<SumitDispatchResult>(
+        `/api/open-finance/reconcile/sumit-dispatch?dry_run=${dryRun ? 'true' : 'false'}`
+      );
+      setSumitDispatch(res);
+      setReconciliation(res.local_reconciliation);
+      if (dryRun) {
+        setNotice(`בדיקה בלבד: נמצאו ${res.local_reconciliation.matched_count} התאמות מוכנות לשליחה.`);
+      } else if (res.unsupported) {
+        setNotice(`ההתאמות נשמרו אצלנו. ${res.unsupported} התאמות דורשות חיבור write-back רשמי ל-SUMIT.`);
+      } else {
+        setNotice(`נשלחו ${res.dispatched} התאמות ל-SUMIT, אושרו ${res.confirmed}.`);
+      }
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'שגיאה בשליחת התאמות ל-SUMIT');
     } finally {
       setBusy(null);
     }
@@ -170,11 +221,75 @@ export default function BankInsightsDashboard() {
             {busy === 'reconcile' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Banknote className="w-4 h-4" />}
             התאמת בנקים
           </button>
+          <button onClick={() => dispatchToSumit(true)} disabled={!!busy}
+            className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50">
+            {busy === 'dispatch-dry-run' ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileCheck2 className="w-4 h-4" />}
+            בדיקת שליחה
+          </button>
+          <button onClick={() => dispatchToSumit(false)} disabled={!!busy}
+            className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-blue-700 text-white text-sm hover:bg-blue-800 disabled:opacity-50">
+            {busy === 'dispatch' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            שלח ל-SUMIT
+          </button>
         </div>
       </div>
 
       {notice && <div className="mb-4 p-3 rounded-lg bg-emerald-50 text-emerald-800 text-sm">{notice}</div>}
       {error && <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-800 text-sm">{error}</div>}
+      {(reconciliation || sumitDispatch) && (
+        <section className="mb-6 border border-slate-200 rounded-xl bg-white p-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-base font-semibold text-slate-800 flex items-center gap-2">
+                <Banknote className="w-4 h-4 text-blue-700" />
+                סטטוס התאמות Open Finance מול SUMIT
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">
+                התאמות נשמרות קודם בבסיס הנתונים שלנו, ואז מקבלות סטטוס dispatch מול SUMIT.
+              </p>
+            </div>
+            {sumitDispatch?.dry_run && (
+              <span className="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600">בדיקה בלבד</span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mt-4 text-sm">
+            <StatusStat label="תנועות" value={reconciliation?.txn_count ?? 0} />
+            <StatusStat label="הותאמו" value={reconciliation?.matched_count ?? 0} tone="emerald" />
+            <StatusStat label="נשלחו" value={sumitDispatch?.dispatched ?? 0} tone="blue" />
+            <StatusStat label="אושרו" value={sumitDispatch?.confirmed ?? 0} tone="emerald" />
+            <StatusStat label="נכשלו" value={sumitDispatch?.failed ?? 0} tone="red" />
+            <StatusStat label="לא נתמך" value={sumitDispatch?.unsupported ?? 0} tone="amber" />
+          </div>
+          {!!sumitDispatch?.items?.length && (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-slate-500 border-b">
+                  <tr>
+                    <th className="text-right py-2">תנועת בנק</th>
+                    <th className="text-right py-2">התאמה</th>
+                    <th className="text-right py-2">סטטוס SUMIT</th>
+                    <th className="text-right py-2">הערה</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sumitDispatch.items.slice(0, 8).map((item) => (
+                    <tr key={`${item.bank_transaction_id}-${item.status}`} className="border-b last:border-0">
+                      <td className="py-2 text-slate-700">#{item.bank_transaction_id}</td>
+                      <td className="py-2 text-slate-600">
+                        {item.matched_entity_type || '—'} {item.matched_entity_id ? `#${item.matched_entity_id}` : ''}
+                      </td>
+                      <td className="py-2">
+                        <DispatchBadge status={item.status} />
+                      </td>
+                      <td className="py-2 text-slate-500 max-w-sm truncate">{item.error || (item.skipped ? 'כבר אושר' : '—')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-20 text-slate-400">
@@ -226,5 +341,41 @@ export default function BankInsightsDashboard() {
         </div>
       )}
     </div>
+  );
+}
+
+function StatusStat({ label, value, tone = 'slate' }: { label: string; value: number; tone?: 'slate' | 'emerald' | 'blue' | 'red' | 'amber' }) {
+  const colors = {
+    slate: 'bg-slate-50 text-slate-700',
+    emerald: 'bg-emerald-50 text-emerald-700',
+    blue: 'bg-blue-50 text-blue-700',
+    red: 'bg-red-50 text-red-700',
+    amber: 'bg-amber-50 text-amber-700',
+  };
+  return (
+    <div className={`rounded-lg px-3 py-2 ${colors[tone]}`}>
+      <div className="text-xs opacity-80">{label}</div>
+      <div className="text-lg font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function DispatchBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    confirmed: 'bg-emerald-100 text-emerald-700',
+    pending: 'bg-blue-100 text-blue-700',
+    failed: 'bg-red-100 text-red-700',
+    unsupported: 'bg-amber-100 text-amber-800',
+  };
+  const labels: Record<string, string> = {
+    confirmed: 'אושר',
+    pending: 'ממתין',
+    failed: 'נכשל',
+    unsupported: 'לא נתמך',
+  };
+  return (
+    <span className={`inline-flex px-2 py-1 rounded-full text-xs ${styles[status] || 'bg-slate-100 text-slate-700'}`}>
+      {labels[status] || status}
+    </span>
   );
 }

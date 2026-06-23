@@ -63,10 +63,16 @@ def reset_postgres_sequences(conn, tables: list[Table]) -> None:
             max_id = conn.execute(
                 text(f'select coalesce(max("{column.name}"), 0) from "{table.name}"')
             ).scalar_one()
-            conn.execute(
-                text("select setval(:sequence_name, :next_value, true)"),
-                {"sequence_name": sequence_name, "next_value": max_id},
-            )
+            if max_id:
+                conn.execute(
+                    text("select setval(:sequence_name, :next_value, true)"),
+                    {"sequence_name": sequence_name, "next_value": max_id},
+                )
+            else:
+                conn.execute(
+                    text("select setval(:sequence_name, 1, false)"),
+                    {"sequence_name": sequence_name},
+                )
             print(f"sequence {sequence_name} -> {max_id}")
 
 

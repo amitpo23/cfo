@@ -345,22 +345,45 @@ class SumitConnector(AccountingConnector):
                     else date.today() - timedelta(days=365)
                 )
 
-                raw_payments = await client.list_payments(
-                    from_date=from_date,
-                    to_date=date.today(),
-                )
-
                 payments = []
-                for p in raw_payments:
+
+                # (a) Billing-system payments (credit-card charges via /billing/payments).
+                try:
+                    raw_payments = await client.list_payments(
+                        from_date=from_date,
+                        to_date=date.today(),
+                    )
+                    for p in raw_payments:
+                        payments.append(NormalizedPayment(
+                            external_id=str(p.id),
+                            contact_external_id=str(getattr(p, "customer_id", None)),
+                            payment_date=p.date if isinstance(p.date, date) else None,
+                            amount=Decimal(str(p.amount or 0)),
+                            currency=getattr(p, "currency", "ILS") or "ILS",
+                            method=getattr(p, "payment_method", None),
+                            reference=getattr(p, "reference", None),
+                            raw_data=p.__dict__ if hasattr(p, "__dict__") else {},
+                        ))
+                except Exception as e:
+                    logger.warning("list_payments unavailable, continuing: %s", e)
+
+                # (b) Receipt documents (SUMIT numeric DocumentType 5 = Receipt / קבלה):
+                # collection events that close invoices. Stored negative; the payment
+                # amount is the absolute value. Captured for AR/collection visibility.
+                receipts = await self._list_documents_all(client, "5", updated_since)
+                for doc in receipts:
+                    amount = abs(Decimal(str(doc.total or 0)))
+                    if amount == 0:
+                        continue
                     payments.append(NormalizedPayment(
-                        external_id=str(p.id),
-                        contact_external_id=str(getattr(p, "customer_id", None)),
-                        payment_date=p.date if isinstance(p.date, date) else None,
-                        amount=Decimal(str(p.amount or 0)),
-                        currency=getattr(p, "currency", "ILS") or "ILS",
-                        method=getattr(p, "payment_method", None),
-                        reference=getattr(p, "reference", None),
-                        raw_data=p.__dict__ if hasattr(p, "__dict__") else {},
+                        external_id=str(doc.id),
+                        contact_external_id=str(doc.customer_id) if doc.customer_id else None,
+                        payment_date=doc.date if isinstance(doc.date, date) else None,
+                        amount=amount,
+                        currency=getattr(doc, "currency", "ILS") or "ILS",
+                        method="receipt",
+                        reference=getattr(doc, "document_number", None),
+                        raw_data=doc.__dict__ if hasattr(doc, "__dict__") else {},
                     ))
 
                 return FetchResult(items=payments, has_more=False)

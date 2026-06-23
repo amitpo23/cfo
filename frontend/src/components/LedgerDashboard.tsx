@@ -24,8 +24,8 @@ interface JournalEntry {
 interface BalanceSheet {
   assets: { account: string; name: string; balance: number }[]; total_assets: number;
   liabilities: { account: string; name: string; balance: number }[]; total_liabilities: number;
-  equity: { retained_earnings: number }; total_equity_and_liabilities: number;
-  balanced: boolean; disclaimer: string;
+  equity: { opening_equity?: number; retained_earnings: number; total_equity?: number };
+  total_equity_and_liabilities: number; balanced: boolean; disclaimer: string;
 }
 
 const now = new Date();
@@ -160,6 +160,10 @@ export default function LedgerDashboard() {
                       <tr key={l.account} className="border-t"><td className="px-4 py-2">{l.name}</td>
                         <td className="px-4 py-2 text-left">{fmt(l.balance)}</td></tr>
                     ))}
+                    {bs.equity.opening_equity ? (
+                      <tr className="border-t"><td className="px-4 py-2">הון/יתרות פתיחה</td>
+                        <td className="px-4 py-2 text-left">{fmt(bs.equity.opening_equity)}</td></tr>
+                    ) : null}
                     <tr className="border-t"><td className="px-4 py-2">עודפים (רווח/הפסד)</td>
                       <td className={`px-4 py-2 text-left ${bs.equity.retained_earnings < 0 ? 'text-rose-600' : ''}`}>{fmt(bs.equity.retained_earnings)}</td></tr>
                     <tr className="border-t font-bold bg-slate-50"><td className="px-4 py-2">סה"כ</td><td className="px-4 py-2 text-left">{fmt(bs.total_equity_and_liabilities)}</td></tr>
