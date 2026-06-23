@@ -69,7 +69,7 @@ const plans = [
     price: '₪750',
     unit: 'לחודש',
     caption: 'עד 2.5 מיליון ש"ח מחזור שנתי',
-    features: ['מחלקת כספים אוטומטית', 'תזרים, AR/AP ודוחות ניהול', 'התאמות בנק ותיעוד פעולות', 'הפרדת משתמשים וארגון עצמאי'],
+    features: ['מחליף עבודה ידנית שוטפת', 'הנה"ח כפולה ודוחות ניהול', 'התאמות בנק ותיעוד פעולות', 'סוכן תובנות ובקרת חריגות'],
   },
   {
     id: 'company_above_2_5m',
@@ -78,7 +78,7 @@ const plans = [
     unit: 'לכל מיליון נוסף',
     caption: 'מעל 2.5 מיליון ש"ח מחזור שנתי',
     featured: true,
-    features: ['כל יכולות החברה', 'בקרת מחזור וחריגות', 'דוחות לבנק ולניהול', 'מרכז המלצות פיננסיות'],
+    features: ['כל יכולות החברה', 'בקרת מחזור וחריגות', 'דוחות לבנק ולניהול', 'מרכז המלצות פיננסיות פעיל'],
   },
   {
     id: 'office',
@@ -98,10 +98,10 @@ const commandMetrics = [
 ];
 
 const proofPoints = [
-  { label: 'ראייה מלאה', text: 'חשבוניות, תשלומים, בנקים, ספקים, לקוחות ותזרים במקום אחד', icon: Landmark },
-  { label: 'עבודה אוטומטית', text: 'התאמות בנק, גבייה, תיוק הוצאות וסגירת פערים בלי אקסלים', icon: Workflow },
-  { label: 'סוכן כספים', text: 'מסביר מה קורה, מה מסוכן ומה כדאי לעשות היום', icon: Sparkles },
-  { label: 'ישראל', text: 'מע"מ, מס"ב, שכר, PCN874 ודוחות שנתיים בתהליכי עבודה מקומיים', icon: ShieldCheck },
+  { label: 'חיסכון מיידי', text: 'במקום עלות חודשית כבדה של הנהלת חשבונות ידנית, מתחילים מ-₪750 לחודש', icon: CircleDollarSign },
+  { label: 'עבודה אוטומטית', text: 'התאמות בנק, הנה"ח כפולה, גבייה, תיוק הוצאות וסגירת פערים בלי אקסלים', icon: Workflow },
+  { label: 'סוכן כספים', text: 'לא רק רושם פעולות. מסביר טעויות, חריגות, גבייה, עמלות ותזרים', icon: Sparkles },
+  { label: 'בקרה ישראלית', text: 'מע"מ, מס"ב, שכר, PCN874, דוחות שנתיים וחומר מסודר למאזן', icon: ShieldCheck },
 ];
 
 const capabilityGroups = [
@@ -118,7 +118,7 @@ const capabilityGroups = [
   {
     title: 'ספרים ודוחות',
     icon: BookOpen,
-    items: ['הנה"ח כפולה אוטומטית', 'רווח והפסד יומי', 'מאזן ומאזן בוחן', 'חבילת דוחות לבנק'],
+    items: ['הנה"ח כפולה אוטומטית', 'רווח והפסד יומי', 'מאזן ומאזן בוחן', 'חבילת דוחות לבנק ולמאזן'],
   },
   {
     title: 'בנק והתאמות',
@@ -158,8 +158,15 @@ const workflow = [
 const agentInsights = [
   'לקוח מרכזי מאחר בתשלום ב-18 יום ועלול לפגוע בתזרים של השבוע הבא.',
   'זוהתה הוצאה חוזרת כפולה בקטגוריית תוכנה. מומלץ לבטל מנוי אחד.',
-  'אפשר לדחות שני תשלומי ספקים לא קריטיים בלי לפגוע בפעילות.',
+  'התאמה בנקאית לא נסגרה בגלל סכום חריג. מומלץ לבדוק עמלה או חיוב כפול.',
   'הרווחיות החודשית נשחקת בגלל עלייה בהוצאות רכש מול מחזור יציב.',
+];
+
+const replacementPoints = [
+  ['עלות', 'מנהל חשבונות או שירות חיצוני יכולים לעלות אלפי שקלים בחודש', 'רצף מתחילה מ-₪750 לחודש לעסק עד 2.5 מיליון ש"ח'],
+  ['עבודה', 'רישום ידני, התאמות ידניות, אקסלים ומעקב אחרי לקוחות וספקים', 'התאמות, סיווגים, גבייה, תשלומים ודוחות מתבצעים במערכת אחת'],
+  ['בקרה', 'בדיקה מדגמית אחרי שהחודש כבר נסגר', 'בדיקה שוטפת של תנועות, חריגות, עמלות, כפילויות ותזרים'],
+  ['תובנות', 'מקבלים דוח, לא תמיד מקבלים הסבר עסקי בזמן אמת', 'סוכן כספים מסביר מה קרה, איפה הטעות ומה הפעולה הבאה'],
 ];
 
 const annualReportTemplates = [
@@ -383,22 +390,23 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
             <div className="max-w-3xl">
               <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
                 <Network className="h-4 w-4" />
-                CFO, הנהלת חשבונות, בנק ותזרים ברצף עבודה אחד
+                להחליף הנהלת חשבונות ידנית במערכת שעובדת בשבילך
               </div>
               <h1 className="text-5xl font-bold leading-tight tracking-normal text-slate-950 md:text-7xl">
-                מחלקת כספים אוטונומית לעסק שלך.
+                מנהל חשבונות ב-10,000 ש"ח? רצף מתחילה מ-750.
               </h1>
               <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-                רצף מחליפה את עבודת הנהלת החשבונות השוטפת בטכנולוגיה שמבצעת עבורך
-                התאמות, סיווגים, גבייה, תשלומים ודוחות. במקום לחכות לסוף חודש,
-                אתה יודע בכל יום מי שילם, מי חייב, מה עומד לצאת ומה מצב הרווחיות.
+                רצף מחליפה את תהליך הנהלת החשבונות השוטף בטכנולוגיה שמבצעת התאמות,
+                סיווגים, הנהלת חשבונות כפולה, בדיקות בנקים, גבייה, תשלומים, הכנה למאזן
+                ודוחות. והיא לא רק מבצעת: היא מנתחת אלפי פרמטרים ומסבירה איפה יש טעויות,
+                חיובים חריגים, כסף שלא נגבה או סיכון תזרימי.
               </p>
               <div className="mt-5 grid gap-2 text-sm font-medium text-slate-700 sm:grid-cols-2">
                 {[
-                  'חיסכון בעלויות הנהלת חשבונות ותפעול כספים',
-                  'רווח והפסד יומי, תזרים ודוחות לבנק',
-                  'התאמות בנק אוטומטיות וזיהוי חריגות',
-                  'סוכן פיננסי שמסביר מה לעשות עכשיו',
+                  'חוסכים עלויות הנהלת חשבונות ורו"ח שוטפות',
+                  'הנה"ח כפולה, רווח והפסד, תזרים והכנה למאזן',
+                  'התאמות בנק אוטומטיות ובדיקת חריגות',
+                  'סוכן פיננסי שמוצא טעויות ותובנות בזמן אמת',
                 ].map((item) => (
                   <div key={item} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                     <Check className="h-4 w-4 shrink-0 text-emerald-600" />
@@ -428,10 +436,10 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
         <section className="border-b border-slate-200 bg-slate-950 text-white">
           <div className="mx-auto grid max-w-7xl gap-0 px-5 py-6 md:grid-cols-4">
             {[
-              ['Autonomous finance', 'מחליף עבודת הנהלת חשבונות שוטפת'],
+              ['Cost reduction', 'מ-10,000 ש"ח בחודש לעבודה חכמה החל מ-750'],
               ['Daily P&L', 'רווח והפסד יומי ולא רק בסוף חודש'],
-              ['Auto reconciliation', 'התאמות בנק ותיעוד פעולות'],
-              ['Cost control', 'פחות עלויות תפעול ויותר שליטה'],
+              ['Auto books', 'הנה"ח כפולה, התאמות ותיעוד פעולות'],
+              ['Active insight', 'בדיקת חריגות ותובנות ששום אדם לא עובר ידנית'],
             ].map(([title, text]) => (
               <div key={title} className="border-white/10 py-4 md:border-l md:px-6">
                 <div className="text-sm font-semibold text-blue-200">{title}</div>
@@ -444,8 +452,8 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
         <section id="capabilities" className="mx-auto max-w-7xl px-5 py-16">
           <SectionHeading
             eyebrow="מה יש בפנים"
-            title="המערכת שעושה את עבודת הכספים השוטפת"
-            text="רצף לא רק מציגה נתונים. היא מבצעת את העבודה: מזהה פערים, מתאימה תנועות, מסמנת חריגות, מנהלת גבייה, מכינה דוחות ונותנת הוראות פעולה ברורות."
+            title="המערכת שעושה את עבודת הנהלת החשבונות והכספים"
+            text="רצף לא רק מציגה נתונים. היא מבצעת את העבודה: מזהה פערים, מתאימה תנועות, בודקת חריגות, מנהלת גבייה, מכינה דוחות, בונה הנהלת חשבונות כפולה ונותנת הוראות פעולה ברורות."
           />
           <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {capabilityGroups.map((group) => (
@@ -454,12 +462,36 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           </div>
         </section>
 
+        <section className="border-y border-slate-200 bg-white">
+          <div className="mx-auto max-w-7xl px-5 py-16">
+            <SectionHeading
+              eyebrow="למה להחזיק תהליך ידני יקר?"
+              title="רצף מחליפה עבודה ידנית במערכת פעילה, בודקת ומסבירה."
+              text="מנהל חשבונות אנושי יכול לרשום פעולות. רצף רושמת, מתאימה, בודקת, מנתחת ומציפה תובנות בזמן אמת. לכן החיסכון הוא לא רק במחיר, אלא גם באיכות השליטה."
+            />
+            <div className="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+              <div className="grid grid-cols-[0.8fr_1fr_1fr] border-b border-slate-200 bg-slate-950 px-4 py-3 text-sm font-semibold text-white">
+                <div>נושא</div>
+                <div>תהליך ידני יקר</div>
+                <div>רצף</div>
+              </div>
+              {replacementPoints.map(([label, manual, rezef]) => (
+                <div key={label} className="grid grid-cols-1 gap-3 border-b border-slate-200 p-4 last:border-b-0 md:grid-cols-[0.8fr_1fr_1fr]">
+                  <div className="font-bold text-slate-950">{label}</div>
+                  <div className="rounded-lg border border-rose-100 bg-white px-4 py-3 text-sm leading-6 text-slate-600">{manual}</div>
+                  <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium leading-6 text-emerald-900">{rezef}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
         <section id="workflow" className="border-y border-slate-200 bg-white">
           <div className="mx-auto max-w-7xl px-5 py-16">
             <SectionHeading
               eyebrow="איך זה עובד"
-              title="כל הכסף, כל המסמכים וכל ההחלטות ברצף אחד."
-              text="הרעיון הוא מרכז שליטה תפעולי: קליטה, התאמה, בקרה, אישור פעולה, דוחות חיים והמלצות שמסבירות מה לעשות."
+              title="כל מספר נבדק מול כל מספר אחר."
+              text="רצף היא רצף מספרים: כל תנועה, מסמך, יתרה, חוב, תשלום ודוח צריכים להתאים. כשהם לא מתאימים, המערכת מסבירה מה חסר ומה צריך לעשות."
             />
             <div className="mt-8 grid gap-4 lg:grid-cols-3">
               {workflow.map((step, index) => (
@@ -470,11 +502,12 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
                 <div className="flex items-center gap-3">
                   <ShieldCheck className="h-6 w-6 text-emerald-600" />
-                  <h3 className="text-xl font-bold">הנהלת חשבונות שוטפת בלי צוות פנימי כבד</h3>
+                  <h3 className="text-xl font-bold">הנהלת חשבונות כפולה והכנה למאזן במחיר נמוך</h3>
                 </div>
                 <p className="mt-3 leading-7 text-slate-600">
-                  המערכת מבצעת סיווג, התאמה, מעקב גבייה, בקרת ספקים והכנת דוחות שוטפים.
-                  במקום לרדוף אחרי אקסלים וצוות תפעולי יקר, העסק מקבל תמונת מצב יומית ופעולות מוכנות לאישור.
+                  המערכת מבצעת סיווג, התאמה, מעקב גבייה, בקרת ספקים, הנהלת חשבונות כפולה
+                  והכנת דוחות שוטפים. במקום לרדוף אחרי אקסלים וצוות תפעולי יקר, העסק מקבל
+                  תמונת מצב יומית ופעולות מוכנות לאישור.
                 </p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
@@ -495,7 +528,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           <SectionHeading
             eyebrow="הסוכן הפיננסי"
             title="לא רק דשבורד. מנהל כספים דיגיטלי שמדבר איתך."
-            text="הסוכן מנתח תנועות, גבייה, הוצאות, רווחיות ותזרים. הוא מסביר למה המספר השתנה, איפה יש סיכון ומה הפעולה המומלצת כדי לנהל את העסק טוב יותר."
+            text="הסוכן מנתח תנועות, גבייה, הוצאות, רווחיות, תזרים וחריגות. הוא מסביר למה המספר השתנה, איפה לקחו יותר מדי, איפה יש טעות ומה הפעולה המומלצת כדי לנהל את העסק טוב יותר."
           />
           <div className="mt-8 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
             <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
@@ -518,10 +551,10 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               {[
-                ['גבייה', 'מי חייב, כמה זמן, ומה כדאי לשלוח עכשיו כדי להכניס כסף בזמן.'],
+                ['גבייה', 'מי חייב, כמה זמן, ומה כדאי לעשות עכשיו כדי להכניס כסף בזמן.'],
                 ['רווחיות', 'רווח והפסד יומי, שחיקת מרווחים וזיהוי הוצאות שפוגעות ברווח.'],
-                ['בנק', 'התאמות אוטומטיות, חריגות, עמלות, תשלומים לא מזוהים ותנועות חשודות.'],
-                ['תזרים', 'תחזית מזומנים, סיכוני מחסור, דחיית ספקים ותזמון גבייה.'],
+                ['בנק ובקרה', 'התאמות אוטומטיות, חריגות, עמלות, תשלומים לא מזוהים ותנועות חשודות.'],
+                ['אלף בדיקות', 'בדיקה רציפה של התאמות, כפילויות, חוסרים, חיובים חריגים וסיכוני תזרים.'],
               ].map(([title, text]) => (
                 <div key={title} className="rounded-lg border border-slate-200 bg-slate-50 p-5">
                   <div className="text-lg font-bold">{title}</div>
@@ -536,8 +569,8 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           <div className="flex flex-wrap items-end justify-between gap-4">
             <SectionHeading
               eyebrow="תמחור"
-              title="תוכניות לפי מחזור ותפעול"
-              text="המחירים לפני מע״מ. הבחירה נשמרת בהרשמה ומשמשת לפתיחת הארגון והגדרת השירות."
+              title="מחיר של תוכנה. עבודה של מחלקת כספים."
+              text="במקום לשלם אלפי שקלים בחודש על עבודה ידנית, רצף מתחילה מ-₪750 לחודש ומבצעת התאמות, דוחות, בקרה ותובנות שוטפות. המחירים לפני מע״מ."
             />
             <div className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 shadow-sm">
               מעל 2.5M: ₪500 לכל מיליון ש"ח נוסף
@@ -585,7 +618,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               <h2 className="text-4xl font-bold leading-tight">פותחים רצף ומתחילים לנהל כספים אוטומטית.</h2>
               <p className="mt-4 max-w-2xl leading-8 text-white/70">
                 התוכנית שנבחרה: <b className="text-white">{selectedPlanName}</b>. אחרי הכניסה נפתח ארגון עצמאי,
-                מגדירים משתמשים והרשאות, ומפעילים את תהליכי הכספים של העסק.
+                מגדירים משתמשים והרשאות, ומפעילים את תהליכי הנהלת החשבונות, התזרים והבקרה של העסק.
               </p>
               <div className="mt-8 grid gap-4 sm:grid-cols-2">
                 <SignupPoint icon={Building2} text="ארגון נפרד לכל עסק או לקוח" />
