@@ -14,12 +14,10 @@ import {
   CreditCard,
   Database,
   FileCheck2,
-  Gauge,
   Landmark,
   Loader2,
   LockKeyhole,
   Network,
-  Receipt,
   ShieldCheck,
   Sparkles,
   TrendingUp,
@@ -71,7 +69,7 @@ const plans = [
     price: '₪750',
     unit: 'לחודש',
     caption: 'עד 2.5 מיליון ש"ח מחזור שנתי',
-    features: ['SUMIT + Open Finance', 'תזרים, AR/AP ודוחות ניהול', 'התאמות בנק ותיעוד פעולות', 'הפרדת משתמשים וארגון עצמאי'],
+    features: ['מחלקת כספים אוטומטית', 'תזרים, AR/AP ודוחות ניהול', 'התאמות בנק ותיעוד פעולות', 'הפרדת משתמשים וארגון עצמאי'],
   },
   {
     id: 'company_above_2_5m',
@@ -94,67 +92,74 @@ const plans = [
 
 const commandMetrics = [
   { label: 'תזרים 30 יום', value: '₪184K', delta: '+12%', tone: 'emerald' },
-  { label: 'חובות לגבייה', value: '₪131K', delta: '11 חשבוניות', tone: 'amber' },
-  { label: 'התאמות בנק', value: '87%', delta: '42 תנועות', tone: 'blue' },
-  { label: 'סיכוני חודש', value: '6', delta: '2 קריטיים', tone: 'rose' },
+  { label: 'מי חייב לנו', value: '₪131K', delta: '11 חשבוניות', tone: 'amber' },
+  { label: 'התאמות אוטומטיות', value: '87%', delta: '42 תנועות', tone: 'blue' },
+  { label: 'חריגות לטיפול', value: '6', delta: '2 קריטיות', tone: 'rose' },
 ];
 
 const proofPoints = [
-  { label: 'SUMIT', text: 'מסמכים, גבייה, סליקה, חובות, הוצאות ומלאי', icon: Receipt },
-  { label: 'Open Finance', text: 'בנק, כרטיסים, תנועות, תשלומים והתאמות', icon: Landmark },
-  { label: 'CFO OS', text: 'תזרים, AR/AP, תקציב, דוחות, המלצות ופעולות', icon: Gauge },
-  { label: 'ישראל', text: 'מע"מ, מס"ב, שכר, PCN874 ודוחות שנתיים', icon: ShieldCheck },
+  { label: 'ראייה מלאה', text: 'חשבוניות, תשלומים, בנקים, ספקים, לקוחות ותזרים במקום אחד', icon: Landmark },
+  { label: 'עבודה אוטומטית', text: 'התאמות בנק, גבייה, תיוק הוצאות וסגירת פערים בלי אקסלים', icon: Workflow },
+  { label: 'סוכן כספים', text: 'מסביר מה קורה, מה מסוכן ומה כדאי לעשות היום', icon: Sparkles },
+  { label: 'ישראל', text: 'מע"מ, מס"ב, שכר, PCN874 ודוחות שנתיים בתהליכי עבודה מקומיים', icon: ShieldCheck },
 ];
 
 const capabilityGroups = [
   {
     title: 'כסף נכנס',
     icon: CircleDollarSign,
-    items: ['חשבוניות וקבלות', 'גיול לקוחות וחובות', 'תזכורות גבייה', 'תחזית תקבולים'],
+    items: ['חשבוניות וקבלות', 'מי שילם ומי לא שילם', 'תזכורות גבייה', 'תחזית תקבולים לפי תאריך'],
   },
   {
     title: 'כסף יוצא',
     icon: CreditCard,
-    items: ['ספקים וחשבונות לתשלום', 'מס"ב', 'הוצאות ו-OCR', 'בקרת הוצאה מול תקציב'],
+    items: ['ספקים וחשבונות לתשלום', 'תשלומי מס"ב', 'הוצאות ו-OCR', 'זיהוי חריגות ומנויים כפולים'],
   },
   {
     title: 'ספרים ודוחות',
     icon: BookOpen,
-    items: ['הנה"ח כפולה נגזרת', 'רווח והפסד', 'מאזן ומאזן בוחן', 'חבילת דוחות לבנק'],
+    items: ['הנה"ח כפולה אוטומטית', 'רווח והפסד יומי', 'מאזן ומאזן בוחן', 'חבילת דוחות לבנק'],
   },
   {
     title: 'בנק והתאמות',
     icon: Landmark,
-    items: ['קליטת תנועות בנק', 'התאמות מול מסמכים', 'dispatch ל-SUMIT', 'חריגות, עמלות ומנויים'],
+    items: ['קליטת תנועות בנק', 'התאמות מול מסמכים', 'אישור התאמות והעברה לספרים', 'חריגות, עמלות ומנויים'],
   },
   {
     title: 'ניהול ו-CFO',
     icon: BarChart3,
-    items: ['תזרים יומי וחודשי', 'תקציב מול ביצוע', 'תחזיות', 'מרכז החלטות פיננסיות'],
+    items: ['תזרים יומי וחודשי', 'תקציב מול ביצוע', 'תחזיות', 'סוכן המלצות פיננסיות'],
   },
   {
     title: 'ציות ישראלי',
     icon: ClipboardCheck,
-    items: ['מע"מ וטיוטות מס', 'PCN874 readiness', 'שכר 102/126', 'דוח שנתי לבדיקת רו"ח'],
+    items: ['מע"מ וטיוטות מס', 'PCN874 readiness', 'שכר 102/126', 'דוח שנתי וחומר מסודר לרו"ח'],
   },
 ];
 
 const workflow = [
   {
-    title: 'Open Finance',
-    text: 'מושכים תנועות בנק וכרטיסים, מזהים חריגות ומכינים התאמות.',
+    title: 'כל תנועה נכנסת למפה אחת',
+    text: 'המערכת מושכת תנועות, מסמכים ופעולות כספיות ומבינה מה שייך למה.',
     icon: Landmark,
   },
   {
-    title: 'Rezef Control Layer',
-    text: 'מחברים ספרים, בנק, תקציב ותזרים למרכז החלטות אחד.',
+    title: 'התאמות, סיווגים ואישורים',
+    text: 'רצף מתאימה תשלומים לחשבוניות, מזהה חריגות ומכינה פעולות לאישור.',
     icon: Workflow,
   },
   {
-    title: 'SUMIT',
-    text: 'שומרים את הנהלת החשבונות הרשמית ומחזירים התאמות ופעולות מאושרות.',
-    icon: Receipt,
+    title: 'דוחות ותובנות בזמן אמת',
+    text: 'הסוכן מסביר מה השתנה, מי חייב כסף, מה עומד לצאת ומה כדאי לעשות.',
+    icon: Sparkles,
   },
+];
+
+const agentInsights = [
+  'לקוח מרכזי מאחר בתשלום ב-18 יום ועלול לפגוע בתזרים של השבוע הבא.',
+  'זוהתה הוצאה חוזרת כפולה בקטגוריית תוכנה. מומלץ לבטל מנוי אחד.',
+  'אפשר לדחות שני תשלומי ספקים לא קריטיים בלי לפגוע בפעילות.',
+  'הרווחיות החודשית נשחקת בגלל עלייה בהוצאות רכש מול מחזור יציב.',
 ];
 
 const annualReportTemplates = [
@@ -173,9 +178,9 @@ const annualReportTemplates = [
 ];
 
 const paymentTemplates = [
-  { id: 'apple_pay', label: 'Apple Pay', note: 'תשלום מהיר דרך Stripe Checkout' },
+  { id: 'apple_pay', label: 'Apple Pay', note: 'תשלום מהיר ומאובטח' },
   { id: 'card', label: 'כרטיס אשראי', note: 'חיוב חודשי אוטומטי' },
-  { id: 'google_pay', label: 'Google Pay', note: 'תשלום מהיר דרך Google' },
+  { id: 'google_pay', label: 'Google Pay', note: 'תשלום מהיר ומאובטח' },
   { id: 'bank_transfer', label: 'העברה בנקאית', note: 'חשבונית לתשלום ידני' },
 ];
 
@@ -191,7 +196,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
   const [selectedPlan, setSelectedPlan] = useState('company_above_2_5m');
   const [annualRevenue, setAnnualRevenue] = useState('up_to_2_5m');
   const [annualReportRequested, setAnnualReportRequested] = useState(true);
-  const [paymentTemplate, setPaymentTemplate] = useState('credit_card');
+  const [paymentTemplate, setPaymentTemplate] = useState('card');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
@@ -361,7 +366,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           </a>
           <nav className="hidden items-center gap-6 text-sm text-slate-600 lg:flex">
             <a href="#capabilities" className="hover:text-slate-950">יכולות</a>
-            <a href="#workflow" className="hover:text-slate-950">Open Finance + SUMIT</a>
+            <a href="#workflow" className="hover:text-slate-950">איך זה עובד</a>
             <a href="#plans" className="hover:text-slate-950">תוכניות</a>
             <a href="#annual-report" className="hover:text-slate-950">דוח שנתי</a>
             <a href="#signup" className="hover:text-slate-950">הרשמה</a>
@@ -381,11 +386,12 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
                 CFO, הנהלת חשבונות, בנק ותזרים ברצף עבודה אחד
               </div>
               <h1 className="text-5xl font-bold leading-tight tracking-normal text-slate-950 md:text-7xl">
-                מערכת הכספים של העסק, לא עוד דף נחיתה.
+                מחלקת כספים אוטונומית לעסק שלך.
               </h1>
               <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-                רצף מחברת את SUMIT, Open Finance, תנועות בנק, חשבוניות, ספקים, תזרים,
-                דוחות והמלצות פיננסיות למסך עבודה אחד שמראה מה קורה ומה צריך לבצע.
+                רצף רואה את הכסף מקצה לקצה: מי שילם, מי חייב, מה עומד לצאת,
+                אילו תנועות דורשות התאמה ומה מצב הרווחיות היום. הסוכן הפיננסי
+                מסביר מה קרה, מה מסוכן ומה הפעולה הנכונה הבאה.
               </p>
               <div className="mt-8 flex flex-wrap gap-3">
                 <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-5 py-3 font-semibold text-white shadow-sm hover:bg-slate-800">
@@ -409,10 +415,10 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
         <section className="border-b border-slate-200 bg-slate-950 text-white">
           <div className="mx-auto grid max-w-7xl gap-0 px-5 py-6 md:grid-cols-4">
             {[
-              ['Tenant isolation', 'ארגון נפרד לכל עסק'],
-              ['Live status', 'סטטוס חיבורים ונתונים'],
-              ['Audit-ready', 'הפרדה בין נגזר לרשמי'],
-              ['Action center', 'המלצות ומשימות לביצוע'],
+              ['Autonomous finance', 'פחות עבודה ידנית במחלקת כספים'],
+              ['Daily P&L', 'רווח והפסד יומי ולא רק בסוף חודש'],
+              ['Auto reconciliation', 'התאמות בנק ותיעוד פעולות'],
+              ['Action center', 'סוכן המלצות ומשימות לביצוע'],
             ].map(([title, text]) => (
               <div key={title} className="border-white/10 py-4 md:border-l md:px-6">
                 <div className="text-sm font-semibold text-blue-200">{title}</div>
@@ -425,8 +431,8 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
         <section id="capabilities" className="mx-auto max-w-7xl px-5 py-16">
           <SectionHeading
             eyebrow="מה יש בפנים"
-            title="מערכת מלאה לעבודה פיננסית יומית"
-            text="הדגש הוא לא רק לראות נתונים, אלא לסגור פערים: גבייה, ספקים, התאמות בנק, דוחות, תזרים ופעולות מול SUMIT."
+            title="המערכת שעושה את עבודת הכספים השוטפת"
+            text="רצף לא רק מציגה נתונים. היא מזהה פערים, מתאימה תנועות, מסמנת חריגות, מנהלת גבייה, מכינה דוחות ונותנת הוראות פעולה ברורות."
           />
           <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {capabilityGroups.map((group) => (
@@ -439,8 +445,8 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           <div className="mx-auto max-w-7xl px-5 py-16">
             <SectionHeading
               eyebrow="איך זה עובד"
-              title="Open Finance מביא את הבנק. SUMIT נשארת הספרים. Rezef סוגרת את הרצף."
-              text="הרעיון הוא hub תפעולי: קליטה, התאמה, בקרה, אישור פעולה, ואז החזרה למערכת הרשמית."
+              title="כל הכסף, כל המסמכים וכל ההחלטות ברצף אחד."
+              text="הרעיון הוא מרכז שליטה תפעולי: קליטה, התאמה, בקרה, אישור פעולה, דוחות חיים והמלצות שמסבירות מה לעשות."
             />
             <div className="mt-8 grid gap-4 lg:grid-cols-3">
               {workflow.map((step, index) => (
@@ -451,23 +457,64 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
                 <div className="flex items-center gap-3">
                   <ShieldCheck className="h-6 w-6 text-emerald-600" />
-                  <h3 className="text-xl font-bold">גבולות אחריות ברורים</h3>
+                  <h3 className="text-xl font-bold">הנהלת חשבונות שוטפת בלי עבודה ידנית</h3>
                 </div>
                 <p className="mt-3 leading-7 text-slate-600">
-                  רצף מציגה דוחות ניהוליים, התאמות והמלצות תפעוליות. ספרים רשמיים ודיווחים סופיים
-                  נשארים דרך SUMIT ובדיקת גורם מקצועי מוסמך. הנתונים הנגזרים מסומנים ככאלה.
+                  המערכת מבצעת סיווג, התאמה, מעקב גבייה, בקרת ספקים והכנת דוחות שוטפים.
+                  במקום לרדוף אחרי אקסלים, העסק מקבל תמונת מצב יומית ופעולות מוכנות לאישור.
                 </p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
                 <div className="flex items-center gap-3">
                   <LockKeyhole className="h-6 w-6 text-blue-600" />
-                  <h3 className="text-xl font-bold">Multi-tenant מהתחלה</h3>
+                  <h3 className="text-xl font-bold">ארגון נפרד לכל עסק</h3>
                 </div>
                 <p className="mt-3 leading-7 text-slate-600">
-                  כל משתמש פותח ארגון עצמאי עם credentials משלו ל-SUMIT ול-Open Finance, והרשאות נפרדות.
-                  מתאים לעסק יחיד, קבוצת חברות או משרד שמנהל כמה תיקים.
+                  כל עסק נפתח בסביבה עצמאית עם משתמשים, הרשאות, נתונים ותהליכי עבודה משלו.
+                  מתאים לעסק יחיד, קבוצת חברות או משרד שמנהל כמה תיקים במקביל.
                 </p>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="mx-auto max-w-7xl px-5 py-16">
+          <SectionHeading
+            eyebrow="הסוכן הפיננסי"
+            title="לא רק דשבורד. מנהל כספים שמדבר איתך."
+            text="הסוכן מנתח תנועות, גבייה, הוצאות, רווחיות ותזרים. הוא יודע להסביר למה המספר השתנה, איפה יש סיכון ומה הפעולה המומלצת."
+          />
+          <div className="mt-8 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+            <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="mb-5 flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
+                  <Sparkles className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="text-lg font-bold">מה הסוכן עושה בפועל</div>
+                  <div className="text-sm text-slate-500">ניתוח, הסבר, התרעה ופעולה</div>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {agentInsights.map((insight) => (
+                  <div key={insight} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-700">
+                    {insight}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {[
+                ['גבייה', 'מי חייב, כמה זמן, ומה כדאי לשלוח עכשיו כדי להכניס כסף בזמן.'],
+                ['רווחיות', 'רווח והפסד יומי, שחיקת מרווחים וזיהוי הוצאות שפוגעות ברווח.'],
+                ['בנק', 'התאמות אוטומטיות, חריגות, עמלות, תשלומים לא מזוהים ותנועות חשודות.'],
+                ['תזרים', 'תחזית מזומנים, סיכוני מחסור, דחיית ספקים ותזמון גבייה.'],
+              ].map(([title, text]) => (
+                <div key={title} className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+                  <div className="text-lg font-bold">{title}</div>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{text}</p>
+                </div>
+              ))}
             </div>
           </div>
         </section>
@@ -495,7 +542,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
             <SectionHeading
               eyebrow="שירות משלים"
               title="דוח שנתי לחברות ושותפויות"
-              text="תבנית שירות להכנת חבילת דוח שנתי על בסיס הנתונים שנאספו ברצף, SUMIT והבנק."
+              text="תבנית שירות להכנת חבילת דוח שנתי על בסיס הנתונים שנצברו במערכת לאורך השנה."
             />
             <div className="mt-8 grid gap-4 lg:grid-cols-2">
               {annualReportTemplates.map((template) => (
@@ -522,16 +569,16 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
                 <BadgeCheck className="h-4 w-4" />
                 פתיחת ארגון עצמאי עם הרשאות וחיבורים נפרדים
               </div>
-              <h2 className="text-4xl font-bold leading-tight">פותחים רצף ומחברים את הכספים.</h2>
+              <h2 className="text-4xl font-bold leading-tight">פותחים רצף ומתחילים לנהל כספים אוטומטית.</h2>
               <p className="mt-4 max-w-2xl leading-8 text-white/70">
-                התוכנית שנבחרה: <b className="text-white">{selectedPlanName}</b>. אחרי הכניסה אפשר להגדיר credentials ל-SUMIT,
-                Open Finance, משתמשים, תפקידים ותהליכי onboarding.
+                התוכנית שנבחרה: <b className="text-white">{selectedPlanName}</b>. אחרי הכניסה נפתח ארגון עצמאי,
+                מגדירים משתמשים והרשאות, ומפעילים את תהליכי הכספים של העסק.
               </p>
               <div className="mt-8 grid gap-4 sm:grid-cols-2">
                 <SignupPoint icon={Building2} text="ארגון נפרד לכל עסק או לקוח" />
                 <SignupPoint icon={Database} text="בסיס נתונים ונתונים org-scoped" />
-                <SignupPoint icon={Landmark} text="חיבור בנק ו-SUMIT לאחר הכניסה" />
-                <SignupPoint icon={TrendingUp} text="תזרים, תחזיות והמלצות בזמן אמת" />
+                <SignupPoint icon={Landmark} text="קליטת נתונים פיננסיים לאחר הכניסה" />
+                <SignupPoint icon={TrendingUp} text="תזרים, תחזיות וסוכן המלצות בזמן אמת" />
               </div>
             </div>
 
@@ -621,10 +668,10 @@ function ProductCockpit() {
               <Sparkles className="h-5 w-5 text-amber-500" />
             </div>
             {[
-              ['Open Finance', 'משיכת תנועות חדשות', 'בוצע'],
-              ['SUMIT', 'התאמת תקבולים', 'אישור'],
+              ['בנק', 'משיכת תנועות חדשות', 'בוצע'],
+              ['גבייה', 'התאמת תקבולים', 'אישור'],
               ['CFO', 'דוח תזרים לבנק', 'מוכן'],
-              ['AP', 'מס"ב ספקים', 'טיוטה'],
+              ['ספקים', 'מס"ב ספקים', 'טיוטה'],
             ].map(([source, action, status]) => (
               <div key={action} className="flex items-center justify-between border-t border-slate-100 py-3 text-sm">
                 <div>
@@ -857,7 +904,7 @@ function SignupForm({
             </button>
             {checkout && (
               <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">
-                checkout מוכן: {checkout.provider === 'stripe' ? 'Stripe Checkout' : 'מצב בדיקה'} · session {checkout.checkout_session_id.slice(0, 14)}…
+                checkout מוכן: {checkout.provider === 'stripe' ? 'תשלום מאובטח' : 'מצב בדיקה'} · session {checkout.checkout_session_id.slice(0, 14)}…
                 {checkout.note && <div className="mt-1 text-emerald-700">{checkout.note}</div>}
               </div>
             )}
