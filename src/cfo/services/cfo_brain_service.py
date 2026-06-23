@@ -29,6 +29,41 @@ from .financial_control_service import FinancialControlService
 class CFOBrainService:
     """Internal CFO reasoning layer backed by persistent database memory."""
 
+    RECOMMENDATION_DISCLAIMER = (
+        "המלצה תפעולית על בסיס נתוני המערכת. אינה ייעוץ השקעות, מס או ייעוץ משפטי; "
+        "פעולות דיווח וסגירת ספרים יש לאשר לפי הנהלים ועם גורם מקצועי מוסמך."
+    )
+
+    TYPE_LABELS = {
+        "connection": "חיבורי נתונים",
+        "reconciliation": "התאמות בנק",
+        "collections": "גבייה ולקוחות",
+        "cashflow": "תזרים",
+        "budget": "תקציב והוצאות",
+        "payables": "ספקים ותשלומים",
+        "profitability": "רווחיות",
+        "month_close": "סגירת חודש",
+    }
+
+    TYPE_ROUTES = {
+        "connection": "/sync",
+        "reconciliation": "/bank-insights",
+        "collections": "/ar",
+        "cashflow": "/cashflow",
+        "budget": "/budget",
+        "payables": "/ap",
+        "profitability": "/reports",
+        "month_close": "/business-menu",
+    }
+
+    SEVERITY_PRIORITY = {
+        "critical": 100,
+        "high": 80,
+        "medium": 55,
+        "low": 30,
+        "info": 10,
+    }
+
     def __init__(self, db: Session, organization_id: int = 1):
         self.db = db
         self.organization_id = organization_id
@@ -46,6 +81,9 @@ class CFOBrainService:
         insights.extend(self._reconciliation_insights(overview))
         insights.extend(self._collections_insights(overview))
         insights.extend(self._cashflow_insights(overview))
+        insights.extend(self._payables_insights(overview))
+        insights.extend(self._profitability_insights(overview))
+        insights.extend(self._month_close_insights(overview))
         insights.extend(self._budget_insights())
         insights.extend(self._large_unreconciled_bank_insights())
 
@@ -84,6 +122,39 @@ class CFOBrainService:
 
         insights = query.order_by(CfoInsight.updated_at.desc()).limit(limit).all()
         return [self._serialize_insight(item) for item in insights]
+
+    def list_recommendations(
+        self,
+        status: str = "active",
+        limit: int = 50,
+        refresh: bool = False,
+    ) -> dict:
+        """Return product-grade financial recommendations from persisted insights."""
+        if refresh:
+            self.run_analysis(create_tasks=True)
+
+        query = self.db.query(CfoInsight).filter(
+            CfoInsight.organization_id == self.organization_id,
+        )
+        if status:
+            query = query.filter(CfoInsight.status == status)
+
+        insights = query.all()
+        recommendations = [
+            self._recommendation_from_insight(insight)
+            for insight in insights
+        ]
+        recommendations.sort(key=lambda item: item["priority_score"], reverse=True)
+        recommendations = recommendations[:limit]
+
+        return {
+            "organization_id": self.organization_id,
+            "generated_at": datetime.utcnow().isoformat(),
+            "count": len(recommendations),
+            "disclaimer": self.RECOMMENDATION_DISCLAIMER,
+            "recommendations": recommendations,
+            "summary": self._recommendation_summary(recommendations),
+        }
 
     def update_insight_status(self, insight_id: int, status: str) -> dict:
         allowed = {"active", "acknowledged", "resolved"}
@@ -270,6 +341,89 @@ class CFOBrainService:
             })
         return insights
 
+    def _payables_insights(self, overview: dict) -> list[dict]:
+        cash = Decimal(str(overview["cash"]["bank_account_balance"]))
+        upcoming = Decimal(str(overview["control"]["upcoming_bills_amount_14d"]))
+        if upcoming <= 0:
+            return []
+
+        evidence = {
+            "cash_balance": float(cash),
+            "upcoming_bills_amount_14d": float(upcoming),
+        }
+        if cash <= 0:
+            severity = "critical"
+            message = f"Upcoming supplier payments total {float(upcoming):,.2f} ILS while cash balance is non-positive."
+        elif upcoming > cash * Decimal("0.75"):
+            severity = "high"
+            message = f"Upcoming supplier payments consume more than 75% of current cash balance."
+        elif upcoming > cash * Decimal("0.40"):
+            severity = "medium"
+            message = f"Upcoming supplier payments consume more than 40% of current cash balance."
+        else:
+            return []
+
+        return [{
+            "fingerprint": "payables:upcoming_cash_pressure",
+            "insight_type": "payables",
+            "severity": severity,
+            "title": "Upcoming supplier payments create cash pressure",
+            "message": message,
+            "recommended_action": "Prioritize critical vendors, delay non-critical bills where allowed, and compare payment timing against expected collections.",
+            "evidence": evidence,
+        }]
+
+    def _profitability_insights(self, overview: dict) -> list[dict]:
+        net_profit = Decimal(str(overview["books"]["net_profit"]))
+        expenses = Decimal(str(overview["books"]["expenses"]))
+        income = Decimal(str(overview["books"]["income"]))
+        if income <= 0 or net_profit >= 0:
+            return []
+
+        severity = "high" if abs(net_profit) > expenses * Decimal("0.20") else "medium"
+        return [{
+            "fingerprint": "profitability:period_loss",
+            "insight_type": "profitability",
+            "severity": severity,
+            "title": "Current period is running at a loss",
+            "message": f"Books show {float(net_profit):,.2f} ILS net profit for the current period.",
+            "recommended_action": "Review top expense categories, pricing, and one-off costs before committing to new spend.",
+            "evidence": overview["books"],
+        }]
+
+    def _month_close_insights(self, overview: dict) -> list[dict]:
+        unreconciled = int(overview["control"]["unreconciled_bank_transactions"])
+        overdue_amount = Decimal(str(overview["control"]["overdue_invoices_amount"]))
+        missing = [
+            item["fingerprint"]
+            for item in self._connection_insights()
+            if item["severity"] in {"high", "critical"}
+        ]
+        blockers = []
+        if unreconciled:
+            blockers.append("unreconciled_bank_transactions")
+        if overdue_amount > 0:
+            blockers.append("open_overdue_receivables")
+        blockers.extend(missing)
+
+        if not blockers:
+            return []
+
+        severity = "critical" if unreconciled > 100 or missing else "high" if unreconciled > 0 else "medium"
+        return [{
+            "fingerprint": "month_close:readiness_blocked",
+            "insight_type": "month_close",
+            "severity": severity,
+            "title": "Month close is not ready for confident reporting",
+            "message": "Reports can be produced, but the control layer found open items that reduce confidence.",
+            "recommended_action": "Clear connection gaps, reconcile bank movements, and review overdue receivables before using reports as final management numbers.",
+            "evidence": {
+                "blockers": blockers,
+                "unreconciled_bank_transactions": unreconciled,
+                "overdue_invoices_amount": float(overdue_amount),
+            },
+        }]
+
     def _budget_insights(self) -> list[dict]:
         today = date.today()
         month_start = date(today.year, today.month, 1)
@@ -412,3 +566,117 @@ class CFOBrainService:
             "updated_at": insight.updated_at.isoformat() if insight.updated_at else None,
             "resolved_at": insight.resolved_at.isoformat() if insight.resolved_at else None,
         }
+
+    def _recommendation_from_insight(self, insight: CfoInsight) -> dict:
+        evidence = insight.evidence or {}
+        insight_type = insight.insight_type or "general"
+        priority = self.SEVERITY_PRIORITY.get(insight.severity or "info", 10)
+        if insight.updated_at:
+            age_days = max((datetime.utcnow() - insight.updated_at).days, 0)
+            priority = max(priority - min(age_days, 20), 1)
+
+        return {
+            "id": f"rec-{insight.id}",
+            "insight_id": insight.id,
+            "category": self.TYPE_LABELS.get(insight_type, insight_type),
+            "insight_type": insight_type,
+            "severity": insight.severity,
+            "priority_score": priority,
+            "title": insight.title,
+            "rationale": insight.message,
+            "recommended_action": insight.recommended_action,
+            "next_steps": self._next_steps_for(insight_type),
+            "source_systems": self._source_systems_for(insight_type, evidence),
+            "confidence": self._confidence_for(insight_type, evidence),
+            "evidence": evidence,
+            "status": insight.status,
+            "route": self.TYPE_ROUTES.get(insight_type, "/business-menu"),
+            "disclaimer": self.RECOMMENDATION_DISCLAIMER,
+            "updated_at": insight.updated_at.isoformat() if insight.updated_at else None,
+        }
+
+    def _recommendation_summary(self, recommendations: list[dict]) -> dict:
+        by_severity: dict[str, int] = {}
+        by_category: dict[str, int] = {}
+        for item in recommendations:
+            by_severity[item["severity"]] = by_severity.get(item["severity"], 0) + 1
+            by_category[item["category"]] = by_category.get(item["category"], 0) + 1
+        top = recommendations[0] if recommendations else None
+        return {
+            "critical": by_severity.get("critical", 0),
+            "high": by_severity.get("high", 0),
+            "by_category": by_category,
+            "top_recommendation_id": top["id"] if top else None,
+            "top_recommendation_title": top["title"] if top else None,
+        }
+
+    @staticmethod
+    def _source_systems_for(insight_type: str, evidence: dict) -> list[str]:
+        sources = {
+            "connection": ["Vercel env", "Integration vault"],
+            "reconciliation": ["Open Finance", "SUMIT", "Bank transactions"],
+            "collections": ["SUMIT", "AR invoices"],
+            "cashflow": ["Open Finance", "Bank balances"],
+            "budget": ["Budget", "Transactions"],
+            "payables": ["SUMIT", "AP bills", "Bank balances"],
+            "profitability": ["SUMIT", "Transactions"],
+            "month_close": ["Open Finance", "SUMIT", "Control layer"],
+        }.get(insight_type, ["Rezef data"])
+        if evidence.get("active_sources"):
+            sources.extend(str(src) for src in evidence["active_sources"])
+        return sorted(set(sources))
+
+    @staticmethod
+    def _confidence_for(insight_type: str, evidence: dict) -> str:
+        if insight_type == "connection":
+            return "high"
+        if evidence.get("blockers") or evidence.get("transactions"):
+            return "high"
+        if evidence:
+            return "medium"
+        return "low"
+
+    @staticmethod
+    def _next_steps_for(insight_type: str) -> list[str]:
+        return {
+            "connection": [
+                "להשלים חיבור מקור נתונים חסר",
+                "להריץ סנכרון מחדש",
+                "לוודא שהסטטוס חוזר כ-active",
+            ],
+            "reconciliation": [
+                "לפתוח התאמות בנק",
+                "לאשר התאמות עם confidence גבוה",
+                "לשלוח התאמות שאושרו ל-SUMIT",
+            ],
+            "collections": [
+                "לפתוח דוח גיול לקוחות",
+                "לתעד פעולת גבייה מול הלקוח",
+                "לעדכן תחזית גבייה אחרי תגובה",
+            ],
+            "cashflow": [
+                "לעדכן תקבולים צפויים",
+                "לדחות התחייבויות לא קריטיות",
+                "להריץ תחזית שמרנית",
+            ],
+            "budget": [
+                "לבדוק עסקאות בקטגוריה",
+                "לעדכן תקציב או לעצור הוצאה",
+                "להוסיף בקרת אישור להוצאה חוזרת",
+            ],
+            "payables": [
+                "לסמן ספקים קריטיים",
+                "לבדוק אילו חשבונות ניתן לדחות",
+                "להצליב מול תקבולים צפויים",
+            ],
+            "profitability": [
+                "לבדוק קטגוריות הוצאה מובילות",
+                "להשוות מחיר/עלות לפרויקטים פעילים",
+                "להגדיר יעד תיקון לחודש הבא",
+            ],
+            "month_close": [
+                "לנקות חסמי חיבור",
+                "להשלים התאמות בנק",
+                "לסמן דוחות כסופיים רק אחרי ביקורת",
+            ],
+        }.get(insight_type, ["לבדוק את מקור הנתון", "לתעד החלטה", "לעקוב אחרי שינוי"])

@@ -218,6 +218,19 @@ async def list_cfo_insights(
     return brain.list_insights(status=status, severity=severity, limit=limit)
 
 
+@router.get("/brain/recommendations")
+async def list_financial_recommendations(
+    status: str = Query("active"),
+    limit: int = Query(50, ge=1, le=200),
+    refresh: bool = Query(False),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """User-facing financial recommendations derived from live org data."""
+    brain = CFOBrainService(db, org_id)
+    return brain.list_recommendations(status=status, limit=limit, refresh=refresh)
+
+
 @router.patch("/brain/insights/{insight_id}")
 async def update_cfo_insight_status(
     insight_id: int,
