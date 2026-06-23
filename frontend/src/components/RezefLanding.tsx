@@ -54,6 +54,16 @@ interface TokenResponse {
   user?: { full_name?: string; email?: string };
 }
 
+interface CheckoutResponse {
+  provider: 'stripe' | 'mock';
+  checkout_session_id: string;
+  checkout_url: string;
+  payment_status: string;
+  subscription_status: string;
+  supports: string[];
+  note?: string;
+}
+
 const plans = [
   {
     id: 'company_up_to_2_5m',
@@ -163,9 +173,10 @@ const annualReportTemplates = [
 ];
 
 const paymentTemplates = [
-  { id: 'credit_card', label: 'כרטיס אשראי', note: 'חיוב חודשי אוטומטי' },
+  { id: 'apple_pay', label: 'Apple Pay', note: 'תשלום מהיר דרך Stripe Checkout' },
+  { id: 'card', label: 'כרטיס אשראי', note: 'חיוב חודשי אוטומטי' },
+  { id: 'google_pay', label: 'Google Pay', note: 'תשלום מהיר דרך Google' },
   { id: 'bank_transfer', label: 'העברה בנקאית', note: 'חשבונית לתשלום ידני' },
-  { id: 'standing_order', label: 'הוראת קבע', note: 'חיוב קבוע לפי תבנית' },
 ];
 
 const toneClasses: Record<string, string> = {
@@ -187,6 +198,8 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
   const [registrationCode, setRegistrationCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkout, setCheckout] = useState<CheckoutResponse | null>(null);
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
 
   const selectedPlanName = useMemo(
@@ -198,6 +211,34 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
     localStorage.setItem('auth_token', data.access_token);
     localStorage.setItem('rezef_selected_plan', selectedPlan);
     onSuccess();
+  };
+
+  const checkoutSessionId = checkout?.checkout_session_id;
+  const paymentStatus = checkout?.payment_status;
+
+  const prepareCheckout = async () => {
+    setError(null);
+    setCheckoutLoading(true);
+    try {
+      const { data } = await axios.post<CheckoutResponse>(`${API_BASE_URL}/admin/billing/checkout`, {
+        selected_plan: selectedPlan,
+        annual_revenue: annualRevenue,
+        annual_report_requested: annualReportRequested,
+        payment_template: paymentTemplate,
+        email: email || undefined,
+        success_path: '/',
+        cancel_path: '/',
+      });
+      setCheckout(data);
+      if (data.provider === 'stripe' && data.checkout_url) {
+        window.location.href = data.checkout_url;
+      }
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'לא הצלחנו להכין תשלום. אפשר לנסות שוב או להמשיך עם קוד הרשמה.');
+    } finally {
+      setCheckoutLoading(false);
+    }
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -218,6 +259,8 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               annual_revenue: annualRevenue,
               annual_report_requested: annualReportRequested,
               payment_template: paymentTemplate,
+              checkout_session_id: checkoutSessionId,
+              payment_status: paymentStatus,
             };
       const { data } = await axios.post<TokenResponse>(`${API_BASE_URL}${endpoint}`, payload);
       completeLogin(data);
@@ -247,6 +290,8 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
         annual_revenue: annualRevenue,
         annual_report_requested: annualReportRequested,
         payment_template: paymentTemplate,
+        checkout_session_id: checkoutSessionId,
+        payment_status: paymentStatus,
       });
       completeLogin(data);
     } catch (err: any) {
@@ -286,7 +331,22 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
     script.defer = true;
     script.onload = render;
     document.head.appendChild(script);
-  }, [mode, registrationCode, selectedPlan]);
+  }, [mode, registrationCode, selectedPlan, checkoutSessionId, paymentStatus]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session_id');
+    const checkoutResult = params.get('checkout');
+    if (!sessionId || !checkoutResult) return;
+    setCheckout({
+      provider: checkoutResult === 'mock' ? 'mock' : 'stripe',
+      checkout_session_id: sessionId,
+      checkout_url: window.location.href,
+      payment_status: checkoutResult === 'success' ? 'paid' : checkoutResult === 'mock' ? 'mock_ready' : 'pending',
+      subscription_status: checkoutResult === 'success' ? 'active' : 'pending',
+      supports: ['card', 'apple_pay', 'google_pay'],
+    });
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950" dir="rtl">
@@ -498,6 +558,9 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               error={error}
               loading={loading}
               googleButtonRef={googleButtonRef}
+              checkout={checkout}
+              checkoutLoading={checkoutLoading}
+              onPrepareCheckout={prepareCheckout}
               onSubmit={handleSubmit}
             />
           </div>
@@ -700,6 +763,9 @@ function SignupForm({
   error,
   loading,
   googleButtonRef,
+  checkout,
+  checkoutLoading,
+  onPrepareCheckout,
   onSubmit,
 }: {
   mode: 'register' | 'login';
@@ -724,8 +790,13 @@ function SignupForm({
   error: string | null;
   loading: boolean;
   googleButtonRef: React.RefObject<HTMLDivElement>;
+  checkout: CheckoutResponse | null;
+  checkoutLoading: boolean;
+  onPrepareCheckout: () => void;
   onSubmit: (event: React.FormEvent) => void;
 }) {
+  const hasCheckout = Boolean(checkout?.checkout_session_id);
+
   return (
     <form onSubmit={onSubmit} className="rounded-2xl bg-white p-6 text-slate-950 shadow-2xl">
       <div className="mb-5 grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-sm">
@@ -753,6 +824,44 @@ function SignupForm({
               <option key={template.id} value={template.id}>{template.label} - {template.note}</option>
             ))}
           </LandingSelect>
+          <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="mb-3 text-sm font-semibold">תשלום מאובטח</div>
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              {[
+                ['apple_pay', 'Apple Pay'],
+                ['card', 'כרטיס אשראי'],
+                ['google_pay', 'Google Pay'],
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setPaymentTemplate(id)}
+                  className={`rounded-lg border px-2 py-2 font-medium transition ${
+                    paymentTemplate === id
+                      ? 'border-blue-500 bg-blue-50 text-blue-700'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={onPrepareCheckout}
+              disabled={checkoutLoading}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+            >
+              {checkoutLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
+              {hasCheckout ? 'עדכן checkout' : 'המשך לתשלום מאובטח'}
+            </button>
+            {checkout && (
+              <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">
+                checkout מוכן: {checkout.provider === 'stripe' ? 'Stripe Checkout' : 'מצב בדיקה'} · session {checkout.checkout_session_id.slice(0, 14)}…
+                {checkout.note && <div className="mt-1 text-emerald-700">{checkout.note}</div>}
+              </div>
+            )}
+          </div>
           <label className="mb-4 flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
             <input
               type="checkbox"
@@ -777,6 +886,7 @@ function SignupForm({
           <div>תוכנית: {selectedPlanName}</div>
           <div>מחזור: {annualRevenue === 'up_to_2_5m' ? 'עד 2.5 מיליון ש"ח' : 'מעל 2.5 מיליון ש"ח'}</div>
           <div>תשלום: {paymentTemplates.find((template) => template.id === paymentTemplate)?.label}</div>
+          <div>Checkout: {hasCheckout ? 'מוכן לפתיחת tenant' : 'טרם הוכן'}</div>
           <div>דוח שנתי: {annualReportRequested ? 'כלול כתבנית שירות' : 'לא נבחר כרגע'}</div>
         </div>
       )}
@@ -788,8 +898,13 @@ function SignupForm({
       </button>
 
       {GOOGLE_CLIENT_ID && (
-        <div className="mt-4 flex justify-center">
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="mb-3 text-center text-xs font-medium text-slate-600">
+            או הרשמה עם Google, כולל החבילה וה-checkout שנבחרו
+          </div>
+          <div className="flex justify-center">
           <div ref={googleButtonRef} />
+          </div>
         </div>
       )}
     </form>

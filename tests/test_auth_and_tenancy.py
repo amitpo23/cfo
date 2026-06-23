@@ -30,6 +30,79 @@ def test_second_user_gets_own_org(owner, tenant):
     assert tenant["user"]["role"] == "admin"  # admin of their own org
 
 
+def test_billing_checkout_returns_self_service_session(client):
+    resp = client.post("/api/admin/billing/checkout", json={
+        "selected_plan": "company_up_to_2_5m",
+        "annual_revenue": "up_to_2_5m",
+        "payment_template": "apple_pay",
+        "annual_report_requested": True,
+        "email": "checkout@example.com",
+    })
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["checkout_session_id"]
+    assert "apple_pay" in body["supports"]
+    assert body["payment_status"] in {"mock_ready", "checkout_started", "paid"}
+
+
+def test_checkout_session_opens_isolated_tenant_without_registration_code(client, owner):
+    checkout = client.post("/api/admin/billing/checkout", json={
+        "selected_plan": "company_above_2_5m",
+        "annual_revenue": "above_2_5m",
+        "payment_template": "card",
+        "annual_report_requested": True,
+    }).json()
+
+    resp = client.post("/api/admin/auth/register", json={
+        "email": "selfserve@example.com",
+        "password": "secret123",
+        "full_name": "Self Serve",
+        "selected_plan": "company_above_2_5m",
+        "annual_revenue": "above_2_5m",
+        "payment_template": "card",
+        "checkout_session_id": checkout["checkout_session_id"],
+        "payment_status": checkout["payment_status"],
+    })
+    assert resp.status_code == 201, resp.text
+    user = resp.json()["user"]
+    assert user["role"] == "admin"
+    assert user["organization_id"] != owner["user"]["organization_id"]
+
+    from cfo.database import SessionLocal
+    from cfo.models import Organization
+
+    db = SessionLocal()
+    try:
+        org = db.query(Organization).filter(Organization.id == user["organization_id"]).first()
+        assert org.settings["selected_plan"] == "company_above_2_5m"
+        assert org.settings["checkout_session_id"] == checkout["checkout_session_id"]
+        assert org.settings["payment_template"] == "card"
+    finally:
+        db.close()
+
+
+def test_mock_checkout_is_disabled_on_vercel(client, monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    resp = client.post("/api/admin/billing/checkout", json={
+        "selected_plan": "company_up_to_2_5m",
+        "annual_revenue": "up_to_2_5m",
+        "payment_template": "card",
+    })
+    assert resp.status_code == 503
+
+
+def test_unverified_checkout_does_not_open_tenant_on_vercel(client, monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    resp = client.post("/api/admin/auth/register", json={
+        "email": "fakecheckout@example.com",
+        "password": "secret123",
+        "full_name": "Fake Checkout",
+        "checkout_session_id": "fake_checkout_id",
+        "payment_status": "paid",
+    })
+    assert resp.status_code == 403
+
+
 def test_login(client, owner):
     resp = client.post("/api/admin/auth/login", json={
         "email": "owner@example.com", "password": "secret123",

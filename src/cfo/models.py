@@ -1055,6 +1055,8 @@ class UserCreate(BaseModel):
     annual_revenue: Optional[str] = None
     annual_report_requested: Optional[bool] = None
     payment_template: Optional[str] = None
+    checkout_session_id: Optional[str] = None
+    payment_status: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
@@ -1095,6 +1097,8 @@ class GoogleLogin(BaseModel):
     annual_revenue: Optional[str] = None
     annual_report_requested: Optional[bool] = None
     payment_template: Optional[str] = None
+    checkout_session_id: Optional[str] = None
+    payment_status: Optional[str] = None
 
 
 class Token(BaseModel):

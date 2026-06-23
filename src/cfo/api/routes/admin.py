@@ -3,9 +3,11 @@ Admin API routes
 ניהול מערכת, משתמשים, ארגונים וחברות
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 import secrets
+from urllib.parse import urlencode
 
 from ...database import get_db_session
 from ...models import (
@@ -34,10 +36,53 @@ router = APIRouter()
 
 # ==================== Authentication ====================
 
-def _assert_registration_allowed(registration_code: Optional[str]):
+PLAN_PRICE_FALLBACKS = {
+    "company_up_to_2_5m": {"monthly_ils": 750, "label": "חברה / שותפות עד 2.5M"},
+    "company_above_2_5m": {"monthly_ils": 750, "label": "חברה בצמיחה מעל 2.5M"},
+    "office": {"monthly_ils": None, "label": "רצף Office"},
+}
+
+
+class CheckoutCreate(BaseModel):
+    selected_plan: str
+    annual_revenue: Optional[str] = None
+    payment_template: str = "credit_card"
+    annual_report_requested: bool = True
+    email: Optional[str] = None
+    success_path: str = "/"
+    cancel_path: str = "/"
+
+
+async def _assert_registration_allowed(
+    registration_code: Optional[str],
+    checkout_session_id: Optional[str] = None,
+):
     from ...config import settings
     from os import getenv
 
+    if checkout_session_id:
+        if checkout_session_id.startswith("mock_") and not getenv("VERCEL"):
+            return
+        if settings.stripe_secret_key and checkout_session_id.startswith("cs_"):
+            import httpx
+
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"https://api.stripe.com/v1/checkout/sessions/{checkout_session_id}",
+                    headers={"Authorization": f"Bearer {settings.stripe_secret_key}"},
+                )
+            if resp.status_code >= 400:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Checkout session could not be verified",
+                )
+            session = resp.json()
+            if session.get("status") == "complete" and session.get("payment_status") in {"paid", "no_payment_required"}:
+                return
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Checkout session is not paid",
+            )
     if getenv("VERCEL") and not settings.registration_secret:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -48,6 +93,127 @@ def _assert_registration_allowed(registration_code: Optional[str]):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Registration requires a valid registration code"
         )
+
+
+def _plan_settings(
+    *,
+    selected_plan: Optional[str],
+    annual_revenue: Optional[str],
+    annual_report_requested: Optional[bool],
+    payment_template: Optional[str],
+    checkout_session_id: Optional[str] = None,
+    payment_status: Optional[str] = None,
+) -> dict:
+    return {
+        "selected_plan": selected_plan or "company_above_2_5m",
+        "annual_revenue": annual_revenue or "up_to_2_5m",
+        "annual_report_requested": annual_report_requested if annual_report_requested is not None else True,
+        "payment_template": payment_template or "credit_card",
+        "checkout_session_id": checkout_session_id,
+        "payment_status": payment_status or ("checkout_started" if checkout_session_id else "pending"),
+        "subscription_status": "active" if payment_status in {"paid", "active", "trialing"} else "pending",
+        "brand": "rezef",
+    }
+
+
+def _stripe_price_id(plan_id: str) -> Optional[str]:
+    from ...config import settings
+
+    return {
+        "company_up_to_2_5m": settings.stripe_price_company_up_to_2_5m,
+        "company_above_2_5m": settings.stripe_price_company_above_2_5m,
+        "office": settings.stripe_price_office,
+    }.get(plan_id)
+
+
+async def _create_stripe_checkout(body: CheckoutCreate) -> Optional[dict]:
+    from ...config import settings
+    import httpx
+
+    if not settings.stripe_secret_key:
+        return None
+    price_id = _stripe_price_id(body.selected_plan)
+    if not price_id:
+        return None
+
+    success_url = f"{settings.app_url.rstrip('/')}{body.success_path}?checkout=success&session_id={{CHECKOUT_SESSION_ID}}#signup"
+    cancel_url = f"{settings.app_url.rstrip('/')}{body.cancel_path}?checkout=cancelled#plans"
+    form = {
+        "mode": "subscription",
+        "line_items[0][price]": price_id,
+        "line_items[0][quantity]": "1",
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "client_reference_id": body.selected_plan,
+        "metadata[selected_plan]": body.selected_plan,
+        "metadata[annual_revenue]": body.annual_revenue or "up_to_2_5m",
+        "metadata[payment_template]": body.payment_template,
+        "metadata[annual_report_requested]": str(body.annual_report_requested).lower(),
+        "allow_promotion_codes": "true",
+    }
+    if body.email:
+        form["customer_email"] = body.email
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            "https://api.stripe.com/v1/checkout/sessions",
+            data=form,
+            headers={"Authorization": f"Bearer {settings.stripe_secret_key}"},
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Stripe checkout failed: {resp.text[:300]}",
+        )
+    session = resp.json()
+    return {
+        "provider": "stripe",
+        "checkout_session_id": session.get("id"),
+        "checkout_url": session.get("url"),
+        "payment_status": session.get("payment_status") or "checkout_started",
+        "subscription_status": "checkout_started",
+        "supports": ["card", "apple_pay", "google_pay"],
+    }
+
+
+@router.post("/billing/checkout", tags=["Billing"])
+async def create_billing_checkout(body: CheckoutCreate):
+    """Create a signup checkout session before tenant registration."""
+    if body.selected_plan not in PLAN_PRICE_FALLBACKS:
+        raise HTTPException(status_code=400, detail="Unknown plan")
+
+    stripe_session = await _create_stripe_checkout(body)
+    if stripe_session:
+        return stripe_session
+
+    from os import getenv
+    if getenv("VERCEL"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Stripe checkout is not configured for production",
+        )
+
+    session_id = "mock_" + secrets.token_urlsafe(18)
+    query = urlencode({
+        "checkout": "mock",
+        "session_id": session_id,
+        "plan": body.selected_plan,
+    })
+    fallback = PLAN_PRICE_FALLBACKS[body.selected_plan]
+    return {
+        "provider": "mock",
+        "checkout_session_id": session_id,
+        "checkout_url": f"{body.success_path}?{query}#signup",
+        "payment_status": "mock_ready",
+        "subscription_status": "pending",
+        "supports": ["card", "apple_pay", "google_pay"],
+        "plan": {
+            "id": body.selected_plan,
+            "label": fallback["label"],
+            "monthly_ils": fallback["monthly_ils"],
+        },
+        "note": "Stripe is not configured; checkout is simulated for onboarding.",
+    }
 
 
 def _create_self_registered_user(
@@ -62,6 +228,8 @@ def _create_self_registered_user(
     annual_revenue: Optional[str] = None,
     annual_report_requested: Optional[bool] = None,
     payment_template: Optional[str] = None,
+    checkout_session_id: Optional[str] = None,
+    payment_status: Optional[str] = None,
 ) -> User:
     requested_organization_id = organization_id
     existing_user = db.query(User).filter(User.email == email).first()
@@ -97,11 +265,14 @@ def _create_self_registered_user(
                 integration_type=IntegrationType.MANUAL,
                 settings={
                     "self_registered": True,
-                    "selected_plan": selected_plan or "company_above_2_5m",
-                    "annual_revenue": annual_revenue or "up_to_2_5m",
-                    "annual_report_requested": annual_report_requested if annual_report_requested is not None else True,
-                    "payment_template": payment_template or "credit_card",
-                    "brand": "rezef",
+                    **_plan_settings(
+                        selected_plan=selected_plan,
+                        annual_revenue=annual_revenue,
+                        annual_report_requested=annual_report_requested,
+                        payment_template=payment_template,
+                        checkout_session_id=checkout_session_id,
+                        payment_status=payment_status,
+                    ),
                 },
                 is_active=True,
             )
@@ -109,16 +280,26 @@ def _create_self_registered_user(
             db.flush()
             organization_id = org.id
 
-    if selected_plan or annual_revenue or annual_report_requested is not None or payment_template:
+    if (
+        selected_plan or annual_revenue or annual_report_requested is not None
+        or payment_template or checkout_session_id or payment_status
+    ):
         org = db.query(Organization).filter(Organization.id == organization_id).first()
         if org:
             org.settings = {
                 **(org.settings or {}),
-                "selected_plan": selected_plan or (org.settings or {}).get("selected_plan") or "company_above_2_5m",
-                "annual_revenue": annual_revenue or "up_to_2_5m",
-                "annual_report_requested": annual_report_requested if annual_report_requested is not None else True,
-                "payment_template": payment_template or "credit_card",
-                "brand": "rezef",
+                **_plan_settings(
+                    selected_plan=selected_plan or (org.settings or {}).get("selected_plan"),
+                    annual_revenue=annual_revenue or (org.settings or {}).get("annual_revenue"),
+                    annual_report_requested=(
+                        annual_report_requested
+                        if annual_report_requested is not None
+                        else (org.settings or {}).get("annual_report_requested")
+                    ),
+                    payment_template=payment_template or (org.settings or {}).get("payment_template"),
+                    checkout_session_id=checkout_session_id or (org.settings or {}).get("checkout_session_id"),
+                    payment_status=payment_status or (org.settings or {}).get("payment_status"),
+                ),
             }
 
     new_user = User(
@@ -150,7 +331,7 @@ async def register(
     db: Session = Depends(get_db_session)
 ):
     """הרשמת משתמש חדש"""
-    _assert_registration_allowed(user_data.registration_code)
+    await _assert_registration_allowed(user_data.registration_code, user_data.checkout_session_id)
     new_user = _create_self_registered_user(
         db,
         email=user_data.email,
@@ -162,6 +343,8 @@ async def register(
         annual_revenue=user_data.annual_revenue,
         annual_report_requested=user_data.annual_report_requested,
         payment_template=user_data.payment_template,
+        checkout_session_id=user_data.checkout_session_id,
+        payment_status=user_data.payment_status,
     )
     return _token_for_user(new_user)
 
@@ -209,7 +392,7 @@ async def google_login(
         db.refresh(user)
         return _token_for_user(user)
 
-    _assert_registration_allowed(login_data.registration_code)
+    await _assert_registration_allowed(login_data.registration_code, login_data.checkout_session_id)
     full_name = payload.get("name") or email.split("@", 1)[0]
     new_user = _create_self_registered_user(
         db,
@@ -220,6 +403,8 @@ async def google_login(
         annual_revenue=login_data.annual_revenue,
         annual_report_requested=login_data.annual_report_requested,
         payment_template=login_data.payment_template,
+        checkout_session_id=login_data.checkout_session_id,
+        payment_status=login_data.payment_status,
     )
     return _token_for_user(new_user)
 

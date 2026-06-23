@@ -72,6 +72,13 @@ class Settings(BaseSettings):
 
     # Google Sign-In
     google_client_id: Optional[str] = None
+
+    # SaaS billing / checkout. Stripe Checkout enables Apple Pay and Google Pay
+    # when the Stripe account, domain, and payment methods are configured.
+    stripe_secret_key: Optional[str] = None
+    stripe_price_company_up_to_2_5m: Optional[str] = None
+    stripe_price_company_above_2_5m: Optional[str] = None
+    stripe_price_office: Optional[str] = None
     
     # OpenAI
     openai_api_key: Optional[str] = None
