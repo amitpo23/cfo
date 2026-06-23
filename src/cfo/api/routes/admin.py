@@ -61,7 +61,7 @@ async def _assert_registration_allowed(
     from os import getenv
 
     if checkout_session_id:
-        if checkout_session_id.startswith("mock_") and not getenv("VERCEL"):
+        if checkout_session_id.startswith("mock_") and getenv("VERCEL_ENV") != "production":
             return
         if settings.stripe_secret_key and checkout_session_id.startswith("cs_"):
             import httpx
@@ -187,7 +187,7 @@ async def create_billing_checkout(body: CheckoutCreate):
         return stripe_session
 
     from os import getenv
-    if getenv("VERCEL"):
+    if getenv("VERCEL_ENV") == "production":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Stripe checkout is not configured for production",

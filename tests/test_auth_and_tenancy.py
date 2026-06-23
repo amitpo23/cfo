@@ -81,8 +81,9 @@ def test_checkout_session_opens_isolated_tenant_without_registration_code(client
         db.close()
 
 
-def test_mock_checkout_is_disabled_on_vercel(client, monkeypatch):
+def test_mock_checkout_is_disabled_on_production(client, monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("VERCEL_ENV", "production")
     resp = client.post("/api/admin/billing/checkout", json={
         "selected_plan": "company_up_to_2_5m",
         "annual_revenue": "up_to_2_5m",
@@ -91,8 +92,27 @@ def test_mock_checkout_is_disabled_on_vercel(client, monkeypatch):
     assert resp.status_code == 503
 
 
-def test_unverified_checkout_does_not_open_tenant_on_vercel(client, monkeypatch):
+def test_preview_mock_checkout_opens_isolated_tenant(client, monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("VERCEL_ENV", "preview")
+    checkout = client.post("/api/admin/billing/checkout", json={
+        "selected_plan": "company_up_to_2_5m",
+        "annual_revenue": "up_to_2_5m",
+        "payment_template": "card",
+    }).json()
+    resp = client.post("/api/admin/auth/register", json={
+        "email": "previewmock@example.com",
+        "password": "secret123",
+        "full_name": "Preview Mock",
+        "checkout_session_id": checkout["checkout_session_id"],
+        "payment_status": checkout["payment_status"],
+    })
+    assert resp.status_code == 201, resp.text
+
+
+def test_unverified_checkout_does_not_open_tenant_on_production(client, monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("VERCEL_ENV", "production")
     resp = client.post("/api/admin/auth/register", json={
         "email": "fakecheckout@example.com",
         "password": "secret123",
