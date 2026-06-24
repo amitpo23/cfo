@@ -69,7 +69,17 @@ class DataSyncService:
         """
         סנכרון מסמכים מ-SUMIT (חשבוניות, קבלות וכו')
         Sync documents from SUMIT (invoices, receipts, etc.)
+
+        DEPRECATED (פאזה 1): נתיב זה כותב שורות Transaction עם amount=doc.total
+        (כולל מע"מ) — מקור היסטורי לספירה כפולה ולמע"מ מנופח. הנתיב הקנוני הוא
+        SyncEngine שכותב Invoice/Bill/Expense עם פיצול net/VAT. הדוחות כבר מתעלמים
+        מ-Transaction שהוא הד-מסמך (לפי external_id), כך שאין ספירה כפולה בפלט.
+        ריטייר מלא (מעבר route ה-sync ל-SyncEngine) מתוכנן לפאזה 6.
         """
+        logger.warning(
+            "DataSyncService.sync_documents is deprecated (writes legacy VAT-inclusive "
+            "Transaction rows). Use SyncEngine (ledger) path. Reports de-dupe echoes by external_id."
+        )
         sumit = await self._get_sumit()
         
         if not from_date:

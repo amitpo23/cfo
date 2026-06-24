@@ -227,15 +227,15 @@ class FinancialReportsService:
                 Transaction.transaction_date <= prev_end
             ).all()
         
-        # ארגון נתונים לפי קטגוריה
-        revenue_items = self._categorize_transactions(
-            [t for t in transactions if t.transaction_type == TransactionType.INCOME],
-            [t for t in prev_transactions if t.transaction_type == TransactionType.INCOME]
+        # ארגון נתונים לפי קטגוריה — מקור אמת: שכבת ה-ledger (Invoice/Bill/Expense)
+        # בסכומי נטו מפוצלי-מע"מ. טבלת Transaction מנופחת (כולל מע"מ) ולא משמשת כאן.
+        # פקודות יומן ידניות (Transaction בלי מסמך מקור) נכללות בנפרד דרך
+        # _manual_journal_items כדי לא לאבד תנועות שאינן הד-מסמך.
+        revenue_items = self._ledger_revenue_items(
+            organization_id, start_date, end_date, prev_start, prev_end, compare_previous
         )
-        
-        expense_items = self._categorize_transactions(
-            [t for t in transactions if t.transaction_type == TransactionType.EXPENSE],
-            [t for t in prev_transactions if t.transaction_type == TransactionType.EXPENSE]
+        expense_items = self._ledger_expense_items(
+            organization_id, start_date, end_date, prev_start, prev_end, compare_previous
         )
         
         # חישובים
@@ -386,8 +386,13 @@ class FinancialReportsService:
         
         total_liabilities = total_current_liabilities + total_long_term_liabilities
         
-        # הון עצמי
-        retained_earnings = total_assets - total_liabilities - balances.get('share_capital', 0)
+        # הון עצמי — עודפים נגזרים מרווח נקי מצטבר (חישוב עצמאי מ-P&L), לא
+        # plug של assets−liabilities−capital שמכריח is_balanced=True ומסתיר
+        # אי-התאמות במקור. is_balanced למטה הוא השוואה אמיתית.
+        accumulated = self.generate_profit_loss(
+            organization_id, date(1900, 1, 1), as_of_date, compare_previous=False
+        )
+        retained_earnings = accumulated.net_income
         equity = [
             BalanceSheetItem('share_capital', 'הון מניות', balances.get('share_capital', 0), prev_balances.get('share_capital', 0)),
             BalanceSheetItem('retained_earnings', 'עודפים', retained_earnings, prev_balances.get('retained_earnings', 0)),
@@ -944,6 +949,136 @@ class FinancialReportsService:
     
     # ============= Helper Methods =============
     
+    @staticmethod
+    def _net_of(row, net_attr: str, gross_attr: str, tax_attr: str) -> float:
+        """סכום נטו (ללא מע"מ) משורת ledger, עם נפילה חיננית ל-ברוטו−מע"מ."""
+        net = getattr(row, net_attr, None)
+        if net is not None:
+            return float(net)
+        gross = float(getattr(row, gross_attr, 0) or 0)
+        tax = float(getattr(row, tax_attr, 0) or 0)
+        return gross - tax
+
+    @staticmethod
+    def _doc_date(row):
+        return (getattr(row, "issue_date", None)
+                or getattr(row, "expense_date", None)
+                or getattr(row, "due_date", None))
+
+    def _ledger_revenue_items(
+        self, organization_id, start_date, end_date, prev_start, prev_end, compare_previous
+    ) -> List[ProfitLossItem]:
+        """הכנסה נטו (subtotal) מחשבוניות ב-ledger, מקובצת לפי קטגוריה."""
+        from ..models import Invoice
+        rows = self.db.query(Invoice).filter(
+            Invoice.organization_id == organization_id).all()
+
+        def _bucket(lo, hi):
+            sums: Dict[str, float] = {}
+            for r in rows:
+                d = self._doc_date(r)
+                if d is None or not (lo <= d <= hi):
+                    continue
+                cat = "sales"
+                sums[cat] = sums.get(cat, 0.0) + self._net_of(r, "subtotal", "total", "tax")
+            return sums
+
+        current = _bucket(start_date, end_date)
+        previous = _bucket(prev_start, prev_end) if compare_previous else {}
+        self._merge_sums(current, self._manual_sums(
+            organization_id, start_date, end_date, TransactionType.INCOME))
+        if compare_previous:
+            self._merge_sums(previous, self._manual_sums(
+                organization_id, prev_start, prev_end, TransactionType.INCOME))
+        return self._items_from_sums(current, previous)
+
+    def _ledger_expense_items(
+        self, organization_id, start_date, end_date, prev_start, prev_end, compare_previous
+    ) -> List[ProfitLossItem]:
+        """הוצאה נטו מספקים (Bill.subtotal) והוצאות (Expense.amount), לפי קטגוריה.
+        המגניטודה חיובית — מסמכים שמורים לעיתים בסימן שלילי (כסף יוצא)."""
+        from ..models import Bill, Expense
+        bills = self.db.query(Bill).filter(Bill.organization_id == organization_id).all()
+        exps = self.db.query(Expense).filter(Expense.organization_id == organization_id).all()
+
+        def _bucket(lo, hi):
+            sums: Dict[str, float] = {}
+            for r in bills:
+                d = self._doc_date(r)
+                if d is None or not (lo <= d <= hi):
+                    continue
+                sums["other"] = sums.get("other", 0.0) + abs(self._net_of(r, "subtotal", "total", "tax"))
+            for r in exps:
+                d = self._doc_date(r)
+                if d is None or not (lo <= d <= hi):
+                    continue
+                cat = (getattr(r, "category", None) or "other")
+                sums[cat] = sums.get(cat, 0.0) + abs(self._net_of(r, "amount", "total", "vat_amount"))
+            return sums
+
+        current = _bucket(start_date, end_date)
+        previous = _bucket(prev_start, prev_end) if compare_previous else {}
+        self._merge_sums(current, self._manual_sums(
+            organization_id, start_date, end_date, TransactionType.EXPENSE))
+        if compare_previous:
+            self._merge_sums(previous, self._manual_sums(
+                organization_id, prev_start, prev_end, TransactionType.EXPENSE))
+        return self._items_from_sums(current, previous)
+
+    @staticmethod
+    def _merge_sums(into: Dict[str, float], extra: Dict[str, float]) -> None:
+        for k, v in extra.items():
+            into[k] = into.get(k, 0.0) + v
+
+    def _ledger_external_ids(self, organization_id) -> set:
+        """כל ה-external_id של מסמכי ledger בארגון — לזיהוי הד-מסמך ב-Transaction."""
+        from ..models import Invoice, Bill, Expense
+        ids = set()
+        for model in (Invoice, Bill, Expense):
+            for (ext,) in self.db.query(model.external_id).filter(
+                model.organization_id == organization_id).all():
+                if ext:
+                    ids.add(str(ext))
+        return ids
+
+    def _manual_sums(self, organization_id, lo, hi, tx_type) -> Dict[str, float]:
+        """סכומי תנועות ידניות (Transaction שאינו הד-מסמך של ledger) לפי קטגוריה.
+        מונע ספירה כפולה: מסמך שכבר נספר ב-Invoice/Bill/Expense מדולג."""
+        ledger_ids = self._ledger_external_ids(organization_id)
+        rows = self.db.query(Transaction).filter(
+            Transaction.organization_id == organization_id,
+            Transaction.transaction_type == tx_type,
+            Transaction.transaction_date >= lo,
+            Transaction.transaction_date <= hi,
+        ).all()
+        sums: Dict[str, float] = {}
+        for t in rows:
+            ext = str(t.external_id) if t.external_id else ""
+            if ext and ext in ledger_ids:
+                continue  # הד-מסמך — כבר נספר ב-ledger
+            cat = t.category or "other"
+            sums[cat] = sums.get(cat, 0.0) + abs(float(t.amount or 0))
+        return sums
+
+    def _items_from_sums(
+        self, current_sums: Dict[str, float], previous_sums: Dict[str, float]
+    ) -> List[ProfitLossItem]:
+        """בניית ProfitLossItem מרשימות סכומים-לפי-קטגוריה (משותף ל-revenue/expense)."""
+        items: List[ProfitLossItem] = []
+        for cat in set(current_sums) | set(previous_sums):
+            curr = current_sums.get(cat, 0.0)
+            prev = previous_sums.get(cat, 0.0)
+            change = ((curr - prev) / prev * 100) if prev else 0
+            items.append(ProfitLossItem(
+                category=cat,
+                category_hebrew=self.CATEGORY_HEBREW.get(cat, cat),
+                amount=curr,
+                previous_amount=prev,
+                change_percentage=change,
+            ))
+        items.sort(key=lambda x: x.amount, reverse=True)
+        return items
+
     def _categorize_transactions(
         self,
         current: List[Transaction],

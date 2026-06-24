@@ -241,12 +241,15 @@ def compute_vat_position(
     bills = db.query(Bill).filter(Bill.organization_id == organization_id).all()
     exps = db.query(Expense).filter(Expense.organization_id == organization_id).all()
 
-    output_vat = sum(float(r.tax or 0) for r in inv
+    # abs(): מסמכים נשמרים לעיתים בסימן שלילי (מוסכמת 'כסף יוצא', בעיקר bills).
+    # מע"מ עסקאות/תשומות הם תמיד גדלים חיוביים. מיישר קו עם tax_service.generate_vat_report
+    # כך ששני המנועים מסכימים (מקור אמת אחד) — אומת מול cfo.db (org 2).
+    output_vat = sum(abs(float(r.tax or 0)) for r in inv
                      if _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
     input_vat = (
-        sum(float(r.tax or 0) for r in bills
+        sum(abs(float(r.tax or 0)) for r in bills
             if _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
-        + sum(float(getattr(r, "vat_amount", 0) or 0) for r in exps
+        + sum(abs(float(getattr(r, "vat_amount", 0) or 0)) for r in exps
               if _in_period(getattr(r, "expense_date", None)))
     )
     net = round(output_vat - input_vat, 2)

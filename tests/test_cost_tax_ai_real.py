@@ -65,17 +65,41 @@ def test_cogs_real(client, books):
 # ---------- VAT (מע"מ) ----------
 
 def test_vat_report_real(client, books):
+    """דוח המע"מ נגזר משדות מע"מ מפורשים במסמכי ה-ledger (לא אומדן 18% מ-Transaction).
+
+    מקור אמת אחד עם compute_vat_position. זורעים חשבונית והוצאה עם מע"מ מפורש
+    לחודש הנוכחי ומאמתים את הסכומים מהשדות האמיתיים.
+    """
+    from cfo.database import SessionLocal
+    from cfo.models import Contact, ContactType, Invoice, InvoiceStatus, Expense
+
     today = date.today()
+    org_id = books["org_id"]
+    db = SessionLocal()
+    try:
+        cust = Contact(organization_id=org_id, contact_type=ContactType.CUSTOMER, name="לקוח מעמ")
+        db.add(cust); db.flush()
+        # חשבונית: נטו 200000 + מע"מ 36000
+        db.add(Invoice(organization_id=org_id, contact_id=cust.id, invoice_number="VAT-1",
+                       issue_date=today, due_date=today,
+                       subtotal=200000, tax=36000, total=236000,
+                       paid_amount=0, balance=236000, status=InvoiceStatus.SENT))
+        # הוצאה: נטו 100000 + מע"מ 18000
+        db.add(Expense(organization_id=org_id, supplier_name="ספק מעמ",
+                       amount=100000, vat_amount=18000, total=118000,
+                       expense_date=today, status="filed"))
+        db.commit()
+    finally:
+        db.close()
+
     r = client.post("/api/financial/tax/vat-report", json={
         "period_start": today.replace(day=1).isoformat(),
         "period_end": today.isoformat(),
     }, headers=books["headers"])
     assert r.status_code == 200, r.text
     data = r.json()["data"]
-    # מע"מ עסקאות = הכנסות 200000 * 0.18
-    assert round(data["output_vat"]) == round(200000 * 0.18)
-    # מע"מ תשומות = הוצאות 100000 * 0.18
-    assert round(data["total_input_vat"]) == round(100000 * 0.18)
+    assert round(data["output_vat"]) == 36000      # מע"מ עסקאות אמיתי מהחשבונית
+    assert round(data["total_input_vat"]) == 18000  # מע"מ תשומות אמיתי מההוצאה
 
 
 def test_tax_routes_no_crash(client, books):
