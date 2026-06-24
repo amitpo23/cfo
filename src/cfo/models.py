@@ -662,6 +662,7 @@ class Expense(Base):
     status = Column(String(20), default="pending")     # pending, filed, error
     sumit_expense_id = Column(String(255), nullable=True)
     filing_error = Column(Text, nullable=True)
+    classifier_feedback = Column(JSON, nullable=True)  # learning feedback: [{"timestamp": "...", "old_category": "...", "new_category": "...", "supplier": "...", "feedback_text": "..."}]
     raw_data = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

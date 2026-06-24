@@ -248,6 +248,61 @@ def get_opening_balances(db, organization_id: int) -> dict[str, Any]:
 # ---------------------------------------------------------------------- #
 # Public API
 # ---------------------------------------------------------------------- #
+def add_manual_entry(db, organization_id: int, *, entry_date: date, memo: str,
+                     lines: list[dict]) -> "object":
+    """פקודת יומן ידנית (התאמת רו"ח). חייבת להיות מאוזנת (Σחובה==Σזכות, >0).
+
+    נשמרת ב-JournalEntry(source='manual') ונכללת אוטומטית ב-build_journal/trial_balance.
+    """
+    norm = []
+    total_d = total_c = 0.0
+    for ln in lines or []:
+        d = _f(ln.get("debit"))
+        c = _f(ln.get("credit"))
+        total_d += d
+        total_c += c
+        norm.append({
+            "account": str(ln.get("account") or "").strip(),
+            "debit": round(d, 2),
+            "credit": round(c, 2),
+            "description": ln.get("description", ""),
+        })
+    if len(norm) < 2:
+        raise ValueError("פקודת יומן דורשת לפחות שתי שורות")
+    if round(total_d, 2) <= 0:
+        raise ValueError("פקודת יומן ריקה (סכום אפס)")
+    if abs(round(total_d - total_c, 2)) >= 0.01:
+        raise ValueError(f"פקודת יומן אינה מאוזנת: חובה {total_d:.2f} ≠ זכות {total_c:.2f}")
+    if any(not ln["account"] for ln in norm):
+        raise ValueError("כל שורה חייבת קוד חשבון")
+
+    from ..models import JournalEntry
+    row = JournalEntry(
+        organization_id=organization_id, source="manual",
+        entry_date=entry_date, memo=memo or "פקודת יומן ידנית", lines=norm,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def _manual_entries(db, organization_id: int) -> list[Entry]:
+    """פקודות יומן ידניות שמורות → Entry objects (מאוזנות בבנייה)."""
+    from ..models import JournalEntry
+    out: list[Entry] = []
+    rows = db.query(JournalEntry).filter(
+        JournalEntry.organization_id == organization_id,
+        JournalEntry.source == "manual",
+    ).all()
+    for r in rows:
+        lines = [Line(account=str(l.get("account")), debit=_f(l.get("debit")),
+                      credit=_f(l.get("credit")), description=l.get("description", ""))
+                 for l in (r.lines or [])]
+        out.append(Entry(entry_date=r.entry_date, memo=r.memo or "פקודת יומן ידנית",
+                          source_ref=f"manual:{r.id}", lines=lines))
+    return out
+
+
 def build_journal(db, organization_id: int, *, start: Optional[date] = None,
                   end: Optional[date] = None, include_opening: bool = True) -> list[Entry]:
     """Derive the full balanced journal for the period from synced documents.
@@ -298,6 +353,11 @@ def build_journal(db, organization_id: int, *, start: Optional[date] = None,
             continue
         e = post_payment(pay)
         if e:
+            entries.append(e)
+
+    # פקודות יומן ידניות (התאמות רו"ח)
+    for e in _manual_entries(db, organization_id):
+        if _in_period(e.entry_date, start, end):
             entries.append(e)
 
     entries.sort(key=lambda e: (e.entry_date or date.max))

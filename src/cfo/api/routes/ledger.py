@@ -47,6 +47,31 @@ def get_journal(
     }
 
 
+@router.post("/ledger/entries")
+def post_manual_entry(
+    payload: dict = Body(...),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """פקודת יומן ידנית (התאמת רו"ח). גוף: {entry_date, memo, lines:[{account,debit,credit,description}]}."""
+    from fastapi import HTTPException
+    raw_date = payload.get("entry_date")
+    try:
+        entry_date = date.fromisoformat(raw_date) if raw_date else date.today()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="entry_date לא תקין (YYYY-MM-DD)")
+    try:
+        row = ledger_service.add_manual_entry(
+            db, org_id, entry_date=entry_date,
+            memo=payload.get("memo", ""), lines=payload.get("lines", []),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    db.commit()
+    return {"id": row.id, "status": "created", "derived": True,
+            "disclaimer": ledger_service.DISCLAIMER}
+
+
 @router.get("/ledger/trial-balance")
 def get_trial_balance(
     year: Optional[int] = Query(None),

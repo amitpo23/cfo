@@ -118,3 +118,26 @@ async def scheduled_enrich_expenses(db: Session = Depends(get_db_session)):
             logger.warning("Expense enrichment failed for org %s: %s", org_id, exc)
             results.append({"organization_id": org_id, "error": str(exc)})
     return {"enriched_orgs": len(results), "results": results}
+
+
+@router.get("/cron/process-ocr", dependencies=[Depends(_verify_cron_secret)])
+async def scheduled_process_ocr(db: Session = Depends(get_db_session)):
+    """Automatic OCR processing of pending SUMIT draft expenses.
+    
+    Runs for all organizations with active SUMIT, processing up to 50 drafts per org.
+    Only files expenses with confidence >= 0.7 to minimize errors.
+    """
+    from ...services.expense_ocr_scheduler import ExpenseOCRScheduler
+
+    scheduler = ExpenseOCRScheduler(db)
+    try:
+        result = await scheduler.run_all_organizations(limit=50, auto_file=True)
+        logger.info(
+            "OCR scheduler: processed %s orgs, filed %s total",
+            result.get("orgs_processed", 0),
+            result.get("total_filed", 0),
+        )
+        return result
+    except Exception as exc:
+        logger.error("OCR scheduler failed: %s", exc)
+        return {"error": str(exc)}
