@@ -7,6 +7,26 @@
 
 ---
 
+## v1.3 — פאזה 4: ייצוב routes (date_trunc על SQLite) (2026-06-24)
+
+**סטטוס:** ✅ ליבה הושלמה. שער: `pytest` 289 passed; `audit_routes.py` 47→40 כשלים (121 OK, היה 116).
+
+### מה תוקן
+- **`forecasting_service`** — `_get_monthly_revenue`/`_get_monthly_expenses` השתמשו ב-`func.date_trunc('month', ...)` שאינו קיים ב-SQLite → `OperationalError` שהפיל את כל `/api/cashflow/forecast/*`. הוחלף ב-`_monthly_totals` (אגרגציה ב-Python, ניטרלית-dialect), המחזיר `date` כ-datetime (ראשון לחודש) לשמירת חוזה ה-route (`r.date.strftime`).
+- אומת: 5 routes של `/api/cashflow/forecast/*` עברו מקריסה ל-200.
+- NaN/חלוקה-באפס שהאודיט סימן (`mape`, `r2`, `revenue_growth`) — נמצאו **כבר מוגנים** בקוד (`np.all(actual != 0)`, `ss_tot != 0`, `revenue_values[0] > 0`).
+
+### מצב audit שנותר (לא קריסות)
+- 4 EXC נותרו, כולם `/api/sync/sumit/*` — `ValueError: SUMIT API key not configured` (צפוי בסביבת audit ללא מפתח; בפרודקשן מוגדר).
+- ~36 × 400 — Open Finance/CRM/communications/payments דורשים credentials/params (התנהגות תקינה, לא 5xx).
+
+### נותר בפאזה 4 (ongoing)
+- המרת ValueError של SUMIT ל-400 נקי (polish).
+- הרחבת כיסוי בדיקות ל-19 ה-route modules ללא בדיקות (נוספו בדיקות ממוקדות; כיסוי מלא = מאמץ נמשך).
+- בדיקות: `tests/test_forecasting_sqlite.py`.
+
+---
+
 ## v1.2 — פאזה 2: החלפת נתוני Mock שדולפים למשתמש (2026-06-24)
 
 **סטטוס:** ✅ הושלם. שער: `pytest` 288 passed / 0 failed (+16 בדיקות מ-baseline 272).

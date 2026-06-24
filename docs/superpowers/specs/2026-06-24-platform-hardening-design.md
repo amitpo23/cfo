@@ -67,7 +67,7 @@
 - ייצוא SHAAM פונקציונלי.
 - **שער:** בדיקות מס עם ערכים צפויים + `audit_routes.py`.
 
-### פאזה 4 — ייצוב routes ובדיקות (תלות: אין — עצמאי)
+### פאזה 4 — ייצוב routes ובדיקות (תלות: אין — עצמאי) — ✅ ליבה הושלמה (v1.3, ראה CHANGELOG)
 - `date_trunc` על SQLite (`forecasting_service.py:678,687,701,710`) → dialect-guard/fallback.
 - NaN ב-MAPE (`:462`) + חלוקה באפס (`:370,375`).
 - בדיקות ל-19 routes ללא כיסוי.
