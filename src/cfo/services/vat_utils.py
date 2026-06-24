@@ -36,6 +36,33 @@ def _q(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+# ---- סינון לפי סטטוס מסמך ----
+# מסמכים שאינם סופיים אינם נספרים כהכנסה/הוצאה/מע"מ: חשבונית/ספק טיוטה או מבוטל,
+# והוצאה שטרם תויקה (pending). מונע ניפוח דוחות ודיווח מע"מ ממסמך מבוטל/טיוטה.
+_EXCLUDED_INVOICE_STATUSES = {"draft", "void", "cancelled"}
+_EXCLUDED_BILL_STATUSES = {"draft", "void"}
+_INCLUDED_EXPENSE_STATUSES = {"filed"}
+
+
+def _status_str(status) -> str:
+    return (getattr(status, "value", status) or "").lower() if status is not None else ""
+
+
+def invoice_counts(status) -> bool:
+    """האם חשבונית נספרת (לא טיוטה/מבוטלת)."""
+    return _status_str(status) not in _EXCLUDED_INVOICE_STATUSES
+
+
+def bill_counts(status) -> bool:
+    """האם מסמך ספק נספר (לא טיוטה/מבוטל)."""
+    return _status_str(status) not in _EXCLUDED_BILL_STATUSES
+
+
+def expense_counts(status) -> bool:
+    """האם הוצאה נספרת (רק filed; pending=טיוטה לא מתויקת)."""
+    return _status_str(status) in _INCLUDED_EXPENSE_STATUSES
+
+
 def split_inclusive(gross, doc_date: date | None) -> tuple[Decimal, Decimal]:
     """Split a VAT-inclusive gross into (subtotal, vat). Sign-preserving.
 

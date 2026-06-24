@@ -7,6 +7,25 @@
 
 ---
 
+## v1.6 — פאזה 1 (הקשחה): סינון מסמכים לפי status (2026-06-24)
+
+**סטטוס:** ✅ הושלם. שער: `pytest` 292 passed; אומת על cfo.db.
+
+### באג סמוי שנתפס (בעקבות סקירת advisor + אימות נתונים)
+מסמכים שאינם סופיים נספרו כהכנסה/הוצאה/מע"מ: חשבונית `cancelled/void/draft`, ספק `void/draft`, והוצאה `pending` (טיוטת קבלה לא מתויקת — ראה memory על 150 הטיוטות). מסמך מבוטל ניפח דוחות ודיווח מע"מ.
+
+### תיקון
+- `vat_utils.py`: predicates משותפים — `invoice_counts`, `bill_counts`, `expense_counts` (חשבונית: לא draft/void/cancelled; ספק: לא draft/void; הוצאה: רק filed).
+- יושמו ב-**5 המקומות** (מקור אמת אחד): `financial_reports_service` (revenue/expense/cashflow), `tax_service._get_vat_transactions`, `financial_synthesis.compute_vat_position`.
+- בדיקות: `tests/test_status_filtering.py` (P&L + שני מנועי מע"מ מחריגים מבוטל/pending).
+
+### אימות נתונים אמיתיים
+- org2 revenue 185k נכון: 1.64M מהמסמכים הם **2025** (מחוץ לתקופת 2026); אין חשבוניות מבוטלות.
+- P&L ללא שינוי אחרי הסינון (ה-pending היו בסכום 0). שני מנועי המע"מ עדיין מסכימים.
+- **balance sheet `is_balanced=False`** על נתונים אמיתיים — ישר ומכוון: הדוח נושא `derived:true`+disclaimer. איזון מלא (יתרות פתיחה/דו-צדדי) → פאזה 6.
+
+---
+
 ## v1.5 — פאזה 5: היגיינת repo וסודות (2026-06-24)
 
 **סטטוס:** ✅ הושלם (אימות; הסיכון הקריטי היה אזעקת שווא).

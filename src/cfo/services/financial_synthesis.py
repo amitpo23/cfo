@@ -227,6 +227,7 @@ def compute_vat_position(
     omit both for the all-time running position used by the synthesis dashboard.
     """
     from ..models import Invoice, Bill, Expense
+    from .vat_utils import invoice_counts, bill_counts, expense_counts
 
     def _in_period(d) -> bool:
         if d is None:
@@ -245,12 +246,15 @@ def compute_vat_position(
     # מע"מ עסקאות/תשומות הם תמיד גדלים חיוביים. מיישר קו עם tax_service.generate_vat_report
     # כך ששני המנועים מסכימים (מקור אמת אחד) — אומת מול cfo.db (org 2).
     output_vat = sum(abs(float(r.tax or 0)) for r in inv
-                     if _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
+                     if invoice_counts(r.status)
+                     and _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
     input_vat = (
         sum(abs(float(r.tax or 0)) for r in bills
-            if _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
+            if bill_counts(r.status)
+            and _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
         + sum(abs(float(getattr(r, "vat_amount", 0) or 0)) for r in exps
-              if _in_period(getattr(r, "expense_date", None)))
+              if expense_counts(getattr(r, "status", None))
+              and _in_period(getattr(r, "expense_date", None)))
     )
     net = round(output_vat - input_vat, 2)
     return {

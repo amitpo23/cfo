@@ -17,6 +17,7 @@ from ..models import (
     Transaction, Account, Organization, TransactionType, AccountType
 )
 from ..config import settings
+from .vat_utils import invoice_counts, bill_counts, expense_counts
 
 logger = logging.getLogger(__name__)
 
@@ -959,7 +960,7 @@ class FinancialReportsService:
             sums: Dict[str, float] = {}
             for r in rows:
                 d = self._doc_date(r)
-                if d is None or not (lo <= d <= hi):
+                if d is None or not (lo <= d <= hi) or not invoice_counts(r.status):
                     continue
                 cat = "sales"
                 sums[cat] = sums.get(cat, 0.0) + self._net_of(r, "subtotal", "total", "tax")
@@ -987,12 +988,12 @@ class FinancialReportsService:
             sums: Dict[str, float] = {}
             for r in bills:
                 d = self._doc_date(r)
-                if d is None or not (lo <= d <= hi):
+                if d is None or not (lo <= d <= hi) or not bill_counts(r.status):
                     continue
                 sums["other"] = sums.get("other", 0.0) + abs(self._net_of(r, "subtotal", "total", "tax"))
             for r in exps:
                 d = self._doc_date(r)
-                if d is None or not (lo <= d <= hi):
+                if d is None or not (lo <= d <= hi) or not expense_counts(getattr(r, "status", None)):
                     continue
                 cat = (getattr(r, "category", None) or "other")
                 sums[cat] = sums.get(cat, 0.0) + abs(self._net_of(r, "amount", "total", "vat_amount"))
@@ -1021,7 +1022,7 @@ class FinancialReportsService:
 
         for r in self.db.query(Invoice).filter(Invoice.organization_id == organization_id).all():
             d = self._doc_date(r)
-            if not _ok(d):
+            if not _ok(d) or not invoice_counts(r.status):
                 continue
             amt = abs(float(r.total or 0))
             monthly_income[d.strftime('%Y-%m')] = monthly_income.get(d.strftime('%Y-%m'), 0) + amt
@@ -1029,7 +1030,7 @@ class FinancialReportsService:
 
         for r in self.db.query(Bill).filter(Bill.organization_id == organization_id).all():
             d = self._doc_date(r)
-            if not _ok(d):
+            if not _ok(d) or not bill_counts(r.status):
                 continue
             amt = abs(float(r.total or 0))
             monthly_expense[d.strftime('%Y-%m')] = monthly_expense.get(d.strftime('%Y-%m'), 0) + amt
@@ -1037,7 +1038,7 @@ class FinancialReportsService:
 
         for r in self.db.query(Expense).filter(Expense.organization_id == organization_id).all():
             d = self._doc_date(r)
-            if not _ok(d):
+            if not _ok(d) or not expense_counts(getattr(r, "status", None)):
                 continue
             amt = abs(float(r.total or 0))
             monthly_expense[d.strftime('%Y-%m')] = monthly_expense.get(d.strftime('%Y-%m'), 0) + amt

@@ -611,6 +611,7 @@ class TaxComplianceService:
         סייג: ללא דגל פטור/אפס מפורש מהמקור, מסמך ללא מע"מ מסווג 'פטור' (לא 'אפס').
         """
         from ..models import Invoice, Bill, Expense
+        from .vat_utils import invoice_counts, bill_counts, expense_counts
 
         def _in_period(d) -> bool:
             return d is not None and start_date <= d <= end_date
@@ -626,7 +627,7 @@ class TaxComplianceService:
 
         for r in self.db.query(Invoice).filter(Invoice.organization_id == org).all():
             d = getattr(r, "issue_date", None) or getattr(r, "due_date", None)
-            if not _in_period(d):
+            if not _in_period(d) or not invoice_counts(r.status):
                 continue
             vat = float(r.tax or 0)
             transactions.append({
@@ -639,7 +640,7 @@ class TaxComplianceService:
 
         for r in self.db.query(Bill).filter(Bill.organization_id == org).all():
             d = getattr(r, "issue_date", None) or getattr(r, "due_date", None)
-            if not _in_period(d):
+            if not _in_period(d) or not bill_counts(r.status):
                 continue
             vat = float(r.tax or 0)
             transactions.append({
@@ -653,7 +654,7 @@ class TaxComplianceService:
 
         for r in self.db.query(Expense).filter(Expense.organization_id == org).all():
             d = getattr(r, "expense_date", None)
-            if not _in_period(d):
+            if not _in_period(d) or not expense_counts(getattr(r, "status", None)):
                 continue
             vat = float(r.vat_amount or 0)
             transactions.append({
