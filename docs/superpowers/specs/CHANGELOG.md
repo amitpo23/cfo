@@ -7,6 +7,32 @@
 
 ---
 
+## v1.7 — פאזות 6/7/8: פקודות יומן ידניות, scheduler ל-OCR, התאמה ידנית (2026-06-24)
+
+**סטטוס:** ✅ ליבות הושלמו. שער: `pytest` 305 passed.
+
+### פאזה 6 — API פקודת יומן ידנית (ledger)
+- `ledger_service.add_manual_entry` — פקודת יומן ידנית מאוזנת (Σחובה==Σזכות, ≥2 שורות, חשבון לכל שורה); נשמרת ב-`JournalEntry(source='manual')` ונכללת אוטומטית ב-`build_journal`/`trial_balance` (פונקציה `_manual_entries`). route `POST /ledger/entries`.
+- בדיקות: `tests/test_manual_journal_entry.py` (unit + route; דחיית לא-מאוזן).
+- *הערה: commit זה נבלע ב-`b1b0d01` יחד עם פאזה 7/8 (סוכן ביצע `git add -A`).* 
+
+### פאזה 7 — קליטת מסמכים (commit b1b0d01)
+- `ExpenseOCRScheduler.run_scheduled_ocr` — הרצת OCR מתוזמנת על טיוטות SUMIT pending; כיבוד חלון 6 חודשים, סף ביטחון (auto-file רק בביטחון גבוה), backoff. route `/api/cron/process-ocr`.
+- לולאת למידה לסיווג: עמודה `Expense.classifier_feedback` (JSON) לתיעוד תיקוני סיווג (audit ל-ML עתידי).
+
+### פאזה 8 — התאמות בנק ידניות (commit b1b0d01)
+- `ManualReconciliationService` + routes `/api/reconcile-manual/*` (match/unmatch/unmatched/suggestions/feedback); הצעות מבוססות-`bank_reconciliation._score` הקיים; התאמה ידנית מאפסת dispatch ל-re-dispatch אופציונלי.
+
+### תיקון נכונות שנוסף בסקירה
+- **migration חסר**: הסוכן הוסיף עמודה `classifier_feedback` ל-models אך ללא alembic migration → היה קורס מול cfo.db האמיתי. נוסף `alembic/versions/5f6a7b8c9d0e_add_expense_classifier_feedback.py` והעמודה הוחלה על cfo.db.
+
+### נותר (פאזות 6-8)
+- פאזה 6: רישום שכר→ledger, פחת, מצב חד-צידי (עוסק פטור).
+- פאזה 7: קליטה במייל/טלפון (תשתית), חשבונית עצמית.
+- פאזה 8: כרטיסי אשראי/שיקים ייעודי.
+
+---
+
 ## v1.6 — פאזה 1 (הקשחה): סינון מסמכים לפי status (2026-06-24)
 
 **סטטוס:** ✅ הושלם. שער: `pytest` 292 passed; אומת על cfo.db.
