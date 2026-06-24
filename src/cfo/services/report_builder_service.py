@@ -9,11 +9,14 @@ from dataclasses import dataclass, asdict, field
 from enum import Enum
 import json
 import asyncio
+import logging
 from pathlib import Path
 from sqlalchemy.orm import Session
 
 from ..database import SessionLocal
 from ..config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class ReportFormat(str, Enum):
@@ -635,120 +638,107 @@ class ReportBuilderService:
         filters: List[ReportFilter],
         parameters: Optional[Dict]
     ) -> List[Dict]:
-        """ביצוע שאילתת הדוח"""
-        import random
-        
-        # בפרודקשן - שאילתה אמיתית לDB
-        # כאן - נתוני דוגמה
-        
+        """ביצוע שאילתת הדוח — מקור אמת: השירותים הפיננסיים האמיתיים (org-scoped)."""
         if template.report_type == ReportType.PROFIT_LOSS:
-            return self._generate_pl_data()
+            return self._generate_pl_data(parameters)
         elif template.report_type == ReportType.AGING_REPORT:
-            return self._generate_aging_data()
+            return self._generate_aging_data(parameters)
         elif template.report_type == ReportType.KPI_DASHBOARD:
-            return self._generate_kpi_data()
+            return self._generate_kpi_data(parameters)
         elif template.report_type == ReportType.BUDGET_VS_ACTUAL:
-            return self._generate_budget_data()
+            return self._generate_budget_data(parameters)
         else:
             return []
-    
-    def _generate_pl_data(self) -> List[Dict]:
-        """יצירת נתוני רווח והפסד"""
-        import random
-        
-        categories = [
-            ('הכנסות', 'הכנסות ממכירות', 500000, 480000),
-            ('הכנסות', 'הכנסות משירותים', 150000, 120000),
-            ('עלות המכר', 'חומרים', -180000, -160000),
-            ('עלות המכר', 'עבודה ישירה', -80000, -75000),
-            ('הוצאות תפעול', 'שכר', -120000, -115000),
-            ('הוצאות תפעול', 'שיווק', -35000, -40000),
-            ('הוצאות תפעול', 'משרד', -25000, -22000),
-            ('הוצאות מימון', 'ריבית', -8000, -10000),
+
+    @staticmethod
+    def _period_from(parameters: Optional[Dict]) -> tuple:
+        """(year, month) מהפרמטרים, עם ברירת מחדל לחודש הנוכחי."""
+        p = parameters or {}
+        today = date.today()
+        return int(p.get('year', today.year)), int(p.get('month', today.month))
+
+    def _generate_pl_data(self, parameters: Optional[Dict] = None) -> List[Dict]:
+        """נתוני רווח והפסד אמיתיים מ-FinancialReportsService (נטו, מ-ledger)."""
+        from .financial_reports_service import FinancialReportsService
+        year, month = self._period_from(parameters)
+        start = date(year, month, 1)
+        end = date(year + 1, 1, 1) - timedelta(days=1) if month == 12 else date(year, month + 1, 1) - timedelta(days=1)
+        try:
+            rep = FinancialReportsService(self.db).generate_profit_loss(
+                self.organization_id, start, end, compare_previous=True)
+        except Exception:
+            logger.exception("report_builder P&L failed for org %s", self.organization_id)
+            return []
+
+        sections = [
+            ('הכנסות', rep.revenue), ('עלות המכר', rep.cost_of_goods_sold),
+            ('הוצאות תפעול', rep.operating_expenses),
+            ('הכנסות אחרות', rep.other_income), ('הוצאות אחרות', rep.other_expenses),
         ]
-        
-        return [
-            {
-                'category': cat,
-                'subcategory': subcat,
-                'amount': amount + random.randint(-5000, 5000),
-                'budget': budget,
-                'variance': ((amount - budget) / abs(budget) * 100) if budget else 0,
-                'previous_period': amount * 0.95
-            }
-            for cat, subcat, amount, budget in categories
-        ]
-    
-    def _generate_aging_data(self) -> List[Dict]:
-        """יצירת נתוני גיול"""
-        import random
-        
-        customers = ['לקוח א', 'לקוח ב', 'לקוח ג', 'לקוח ד', 'לקוח ה']
-        
-        data = []
-        for customer in customers:
-            current = random.randint(0, 50000)
-            d31_60 = random.randint(0, 30000)
-            d61_90 = random.randint(0, 20000)
-            d91_120 = random.randint(0, 15000)
-            over_120 = random.randint(0, 10000)
-            
-            data.append({
-                'customer_name': customer,
-                'current': current,
-                'days_31_60': d31_60,
-                'days_61_90': d61_90,
-                'days_91_120': d91_120,
-                'over_120': over_120,
-                'total': current + d31_60 + d61_90 + d91_120 + over_120
-            })
-        
-        return data
-    
-    def _generate_kpi_data(self) -> List[Dict]:
-        """יצירת נתוני KPI"""
-        kpis = [
-            ('רווחיות', 'שיעור רווח גולמי', 42.5, 40, 'above_target', 'up'),
-            ('רווחיות', 'שיעור רווח נקי', 15.2, 12, 'above_target', 'up'),
-            ('נזילות', 'יחס שוטף', 1.85, 1.5, 'above_target', 'stable'),
-            ('יעילות', 'DSO', 45, 35, 'below_target', 'down'),
-            ('צמיחה', 'צמיחת הכנסות', 8.5, 10, 'below_target', 'up'),
-        ]
-        
-        return [
-            {
-                'category': cat,
-                'kpi_name': name,
-                'value': value,
-                'target': target,
-                'status': status,
-                'trend': trend
-            }
-            for cat, name, value, target, status, trend in kpis
-        ]
-    
-    def _generate_budget_data(self) -> List[Dict]:
-        """יצירת נתוני תקציב"""
-        import random
-        
-        categories = ['הכנסות', 'שכר', 'שיווק', 'תפעול', 'הנה"כ']
-        
-        return [
-            {
-                'category': cat,
-                'budget': budget,
-                'actual': budget + random.randint(-int(budget * 0.2), int(budget * 0.2)),
-                'variance': 0,
-                'variance_pct': 0
-            }
-            for cat, budget in [
-                ('הכנסות', 500000),
-                ('שכר', -150000),
-                ('שיווק', -50000),
-                ('תפעול', -80000),
-                ('הנה"כ', -30000),
-            ]
-        ]
+        rows = []
+        for section, items in sections:
+            for it in items:
+                rows.append({
+                    'category': section,
+                    'subcategory': it.category_hebrew,
+                    'amount': it.amount,
+                    'budget': it.previous_amount,
+                    'variance': it.change_percentage,
+                    'previous_period': it.previous_amount,
+                })
+        return rows
+
+    def _generate_aging_data(self, parameters: Optional[Dict] = None) -> List[Dict]:
+        """נתוני גיול חובות אמיתיים מ-AccountsReceivableService."""
+        from .ar_service import AccountsReceivableService
+        try:
+            rep = AccountsReceivableService(self.db, self.organization_id).get_aging_report()
+        except Exception:
+            logger.exception("report_builder aging failed for org %s", self.organization_id)
+            return []
+        return [{
+            'customer_name': c.customer_name,
+            'current': c.current,
+            'days_31_60': c.days_31_60,
+            'days_61_90': c.days_61_90,
+            'days_91_120': c.days_91_120,
+            'over_120': c.over_120,
+            'total': c.total_outstanding,
+        } for c in rep.customers]
+
+    def _generate_kpi_data(self, parameters: Optional[Dict] = None) -> List[Dict]:
+        """נתוני KPI אמיתיים מ-KPIService."""
+        from .kpi_service import KPIService
+        try:
+            dash = KPIService(self.db, self.organization_id).get_kpi_dashboard()
+        except Exception:
+            logger.exception("report_builder KPI failed for org %s", self.organization_id)
+            return []
+        return [{
+            'category': k.category.value if hasattr(k.category, 'value') else str(k.category),
+            'kpi_name': k.name_hebrew or k.name,
+            'value': k.value,
+            'target': k.target,
+            'status': k.status.value if hasattr(k.status, 'value') else str(k.status),
+            'trend': k.trend.value if hasattr(k.trend, 'value') else str(k.trend),
+        } for k in dash.kpis]
+
+    def _generate_budget_data(self, parameters: Optional[Dict] = None) -> List[Dict]:
+        """נתוני תקציב מול ביצוע אמיתיים מ-BudgetService."""
+        from .budget_service import BudgetService
+        year, month = self._period_from(parameters)
+        try:
+            summary = BudgetService(self.db, self.organization_id).get_budget_vs_actual(year, month)
+        except Exception:
+            logger.exception("report_builder budget failed for org %s", self.organization_id)
+            return []
+        return [{
+            'category': c.category_hebrew,
+            'budget': c.budget_amount,
+            'actual': c.actual_amount,
+            'variance': c.variance,
+            'variance_pct': c.variance_percentage,
+        } for c in summary.categories]
     
     def _generate_excel(self, filename: str, template: ReportTemplate, data: List[Dict]) -> Path:
         """יצירת קובץ Excel"""

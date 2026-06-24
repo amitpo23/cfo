@@ -123,6 +123,9 @@ class AIRecommendation:
     prerequisites: List[str]
     risks: List[str]
     priority_score: float
+    # המלצות אלו הן תבניות לדוגמה (לא נגזרו מנתוני העסק). המלצות data-derived
+    # אמיתיות יסומנו False ויוטמעו בפאזה 11 (תכנון/ייעוץ מס).
+    is_illustrative: bool = True
 
 
 class AdvancedAIService:
@@ -867,40 +870,27 @@ class AdvancedAIService:
         ]
     
     def _get_transactions(self, start_date: date, end_date: date) -> List[Dict]:
-        """שליפת עסקאות"""
-        import random
-        transactions = []
-        
-        categories = ['הכנסות', 'הוצאות משרד', 'שכר', 'שיווק', 'נסיעות']
-        
-        for i in range(50):
-            days_ago = random.randint(0, (end_date - start_date).days)
-            tx_date = end_date - timedelta(days=days_ago)
-            cat = random.choice(categories)
-            
-            base_amount = {
-                'הכנסות': 15000,
-                'הוצאות משרד': 2000,
-                'שכר': 12000,
-                'שיווק': 5000,
-                'נסיעות': 1500
-            }[cat]
-            
-            amount = base_amount + random.randint(-int(base_amount * 0.3), int(base_amount * 0.3))
-            
-            # הוספת כמה outliers
-            if random.random() > 0.95:
-                amount *= 3
-            
-            transactions.append({
-                'id': f'TX-{i + 1000}',
-                'date': tx_date.isoformat(),
-                'amount': amount,
-                'category': cat,
-                'description': f'{cat} - עסקה {i + 1}'
-            })
-        
-        return transactions
+        """שליפת עסקאות אמיתיות מה-DB (org-scoped) לזיהוי חריגות.
+
+        ללא stream מזויף: זיהוי החריגות רץ על התנועות בפועל; ללא נתונים → [].
+        """
+        rows = (
+            self.db.query(Transaction)
+            .filter(
+                Transaction.organization_id == self.organization_id,
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date <= end_date,
+            )
+            .all()
+        )
+        return [{
+            'id': f'TX-{t.id}',
+            # תאריך-בלבד (ה-downstream מנתח %Y-%m-%d; DateTime היה מוסיף T00:00:00).
+            'date': t.transaction_date.strftime('%Y-%m-%d') if t.transaction_date else None,
+            'amount': float(t.amount or 0),
+            'category': t.category or 'other',
+            'description': t.description or '',
+        } for t in rows]
     
     def _get_metric_history(self, metric: str, months: int) -> List[Dict]:
         """היסטוריית מדד"""

@@ -52,7 +52,7 @@
 6. טיפול בפטור/אפס דרך `vat_amount` מפורש.
 - **שער:** כל הבדיקות החדשות + הקיימות עוברות; `audit_routes.py` נקי בנתיבי accounting/reports/tax.
 
-### פאזה 2 — החלפת נתוני Mock שדולפים למשתמש (תלות: פאזה 1)
+### פאזה 2 — החלפת נתוני Mock שדולפים למשתמש (תלות: פאזה 1) — ✅ הושלם (v1.2, ראה CHANGELOG)
 - `report_builder_service._generate_*` (P&L/גיול/תקציב/KPI אקראיים) → חישוב אמיתי מה-ledger המתוקן.
 - `ai_analytics_service`: anomalies (stream מזויף) ו-recommendations (5 קשיחות) → חישוב מנתוני org או סימון מפורש כ-demo.
 - `budget_service` silent fallback ל-random → להסיר, להחזיר שגיאה/ריק עם לוג.

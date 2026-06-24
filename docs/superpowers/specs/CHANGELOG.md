@@ -7,11 +7,17 @@
 
 ---
 
-## v1.2 — פאזה 2 (חלקי): הסרת נתוני random מסוכנים (2026-06-24)
+## v1.2 — פאזה 2: החלפת נתוני Mock שדולפים למשתמש (2026-06-24)
 
-**סטטוס:** 🟡 בתהליך. שער: `pytest` 284 passed / 0 failed (+4 בדיקות).
+**סטטוס:** ✅ הושלם. שער: `pytest` 288 passed / 0 failed (+16 בדיקות מ-baseline 272).
 
-### מה תוקן עד כה
+### ReportBuilder + AI (השלמת הפאזה)
+- **`report_builder_service`** — `_execute_report_query` וארבעת ה-`_generate_*` נותבו לשירותים האמיתיים (org-scoped): P&L→`FinancialReportsService`, גיול→`AccountsReceivableService`, KPI→`KPIService`, תקציב→`BudgetService`. כשל → `[]` + לוג (לא random). הוסר כל `import random`.
+- **`ai_analytics_service._get_transactions`** — הוסר ה-stream המזויף (50 תנועות random); זיהוי חריגות רץ על `Transaction` אמיתי (תאריך-בלבד למניעת קריסת parsing ב-route).
+- **`ai_analytics_service.AIRecommendation`** — שדה `is_illustrative=True`: ההמלצות הקשיחות מסומנות ביושר כתבניות לדוגמה (לא data-derived). מימוש אמיתי → פאזה 11.
+- בדיקות: `test_report_builder_real.py`, `test_anomalies_real_source.py` (2), `test_ai_recommendations_flagged.py`. אומת גם דרך `test_all_financial_get_routes_no_crash`.
+
+### מה תוקן (silent random)
 - **`budget_service._get_actual_by_category`** — באג חי: השתמש ב-`Transaction.date` (שדה לא קיים) → זרק תמיד → נפל ל-`_get_sample_actuals` (random). כלומר *תקציב מול ביצוע היה 100% מזויף לכל ארגון*. תוקן ל-`transaction_date`, הוסר ה-fallback האקראי השקט (כשל → `{}` + לוג), ונמחקה `_get_sample_actuals` המתה.
 - **`financial_reports_service.generate_cash_flow_projection`** — הוסר רעש אקראי ±5%/±3%; המקור הוסט מ-`Transaction` (ריק לארגוני ledger) ל-מסמכי ledger בברוטו (תנועת מזומן בפועל). עונתיות מחושבת מהכנסות חודשיות. מתודות עזר: `_ledger_cash_aggregates`, `_seasonality_from_monthly`.
 
