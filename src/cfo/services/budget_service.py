@@ -2,6 +2,7 @@
 Budget Management Service
 שירות ניהול תקציב ובקרה תקציבית
 """
+import logging
 from datetime import datetime, date
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
@@ -12,6 +13,8 @@ from sqlalchemy import func, and_, extract
 
 from ..models import Transaction, Account, Budget
 from ..database import SessionLocal
+
+logger = logging.getLogger(__name__)
 
 
 class BudgetPeriod(str, Enum):
@@ -569,22 +572,26 @@ class BudgetService:
         start_date: date,
         end_date: date
     ) -> Dict[str, float]:
-        """שליפת ביצוע בפועל לפי קטגוריה"""
+        """שליפת ביצוע בפועל לפי קטגוריה — נתונים אמיתיים בלבד.
+
+        ללא fallback אקראי שקט: בכשל מחזיר {} ורושם לוג, כדי שלא יוצגו
+        למשתמש מספרים מזויפים כאילו הם הביצוע בפועל.
+        """
         try:
             transactions = self.db.query(Transaction).filter(
                 Transaction.organization_id == self.organization_id,
-                Transaction.date >= start_date,
-                Transaction.date < end_date
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date < end_date,
             ).all()
-            
-            actuals = {}
-            for tx in transactions:
-                category = self._categorize_transaction(tx)
-                actuals[category] = actuals.get(category, 0) + float(tx.amount)
-            
-            return actuals
         except Exception:
-            return self._get_sample_actuals()
+            logger.exception("budget actuals query failed for org %s", self.organization_id)
+            return {}
+
+        actuals: Dict[str, float] = {}
+        for tx in transactions:
+            category = self._categorize_transaction(tx)
+            actuals[category] = actuals.get(category, 0) + float(tx.amount)
+        return actuals
     
     def _categorize_transaction(self, tx: Transaction) -> str:
         """קטגוריזציה של עסקה"""
@@ -627,12 +634,6 @@ class BudgetService:
             'professional': 15000,
             'other_expense': 20000
         }
-    
-    def _get_sample_actuals(self) -> Dict[str, float]:
-        """נתוני דוגמה"""
-        import random
-        base = self._get_default_budget()
-        return {k: v * random.uniform(0.7, 1.3) for k, v in base.items()}
     
     def _generate_alert_message(self, cat: BudgetCategory) -> str:
         """יצירת הודעת התראה"""

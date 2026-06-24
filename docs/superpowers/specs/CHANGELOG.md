@@ -7,6 +7,23 @@
 
 ---
 
+## v1.2 — פאזה 2 (חלקי): הסרת נתוני random מסוכנים (2026-06-24)
+
+**סטטוס:** 🟡 בתהליך. שער: `pytest` 284 passed / 0 failed (+4 בדיקות).
+
+### מה תוקן עד כה
+- **`budget_service._get_actual_by_category`** — באג חי: השתמש ב-`Transaction.date` (שדה לא קיים) → זרק תמיד → נפל ל-`_get_sample_actuals` (random). כלומר *תקציב מול ביצוע היה 100% מזויף לכל ארגון*. תוקן ל-`transaction_date`, הוסר ה-fallback האקראי השקט (כשל → `{}` + לוג), ונמחקה `_get_sample_actuals` המתה.
+- **`financial_reports_service.generate_cash_flow_projection`** — הוסר רעש אקראי ±5%/±3%; המקור הוסט מ-`Transaction` (ריק לארגוני ledger) ל-מסמכי ledger בברוטו (תנועת מזומן בפועל). עונתיות מחושבת מהכנסות חודשיות. מתודות עזר: `_ledger_cash_aggregates`, `_seasonality_from_monthly`.
+
+### בדיקות חדשות
+- `tests/test_budget_actuals_real.py` (2), `tests/test_cashflow_ledger_sourced.py` (2).
+
+### נותר בפאזה 2
+- `report_builder_service._generate_*` (P&L/גיול/תקציב/KPI אקראיים) → ניתוב לשירותים האמיתיים.
+- `ai_analytics_service`: anomalies (stream מזויף) + recommendations (5 קשיחות) → חישוב אמיתי או סימון מפורש כ-demo.
+
+---
+
 ## v1.1 — פאזה 1: תיקון שורש נכונות המע"מ והחשבונאות (2026-06-24)
 
 **סטטוס:** ✅ הושלם. שער: `pytest` 280 passed / 0 failed (baseline 272 → +8 בדיקות).

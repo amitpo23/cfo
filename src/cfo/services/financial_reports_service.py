@@ -436,27 +436,15 @@ class FinancialReportsService:
         end_date = date.today()
         start_date = end_date - timedelta(days=180)
         
-        transactions = self.db.query(Transaction).filter(
-            Transaction.organization_id == organization_id,
-            Transaction.transaction_date >= start_date,
-            Transaction.transaction_date <= end_date
-        ).all()
-        
-        # חישוב ממוצעים היסטוריים
-        income_txs = [t for t in transactions if t.transaction_type == TransactionType.INCOME]
-        expense_txs = [t for t in transactions if t.transaction_type == TransactionType.EXPENSE]
-        
-        # קיבוץ לפי חודש
-        monthly_income = self._group_by_month(income_txs)
-        monthly_expense = self._group_by_month(expense_txs)
-        
+        # מקור: מסמכי ה-ledger בסכומי ברוטו (total) — תזרים עוסק בתנועת מזומן
+        # בפועל, הכוללת מע"מ. (P&L לעומת זאת משתמש בנטו.)
+        (monthly_income, monthly_expense,
+         income_by_category, expense_by_category) = self._ledger_cash_aggregates(
+            organization_id, start_date, end_date)
+
         # ממוצעים
         avg_income = sum(monthly_income.values()) / max(len(monthly_income), 1)
         avg_expense = sum(monthly_expense.values()) / max(len(monthly_expense), 1)
-        
-        # פירוט לפי קטגוריה
-        income_by_category = self._sum_by_category(income_txs)
-        expense_by_category = self._sum_by_category(expense_txs)
         
         # נרמול לחודש
         num_months = max(len(monthly_income), 1)
@@ -477,8 +465,8 @@ class FinancialReportsService:
         min_balance = current_balance
         max_balance = current_balance
         
-        # גורמי עונתיות
-        seasonality = self._calculate_seasonality(transactions)
+        # גורמי עונתיות — מחושב מהכנסות ה-ledger החודשיות
+        seasonality = self._seasonality_from_monthly(monthly_income)
         
         for i in range(months):
             proj_date = date.today() + timedelta(days=30 * (i + 1))
@@ -488,16 +476,10 @@ class FinancialReportsService:
             # התאמת עונתיות
             season_factor = seasonality.get(month_num, 1.0)
             
-            # חיזוי כניסות ויציאות
+            # חיזוי כניסות ויציאות — דטרמיניסטי, ללא רעש אקראי מלאכותי.
             projected_inflows = avg_income * season_factor
             projected_outflows = avg_expense
-            
-            # הוספת אי-ודאות קלה (±5%)
-            import random
-            random.seed(i)  # לשחזוריות
-            projected_inflows *= (1 + random.uniform(-0.05, 0.05))
-            projected_outflows *= (1 + random.uniform(-0.03, 0.03))
-            
+
             net_flow = projected_inflows - projected_outflows
             closing = current_balance + net_flow
             
@@ -1024,6 +1006,59 @@ class FinancialReportsService:
             self._merge_sums(previous, self._manual_sums(
                 organization_id, prev_start, prev_end, TransactionType.EXPENSE))
         return self._items_from_sums(current, previous)
+
+    def _ledger_cash_aggregates(self, organization_id, start_date, end_date):
+        """אגרגציות תזרים ממסמכי ledger בברוטו (total) — תנועת מזומן בפועל.
+        מחזיר: (monthly_income, monthly_expense, income_by_cat, expense_by_cat)."""
+        from ..models import Invoice, Bill, Expense
+        monthly_income: Dict[str, float] = {}
+        monthly_expense: Dict[str, float] = {}
+        income_by_cat: Dict[str, float] = {}
+        expense_by_cat: Dict[str, float] = {}
+
+        def _ok(d):
+            return d is not None and start_date <= d <= end_date
+
+        for r in self.db.query(Invoice).filter(Invoice.organization_id == organization_id).all():
+            d = self._doc_date(r)
+            if not _ok(d):
+                continue
+            amt = abs(float(r.total or 0))
+            monthly_income[d.strftime('%Y-%m')] = monthly_income.get(d.strftime('%Y-%m'), 0) + amt
+            income_by_cat['sales'] = income_by_cat.get('sales', 0) + amt
+
+        for r in self.db.query(Bill).filter(Bill.organization_id == organization_id).all():
+            d = self._doc_date(r)
+            if not _ok(d):
+                continue
+            amt = abs(float(r.total or 0))
+            monthly_expense[d.strftime('%Y-%m')] = monthly_expense.get(d.strftime('%Y-%m'), 0) + amt
+            expense_by_cat['other'] = expense_by_cat.get('other', 0) + amt
+
+        for r in self.db.query(Expense).filter(Expense.organization_id == organization_id).all():
+            d = self._doc_date(r)
+            if not _ok(d):
+                continue
+            amt = abs(float(r.total or 0))
+            monthly_expense[d.strftime('%Y-%m')] = monthly_expense.get(d.strftime('%Y-%m'), 0) + amt
+            cat = getattr(r, 'category', None) or 'other'
+            expense_by_cat[cat] = expense_by_cat.get(cat, 0) + amt
+
+        return monthly_income, monthly_expense, income_by_cat, expense_by_cat
+
+    @staticmethod
+    def _seasonality_from_monthly(monthly_income: Dict[str, float]) -> Dict[int, float]:
+        """גורם עונתיות לכל מספר-חודש מתוך הכנסות חודשיות (ממוצע חודש / ממוצע כללי)."""
+        by_month_num: Dict[int, List[float]] = {}
+        for key, val in monthly_income.items():
+            mn = int(key.split('-')[1])
+            by_month_num.setdefault(mn, []).append(val)
+        all_vals = [v for vals in by_month_num.values() for v in vals]
+        overall = (sum(all_vals) / len(all_vals)) if all_vals else 1.0
+        return {
+            mn: ((sum(vals) / len(vals)) / overall if overall else 1.0)
+            for mn, vals in by_month_num.items()
+        }
 
     @staticmethod
     def _merge_sums(into: Dict[str, float], extra: Dict[str, float]) -> None:
