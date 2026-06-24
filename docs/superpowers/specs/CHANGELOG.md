@@ -7,6 +7,22 @@
 
 ---
 
+## v1.4 — פאזה 3 (חלקי): השלמת מודול המס (2026-06-24)
+
+**סטטוס:** 🟡 ליבה. שער: `pytest` 290 passed.
+
+### מה תוקן
+- **`tax_service.__init__`** — ח.פ (`company_vat_number`) נטען דינמית מ-`Organization.tax_id` במקום הקשיח `'123456789'`. נדרש לזהות נכון בייצוא SHAAM (filename/header/XML). fallback `'000000000'` רק אם חסר.
+- **`tax_service._get_annual_profit_estimate`** — חושב מ-P&L מבוסס-ledger (`FinancialReportsService`) במקום מטבלת `Transaction` (שהייתה אפס לארגוני ledger). עקבי עם פאזה 1.
+- בדיקות: `tests/test_tax_vat_number_dynamic.py`.
+
+### נותר בפאזה 3
+- מעקב תשלומי מקדמות (`_get_previous_payments` עדיין מחזיר 0) — דורש טבלת רישום תשלומים.
+- לוח שנת מס מחושב (סכומים קשיחים 15000/8000/25000).
+- ייצוא SHAAM מלא end-to-end (כעת עם ח.פ נכון; נדרש אימות מבנה מול שע"מ).
+
+---
+
 ## v1.3 — פאזה 4: ייצוב routes (date_trunc על SQLite) (2026-06-24)
 
 **סטטוס:** ✅ ליבה הושלמה. שער: `pytest` 289 passed; `audit_routes.py` 47→40 כשלים (121 OK, היה 116).

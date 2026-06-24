@@ -170,9 +170,11 @@ class TaxComplianceService:
     def __init__(self, db: Session, organization_id: int = 1):
         self.db = db
         self.organization_id = organization_id
-        
-        # הגדרות חברה
-        self.company_vat_number = '123456789'
+
+        # ח.פ נטען מה-Organization (נדרש לייצוא SHAAM תקין); fallback בלבד אם חסר.
+        from ..models import Organization
+        org = db.query(Organization).filter(Organization.id == organization_id).first()
+        self.company_vat_number = (org.tax_id if org and org.tax_id else '000000000')
         self.reporting_frequency = 'monthly'  # או bi-monthly
     
     def generate_vat_report(
@@ -666,28 +668,17 @@ class TaxComplianceService:
         return transactions
 
     def _get_annual_profit_estimate(self, year: int) -> float:
-        """הערכת רווח שנתי אמיתית: הכנסות פחות הוצאות לשנה."""
-        start = date(year, 1, 1)
-        end = date(year, 12, 31)
-        income = float(
-            self.db.query(func.coalesce(func.sum(Transaction.amount), 0))
-            .filter(
-                Transaction.organization_id == self.organization_id,
-                Transaction.transaction_type == TransactionType.INCOME,
-                Transaction.transaction_date >= start,
-                Transaction.transaction_date <= end,
-            ).scalar() or 0
+        """הערכת רווח שנתי לפני מס — מ-P&L מבוסס-ledger (עקבי עם פאזה 1).
+
+        קודם קרא מטבלת Transaction (אפס לארגוני ledger). כעת נשען על
+        FinancialReportsService שקורא מ-Invoice/Bill/Expense בנטו.
+        """
+        from .financial_reports_service import FinancialReportsService
+        pl = FinancialReportsService(self.db).generate_profit_loss(
+            self.organization_id, date(year, 1, 1), date(year, 12, 31),
+            compare_previous=False,
         )
-        expenses = float(
-            self.db.query(func.coalesce(func.sum(Transaction.amount), 0))
-            .filter(
-                Transaction.organization_id == self.organization_id,
-                Transaction.transaction_type == TransactionType.EXPENSE,
-                Transaction.transaction_date >= start,
-                Transaction.transaction_date <= end,
-            ).scalar() or 0
-        )
-        return income - expenses
+        return pl.net_income_before_tax
 
     def _get_previous_payments(self, year: int, month: int, tax_type: TaxType) -> float:
         """תשלומים קודמים — לא נרשמים במערכת כרגע."""
