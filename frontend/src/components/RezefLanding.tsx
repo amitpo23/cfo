@@ -1,11 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import {
+  AlertTriangle,
   ArrowLeft,
-  BadgeCheck,
   BarChart3,
   BookOpen,
-  Building2,
   Check,
   CheckCircle2,
   ChevronLeft,
@@ -15,9 +14,9 @@ import {
   Database,
   FileCheck2,
   Landmark,
+  Layers3,
+  LineChart,
   Loader2,
-  LockKeyhole,
-  Network,
   ShieldCheck,
   Sparkles,
   TrendingUp,
@@ -77,118 +76,26 @@ const plans = [
     price: '₪750',
     unit: 'לחודש',
     caption: 'עד 2.5 מיליון ש"ח מחזור שנתי',
-    features: ['מחליף עבודה ידנית שוטפת', 'הנה"ח כפולה ודוחות ניהול', 'התאמות בנק ותיעוד פעולות', 'סוכן תובנות ובקרת חריגות'],
+    featured: false,
+    features: ['הנה"ח כפולה', 'התאמות בנק', 'רווח והפסד יומי', 'תזרים וגבייה', 'סוכן CFO AI', 'הכנה למאזן'],
   },
   {
     id: 'company_above_2_5m',
     name: 'חברה בצמיחה',
     price: '₪750 + ₪500',
-    unit: 'לכל מיליון נוסף',
+    unit: 'לכל מיליון ש"ח נוסף',
     caption: 'מעל 2.5 מיליון ש"ח מחזור שנתי',
     featured: true,
-    features: ['כל יכולות החברה', 'בקרת מחזור וחריגות', 'דוחות לבנק ולניהול', 'מרכז המלצות פיננסיות פעיל'],
+    features: ['כל יכולות החברה', 'בקרת מחזור', 'דוחות ניהול', 'דוחות לבנק', 'התראות חריגות', 'תובנות בזמן אמת'],
   },
   {
     id: 'office',
-    name: 'רצף Office',
+    name: 'Rezef Office',
     price: 'בהתאמה',
     unit: 'למשרד / קבוצה',
-    caption: 'משרד רו"ח, קבוצת חברות או CFO חיצוני',
-    features: ['ניהול תיקי לקוחות', 'אדמין רב-ארגוני', 'סנכרון רוחבי והרשאות', 'תצוגת על לכל הלקוחות'],
-  },
-];
-
-const commandMetrics = [
-  { label: 'תזרים 30 יום', value: '₪184K', delta: '+12%', tone: 'emerald' },
-  { label: 'מי חייב לנו', value: '₪131K', delta: '11 חשבוניות', tone: 'amber' },
-  { label: 'התאמות אוטומטיות', value: '87%', delta: '42 תנועות', tone: 'blue' },
-  { label: 'חריגות לטיפול', value: '6', delta: '2 קריטיות', tone: 'rose' },
-];
-
-const proofPoints = [
-  { label: 'חיסכון מיידי', text: 'במקום עלות חודשית כבדה של הנהלת חשבונות ידנית, מתחילים מ-₪750 לחודש', icon: CircleDollarSign },
-  { label: 'עבודה אוטומטית', text: 'התאמות בנק, הנה"ח כפולה, גבייה, תיוק הוצאות וסגירת פערים בלי אקסלים', icon: Workflow },
-  { label: 'סוכן כספים', text: 'לא רק רושם פעולות. מסביר טעויות, חריגות, גבייה, עמלות ותזרים', icon: Sparkles },
-  { label: 'בקרה ישראלית', text: 'מע"מ, מס"ב, שכר, PCN874, דוחות שנתיים וחומר מסודר למאזן', icon: ShieldCheck },
-];
-
-const capabilityGroups = [
-  {
-    title: 'כסף נכנס',
-    icon: CircleDollarSign,
-    items: ['חשבוניות וקבלות', 'מי שילם ומי לא שילם', 'תזכורות גבייה', 'תחזית תקבולים לפי תאריך'],
-  },
-  {
-    title: 'כסף יוצא',
-    icon: CreditCard,
-    items: ['ספקים וחשבונות לתשלום', 'תשלומי מס"ב', 'הוצאות ו-OCR', 'זיהוי חריגות ומנויים כפולים'],
-  },
-  {
-    title: 'ספרים ודוחות',
-    icon: BookOpen,
-    items: ['הנה"ח כפולה אוטומטית', 'רווח והפסד יומי', 'מאזן ומאזן בוחן', 'חבילת דוחות לבנק ולמאזן'],
-  },
-  {
-    title: 'בנק והתאמות',
-    icon: Landmark,
-    items: ['קליטת תנועות בנק', 'התאמות מול מסמכים', 'אישור התאמות והעברה לספרים', 'חריגות, עמלות ומנויים'],
-  },
-  {
-    title: 'ניהול ו-CFO',
-    icon: BarChart3,
-    items: ['תזרים יומי וחודשי', 'תקציב מול ביצוע', 'תחזיות', 'סוכן המלצות פיננסיות'],
-  },
-  {
-    title: 'ציות ישראלי',
-    icon: ClipboardCheck,
-    items: ['מע"מ וטיוטות מס', 'PCN874 readiness', 'שכר 102/126', 'דוח שנתי וחומר מסודר לרו"ח'],
-  },
-];
-
-const workflow = [
-  {
-    title: 'כל תנועה נכנסת למפה אחת',
-    text: 'המערכת מושכת תנועות, מסמכים ופעולות כספיות ומבינה מה שייך למה.',
-    icon: Landmark,
-  },
-  {
-    title: 'התאמות, סיווגים ואישורים',
-    text: 'רצף מתאימה תשלומים לחשבוניות, מזהה חריגות ומכינה פעולות לאישור.',
-    icon: Workflow,
-  },
-  {
-    title: 'דוחות ותובנות בזמן אמת',
-    text: 'הסוכן מסביר מה השתנה, מי חייב כסף, מה עומד לצאת ומה כדאי לעשות.',
-    icon: Sparkles,
-  },
-];
-
-const agentInsights = [
-  'לקוח מרכזי מאחר בתשלום ב-18 יום ועלול לפגוע בתזרים של השבוע הבא.',
-  'זוהתה הוצאה חוזרת כפולה בקטגוריית תוכנה. מומלץ לבטל מנוי אחד.',
-  'התאמה בנקאית לא נסגרה בגלל סכום חריג. מומלץ לבדוק עמלה או חיוב כפול.',
-  'הרווחיות החודשית נשחקת בגלל עלייה בהוצאות רכש מול מחזור יציב.',
-];
-
-const replacementPoints = [
-  ['עלות', 'מנהל חשבונות או שירות חיצוני יכולים לעלות אלפי שקלים בחודש', 'רצף מתחילה מ-₪750 לחודש לעסק עד 2.5 מיליון ש"ח'],
-  ['עבודה', 'רישום ידני, התאמות ידניות, אקסלים ומעקב אחרי לקוחות וספקים', 'התאמות, סיווגים, גבייה, תשלומים ודוחות מתבצעים במערכת אחת'],
-  ['בקרה', 'בדיקה מדגמית אחרי שהחודש כבר נסגר', 'בדיקה שוטפת של תנועות, חריגות, עמלות, כפילויות ותזרים'],
-  ['תובנות', 'מקבלים דוח, לא תמיד מקבלים הסבר עסקי בזמן אמת', 'סוכן כספים מסביר מה קרה, איפה הטעות ומה הפעולה הבאה'],
-];
-
-const annualReportTemplates = [
-  {
-    id: 'annual_report_up_to_2_5m',
-    title: 'דוח שנתי עד 2.5M',
-    price: '₪3,000',
-    note: 'חבילת דוח שנתי לחברה או שותפות עד 2.5 מיליון ש"ח מחזור שנתי.',
-  },
-  {
-    id: 'annual_report_above_2_5m',
-    title: 'דוח שנתי מעל 2.5M',
-    price: '₪3,000 + ₪500',
-    note: 'בסיס של ₪3,000 ועוד ₪500 לכל מיליון ש"ח נוסף מעל 2.5M.',
+    caption: 'למשרדי רו"ח, קבוצות חברות ו-CFO חיצוני',
+    featured: false,
+    features: ['ניהול כמה ארגונים', 'הרשאות משתמשים', 'תצוגת על לכל הלקוחות', 'עבודה רב-תיקית'],
   },
 ];
 
@@ -199,11 +106,102 @@ const paymentTemplates = [
   { id: 'bank_transfer', label: 'העברה בנקאית', note: 'חשבונית לתשלום ידני' },
 ];
 
+const trustItems = ['הנה"ח כפולה', 'התאמות בנק', 'רווח והפסד יומי', 'תזרים', 'הכנה למאזן', 'סוכן CFO AI'];
+
+const painBullets = [
+  'לא מחכים לסוף חודש כדי להבין רווחיות',
+  'לא רודפים אחרי אקסלים והתאמות ידניות',
+  'לא מגלים טעויות אחרי שהנזק כבר קרה',
+  'לא משלמים אלפי שקלים על עבודה חוזרת שאפשר לאוטומט',
+];
+
+const solutionCards = [
+  {
+    title: 'הנהלת חשבונות כפולה אוטומטית',
+    text: 'פקודות יומן, סיווגים, התאמות ותיעוד פעולות בצורה מסודרת.',
+    icon: BookOpen,
+  },
+  {
+    title: 'התאמות בנק ובקרה',
+    text: 'קליטת תנועות, התאמה למסמכים, זיהוי פערים, עמלות ופעולות חריגות.',
+    icon: Landmark,
+  },
+  {
+    title: 'רווח והפסד יומי',
+    text: 'לא מחכים לסוף החודש. רואים רווחיות, הוצאות ומגמות בכל יום.',
+    icon: LineChart,
+  },
+  {
+    title: 'תזרים וגבייה',
+    text: 'מי חייב כסף, מה צפוי להיכנס, מה עומד לצאת ואיפה יש סיכון תזרימי.',
+    icon: CircleDollarSign,
+  },
+  {
+    title: 'סוכן CFO AI',
+    text: 'המערכת מסבירה מה קרה, איפה הבעיה ומה הפעולה המומלצת.',
+    icon: Sparkles,
+  },
+  {
+    title: 'הכנה למאזן ולרו"ח',
+    text: 'חומר מסודר, דוחות, מאזן בוחן וחבילת עבודה שנתית.',
+    icon: FileCheck2,
+  },
+];
+
+const anomalyItems = [
+  'חיובים כפולים',
+  'הוצאות חריגות',
+  'לקוחות מאחרים',
+  'פערים בהתאמות בנק',
+  'שחיקה ברווחיות',
+  'סיכון תזרימי',
+  'טעויות סיווג',
+  'תשלומים לא מזוהים',
+];
+
+const comparisonRows = [
+  ['עובד בדיעבד', 'עובדת כל יום'],
+  ['תלוי באקסלים', 'הכול במערכת אחת'],
+  ['בדיקה מדגמית', 'בודקת כל פעולה'],
+  ['דוחות בסוף חודש', 'רווח והפסד יומי'],
+  ['מציג מספרים', 'מסבירה מה לעשות'],
+  ['עולה אלפי שקלים בחודש', 'החל מ-₪750 לחודש'],
+];
+
+const commandMetrics = [
+  { label: 'תזרים 30 יום', value: '₪184K', detail: '+12% מול תחזית', tone: 'emerald' },
+  { label: 'מי חייב לנו', value: '₪131K', detail: '11 חשבוניות פתוחות', tone: 'amber' },
+  { label: 'התאמות אוטומטיות', value: '87%', detail: '42 תנועות נסגרו', tone: 'blue' },
+  { label: 'חריגות לטיפול', value: '6', detail: '2 קריטיות', tone: 'rose' },
+];
+
+const workflowSteps = [
+  ['01', 'מושכים נתונים', 'בנק, חשבוניות, קבלות, ספקים, לקוחות והוצאות נכנסים למפה פיננסית אחת.'],
+  ['02', 'רצף מתאימה ומסווגת', 'המערכת מחברת תשלומים למסמכים, מזהה חריגות ומכינה פקודות יומן.'],
+  ['03', 'מאשרים פעולות', 'המשתמש מאשר התאמות, תשלומים, סיווגים ודוחות לפני העברה סופית.'],
+  ['04', 'מקבלים תובנות', 'ה-CFO הדיגיטלי מסביר מה השתנה, מה דורש טיפול ומה כדאי לעשות.'],
+];
+
+const annualReportTemplates = [
+  {
+    id: 'annual_report_up_to_2_5m',
+    title: 'דוח שנתי עד 2.5M',
+    price: '₪3,000',
+    note: 'חבילת דוח שנתי לחברה או שותפות עד 2.5 מיליון ש"ח מחזור.',
+  },
+  {
+    id: 'annual_report_above_2_5m',
+    title: 'דוח שנתי מעל 2.5M',
+    price: '₪3,000 + ₪500',
+    note: '₪3,000 בסיס ועוד ₪500 לכל מיליון ש"ח נוסף מעל 2.5M.',
+  },
+];
+
 const toneClasses: Record<string, string> = {
-  emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  amber: 'border-amber-200 bg-amber-50 text-amber-700',
-  blue: 'border-blue-200 bg-blue-50 text-blue-700',
-  rose: 'border-rose-200 bg-rose-50 text-rose-700',
+  emerald: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200',
+  amber: 'border-amber-400/25 bg-amber-400/10 text-amber-200',
+  blue: 'border-blue-400/25 bg-blue-400/10 text-blue-200',
+  rose: 'border-rose-400/25 bg-rose-400/10 text-rose-200',
 };
 
 const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
@@ -386,269 +384,217 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950" dir="rtl">
-      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur">
+      <header className="sticky top-0 z-40 border-b border-white/10 bg-slate-950/92 text-white backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-3">
           <a href="#top" className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-950 text-lg font-bold text-white shadow-sm">ר</div>
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-lg font-bold text-slate-950 shadow-sm">ר</div>
             <div>
-              <div className="text-xl font-bold tracking-normal">רצף <span className="text-slate-500">Rezef</span></div>
-              <div className="text-xs text-slate-500">Finance operating system</div>
+              <div className="text-xl font-bold tracking-normal">רצף <span className="text-blue-200">Rezef</span></div>
+              <div className="text-xs text-slate-400">Autonomous digital CFO</div>
             </div>
           </a>
-          <nav className="hidden items-center gap-6 text-sm text-slate-600 lg:flex">
-            <a href="#capabilities" className="hover:text-slate-950">יכולות</a>
-            <a href="#workflow" className="hover:text-slate-950">איך זה עובד</a>
-            <a href="#plans" className="hover:text-slate-950">תוכניות</a>
-            <a href="#annual-report" className="hover:text-slate-950">דוח שנתי</a>
-            <a href="#signup" className="hover:text-slate-950">הרשמה</a>
+          <nav className="hidden items-center gap-6 text-sm text-slate-300 lg:flex">
+            <a href="#pain" className="hover:text-white">הכאב</a>
+            <a href="#solution" className="hover:text-white">הפתרון</a>
+            <a href="#command-center" className="hover:text-white">Command Center</a>
+            <a href="#plans" className="hover:text-white">תמחור</a>
+            <a href="#signup" className="hover:text-white">הרשמה</a>
           </nav>
-          <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-            התחילו <ArrowLeft className="h-4 w-4" />
+          <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-400">
+            להתחיל עם רצף <ArrowLeft className="h-4 w-4" />
           </a>
         </div>
       </header>
 
       <main id="top">
-        <section className="border-b border-slate-200 bg-white">
-          <div className="mx-auto grid min-h-[calc(100vh-65px)] max-w-7xl gap-10 px-5 py-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+        <section className="bg-slate-950 text-white">
+          <div className="mx-auto grid min-h-[calc(100vh-65px)] max-w-7xl gap-10 px-5 py-12 lg:grid-cols-[0.88fr_1.12fr] lg:items-center">
             <div className="max-w-3xl">
-              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
-                <Network className="h-4 w-4" />
-                להחליף הנהלת חשבונות ידנית במערכת שעובדת בשבילך
+              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-sm font-medium text-emerald-200">
+                <Sparkles className="h-4 w-4" />
+                רצף היא לא עוד תוכנת הנהלת חשבונות
               </div>
-              <h1 className="text-5xl font-bold leading-tight tracking-normal text-slate-950 md:text-7xl">
-                מנהל חשבונות ב-10,000 ש"ח? רצף מתחילה מ-750.
+              <h1 className="text-4xl font-bold leading-tight tracking-normal text-white md:text-6xl">
+                CFO דיגיטלי שמנהל את הכסף של החברה — החל מ-₪750 לחודש
               </h1>
-              <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-                רצף מחליפה את תהליך הנהלת החשבונות השוטף בטכנולוגיה שמבצעת התאמות,
-                סיווגים, הנהלת חשבונות כפולה, בדיקות בנקים, גבייה, תשלומים, הכנה למאזן
-                ודוחות. והיא לא רק מבצעת: היא מנתחת אלפי פרמטרים ומסבירה איפה יש טעויות,
-                חיובים חריגים, כסף שלא נגבה או סיכון תזרימי.
+              <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-300">
+                רצף מחליפה תהליך הנהלת חשבונות ידני ויקר במערכת אוטומטית שמבצעת הנהלת חשבונות כפולה,
+                התאמות בנק, דוחות, גבייה, תזרים ותובנות AI בזמן אמת.
               </p>
-              <div className="mt-5 grid gap-2 text-sm font-medium text-slate-700 sm:grid-cols-2">
-                {[
-                  'חוסכים עלויות הנהלת חשבונות ורו"ח שוטפות',
-                  'הנה"ח כפולה, רווח והפסד, תזרים והכנה למאזן',
-                  'התאמות בנק אוטומטיות ובדיקת חריגות',
-                  'סוכן פיננסי שמוצא טעויות ותובנות בזמן אמת',
-                ].map((item) => (
-                  <div key={item} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                    <Check className="h-4 w-4 shrink-0 text-emerald-600" />
-                    <span>{item}</span>
-                  </div>
-                ))}
+              <div className="mt-5 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-lg font-semibold text-blue-100">
+                מנהל חשבונות רושם את העבר. רצף עוזרת לנהל את העתיד.
               </div>
               <div className="mt-8 flex flex-wrap gap-3">
-                <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-5 py-3 font-semibold text-white shadow-sm hover:bg-slate-800">
-                  הרשמה ובחירת תוכנית <UserPlus className="h-4 w-4" />
+                <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-3 font-semibold text-white shadow-sm hover:bg-blue-400">
+                  להתחיל עם רצף <UserPlus className="h-4 w-4" />
                 </a>
-                <a href="#capabilities" className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-3 font-semibold text-slate-950 hover:bg-slate-100">
-                  לראות את המערכת <Sparkles className="h-4 w-4 text-amber-500" />
+                <a href="#command-center" className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/5 px-5 py-3 font-semibold text-white hover:bg-white/10">
+                  לראות את המערכת <BarChart3 className="h-4 w-4 text-emerald-300" />
                 </a>
               </div>
-              <div className="mt-8 grid gap-3 sm:grid-cols-2">
-                {proofPoints.map((point) => (
-                  <ProofPoint key={point.label} {...point} />
+              <div className="mt-8 flex flex-wrap gap-2 text-sm text-slate-300">
+                {trustItems.map((item) => (
+                  <span key={item} className="rounded-full border border-white/10 bg-white/5 px-3 py-1">
+                    {item}
+                  </span>
                 ))}
               </div>
             </div>
 
-            <ProductCockpit />
+            <CommandCenterMockup />
           </div>
         </section>
 
-        <section className="border-b border-slate-200 bg-slate-950 text-white">
-          <div className="mx-auto grid max-w-7xl gap-0 px-5 py-6 md:grid-cols-4">
-            {[
-              ['Cost reduction', 'מ-10,000 ש"ח בחודש לעבודה חכמה החל מ-750'],
-              ['Daily P&L', 'רווח והפסד יומי ולא רק בסוף חודש'],
-              ['Auto books', 'הנה"ח כפולה, התאמות ותיעוד פעולות'],
-              ['Active insight', 'בדיקת חריגות ותובנות ששום אדם לא עובר ידנית'],
-            ].map(([title, text]) => (
-              <div key={title} className="border-white/10 py-4 md:border-l md:px-6">
-                <div className="text-sm font-semibold text-blue-200">{title}</div>
-                <div className="mt-1 text-sm text-white/70">{text}</div>
+        <section id="pain" className="border-b border-slate-200 bg-white">
+          <div className="mx-auto grid max-w-7xl gap-8 px-5 py-16 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
+            <SectionHeading
+              eyebrow="הכאב"
+              title="למה לשלם אלפי שקלים בחודש ועדיין לא לדעת מה קורה בעסק?"
+              text="ברוב החברות הנהלת החשבונות מתבצעת בדיעבד. בסוף החודש מקבלים דוחות, אבל הבעיות כבר קרו: לקוחות שלא שילמו, הוצאות חריגות, חיובים כפולים, טעויות התאמה ולחץ תזרימי."
+            />
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-blue-700">
+                <Workflow className="h-4 w-4" />
+                רצף הופכת את התהליך ליומי, אוטומטי וחכם
               </div>
-            ))}
+              <div className="grid gap-3 sm:grid-cols-2">
+                {painBullets.map((item) => (
+                  <Bullet key={item} text={item} />
+                ))}
+              </div>
+            </div>
           </div>
         </section>
 
-        <section id="capabilities" className="mx-auto max-w-7xl px-5 py-16">
+        <section id="solution" className="mx-auto max-w-7xl px-5 py-16">
           <SectionHeading
-            eyebrow="מה יש בפנים"
-            title="המערכת שעושה את עבודת הנהלת החשבונות והכספים"
-            text="רצף לא רק מציגה נתונים. היא מבצעת את העבודה: מזהה פערים, מתאימה תנועות, בודקת חריגות, מנהלת גבייה, מכינה דוחות, בונה הנהלת חשבונות כפולה ונותנת הוראות פעולה ברורות."
+            eyebrow="הפתרון"
+            title="רצף לא רק מנהלת ספרים. היא מנהלת את הכסף."
+            text="המערכת קולטת תנועות בנק, חשבוניות, קבלות, ספקים, לקוחות והוצאות — ומחברת הכול לתמונה פיננסית אחת. היא מבצעת התאמות, יוצרת פקודות יומן, בודקת חריגות, מנהלת גבייה ומכינה חומר מסודר לרו״ח ולמאזן."
           />
           <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {capabilityGroups.map((group) => (
-              <Capability key={group.title} {...group} />
+            {solutionCards.map((card) => (
+              <SolutionCard key={card.title} {...card} />
             ))}
           </div>
         </section>
 
-        <section className="border-y border-slate-200 bg-white">
-          <div className="mx-auto max-w-7xl px-5 py-16">
-            <SectionHeading
-              eyebrow="למה להחזיק תהליך ידני יקר?"
-              title="רצף מחליפה עבודה ידנית במערכת פעילה, בודקת ומסבירה."
-              text="מנהל חשבונות אנושי יכול לרשום פעולות. רצף רושמת, מתאימה, בודקת, מנתחת ומציפה תובנות בזמן אמת. לכן החיסכון הוא לא רק במחיר, אלא גם באיכות השליטה."
-            />
-            <div className="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-              <div className="grid grid-cols-[0.8fr_1fr_1fr] border-b border-slate-200 bg-slate-950 px-4 py-3 text-sm font-semibold text-white">
-                <div>נושא</div>
-                <div>תהליך ידני יקר</div>
-                <div>רצף</div>
-              </div>
-              {replacementPoints.map(([label, manual, rezef]) => (
-                <div key={label} className="grid grid-cols-1 gap-3 border-b border-slate-200 p-4 last:border-b-0 md:grid-cols-[0.8fr_1fr_1fr]">
-                  <div className="font-bold text-slate-950">{label}</div>
-                  <div className="rounded-lg border border-rose-100 bg-white px-4 py-3 text-sm leading-6 text-slate-600">{manual}</div>
-                  <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium leading-6 text-emerald-900">{rezef}</div>
+        <section className="border-y border-slate-200 bg-slate-950 text-white">
+          <div className="mx-auto grid max-w-7xl gap-8 px-5 py-16 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
+            <div>
+              <div className="text-sm font-semibold text-emerald-300">ההבטחה</div>
+              <h2 className="mt-2 text-3xl font-bold leading-tight md:text-4xl">
+                מה אם מנהל החשבונות שלך היה בודק 100% מהפעולות?
+              </h2>
+              <p className="mt-4 leading-8 text-slate-300">
+                מנהל חשבונות אנושי לא באמת יכול לעבור כל יום על כל תנועה, כל חיוב, כל עמלה,
+                כל לקוח וכל ספק. רצף כן.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {anomalyItems.map((item) => (
+                <div key={item} className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-slate-100">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />
+                  <span>{item}</span>
                 </div>
               ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="workflow" className="border-y border-slate-200 bg-white">
-          <div className="mx-auto max-w-7xl px-5 py-16">
-            <SectionHeading
-              eyebrow="איך זה עובד"
-              title="כל מספר נבדק מול כל מספר אחר."
-              text="רצף היא רצף מספרים: כל תנועה, מסמך, יתרה, חוב, תשלום ודוח צריכים להתאים. כשהם לא מתאימים, המערכת מסבירה מה חסר ומה צריך לעשות."
-            />
-            <div className="mt-8 grid gap-4 lg:grid-cols-3">
-              {workflow.map((step, index) => (
-                <WorkflowStep key={step.title} index={index + 1} {...step} />
-              ))}
-            </div>
-            <div className="mt-8 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
-                <div className="flex items-center gap-3">
-                  <ShieldCheck className="h-6 w-6 text-emerald-600" />
-                  <h3 className="text-xl font-bold">הנהלת חשבונות כפולה והכנה למאזן במחיר נמוך</h3>
-                </div>
-                <p className="mt-3 leading-7 text-slate-600">
-                  המערכת מבצעת סיווג, התאמה, מעקב גבייה, בקרת ספקים, הנהלת חשבונות כפולה
-                  והכנת דוחות שוטפים. במקום לרדוף אחרי אקסלים וצוות תפעולי יקר, העסק מקבל
-                  תמונת מצב יומית ופעולות מוכנות לאישור.
-                </p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
-                <div className="flex items-center gap-3">
-                  <LockKeyhole className="h-6 w-6 text-blue-600" />
-                  <h3 className="text-xl font-bold">ארגון נפרד לכל עסק</h3>
-                </div>
-                <p className="mt-3 leading-7 text-slate-600">
-                  כל עסק נפתח בסביבה עצמאית עם משתמשים, הרשאות, נתונים ותהליכי עבודה משלו.
-                  מתאים לעסק יחיד, קבוצת חברות או משרד שמנהל כמה תיקים במקביל.
-                </p>
-              </div>
             </div>
           </div>
         </section>
 
         <section className="mx-auto max-w-7xl px-5 py-16">
           <SectionHeading
-            eyebrow="הסוכן הפיננסי"
-            title="לא רק דשבורד. מנהל כספים דיגיטלי שמדבר איתך."
-            text="הסוכן מנתח תנועות, גבייה, הוצאות, רווחיות, תזרים וחריגות. הוא מסביר למה המספר השתנה, איפה לקחו יותר מדי, איפה יש טעות ומה הפעולה המומלצת כדי לנהל את העסק טוב יותר."
+            eyebrow="השוואה"
+            title="תהליך ידני מול רצף"
+            text="ההבדל הוא לא רק מחיר. ההבדל הוא מעבר מעבודה בדיעבד לבקרה יומית שמסבירה מה לעשות."
           />
-          <div className="mt-8 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-            <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="mb-5 flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
-                  <Sparkles className="h-5 w-5" />
-                </div>
-                <div>
-                  <div className="text-lg font-bold">מה הסוכן עושה בפועל</div>
-                  <div className="text-sm text-slate-500">ניתוח, הסבר, התרעה ופעולה</div>
-                </div>
+          <div className="mt-8 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <div className="grid grid-cols-2 bg-slate-950 px-4 py-3 text-sm font-semibold text-white">
+              <div>תהליך ידני</div>
+              <div>רצף</div>
+            </div>
+            {comparisonRows.map(([manual, rezef]) => (
+              <div key={manual} className="grid grid-cols-1 border-b border-slate-200 last:border-b-0 md:grid-cols-2">
+                <div className="border-b border-slate-100 p-4 text-sm text-slate-600 md:border-b-0 md:border-l">{manual}</div>
+                <div className="bg-emerald-50 p-4 text-sm font-semibold text-emerald-900">{rezef}</div>
               </div>
-              <div className="space-y-3">
-                {agentInsights.map((insight) => (
-                  <div key={insight} className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-700">
-                    {insight}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              {[
-                ['גבייה', 'מי חייב, כמה זמן, ומה כדאי לעשות עכשיו כדי להכניס כסף בזמן.'],
-                ['רווחיות', 'רווח והפסד יומי, שחיקת מרווחים וזיהוי הוצאות שפוגעות ברווח.'],
-                ['בנק ובקרה', 'התאמות אוטומטיות, חריגות, עמלות, תשלומים לא מזוהים ותנועות חשודות.'],
-                ['אלף בדיקות', 'בדיקה רציפה של התאמות, כפילויות, חוסרים, חיובים חריגים וסיכוני תזרים.'],
-              ].map(([title, text]) => (
-                <div key={title} className="rounded-lg border border-slate-200 bg-slate-50 p-5">
-                  <div className="text-lg font-bold">{title}</div>
-                  <p className="mt-2 text-sm leading-6 text-slate-600">{text}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section id="plans" className="mx-auto max-w-7xl px-5 py-16">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <SectionHeading
-              eyebrow="תמחור"
-              title="מחיר של תוכנה. עבודה של מחלקת כספים."
-              text="במקום לשלם אלפי שקלים בחודש על עבודה ידנית, רצף מתחילה מ-₪750 לחודש ומבצעת התאמות, דוחות, בקרה ותובנות שוטפות. המחירים לפני מע״מ."
-            />
-            <div className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 shadow-sm">
-              מעל 2.5M: ₪500 לכל מיליון ש"ח נוסף
-            </div>
-          </div>
-          <div className="mt-8 grid gap-4 lg:grid-cols-3">
-            {plans.map((plan) => (
-              <PlanCard key={plan.id} plan={plan} selected={selectedPlan === plan.id} onSelect={() => setSelectedPlan(plan.id)} />
             ))}
           </div>
         </section>
 
-        <section id="annual-report" className="border-y border-slate-200 bg-white">
-          <div className="mx-auto max-w-7xl px-5 py-16">
+        <section id="command-center" className="border-y border-slate-200 bg-white">
+          <div className="mx-auto grid max-w-7xl gap-8 px-5 py-16 lg:grid-cols-[0.85fr_1.15fr] lg:items-center">
             <SectionHeading
-              eyebrow="שירות משלים"
-              title="דוח שנתי לחברות ושותפויות"
-              text="תבנית שירות להכנת חבילת דוח שנתי על בסיס הנתונים שנצברו במערכת לאורך השנה."
+              eyebrow="Command Center"
+              title="תמונת מצב פיננסית אחת לכל החברה"
+              text="במקום לפזר נתונים בין בנק, חשבוניות, אקסלים, רו״ח ומיילים — רצף מרכזת את כל המספרים במקום אחד."
             />
-            <div className="mt-8 grid gap-4 lg:grid-cols-2">
+            <CommandCenterPanel />
+          </div>
+        </section>
+
+        <section id="workflow" className="mx-auto max-w-7xl px-5 py-16">
+          <SectionHeading
+            eyebrow="איך זה עובד"
+            title="כל מספר נבדק מול כל מספר אחר"
+            text="רצף בונה שכבה אחת שמחברת נתונים, התאמות, פעולות ותובנות — ואז משאירה למשתמש לאשר את מה שחשוב."
+          />
+          <div className="mt-8 grid gap-4 lg:grid-cols-4">
+            {workflowSteps.map(([number, title, text]) => (
+              <WorkflowStep key={number} number={number} title={title} text={text} />
+            ))}
+          </div>
+        </section>
+
+        <section id="plans" className="border-y border-slate-200 bg-white">
+          <div className="mx-auto max-w-7xl px-5 py-16">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <SectionHeading
+                eyebrow="תמחור"
+                title="מחיר של תוכנה. עבודה של מחלקת כספים."
+                text="מתחילים במחיר ברור, מקבלים הנהלת חשבונות כפולה, התאמות בנק, רווח והפסד יומי, תזרים וסוכן CFO AI."
+              />
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600">
+                דוח שנתי: החל מ-₪3,000
+              </div>
+            </div>
+            <div className="mt-8 grid gap-4 lg:grid-cols-3">
+              {plans.map((plan) => (
+                <PlanCard key={plan.id} plan={plan} selected={selectedPlan === plan.id} onSelect={() => setSelectedPlan(plan.id)} />
+              ))}
+            </div>
+            <div className="mt-6 grid gap-4 lg:grid-cols-2">
               {annualReportTemplates.map((template) => (
-                <div key={template.id} className="rounded-lg border border-slate-200 bg-slate-50 p-6">
-                  <div className="flex items-center gap-3">
-                    <FileCheck2 className="h-6 w-6 text-blue-600" />
-                    <h3 className="text-xl font-bold">{template.title}</h3>
-                  </div>
-                  <div className="mt-5 flex items-end gap-2">
-                    <span className="text-4xl font-bold">{template.price}</span>
-                    <span className="pb-1 text-sm text-slate-500">לדוח שנתי</span>
-                  </div>
-                  <p className="mt-4 text-sm leading-6 text-slate-600">{template.note}</p>
-                </div>
+                <AnnualReportCard key={template.id} {...template} />
               ))}
             </div>
           </div>
         </section>
 
-        <section id="signup" className="bg-slate-950 px-5 py-16 text-white">
+        <section className="bg-slate-950 px-5 py-16 text-white">
           <div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[1fr_480px] lg:items-start">
             <div>
               <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm text-blue-200">
-                <BadgeCheck className="h-4 w-4" />
-                פתיחת ארגון עצמאי עם הרשאות וחיבורים נפרדים
+                <ShieldCheck className="h-4 w-4" />
+                CFO דיגיטלי לחברה שעובדת בזמן אמת
               </div>
-              <h2 className="text-4xl font-bold leading-tight">פותחים רצף ומתחילים לנהל כספים אוטומטית.</h2>
+              <h2 className="text-4xl font-bold leading-tight">תפסיקו לנהל את הכסף בדיעבד</h2>
               <p className="mt-4 max-w-2xl leading-8 text-white/70">
-                התוכנית שנבחרה: <b className="text-white">{selectedPlanName}</b>. אחרי הכניסה נפתח ארגון עצמאי,
-                מגדירים משתמשים והרשאות, ומפעילים את תהליכי הנהלת החשבונות, התזרים והבקרה של העסק.
+                רצף נותנת לחברה שלך הנהלת חשבונות, בקרה, תזרים ותובנות בזמן אמת — במחיר שמתחיל מ-₪750 לחודש.
               </p>
+              <div className="mt-6 flex flex-wrap gap-3">
+                <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-3 font-semibold text-white hover:bg-blue-400">
+                  להתחיל עכשיו <ArrowLeft className="h-4 w-4" />
+                </a>
+                <a href="#signup" className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/5 px-5 py-3 font-semibold text-white hover:bg-white/10">
+                  לקבוע הדגמה <ClipboardCheck className="h-4 w-4" />
+                </a>
+              </div>
               <div className="mt-8 grid gap-4 sm:grid-cols-2">
-                <SignupPoint icon={Building2} text="ארגון נפרד לכל עסק או לקוח" />
-                <SignupPoint icon={Database} text="בסיס נתונים ונתונים org-scoped" />
+                <SignupPoint icon={BuildingIcon} text="ארגון נפרד לכל חברה או לקוח" />
+                <SignupPoint icon={Database} text="נתונים והרשאות מופרדים" />
                 <SignupPoint icon={Landmark} text="קליטת נתונים פיננסיים לאחר הכניסה" />
-                <SignupPoint icon={TrendingUp} text="תזרים, תחזיות וסוכן המלצות בזמן אמת" />
+                <SignupPoint icon={TrendingUp} text="תזרים ותובנות בזמן אמת" />
               </div>
             </div>
 
@@ -688,77 +634,73 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
   );
 };
 
-function ProductCockpit() {
+const BuildingIcon = Layers3;
+
+function CommandCenterMockup() {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-2xl">
-      <div className="flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4">
+    <div className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.03] shadow-2xl">
+      <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.04] px-5 py-4">
         <div>
-          <div className="text-sm text-slate-500">Rezef Command Center</div>
-          <div className="text-lg font-bold">תמונת מצב פיננסית</div>
+          <div className="text-sm text-slate-400">Rezef Command Center</div>
+          <div className="text-lg font-bold text-white">תמונת מצב פיננסית</div>
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-700">
+        <div className="flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-sm font-medium text-emerald-200">
           <CheckCircle2 className="h-4 w-4" />
-          live controls
+          live CFO
         </div>
       </div>
       <div className="grid gap-4 p-5 lg:grid-cols-[1fr_280px]">
         <div className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             {commandMetrics.map((metric) => (
-              <div key={metric.label} className="rounded-xl border border-slate-200 bg-white p-4">
-                <div className="text-xs font-medium text-slate-500">{metric.label}</div>
-                <div className="mt-2 flex items-end justify-between gap-3">
-                  <div className="text-3xl font-bold">{metric.value}</div>
-                  <div className={`rounded-full border px-2 py-1 text-xs ${toneClasses[metric.tone]}`}>{metric.delta}</div>
-                </div>
-              </div>
+              <Metric key={metric.label} {...metric} dark />
             ))}
           </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="rounded-lg border border-white/10 bg-slate-900 p-4">
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <div className="text-sm font-bold">רווח והפסד מצטבר</div>
-                <div className="text-xs text-slate-500">ינואר עד היום · נגזר מהנתונים</div>
+                <div className="text-sm font-bold text-white">רווח והפסד מצטבר</div>
+                <div className="text-xs text-slate-400">ינואר עד היום</div>
               </div>
-              <div className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600">לבדיקת רו"ח</div>
+              <div className="rounded-full bg-white/5 px-3 py-1 text-xs text-slate-300">Daily P&L</div>
             </div>
             <div className="flex h-44 items-end gap-2">
               {[42, 58, 37, 72, 64, 81, 76, 92, 69, 88, 98, 84].map((height, index) => (
-                <div key={index} className="flex flex-1 flex-col items-center gap-2">
-                  <div className="w-full rounded-t bg-blue-500" style={{ height: `${height}%` }} />
-                  <div className="h-1 w-full rounded bg-emerald-500" />
+                <div key={height + index} className="flex flex-1 flex-col items-center gap-2">
+                  <div className="w-full rounded-t bg-blue-400" style={{ height: `${height}%` }} />
+                  <div className="h-1 w-full rounded bg-emerald-400" />
                 </div>
               ))}
             </div>
           </div>
         </div>
         <div className="space-y-4">
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="rounded-lg border border-white/10 bg-slate-900 p-4">
             <div className="mb-3 flex items-center justify-between">
-              <span className="font-bold">רצף פעולות</span>
-              <Sparkles className="h-5 w-5 text-amber-500" />
+              <span className="font-bold text-white">רצף פעולות</span>
+              <Sparkles className="h-5 w-5 text-amber-300" />
             </div>
             {[
               ['בנק', 'משיכת תנועות חדשות', 'בוצע'],
               ['גבייה', 'התאמת תקבולים', 'אישור'],
               ['CFO', 'דוח תזרים לבנק', 'מוכן'],
-              ['ספקים', 'מס"ב ספקים', 'טיוטה'],
+              ['ספקים', 'תשלומים קרובים', 'סיכון'],
             ].map(([source, action, status]) => (
-              <div key={action} className="flex items-center justify-between border-t border-slate-100 py-3 text-sm">
+              <div key={action} className="flex items-center justify-between border-t border-white/10 py-3 text-sm">
                 <div>
-                  <div className="font-medium">{action}</div>
-                  <div className="text-xs text-slate-500">{source}</div>
+                  <div className="font-medium text-white">{action}</div>
+                  <div className="text-xs text-slate-400">{source}</div>
                 </div>
-                <div className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{status}</div>
+                <div className="rounded-full bg-white/5 px-2 py-1 text-xs text-slate-300">{status}</div>
               </div>
             ))}
           </div>
-          <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
-            <div className="flex items-center gap-2 text-sm font-bold text-blue-800">
+          <div className="rounded-lg border border-blue-400/25 bg-blue-400/10 p-4">
+            <div className="flex items-center gap-2 text-sm font-bold text-blue-100">
               <Sparkles className="h-4 w-4" />
               המלצה פיננסית
             </div>
-            <p className="mt-3 text-sm leading-6 text-blue-900">
+            <p className="mt-3 text-sm leading-6 text-blue-100/85">
               תשלומי ספקים ב-14 יום הקרובים צורכים מעל 75% מהיתרה. בדקו דחייה לספקים לא קריטיים מול גבייה צפויה.
             </p>
           </div>
@@ -768,15 +710,53 @@ function ProductCockpit() {
   );
 }
 
-function ProofPoint({ label, text, icon: Icon }: { label: string; text: string; icon: LucideIcon }) {
+function CommandCenterPanel() {
   return (
-    <div className="flex gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
-        <Icon className="h-5 w-5" />
+    <div className="rounded-lg border border-slate-200 bg-slate-950 p-5 text-white shadow-xl">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {commandMetrics.map((metric) => (
+          <Metric key={metric.label} {...metric} dark />
+        ))}
       </div>
-      <div>
-        <div className="text-sm font-bold">{label}</div>
-        <div className="mt-1 text-xs leading-5 text-slate-600">{text}</div>
+      <div className="mt-4 rounded-lg border border-white/10 bg-white/5 p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <div className="text-sm font-bold">רווח והפסד מצטבר</div>
+            <div className="text-xs text-slate-400">ינואר עד היום</div>
+          </div>
+          <LineChart className="h-5 w-5 text-emerald-300" />
+        </div>
+        <div className="flex h-32 items-end gap-2">
+          {[42, 58, 37, 72, 64, 81, 76, 92, 69, 88, 98, 84].map((height, index) => (
+            <div key={height + index} className="w-full rounded-t bg-blue-400" style={{ height: `${height}%` }} />
+          ))}
+        </div>
+      </div>
+      <div className="mt-4 rounded-lg border border-blue-400/25 bg-blue-400/10 p-4 text-sm leading-6 text-blue-100">
+        <b>המלצה פיננסית:</b> תשלומי ספקים ב-14 יום הקרובים צורכים מעל 75% מהיתרה. בדקו דחייה לספקים לא קריטיים מול גבייה צפויה.
+      </div>
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone: string;
+  dark?: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+      <div className="text-xs font-medium text-slate-400">{label}</div>
+      <div className="mt-2 flex items-end justify-between gap-3">
+        <div className="text-3xl font-bold text-white">{value}</div>
+        <div className={`rounded-full border px-2 py-1 text-xs ${toneClasses[tone]}`}>{detail}</div>
       </div>
     </div>
   );
@@ -792,38 +772,38 @@ function SectionHeading({ eyebrow, title, text }: { eyebrow: string; title: stri
   );
 }
 
-function Capability({ title, icon: Icon, items }: { title: string; icon: LucideIcon; items: string[] }) {
+function Bullet({ text }: { text: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-          <Icon className="h-6 w-6" />
-        </div>
-        <h3 className="text-lg font-bold">{title}</h3>
-      </div>
-      <ul className="mt-4 space-y-2 text-sm text-slate-600">
-        {items.map((item) => (
-          <li key={item} className="flex items-start gap-2">
-            <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-            <span>{item}</span>
-          </li>
-        ))}
-      </ul>
+    <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm font-medium text-slate-700">
+      <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+      <span>{text}</span>
     </div>
   );
 }
 
-function WorkflowStep({ index, title, text, icon: Icon }: { index: number; title: string; text: string; icon: LucideIcon }) {
+function SolutionCard({ title, text, icon: Icon }: { title: string; text: string; icon: LucideIcon }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-6">
-      <div className="flex items-center justify-between">
-        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-slate-950 text-white">
-          <Icon className="h-6 w-6" />
-        </div>
-        <div className="text-3xl font-bold text-slate-200">{String(index).padStart(2, '0')}</div>
+    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
+        <Icon className="h-6 w-6" />
       </div>
-      <h3 className="mt-5 text-xl font-bold">{title}</h3>
-      <p className="mt-3 leading-7 text-slate-600">{text}</p>
+      <h3 className="text-lg font-bold text-slate-950">{title}</h3>
+      <p className="mt-2 text-sm leading-6 text-slate-600">{text}</p>
+    </div>
+  );
+}
+
+function WorkflowStep({ number, title, text }: { number: string; title: string; text: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-5 flex items-center justify-between">
+        <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-950 text-white">
+          <Workflow className="h-5 w-5" />
+        </div>
+        <div className="text-3xl font-bold text-slate-200">{number}</div>
+      </div>
+      <h3 className="text-lg font-bold">{title}</h3>
+      <p className="mt-3 text-sm leading-6 text-slate-600">{text}</p>
     </div>
   );
 }
@@ -833,7 +813,7 @@ function PlanCard({ plan, selected, onSelect }: { plan: typeof plans[number]; se
     <button
       type="button"
       onClick={onSelect}
-      className={`text-right rounded-xl border p-6 transition ${
+      className={`text-right rounded-lg border p-6 transition ${
         selected ? 'border-blue-500 bg-white shadow-xl shadow-blue-100' : 'border-slate-200 bg-white shadow-sm hover:border-slate-300'
       }`}
     >
@@ -841,7 +821,7 @@ function PlanCard({ plan, selected, onSelect }: { plan: typeof plans[number]; se
         <h3 className="text-2xl font-bold">{plan.name}</h3>
         {plan.featured && <span className="rounded-full bg-blue-600 px-3 py-1 text-xs font-semibold text-white">מומלץ</span>}
       </div>
-      <p className="mt-2 text-sm text-slate-600">{plan.caption}</p>
+      <p className="mt-2 min-h-[40px] text-sm leading-5 text-slate-600">{plan.caption}</p>
       <div className="mt-5 flex items-end gap-2">
         <span className="text-4xl font-bold">{plan.price}</span>
         <span className="pb-1 text-sm text-slate-500">{plan.unit}</span>
@@ -855,6 +835,19 @@ function PlanCard({ plan, selected, onSelect }: { plan: typeof plans[number]; se
         ))}
       </ul>
     </button>
+  );
+}
+
+function AnnualReportCard({ title, price, note }: { title: string; price: string; note: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+      <div className="flex items-center gap-3">
+        <FileCheck2 className="h-5 w-5 text-blue-600" />
+        <h3 className="text-lg font-bold">{title}</h3>
+      </div>
+      <div className="mt-4 text-3xl font-bold">{price}</div>
+      <p className="mt-2 text-sm leading-6 text-slate-600">{note}</p>
+    </div>
   );
 }
 
@@ -920,7 +913,7 @@ function SignupForm({
   const billingBlocked = billingStatus?.production && !billingStatus.ready;
 
   return (
-    <form onSubmit={onSubmit} className="rounded-2xl bg-white p-6 text-slate-950 shadow-2xl">
+    <form id="signup" onSubmit={onSubmit} className="rounded-lg bg-white p-6 text-slate-950 shadow-2xl">
       <div className="mb-5 grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-sm">
         <button type="button" onClick={() => setMode('register')}
           className={`rounded-md px-3 py-2 font-semibold ${mode === 'register' ? 'bg-white shadow-sm' : 'text-slate-500'}`}>
@@ -946,7 +939,7 @@ function SignupForm({
               <option key={template.id} value={template.id}>{template.label} - {template.note}</option>
             ))}
           </LandingSelect>
-          <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
             <div className="mb-3 text-sm font-semibold">תשלום מאובטח</div>
             <div className={`mb-3 rounded-lg border px-3 py-2 text-xs leading-5 ${
               liveBillingReady
@@ -992,7 +985,7 @@ function SignupForm({
             </button>
             {checkout && (
               <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">
-                checkout מוכן: {checkout.provider === 'stripe' ? 'תשלום מאובטח' : 'מצב בדיקה'} · session {checkout.checkout_session_id.slice(0, 14)}…
+                checkout מוכן: {checkout.provider === 'stripe' ? 'תשלום מאובטח' : 'מצב בדיקה'} · session {checkout.checkout_session_id.slice(0, 14)}...
                 {checkout.note && <div className="mt-1 text-emerald-700">{checkout.note}</div>}
               </div>
             )}
@@ -1039,7 +1032,7 @@ function SignupForm({
             או הרשמה עם Google, כולל החבילה וה-checkout שנבחרו
           </div>
           <div className="flex justify-center">
-          <div ref={googleButtonRef} />
+            <div ref={googleButtonRef} />
           </div>
         </div>
       )}
@@ -1049,7 +1042,7 @@ function SignupForm({
 
 function SignupPoint({ icon: Icon, text }: { icon: LucideIcon; text: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/80">
+    <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-white/80">
       <Icon className="h-5 w-5 text-blue-300" />
       <span>{text}</span>
     </div>
