@@ -7,6 +7,22 @@
 
 ---
 
+## v1.5 — פאזה 5: היגיינת repo וסודות (2026-06-24)
+
+**סטטוס:** ✅ הושלם (אימות; הסיכון הקריטי היה אזעקת שווא).
+
+### ממצא (אומת מול git, מתקן את האודיט)
+- **`cfo.db`, `.env.local`, `*.bak` אינם בהיסטוריית git ואינם במעקב** — בניגוד לטענת האודיט. `git log --all --name-only` לא מצא אותם; `git ls-files` לא מציג אותם. **אין צורך בשכתוב היסטוריה.**
+- `.gitignore` כבר מכסה: `.env`, `.env.local`, `.env*.local`, `*.db`, `*.bak`, `cfo.db.*.bak`, `.vercel`.
+- קבצי env במעקב הם templates/ציבוריים בלבד: `.env.example`, `.env.template`, `frontend/.env.example`, `frontend/.env.production` (רק `VITE_*` ציבורי — אין סודות).
+- `.vercel/` אינו במעקב.
+
+### נדחה (דורש אימות פריסה, לא בוצע חד-צדדית)
+- איחוד מקורות תלויות (`requirements.txt` + `requirements-full.txt` + `pyproject.toml` + `uv.lock`) — שינוי משפיע על build/deploy של Vercel; דורש אימות פריסה לפני ביצוע. המלצה בלבד.
+- ארכוב docs מיושנים (קוסמטי).
+
+---
+
 ## v1.4 — פאזה 3 (חלקי): השלמת מודול המס (2026-06-24)
 
 **סטטוס:** 🟡 ליבה. שער: `pytest` 290 passed.
