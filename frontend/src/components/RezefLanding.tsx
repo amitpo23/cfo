@@ -568,6 +568,11 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
                 <AnnualReportCard key={template.id} {...template} />
               ))}
             </div>
+            <p className="mt-4 text-xs leading-6 text-slate-500">
+              * שירות הדוח השנתי מבוצע בשיתוף משרד רואי חשבון חיצוני, לצורך שמירה על אי תלות בין מערכת הנהלת החשבונות
+              לבין הגורם המבצע את המאזן והדוח השנתי. המחיר המופחת מתאפשר כאשר הנהלת החשבונות מנוהלת באופן שוטף ומסודר
+              ברצף, כך שחבילת העבודה השנתית מגיעה מוכנה, מתועדת ונוחה לבדיקה מקצועית.
+            </p>
           </div>
         </section>
 
