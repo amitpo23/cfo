@@ -29,7 +29,7 @@ class RevenueAnalyticsService:
             Invoice.status.in_(["sent", "paid", "partially_paid"])
         ).all()
 
-        total_invoiced = sum(inv.total_amount for inv in invoices) or Decimal(0)
+        total_invoiced = sum(inv.total for inv in invoices) or Decimal(0)
         total_paid = sum(inv.paid_amount for inv in invoices) or Decimal(0)
         total_pending = total_invoiced - total_paid
 
@@ -53,12 +53,12 @@ class RevenueAnalyticsService:
         customer_revenue = self.db.query(
             Contact.id,
             Contact.name,
-            func.sum(Invoice.total_amount).label("total_revenue"),
+            func.sum(Invoice.total).label("total_revenue"),
             func.count(Invoice.id).label("invoice_count"),
-            func.avg(Invoice.total_amount).label("average_invoice"),
+            func.avg(Invoice.total).label("average_invoice"),
             func.sum(Invoice.paid_amount).label("amount_paid")
         ).join(
-            Invoice, Invoice.customer_id == Contact.id
+            Invoice, Invoice.contact_id == Contact.id
         ).filter(
             Invoice.organization_id == self.org_id,
             Invoice.created_at >= start_date,
@@ -67,7 +67,7 @@ class RevenueAnalyticsService:
         ).group_by(
             Contact.id, Contact.name
         ).order_by(
-            func.sum(Invoice.total_amount).desc()
+            func.sum(Invoice.total).desc()
         ).limit(limit).all()
 
         total_revenue = sum(c.total_revenue for c in customer_revenue) or Decimal(1)
@@ -86,78 +86,28 @@ class RevenueAnalyticsService:
             for c in customer_revenue
         ]
 
-    def analyze_revenue_by_category(self, days: int = 90) -> List[Dict[str, Any]]:
+    def analyze_revenue_by_category(self, days: int = 90) -> Dict[str, Any]:
+        """לא נתמך: למודל Invoice אין שדה category בסכמה.
+
+        מוחזר סטטוס 'unsupported' מפורש במקום נתון מומצא או קריסה. לתמיכה
+        אמיתית נדרש לגזור קטגוריה מ-``Invoice.line_items`` או להוסיף עמודה.
         """
-        Analyze revenue by product/service category
+        return {
+            "status": "unsupported",
+            "reason": "Invoice records have no category field in the current schema",
+            "data": [],
+        }
+
+    def analyze_revenue_by_region(self, days: int = 90) -> Dict[str, Any]:
+        """לא נתמך: למודל Contact אין שדות גאוגרפיים (country/state) בסכמה.
+
+        מוחזר סטטוס 'unsupported' מפורש במקום נתון מומצא או קריסה.
         """
-        start_date = datetime.now(timezone.utc) - timedelta(days=days)
-
-        # Query revenue by category
-        category_revenue = self.db.query(
-            Invoice.category,
-            func.sum(Invoice.total_amount).label("total_revenue"),
-            func.count(Invoice.id).label("invoice_count"),
-            func.avg(Invoice.total_amount).label("average_invoice")
-        ).filter(
-            Invoice.organization_id == self.org_id,
-            Invoice.created_at >= start_date,
-            Invoice.status.in_(["sent", "paid", "partially_paid"])
-        ).group_by(
-            Invoice.category
-        ).order_by(
-            func.sum(Invoice.total_amount).desc()
-        ).all()
-
-        total_revenue = sum(c.total_revenue for c in category_revenue) or Decimal(1)
-
-        return [
-            {
-                "category": c.category or "uncategorized",
-                "total_revenue": float(c.total_revenue),
-                "invoice_count": c.invoice_count,
-                "average_invoice": float(c.average_invoice) if c.average_invoice else 0,
-                "percentage_of_total": float((c.total_revenue / total_revenue * 100) if total_revenue > 0 else 0),
-            }
-            for c in category_revenue
-        ]
-
-    def analyze_revenue_by_region(self, days: int = 90) -> List[Dict[str, Any]]:
-        """
-        Analyze revenue by customer region/geography
-        """
-        start_date = datetime.now(timezone.utc) - timedelta(days=days)
-
-        region_revenue = self.db.query(
-            Contact.country,
-            Contact.state_province,
-            func.sum(Invoice.total_amount).label("total_revenue"),
-            func.count(Invoice.id).label("invoice_count")
-        ).join(
-            Invoice, Invoice.customer_id == Contact.id
-        ).filter(
-            Invoice.organization_id == self.org_id,
-            Invoice.created_at >= start_date,
-            Invoice.status.in_(["sent", "paid", "partially_paid"]),
-            Contact.organization_id == self.org_id
-        ).group_by(
-            Contact.country, Contact.state_province
-        ).order_by(
-            func.sum(Invoice.total_amount).desc()
-        ).all()
-
-        total_revenue = sum(r.total_revenue for r in region_revenue) or Decimal(1)
-
-        return [
-            {
-                "country": r.country or "Unknown",
-                "state_province": r.state_province or "Unknown",
-                "region": f"{r.country or 'Unknown'}, {r.state_province or 'N/A'}",
-                "total_revenue": float(r.total_revenue),
-                "invoice_count": r.invoice_count,
-                "percentage_of_total": float((r.total_revenue / total_revenue * 100) if total_revenue > 0 else 0),
-            }
-            for r in region_revenue
-        ]
+        return {
+            "status": "unsupported",
+            "reason": "Contact records have no geographic fields in the current schema",
+            "data": [],
+        }
 
     def analyze_revenue_concentration(self, days: int = 90) -> Dict[str, Any]:
         """
@@ -238,21 +188,10 @@ class RevenueAnalyticsService:
         """
         opportunities = []
 
-        # 1. High-margin categories
-        categories = self.analyze_revenue_by_category(days=days)
-        for cat in categories:
-            if cat["percentage_of_total"] < 10 and cat["average_invoice"] > 1000:
-                opportunities.append({
-                    "type": "high_margin_category",
-                    "category": cat["category"],
-                    "current_revenue": cat["total_revenue"],
-                    "average_invoice": cat["average_invoice"],
-                    "growth_potential": "high",
-                    "recommendation": f"Increase marketing/sales focus on {cat['category']} category",
-                    "estimated_growth": cat["total_revenue"] * 0.25,  # Estimate 25% growth potential
-                })
+        # הזדמנויות לפי קטגוריה/אזור הושמטו: הסכמה אינה כוללת קטגוריית חשבונית
+        # או שדות גאוגרפיים (ראו analyze_revenue_by_category/region). לא ממציאים נתון.
 
-        # 2. Growing customers
+        # Growing customers — מבוסס על נתון אמיתי (revenue לפי לקוח)
         customers = self.analyze_revenue_by_customer(days=days, limit=50)
         for cust in customers:
             if cust["invoice_count"] >= 4 and cust["percentage_of_total"] < 15:
@@ -266,19 +205,7 @@ class RevenueAnalyticsService:
                     "estimated_growth": cust["total_revenue"] * 0.3,
                 })
 
-        # 3. Underexploited regions
-        regions = self.analyze_revenue_by_region(days=days)
-        for region in regions:
-            if region["percentage_of_total"] < 10 and region["invoice_count"] >= 2:
-                opportunities.append({
-                    "type": "emerging_region",
-                    "region": region["region"],
-                    "current_revenue": region["total_revenue"],
-                    "invoice_count": region["invoice_count"],
-                    "growth_potential": "medium",
-                    "recommendation": f"Expand market presence in {region['region']}",
-                    "estimated_growth": region["total_revenue"] * 0.2,
-                })
+        # הזדמנויות לפי אזור הושמטו — אין שדות גאוגרפיים בסכמה.
 
         return sorted(
             opportunities,
@@ -303,7 +230,7 @@ class RevenueAnalyticsService:
             date_key = inv.created_at.date().isoformat()
             if date_key not in daily_revenue:
                 daily_revenue[date_key] = Decimal(0)
-            daily_revenue[date_key] += inv.total_amount
+            daily_revenue[date_key] += inv.total
 
         if not daily_revenue:
             return {"status": "no_data", "period_days": days}
@@ -348,9 +275,9 @@ class RevenueAnalyticsService:
         sent_invoices = [i for i in invoices if i.status == "sent"]
         paid_invoices = [i for i in invoices if i.status == "paid"]
 
-        draft_value = sum(i.total_amount for i in draft_invoices) or Decimal(0)
-        sent_value = sum(i.total_amount for i in sent_invoices) or Decimal(0)
-        paid_value = sum(i.total_amount for i in paid_invoices) or Decimal(0)
+        draft_value = sum(i.total for i in draft_invoices) or Decimal(0)
+        sent_value = sum(i.total for i in sent_invoices) or Decimal(0)
+        paid_value = sum(i.total for i in paid_invoices) or Decimal(0)
 
         return {
             "draft_invoices": len(draft_invoices),

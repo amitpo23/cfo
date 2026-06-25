@@ -2,6 +2,7 @@
 Phase 13D: Analytics Reporting Service
 Generates daily, weekly, and monthly financial reports with insights
 """
+import calendar
 from datetime import datetime, timedelta, date, timezone
 from typing import Dict, List, Optional, Any
 from decimal import Decimal
@@ -9,9 +10,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 
 from ..models import (
-    Organization, Invoice, Bill, BankTransaction, 
-    Expense, Contact, Account, Transaction
+    Organization, Invoice, Bill, BankTransaction,
+    Expense, Contact, Account, AccountType, Transaction
 )
+from .budget_service import BudgetService
 
 
 class AnalyticsReportingService:
@@ -124,7 +126,7 @@ class AnalyticsReportingService:
 
         # Income transactions
         income = self.db.query(
-            func.sum(Invoice.total_amount)
+            func.sum(Invoice.total)
         ).filter(
             Invoice.organization_id == self.org_id,
             Invoice.created_at >= day_start,
@@ -134,7 +136,7 @@ class AnalyticsReportingService:
 
         # Expense transactions
         expenses = self.db.query(
-            func.sum(Expense.total_amount)
+            func.sum(Expense.total)
         ).filter(
             Expense.organization_id == self.org_id,
             Expense.created_at >= day_start,
@@ -144,7 +146,7 @@ class AnalyticsReportingService:
 
         # Bills
         bills_paid = self.db.query(
-            func.sum(Bill.total_amount)
+            func.sum(Bill.total)
         ).filter(
             Bill.organization_id == self.org_id,
             Bill.created_at >= day_start,
@@ -167,7 +169,7 @@ class AnalyticsReportingService:
         end_dt = datetime.combine(end_date, datetime.max.time())
 
         revenue = self.db.query(
-            func.sum(Invoice.total_amount)
+            func.sum(Invoice.total)
         ).filter(
             Invoice.organization_id == self.org_id,
             Invoice.created_at >= start_dt,
@@ -176,7 +178,7 @@ class AnalyticsReportingService:
         ).scalar() or Decimal(0)
 
         expenses = self.db.query(
-            func.sum(Expense.total_amount)
+            func.sum(Expense.total)
         ).filter(
             Expense.organization_id == self.org_id,
             Expense.created_at >= start_dt,
@@ -196,19 +198,65 @@ class AnalyticsReportingService:
         }
 
     def _get_cash_position(self) -> Dict[str, Any]:
-        """Get current cash position summary"""
-        # This would query bank accounts and sum balances
-        # For now, return structure
+        """מצב מזומן נגזר מיתרות חשבונות הבנק האמיתיות."""
+        accounts = self.db.query(Account).filter(
+            Account.organization_id == self.org_id,
+            Account.account_type == AccountType.BANK,
+        ).all()
+
+        total_cash = sum(float(a.balance or 0) for a in accounts)
+        bank_accounts = [
+            {"name": a.name, "balance": float(a.balance or 0), "currency": a.currency}
+            for a in accounts
+        ]
+
+        # יחס נזילות: מזומן מול ספקים באיחור (התחייבויות שוטפות). None כשאין חוב.
+        overdue_ap = self.db.query(func.sum(Bill.balance)).filter(
+            Bill.organization_id == self.org_id,
+            Bill.due_date < date.today(),
+            Bill.status.in_(["received", "approved", "partially_paid", "overdue"]),
+        ).scalar() or Decimal(0)
+        liquidity_ratio = (total_cash / float(overdue_ap)) if overdue_ap else None
+
         return {
-            "total_cash": 0.0,
-            "bank_accounts": [],
-            "liquidity_ratio": 0.0,
+            "total_cash": total_cash,
+            "bank_accounts": bank_accounts,
+            "liquidity_ratio": liquidity_ratio,
         }
+
+    def _prorated_budget(self, start_date: date, end_date: date) -> tuple[float, Dict[str, float]]:
+        """תקציב התקופה: תקציב חודשי אמיתי מ-BudgetService מחולק יחסית למספר הימים."""
+        period_days = (end_date - start_date).days + 1
+        days_in_month = calendar.monthrange(start_date.year, start_date.month)[1]
+        factor = period_days / days_in_month if days_in_month else 0
+
+        summary = BudgetService(self.db, self.org_id).get_budget_vs_actual(
+            start_date.year, start_date.month
+        )
+        by_category = {
+            (c.category_name or str(c.category_id)): c.budget_amount * factor
+            for c in summary.categories
+        }
+        return summary.total_budget * factor, by_category
+
+    def _period_expenses_by_category(self, start_date: date, end_date: date) -> Dict[str, float]:
+        """ביצוע הוצאות בפועל בתקופה, מקובץ לפי קטגוריה."""
+        start_dt = datetime.combine(start_date, datetime.min.time())
+        end_dt = datetime.combine(end_date, datetime.max.time())
+        rows = self.db.query(
+            Expense.category, func.sum(Expense.total)
+        ).filter(
+            Expense.organization_id == self.org_id,
+            Expense.created_at >= start_dt,
+            Expense.created_at <= end_dt,
+            Expense.status != "draft",
+        ).group_by(Expense.category).all()
+        return {(cat or "uncategorized"): float(total or 0) for cat, total in rows}
 
     def _get_ar_ap_summary(self) -> Dict[str, Any]:
         """Get AR/AP summary"""
         overdue_ar = self.db.query(
-            func.sum(Invoice.remaining_balance)
+            func.sum(Invoice.balance)
         ).filter(
             Invoice.organization_id == self.org_id,
             Invoice.due_date < date.today(),
@@ -216,7 +264,7 @@ class AnalyticsReportingService:
         ).scalar() or Decimal(0)
 
         overdue_ap = self.db.query(
-            func.sum(Bill.remaining_balance)
+            func.sum(Bill.balance)
         ).filter(
             Bill.organization_id == self.org_id,
             Bill.due_date < date.today(),
@@ -235,7 +283,7 @@ class AnalyticsReportingService:
 
         # Check for overdue AR
         overdue_ar = self.db.query(
-            func.sum(Invoice.remaining_balance)
+            func.sum(Invoice.balance)
         ).filter(
             Invoice.organization_id == self.org_id,
             Invoice.due_date < date.today(),
@@ -251,7 +299,7 @@ class AnalyticsReportingService:
 
         # Check for overdue AP
         overdue_ap = self.db.query(
-            func.sum(Bill.remaining_balance)
+            func.sum(Bill.balance)
         ).filter(
             Bill.organization_id == self.org_id,
             Bill.due_date < date.today(),
@@ -270,37 +318,31 @@ class AnalyticsReportingService:
     # ==================== Weekly Budget Helpers ====================
 
     def _get_weekly_budget_summary(self, start_date: date, end_date: date) -> Dict[str, Any]:
-        """Get budget summary for week"""
-        # This would query budgets for the organization
+        """סיכום תקציב מול ביצוע לשבוע — תקציב חודשי אמיתי בפרורציה."""
+        budgeted, _ = self._prorated_budget(start_date, end_date)
+        actual = sum(self._period_expenses_by_category(start_date, end_date).values())
         return {
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
-            "budgeted_amount": 0.0,
-            "actual_amount": 0.0,
-            "variance": 0.0,
+            "budgeted_amount": budgeted,
+            "actual_amount": actual,
+            "variance": budgeted - actual,
         }
 
     def _get_actual_vs_budget(self, start_date: date, end_date: date) -> Dict[str, Any]:
-        """Get actual spending vs budget"""
-        start_dt = datetime.combine(start_date, datetime.min.time())
-        end_dt = datetime.combine(end_date, datetime.max.time())
-
-        actual_expenses = self.db.query(
-            func.sum(Expense.total_amount)
-        ).filter(
-            Expense.organization_id == self.org_id,
-            Expense.created_at >= start_dt,
-            Expense.created_at <= end_dt,
-            Expense.status != "draft"
-        ).scalar() or Decimal(0)
+        """ביצוע בפועל מול תקציב התקופה (נגזר מ-BudgetService)."""
+        budgeted, _ = self._prorated_budget(start_date, end_date)
+        actual = sum(self._period_expenses_by_category(start_date, end_date).values())
+        variance = budgeted - actual
+        variance_percent = (variance / budgeted * 100) if budgeted else 0.0
 
         return {
             "period_start": start_date.isoformat(),
             "period_end": end_date.isoformat(),
-            "actual": float(actual_expenses),
-            "budget": 0.0,  # Would pull from budget table
-            "variance": 0.0,
-            "variance_percent": 0.0,
+            "actual": actual,
+            "budget": budgeted,
+            "variance": variance,
+            "variance_percent": variance_percent,
         }
 
     def _get_top_expenses(self, start_date: date, end_date: date, limit: int = 10) -> List[Dict[str, Any]]:
@@ -310,7 +352,7 @@ class AnalyticsReportingService:
 
         top_expenses = self.db.query(
             Expense.category,
-            func.sum(Expense.total_amount).label("total"),
+            func.sum(Expense.total).label("total"),
             func.count(Expense.id).label("count")
         ).filter(
             Expense.organization_id == self.org_id,
@@ -320,7 +362,7 @@ class AnalyticsReportingService:
         ).group_by(
             Expense.category
         ).order_by(
-            func.sum(Expense.total_amount).desc()
+            func.sum(Expense.total).desc()
         ).limit(limit).all()
 
         return [
@@ -334,11 +376,33 @@ class AnalyticsReportingService:
         ]
 
     def _get_variance_analysis(self, start_date: date, end_date: date) -> Dict[str, Any]:
-        """Analyze budget variance"""
+        """סטיות תקציב לפי קטגוריה: תקציב התקופה (פרורציה) מול ביצוע בפועל."""
+        _, budget_by_cat = self._prorated_budget(start_date, end_date)
+        actual_by_cat = self._period_expenses_by_category(start_date, end_date)
+
+        favorable = 0.0
+        unfavorable = 0.0
+        categories = []
+        for cat in sorted(set(budget_by_cat) | set(actual_by_cat)):
+            budgeted = budget_by_cat.get(cat, 0.0)
+            actual = actual_by_cat.get(cat, 0.0)
+            variance = budgeted - actual  # חיובי = מתחת לתקציב (חיובי לעסק)
+            if variance >= 0:
+                favorable += variance
+            else:
+                unfavorable += abs(variance)
+            categories.append({
+                "category": cat,
+                "budget": budgeted,
+                "actual": actual,
+                "variance": variance,
+                "variance_percent": (variance / budgeted * 100) if budgeted else 0.0,
+            })
+
         return {
-            "favorable_variance": 0.0,
-            "unfavorable_variance": 0.0,
-            "variance_categories": [],
+            "favorable_variance": favorable,
+            "unfavorable_variance": unfavorable,
+            "variance_categories": categories,
         }
 
     # ==================== Monthly P&L Helpers ====================
@@ -349,7 +413,7 @@ class AnalyticsReportingService:
         end_dt = datetime.combine(end_date, datetime.max.time())
 
         revenue = self.db.query(
-            func.sum(Invoice.total_amount)
+            func.sum(Invoice.total)
         ).filter(
             Invoice.organization_id == self.org_id,
             Invoice.created_at >= start_dt,
@@ -365,7 +429,7 @@ class AnalyticsReportingService:
         end_dt = datetime.combine(end_date, datetime.max.time())
 
         expenses = self.db.query(
-            func.sum(Expense.total_amount)
+            func.sum(Expense.total)
         ).filter(
             Expense.organization_id == self.org_id,
             Expense.created_at >= start_dt,
@@ -424,7 +488,7 @@ class AnalyticsReportingService:
 
         breakdown = self.db.query(
             Expense.category,
-            func.sum(Expense.total_amount).label("total"),
+            func.sum(Expense.total).label("total"),
             func.count(Expense.id).label("count")
         ).filter(
             Expense.organization_id == self.org_id,
@@ -434,7 +498,7 @@ class AnalyticsReportingService:
         ).group_by(
             Expense.category
         ).order_by(
-            func.sum(Expense.total_amount).desc()
+            func.sum(Expense.total).desc()
         ).all()
 
         total_expenses = sum(exp.total for exp in breakdown) or Decimal(1)

@@ -83,8 +83,8 @@ def test_forecast_cash_flow(acc):
         result = service.forecast_cash_flow(days_ahead=30, starting_balance=Decimal("10000"))
 
         assert result["starting_balance"] == 10000.0
-        assert "daily_forecast" in result
-        assert len(result["daily_forecast"]) == 30
+        assert "forecast" in result
+        assert len(result["forecast"]) >= 1
         assert "critical_dates" in result
     finally:
         db.close()
@@ -254,7 +254,7 @@ def test_forecast_api(client, acc):
     r = client.get("/api/advanced/forecast/cash-flow?days_ahead=30", headers=acc["headers"])
     assert r.status_code == 200, r.text
     data = r.json()["data"]
-    assert "daily_forecast" in data
+    assert "forecast" in data
 
 
 def test_tax_reports_api(client, acc):

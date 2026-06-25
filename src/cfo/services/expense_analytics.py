@@ -29,7 +29,7 @@ class ExpenseAnalyticsService:
             Expense.status != "draft"
         ).all()
 
-        total = sum(exp.total_amount for exp in expenses) or Decimal(0)
+        total = sum(exp.total for exp in expenses) or Decimal(0)
         count = len(expenses)
         average = total / count if count > 0 else Decimal(0)
 
@@ -39,7 +39,7 @@ class ExpenseAnalyticsService:
             "expense_count": count,
             "average_expense": float(average),
             "unique_categories": len(set(exp.category for exp in expenses)),
-            "unique_vendors": len(set(exp.vendor_id for exp in expenses if exp.vendor_id)),
+            "unique_vendors": len(set(exp.supplier_id for exp in expenses if exp.supplier_id)),
         }
 
     def analyze_category_spending(self, days: int = 30) -> List[Dict[str, Any]]:
@@ -51,7 +51,7 @@ class ExpenseAnalyticsService:
 
         category_spending = self.db.query(
             Expense.category,
-            func.sum(Expense.total_amount).label("total"),
+            func.sum(Expense.total).label("total"),
             func.count(Expense.id).label("count")
         ).filter(
             Expense.organization_id == self.org_id,
@@ -60,7 +60,7 @@ class ExpenseAnalyticsService:
         ).group_by(
             Expense.category
         ).order_by(
-            func.sum(Expense.total_amount).desc()
+            func.sum(Expense.total).desc()
         ).all()
 
         total_spending = sum(cat.total for cat in category_spending) or Decimal(1)
@@ -86,20 +86,20 @@ class ExpenseAnalyticsService:
         vendor_spending = self.db.query(
             Contact.name,
             Contact.id,
-            func.sum(Expense.total_amount).label("total"),
+            func.sum(Expense.total).label("total"),
             func.count(Expense.id).label("count"),
-            func.avg(Expense.total_amount).label("average")
+            func.avg(Expense.total).label("average")
         ).join(
-            Contact, Expense.vendor_id == Contact.id
+            Contact, Expense.supplier_id == Contact.id
         ).filter(
             Expense.organization_id == self.org_id,
             Expense.created_at >= start_date,
             Expense.status != "draft",
-            Expense.vendor_id.isnot(None)
+            Expense.supplier_id.isnot(None)
         ).group_by(
             Contact.name, Contact.id
         ).order_by(
-            func.sum(Expense.total_amount).desc()
+            func.sum(Expense.total).desc()
         ).limit(limit).all()
 
         return [
@@ -154,7 +154,7 @@ class ExpenseAnalyticsService:
             if len(category_expenses) < 3:
                 continue
 
-            amounts = [float(e.total_amount) for e in category_expenses]
+            amounts = [float(e.total) for e in category_expenses]
             
             try:
                 mean_amount = mean(amounts)
@@ -165,16 +165,16 @@ class ExpenseAnalyticsService:
 
                 # Find anomalies
                 for exp in category_expenses:
-                    z_score = (float(exp.total_amount) - mean_amount) / std_dev
+                    z_score = (float(exp.total) - mean_amount) / std_dev
                     
                     if abs(z_score) > sensitivity:
                         anomalies.append({
                             "expense_id": exp.id,
                             "category": category,
-                            "amount": float(exp.total_amount),
+                            "amount": float(exp.total),
                             "date": exp.expense_date.isoformat() if exp.expense_date else None,
                             "description": exp.description,
-                            "vendor_name": exp.vendor.name if exp.vendor else "Unknown",
+                            "vendor_name": exp.supplier.name if exp.supplier else "Unknown",
                             "z_score": round(z_score, 2),
                             "mean_for_category": round(mean_amount, 2),
                             "anomaly_type": "unusually_high" if z_score > 0 else "unusually_low",
@@ -212,7 +212,7 @@ class ExpenseAnalyticsService:
             date_key = exp.created_at.date().isoformat()
             if date_key not in daily_amounts:
                 daily_amounts[date_key] = Decimal(0)
-            daily_amounts[date_key] += exp.total_amount
+            daily_amounts[date_key] += exp.total
 
         # Calculate averages
         total = sum(daily_amounts.values()) or Decimal(0)
@@ -331,7 +331,7 @@ class ExpenseAnalyticsService:
             if day_of_month not in category_dates[cat]:
                 category_dates[cat][day_of_month] = []
             
-            category_dates[cat][day_of_month].append(exp.total_amount)
+            category_dates[cat][day_of_month].append(exp.total)
 
         # Find patterns
         recurring_patterns = []
