@@ -28,12 +28,19 @@ export const DocumentManager: React.FC = () => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [filterType, setFilterType] = useState<string>('all');
 
+  const { data: integrationStatus } = useQuery<{ configured: Record<string, boolean> }>({
+    queryKey: ['integration-status'],
+    queryFn: () => apiService.get('/integration/status'),
+  });
+  const isSumitConfigured = integrationStatus?.configured?.sumit === true;
+
   const { data: documents, isLoading } = useQuery<Document[]>({
     queryKey: ['documents', filterType],
     queryFn: async (): Promise<Document[]> => {
       const params = filterType !== 'all' ? { document_type: filterType } : {};
       return apiService.listDocuments(params);
     },
+    enabled: isSumitConfigured,
   });
 
   const sendDocumentMutation = useMutation({
@@ -66,7 +73,8 @@ export const DocumentManager: React.FC = () => {
         <h1 className="text-3xl font-bold text-gray-800">Documents</h1>
         <button
           onClick={() => setIsCreateModalOpen(true)}
-          className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition"
+          disabled={!isSumitConfigured}
+          className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Plus size={20} />
           New Document
@@ -93,6 +101,10 @@ export const DocumentManager: React.FC = () => {
       {/* Documents Table */}
       {isLoading ? (
         <div className="text-center py-12">Loading...</div>
+      ) : !isSumitConfigured ? (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-6">
+          חיבור מסמכים לא מוגדר לארגון הזה עדיין. לאחר הגדרת האינטגרציה, החשבוניות והמסמכים ייטענו כאן.
+        </div>
       ) : (
         <div className="bg-white rounded-lg shadow overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">

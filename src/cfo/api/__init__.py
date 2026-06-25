@@ -1,17 +1,19 @@
 """
 FastAPI application initialization
 """
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from .routes import (
     accounting, crm, payments, communications, admin,
     cashflow, sync, reports, financial_management, financial_operations
 )
-from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, manual_reconciliation, advanced_features
+from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, manual_reconciliation, advanced_features, phase10_12
 from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
+from ..integrations.sumit_integration import SumitAPIError
 
 app = FastAPI(
     title=settings.app_name,
@@ -29,6 +31,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(SumitAPIError)
+async def sumit_api_error_handler(_request, exc: SumitAPIError):
+    return JSONResponse(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        content={
+            "detail": str(exc),
+            "source": "sumit",
+            "code": "external_integration_error",
+        },
+    )
 
 # Include existing routers
 # SUMIT pass-through routers — every route already injects get_sumit_integration
@@ -76,6 +90,10 @@ app.include_router(
 )
 app.include_router(
     advanced_features.router, prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    phase10_12.router, prefix="/api",
     dependencies=[Depends(get_current_user)],
 )
 

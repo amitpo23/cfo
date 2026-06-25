@@ -537,10 +537,17 @@ async def get_ml_ensemble_forecast(
     historical = forecasting_service._get_monthly_revenue(organization_id, 24)
     
     if len(historical) < 12:
-        raise HTTPException(
-            status_code=400,
-            detail="אין מספיק נתונים היסטוריים לתחזית ML (נדרשים לפחות 12 חודשים)"
-        )
+        return {
+            "ensemble": [],
+            "lstm": [],
+            "prophet": [],
+            "xgboost": [],
+            "weights": {"lstm": 0, "prophet": 0, "xgboost": 0},
+            "status": "insufficient_data",
+            "detail": "אין מספיק נתונים היסטוריים לתחזית ML (נדרשים לפחות 12 חודשים)",
+            "required_months": 12,
+            "available_months": len(historical),
+        }
     
     dates = [h['date'] for h in historical]
     values = [h['amount'] for h in historical]

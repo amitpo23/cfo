@@ -25,12 +25,25 @@ export default function OpenFinanceOpsDashboard() {
   const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState<Record<string, any>>({});
   const [busy, setBusy] = useState(false);
+  const [configured, setConfigured] = useState<boolean | null>(null);
 
   const current = TABS.find((t) => t.key === tab)!;
+
+  const loadStatus = async () => {
+    const status = await api.get<{ configured?: Record<string, boolean> }>('/integration/status');
+    const isConfigured = status.configured?.open_finance === true;
+    setConfigured(isConfigured);
+    return isConfigured;
+  };
 
   const load = async () => {
     setLoading(true); setError(null); setRows([]);
     try {
+      const isConfigured = configured ?? await loadStatus();
+      if (!isConfigured) {
+        setError('חיבור Open Finance לא מוגדר לארגון הזה עדיין.');
+        return;
+      }
       const r = await api.get<any>(current.list);
       const items = r[current.itemsKey] || r.items || (Array.isArray(r) ? r : []);
       setRows(Array.isArray(items) ? items : []);
@@ -44,6 +57,11 @@ export default function OpenFinanceOpsDashboard() {
   const create = async () => {
     setBusy(true); setError(null); setNotice(null);
     try {
+      const isConfigured = configured ?? await loadStatus();
+      if (!isConfigured) {
+        setError('חיבור Open Finance לא מוגדר לארגון הזה עדיין.');
+        return;
+      }
       if (tab === 'payments') {
         await api.post('/api/open-finance/payments', {
           paymentInformation: {
@@ -118,7 +136,7 @@ export default function OpenFinanceOpsDashboard() {
           <Field label="שם תצוגה" onChange={(v) => setForm({ ...form, displayName: v })} value={form.displayName} />
           <Field label="חשבון (bban)" onChange={(v) => setForm({ ...form, bban: v })} value={form.bban} />
         </>}
-        <button onClick={create} disabled={busy}
+        <button onClick={create} disabled={busy || configured === false}
           className="inline-flex items-center gap-1 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm hover:bg-emerald-700 disabled:opacity-50">
           {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} צור
         </button>

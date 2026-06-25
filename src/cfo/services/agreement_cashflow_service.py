@@ -518,11 +518,9 @@ class AgreementCashFlowService:
     
     def _add_months(self, d: date, months: int) -> date:
         """הוספת חודשים לתאריך"""
-        month = d.month + months
-        year = d.year
-        while month > 12:
-            month -= 12
-            year += 1
+        month_index = d.year * 12 + (d.month - 1) + months
+        year = month_index // 12
+        month = month_index % 12 + 1
         day = min(d.day, 28)
         return date(year, month, day)
     

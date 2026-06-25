@@ -60,6 +60,10 @@ from .sumit_models import (
 logger = logging.getLogger(__name__)
 
 
+class SumitAPIError(Exception):
+    """Raised when SUMIT returns a business/API error envelope."""
+
+
 # Mapping from this codebase's document type names to SUMIT's
 # Accounting_Typed_DocumentType enum names.
 _DOCUMENT_TYPE_TO_SUMIT = {
@@ -222,7 +226,7 @@ class SumitIntegration(BaseIntegration):
             self._log_error(e, f"HTTP error on {endpoint}")
             # כולל את קוד הסטטוס בהודעה — ל-403 (rate limit) התגובה לרוב ריקה,
             # וקוראים מסתמכים על זיהוי "403" בטקסט כדי לבצע backoff.
-            raise Exception(
+            raise SumitAPIError(
                 f"SUMIT API error {e.response.status_code}: {e.response.text}"
             )
         except Exception as e:
@@ -245,7 +249,7 @@ class SumitIntegration(BaseIntegration):
         """
         response = await self._make_request(endpoint, data=payload, params=params)
         if not isinstance(response, dict):
-            raise Exception(f"SUMIT API error: unexpected response from {endpoint}")
+            raise SumitAPIError(f"SUMIT API error: unexpected response from {endpoint}")
         status = response.get("Status", 0)
         if status not in (0, "0", "Success"):
             message = (
@@ -253,7 +257,7 @@ class SumitIntegration(BaseIntegration):
                 or response.get("TechnicalErrorDetails")
                 or f"Status={status}"
             )
-            raise Exception(f"SUMIT API error: {message}")
+            raise SumitAPIError(f"SUMIT API error: {message}")
         data = response.get("Data")
         return data if isinstance(data, dict) else ({} if data is None else data)
 
@@ -282,7 +286,7 @@ class SumitIntegration(BaseIntegration):
                     or body.get("TechnicalErrorDetails")
                     or f"Status={body.get('Status')}"
                 )
-                raise Exception(f"SUMIT API error: {message}")
+                raise SumitAPIError(f"SUMIT API error: {message}")
         return response.content
 
     # ==================== Conversion helpers ====================
