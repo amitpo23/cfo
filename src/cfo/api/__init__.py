@@ -8,7 +8,7 @@ from .routes import (
     accounting, crm, payments, communications, admin,
     cashflow, sync, reports, financial_management, financial_operations
 )
-from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, manual_reconciliation, advanced_features, phase10_12
+from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, manual_reconciliation, advanced_features, phase10_12, analytics
 from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding
 from .dependencies import get_current_user
 from ..config import settings
@@ -110,6 +110,13 @@ app.include_router(
     cfo_tasks.router, prefix="/api", tags=["CFO Tasks & Alerts"],
     dependencies=[Depends(get_current_user)],
 )
+
+# Phase 13: Analytics & Business Intelligence
+app.include_router(
+    analytics.router, prefix="/api",
+    dependencies=[Depends(get_current_user)],
+)
+
 # Open Finance — full integration + bank intelligence. Per-route auth via
 # get_current_org_id; the /webhooks route is intentionally public (Open Finance
 # posts events to it and no signature scheme is documented).
