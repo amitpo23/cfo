@@ -148,6 +148,77 @@ const solutionCards = [
   },
 ];
 
+const capabilityPillars = [
+  {
+    title: 'הנהלת חשבונות כפולה וספרים',
+    text: 'פקודות יומן, סיווגים, מאזן בוחן, רווח והפסד, חומרים למאזן ובקרת שלמות בין כל המסמכים והתנועות.',
+    icon: BookOpen,
+  },
+  {
+    title: 'בנק, התאמות ותזרים',
+    text: 'קליטת תנועות, התאמות אוטומטיות, מעקב יתרות, תחזיות תזרים, חריגות בנקאיות ודוחות שמוכנים להצגה להנהלה ולבנק.',
+    icon: Landmark,
+  },
+  {
+    title: 'גבייה, לקוחות ותשלומים',
+    text: 'מעקב מי חייב לנו, חשבוניות פתוחות, בקשות תשלום, סליקה, הוראות קבע, החזרות חיוב והתראות על כסף שלא צפוי להיכנס.',
+    icon: CreditCard,
+  },
+  {
+    title: 'ספקים, הוצאות ורכש',
+    text: 'קליטת הוצאות, OCR, ספקים, תשלומים צפויים, ניכויים, בקרת חריגות וזיהוי הוצאות כפולות או לא מוסברות.',
+    icon: ClipboardCheck,
+  },
+  {
+    title: 'דוחות הנהלה יומיים',
+    text: 'רווח והפסד יומי, תקציב מול בפועל, KPI, דוחות יומיים, דוחות שנתיים, השוואות תקופתיות ודשבורדים לכל רמת ניהול.',
+    icon: BarChart3,
+  },
+  {
+    title: 'משרד, קבוצות וחברות רבות',
+    text: 'ניהול כמה חברות או לקוחות, הרשאות משתמשים, תצוגת על, הפרדת ארגונים ויכולת לעבוד כמשרד CFO או משרד מייצג.',
+    icon: Layers3,
+  },
+  {
+    title: 'AI פיננסי וזיהוי חריגות',
+    text: 'סוכן CFO שמסביר מה קרה, מזהה אנומליות, מציף סיכונים, ממליץ על פעולות ומתרגם מספרים להחלטות.',
+    icon: Sparkles,
+  },
+  {
+    title: 'תפעול עסקי מלא',
+    text: 'שכר, מלאי, תשלומים, מס״ב, מסמכים, לקוחות, ספקים, בנק, דוחות ובקרה במקום אחד שמדבר בשפה של העסק.',
+    icon: Workflow,
+  },
+];
+
+const platformProof = [
+  '75+ מנועי שירות שמטפלים בלוגיקה העסקית',
+  '300+ פעולות API לתהליכי כספים, דוחות ותפעול',
+  'בסיס נתונים PostgreSQL עם ORM מלא',
+  'אימות JWT מוכן לעבודה מרובת משתמשים',
+  '357 בדיקות אוטומטיות שעוברות',
+  'מוכן לפרודקשן בענן עם הפרדת ארגונים והרשאות',
+];
+
+const marketingMessages = [
+  {
+    title: 'למנכ״ל',
+    text: 'לדעת בכל יום אם החברה מרוויחה, מי חייב כסף, מה עומד לצאת ומה הסיכון התזרימי הקרוב.',
+  },
+  {
+    title: 'לבעל העסק',
+    text: 'להחליף עבודה ידנית, אקסלים ושיחות חוזרות במערכת אחת שמבצעת, בודקת ומסבירה.',
+  },
+  {
+    title: 'ל-CFO',
+    text: 'לקבל שכבת בקרה, תחזיות, KPI, חריגות, תקציב מול בפועל ודוחות מוכנים לדיון.',
+  },
+  {
+    title: 'למשרד מייצג',
+    text: 'לנהל הרבה לקוחות בתצוגת על, עם הרשאות, סטטוסים, משימות ודוחות עבודה מסודרים.',
+  },
+];
+
 const anomalyItems = [
   'חיובים כפולים',
   'הוצאות חריגות',
@@ -396,6 +467,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           <nav className="hidden items-center gap-6 text-sm text-slate-300 lg:flex">
             <a href="#pain" className="hover:text-white">הכאב</a>
             <a href="#solution" className="hover:text-white">הפתרון</a>
+            <a href="#capabilities" className="hover:text-white">יכולות</a>
             <a href="#command-center" className="hover:text-white">Command Center</a>
             <a href="#plans" className="hover:text-white">תמחור</a>
             <a href="#signup" className="hover:text-white">הרשמה</a>
@@ -476,6 +548,79 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
             {solutionCards.map((card) => (
               <SolutionCard key={card.title} {...card} />
             ))}
+          </div>
+        </section>
+
+        <section id="capabilities" className="border-y border-slate-200 bg-white">
+          <div className="mx-auto max-w-7xl px-5 py-16">
+            <div className="grid gap-8 lg:grid-cols-[0.82fr_1.18fr] lg:items-start">
+              <div>
+                <SectionHeading
+                  eyebrow="היכולות"
+                  title="מערכת כספים מלאה, לא מסך דוחות יפה"
+                  text="רצף בנויה כמערכת תפעול פיננסית מקצה לקצה: הנהלת חשבונות, בנק, גבייה, תשלומים, ספקים, שכר, מלאי, דוחות, תחזיות ובקרה. כל פעולה נכנסת לאותו רצף מספרים, וכל מספר נבדק מול המספרים האחרים."
+                />
+                <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-5">
+                  <div className="mb-3 flex items-center gap-2 text-sm font-bold text-blue-800">
+                    <ShieldCheck className="h-4 w-4" />
+                    למה זה מרגיש אחרת מתוכנת הנהלת חשבונות רגילה?
+                  </div>
+                  <p className="text-sm leading-7 text-blue-900">
+                    כי רצף לא מסתפקת ברישום הפעולה. היא בודקת אם הכסף נכנס, אם המסמך תואם,
+                    אם התשלום חריג, אם התזרים נפגע, ואם יש פעולה שהעסק צריך לבצע עכשיו.
+                  </p>
+                </div>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                {capabilityPillars.map((item) => (
+                  <CapabilityCard key={item.title} {...item} />
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-10 grid gap-4 rounded-lg border border-slate-200 bg-slate-950 p-5 text-white lg:grid-cols-[0.8fr_1.2fr]">
+              <div>
+                <div className="text-sm font-semibold text-emerald-300">תשתית מוצר</div>
+                <h3 className="mt-2 text-2xl font-bold">מתחת לשיווק יש מערכת אמיתית</h3>
+                <p className="mt-3 text-sm leading-7 text-slate-300">
+                  זה לא prototype של דשבורד. זו שכבת מוצר עם שירותים, הרשאות, בסיס נתונים, API ובדיקות,
+                  שמיועדת להחזיק עבודה פיננסית של חברות ולקוחות מרובים.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {platformProof.map((item) => (
+                  <div key={item} className="flex items-start gap-2 rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-slate-100">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                    <span>{item}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="mx-auto max-w-7xl px-5 py-16">
+          <SectionHeading
+            eyebrow="מסר לפרסום"
+            title="לא עוד דוח בסוף החודש. מערכת שמנהלת את הכסף בזמן אמת."
+            text="הפרסום של רצף צריך לדבר על תוצאה עסקית: פחות עבודה ידנית, פחות עלויות הנהלת חשבונות, יותר שליטה, יותר בקרה, ויותר החלטות בזמן."
+          />
+          <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {marketingMessages.map((message) => (
+              <div key={message.title} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="text-sm font-semibold text-blue-600">{message.title}</div>
+                <p className="mt-3 text-sm leading-7 text-slate-700">{message.text}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-5">
+            <div className="text-lg font-bold text-emerald-950">
+              רצף מחליפה את העבודה הידנית סביב הנהלת החשבונות ומוסיפה שכבת CFO שלא הייתה קיימת לעסק.
+            </div>
+            <p className="mt-2 text-sm leading-7 text-emerald-900">
+              במקום להסתכל אחורה על מה שכבר קרה, רצף עוזרת להבין מה קורה עכשיו:
+              רווחיות, גבייה, תזרים, תשלומים, חריגות, תקציב, דוחות והמלצות פעולה.
+            </p>
           </div>
         </section>
 
@@ -794,6 +939,20 @@ function SolutionCard({ title, text, icon: Icon }: { title: string; text: string
       </div>
       <h3 className="text-lg font-bold text-slate-950">{title}</h3>
       <p className="mt-2 text-sm leading-6 text-slate-600">{text}</p>
+    </div>
+  );
+}
+
+function CapabilityCard({ title, text, icon: Icon }: { title: string; text: string; icon: LucideIcon }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+      <div className="mb-4 flex items-center gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-950 text-white">
+          <Icon className="h-5 w-5" />
+        </div>
+        <h3 className="text-base font-bold text-slate-950">{title}</h3>
+      </div>
+      <p className="text-sm leading-6 text-slate-600">{text}</p>
     </div>
   );
 }
