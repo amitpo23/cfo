@@ -14,7 +14,7 @@ until the document counts in our DB match the counts reported live by the source
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 

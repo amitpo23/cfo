@@ -572,7 +572,13 @@ class CFOBrainService:
         insight_type = insight.insight_type or "general"
         priority = self.SEVERITY_PRIORITY.get(insight.severity or "info", 10)
         if insight.updated_at:
-            age_days = max((datetime.now(timezone.utc) - insight.updated_at).days, 0)
+            # Ensure both datetimes are timezone-aware or naive for comparison
+            updated_at = insight.updated_at
+            now = datetime.now(timezone.utc)
+            if updated_at.tzinfo is None:
+                # Naive datetime - make it UTC-aware
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            age_days = max((now - updated_at).days, 0)
             priority = max(priority - min(age_days, 20), 1)
 
         return {

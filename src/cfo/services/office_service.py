@@ -15,7 +15,7 @@ Sync execution itself runs through the existing async SyncEngine in the routes.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from ..models import (
