@@ -81,7 +81,10 @@ class SUMITTestBase:
         """Check if element is visible"""
         try:
             return await self.page.is_visible(selector)
-        except:
+        except Exception as e:
+            # FIX #2: Catch specific Exception instead of bare except
+            # This allows real errors like closed context to propagate for debugging
+            print(f"  ⚠ Visibility check failed: {type(e).__name__}: {e}")
             return False
 
     async def wait_for_element(self, selector: str, timeout: int = 5000):

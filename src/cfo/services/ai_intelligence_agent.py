@@ -2,7 +2,7 @@
 Phase 13C: AI Intelligence Agent with RAG
 Retrieval-Augmented Generation for financial insights
 """
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Dict, List, Optional, Any
 from decimal import Decimal
 from sqlalchemy.orm import Session
@@ -57,7 +57,7 @@ class AIIntelligenceAgent:
             "answer": answer,
             "confidence": self._calculate_confidence(relevant_data),
             "data_sources": relevant_data.get("sources", []),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     def generate_daily_insights(self) -> List[Dict[str, Any]]:
@@ -156,7 +156,7 @@ class AIIntelligenceAgent:
         health_score = self.get_financial_health_score()
 
         return {
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "period": "last_90_days",
             "key_metrics": {
                 "total_revenue": revenue_summary["total_invoiced"],

@@ -2,7 +2,7 @@
 Phase 13D: Analytics Reporting Service
 Generates daily, weekly, and monthly financial reports with insights
 """
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Dict, List, Optional, Any
 from decimal import Decimal
 from sqlalchemy.orm import Session
@@ -41,7 +41,7 @@ class AnalyticsReportingService:
         return {
             "report_type": "daily",
             "report_date": report_date.isoformat(),
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "summary": self._get_daily_summary(report_date),
             "yesterday_comparison": self._get_daily_summary(yesterday),
             "cumulative_pl_current_month": self._get_cumulative_pl(month_start, report_date),
@@ -70,7 +70,7 @@ class AnalyticsReportingService:
             "report_type": "weekly_budget",
             "week_start": week_start.isoformat(),
             "week_end": week_end.isoformat(),
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "budget_summary": self._get_weekly_budget_summary(week_start, week_end),
             "actual_vs_budget": self._get_actual_vs_budget(week_start, week_end),
             "top_expenses": self._get_top_expenses(week_start, week_end, limit=10),
@@ -103,7 +103,7 @@ class AnalyticsReportingService:
             "report_type": "monthly_pl",
             "month": report_month.isoformat(),
             "month_end": month_end.isoformat(),
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "revenue": self._get_monthly_revenue(report_month, month_end),
             "expenses": self._get_monthly_expenses(report_month, month_end),
             "operating_profit": self._get_operating_profit(report_month, month_end),

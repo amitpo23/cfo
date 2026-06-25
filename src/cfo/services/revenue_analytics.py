@@ -2,7 +2,7 @@
 Phase 13A: Sales & Revenue Analytics Service
 Analyzes revenue sources and sales segments
 """
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Dict, List, Optional, Any
 from decimal import Decimal
 from statistics import mean
@@ -21,7 +21,7 @@ class RevenueAnalyticsService:
 
     def get_revenue_summary(self, days: int = 30) -> Dict[str, Any]:
         """Get revenue summary for period"""
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         invoices = self.db.query(Invoice).filter(
             Invoice.organization_id == self.org_id,
@@ -48,7 +48,7 @@ class RevenueAnalyticsService:
         Analyze revenue by customer
         Returns: top customers with revenue metrics
         """
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         customer_revenue = self.db.query(
             Contact.id,
@@ -90,7 +90,7 @@ class RevenueAnalyticsService:
         """
         Analyze revenue by product/service category
         """
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         # Query revenue by category
         category_revenue = self.db.query(
@@ -125,7 +125,7 @@ class RevenueAnalyticsService:
         """
         Analyze revenue by customer region/geography
         """
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         region_revenue = self.db.query(
             Contact.country,
@@ -290,7 +290,7 @@ class RevenueAnalyticsService:
         """
         Analyze revenue trends over time
         """
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         daily_revenue = {}
         invoices = self.db.query(Invoice).filter(
@@ -337,7 +337,7 @@ class RevenueAnalyticsService:
         - Conversion metrics
         """
         # Get invoices from last 90 days
-        start_date = datetime.utcnow() - timedelta(days=90)
+        start_date = datetime.now(timezone.utc) - timedelta(days=90)
         
         invoices = self.db.query(Invoice).filter(
             Invoice.organization_id == self.org_id,

@@ -25,6 +25,8 @@ class CompletTestRunner:
     def __init__(self):
         self.all_results = []
         self.start_time = None
+        # FIX #6: Track test suites for cleanup
+        self.test_suites = []
         
     async def run_all(self):
         """Run all test suites"""
@@ -32,29 +34,45 @@ class CompletTestRunner:
         print("CFO SYSTEM - COMPLETE INTEGRATION TEST SUITE")
         print("="*70)
         
-        # Run SUMIT tests
-        print("\n[RUNNING] SUMIT Integration Tests")
-        print("-"*70)
-        sumit_tests = SUMITConnectionTests()
-        await sumit_tests.run_all_tests()
-        self.all_results.extend(sumit_tests.test_results)
-        
-        # Run CFO UI tests
-        print("\n[RUNNING] CFO UI Tests")
-        print("-"*70)
-        ui_tests = DashboardUITests()
-        await ui_tests.run_all_tests()
-        self.all_results.extend(ui_tests.test_results)
-        
-        # Run data sync tests
-        print("\n[RUNNING] Data Synchronization Tests")
-        print("-"*70)
-        sync_tests = BackendFrontendSyncTests()
-        await sync_tests.run_all_tests()
-        self.all_results.extend(sync_tests.test_results)
-        
-        # Print final summary
-        self.print_final_summary()
+        try:
+            # Run SUMIT tests
+            print("\n[RUNNING] SUMIT Integration Tests")
+            print("-"*70)
+            sumit_tests = SUMITConnectionTests()
+            self.test_suites.append(sumit_tests)
+            await sumit_tests.run_all_tests()
+            self.all_results.extend(sumit_tests.test_results)
+            
+            # Run CFO UI tests
+            print("\n[RUNNING] CFO UI Tests")
+            print("-"*70)
+            ui_tests = DashboardUITests()
+            self.test_suites.append(ui_tests)
+            await ui_tests.run_all_tests()
+            self.all_results.extend(ui_tests.test_results)
+            
+            # Run data sync tests
+            print("\n[RUNNING] Data Synchronization Tests")
+            print("-"*70)
+            sync_tests = BackendFrontendSyncTests()
+            self.test_suites.append(sync_tests)
+            await sync_tests.run_all_tests()
+            self.all_results.extend(sync_tests.test_results)
+            
+            # Print final summary
+            self.print_final_summary()
+        finally:
+            # FIX #6: Cleanup playwright resources on exit (success or exception)
+            await self._cleanup_all()
+    
+    async def _cleanup_all(self):
+        """Cleanup all test resources"""
+        for suite in self.test_suites:
+            try:
+                if hasattr(suite, 'teardown'):
+                    await suite.teardown()
+            except Exception as e:
+                print(f"  ⚠ Cleanup error for {suite.__class__.__name__}: {e}")
     
     def print_final_summary(self):
         """Print final test summary"""

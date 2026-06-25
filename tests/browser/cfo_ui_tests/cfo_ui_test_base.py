@@ -4,6 +4,7 @@ Provides shared functionality for CFO UI tests
 """
 import os
 import asyncio
+import json
 from typing import Optional
 from datetime import datetime
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
@@ -66,11 +67,12 @@ class CFOUITestBase:
             # Wait for dashboard
             await self.page.wait_for_url(f"{self.cfo_url}/dashboard")
             print(f"  ✓ Login successful")
-        except:
+        except Exception as e:
             print(f"  ℹ Using auth token from environment")
-            # Set auth token in local storage
+            # Set auth token in local storage (FIX #1: Use JSON.stringify to avoid injection)
+            auth_token = os.getenv("CFO_AUTH_TOKEN", "")
             await self.page.evaluate(f'''
-                localStorage.setItem('auth_token', '{os.getenv("CFO_AUTH_TOKEN", "")}')
+                localStorage.setItem('auth_token', {json.dumps(auth_token)})
             ''')
 
     async def get_text(self, selector: str) -> str:
@@ -81,7 +83,8 @@ class CFOUITestBase:
         """Check if element is visible"""
         try:
             return await self.page.is_visible(selector)
-        except:
+        except Exception as e:
+            # FIX #3: Catch specific Exception, not bare except
             return False
 
     async def wait_for_element(self, selector: str, timeout: int = 5000):
@@ -112,18 +115,45 @@ class CFOUITestBase:
             "Authorization": f"Bearer {os.getenv('CFO_AUTH_TOKEN', '')}"
         }
         
-        if method == "GET":
-            response = await self.page.request.get(f"{self.cfo_url}{endpoint}", headers=headers)
-        elif method == "POST":
-            response = await self.page.request.post(f"{self.cfo_url}{endpoint}", headers=headers, data=data)
-        elif method == "PUT":
-            response = await self.page.request.put(f"{self.cfo_url}{endpoint}", headers=headers, data=data)
-        else:
-            raise ValueError(f"Unsupported method: {method}")
+        # FIX #5: Add timeout to prevent indefinite hangs
+        request_timeout = 30000  # 30 seconds
         
-        result = await response.json()
-        print(f"  ✓ Response status: {response.status}")
-        return result
+        try:
+            if method == "GET":
+                response = await self.page.request.get(
+                    f"{self.cfo_url}{endpoint}", 
+                    headers=headers,
+                    timeout=request_timeout
+                )
+            elif method == "POST":
+                response = await self.page.request.post(
+                    f"{self.cfo_url}{endpoint}", 
+                    headers=headers, 
+                    data=data,
+                    timeout=request_timeout
+                )
+            elif method == "PUT":
+                response = await self.page.request.put(
+                    f"{self.cfo_url}{endpoint}", 
+                    headers=headers, 
+                    data=data,
+                    timeout=request_timeout
+                )
+            else:
+                raise ValueError(f"Unsupported method: {method}")
+            
+            # FIX #4: Handle non-JSON responses gracefully
+            try:
+                result = await response.json()
+            except json.JSONDecodeError as e:
+                print(f"  ✗ Response is not JSON (status {response.status}): {e}")
+                raise ValueError(f"Expected JSON response, got {response.content_type}") from e
+            
+            print(f"  ✓ Response status: {response.status}")
+            return result
+        except Exception as e:
+            print(f"  ✗ API request failed: {e}")
+            raise
 
     def add_result(self, test_name: str, status: str, message: str = ""):
         """Add test result"""

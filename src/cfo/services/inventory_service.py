@@ -2,7 +2,7 @@
 שירות מלאי — דוח מלאי קיים, שערוך, והתראות מלאי נמוך
 Inventory service: current-stock report, valuation, low-stock alerts, SUMIT sync.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional
 
@@ -145,7 +145,7 @@ class InventoryService:
             item.name = s.name or item.name or ext
             item.quantity = s.quantity
             item.unit = s.unit or item.unit or "unit"
-            item.last_updated = datetime.utcnow()
+            item.last_updated = datetime.now(timezone.utc)
 
         self.db.commit()
         return {"synced": created + updated, "created": created, "updated": updated}

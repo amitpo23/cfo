@@ -7,7 +7,7 @@ feed back into classifier confidence and pattern memory.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
@@ -112,7 +112,7 @@ class ManualReconciliationService:
         if not exp.classifier_feedback:
             exp.classifier_feedback = []
         exp.classifier_feedback.append({
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "old_category": old_category,
             "new_category": corrected_category,
             "supplier": exp.supplier_name,

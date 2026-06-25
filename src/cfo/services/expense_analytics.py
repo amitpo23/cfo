@@ -2,7 +2,7 @@
 Phase 13B: Expense & Cost Analysis Service
 Analyzes spending patterns and detects anomalies
 """
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from decimal import Decimal
 from statistics import stdev, mean
@@ -21,7 +21,7 @@ class ExpenseAnalyticsService:
 
     def get_expense_summary(self, days: int = 30) -> Dict[str, Any]:
         """Get expense summary for period"""
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
         
         expenses = self.db.query(Expense).filter(
             Expense.organization_id == self.org_id,
@@ -47,7 +47,7 @@ class ExpenseAnalyticsService:
         Analyze spending by category
         Returns: category, total, count, average, percentage of total
         """
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         category_spending = self.db.query(
             Expense.category,
@@ -81,7 +81,7 @@ class ExpenseAnalyticsService:
         Analyze spending by vendor
         Returns: top vendors with spending analysis
         """
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         vendor_spending = self.db.query(
             Contact.name,
@@ -126,7 +126,7 @@ class ExpenseAnalyticsService:
                     2.0 = ~95% confidence (more anomalies)
                     3.0 = ~99.7% confidence (fewer anomalies)
         """
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         # Get all expenses for period
         expenses = self.db.query(Expense).filter(
@@ -189,7 +189,7 @@ class ExpenseAnalyticsService:
         Analyze spending trends over time
         Returns: daily, weekly, monthly averages and trends
         """
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         expenses = self.db.query(Expense).filter(
             Expense.organization_id == self.org_id,
@@ -311,7 +311,7 @@ class ExpenseAnalyticsService:
 
     def _find_recurring_expenses(self, days: int = 180) -> List[Dict[str, Any]]:
         """Find recurring expenses by category"""
-        start_date = datetime.utcnow() - timedelta(days=days)
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
         # Group by category and date patterns
         category_dates = {}

@@ -159,14 +159,14 @@ class EmailExpenseIntakeService:
                 amount=0,  # Will be filled by OCR
                 vat_amount=0,
                 total=0,
-                expense_date=datetime.utcnow().date(),
+                expense_date=datetime.now(timezone.utc).date(),
                 status="pending",
                 receipt_file=attachments[0]["content"],  # Store first attachment
                 raw_data={
                     "sender_email": sender_email,
                     "subject": subject,
                     "attachment_count": len(attachments),
-                    "received_at": datetime.utcnow().isoformat(),
+                    "received_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             self.db.add(exp)
