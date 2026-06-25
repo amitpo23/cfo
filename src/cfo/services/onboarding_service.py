@@ -143,7 +143,7 @@ async def run_onboarding(db, organization_id: int, source: str = "sumit",
             db.commit()
             continue
         row.status = "running"
-        row.started_at = datetime.utcnow()
+        row.started_at = datetime.now(timezone.utc)
         row.attempts = (row.attempts or 0) + 1
         db.commit()
         try:
@@ -152,7 +152,7 @@ async def run_onboarding(db, organization_id: int, source: str = "sumit",
             row.result = {k: v for k, v in result.items() if k != "ok"}
             row.status = "completed" if ok else "failed"
             row.error = None if ok else result.get("message", "step did not reconcile")
-            row.completed_at = datetime.utcnow() if ok else None
+            row.completed_at = datetime.now(timezone.utc) if ok else None
             db.commit()
             if not ok:
                 break  # do not proceed past an unreconciled step

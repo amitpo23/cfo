@@ -1,6 +1,6 @@
 
 """Phase 12: Compliance and audit service."""
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,7 @@ class ComplianceAuditService:
         self.audit_log = []
 
     def log_change(self, user_id: Optional[int], action: str, entity_type: str, entity_id: int, changes: dict[str, Any]) -> dict[str, Any]:
-        return {"entry_id": len(self.audit_log), "timestamp": datetime.utcnow().isoformat(), "action": action, "entity": f"{entity_type}/{entity_id}", "user_id": user_id}
+        return {"entry_id": len(self.audit_log), "timestamp": datetime.now(timezone.utc).isoformat(), "action": action, "entity": f"{entity_type}/{entity_id}", "user_id": user_id}
 
     def get_audit_trail(self, entity_type: Optional[str] = None, entity_id: Optional[int] = None, action: Optional[str] = None, from_date: Optional[date] = None, to_date: Optional[date] = None) -> list[dict[str, Any]]:
         return []

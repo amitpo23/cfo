@@ -150,7 +150,7 @@ class OpenFinanceConnector(AccountingConnector):
         return NormalizedBankTransaction(
             external_id=f"open_finance:{external_id}",
             account_external_id=f"open_finance:{account_id}" if account_id else None,
-            transaction_date=_transaction_date(item) or datetime.utcnow().date(),
+            transaction_date=_transaction_date(item) or datetime.now(timezone.utc).date(),
             description=description,
             amount=amount,
             currency=currency or "ILS",

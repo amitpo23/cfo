@@ -7,7 +7,7 @@ supported by the current connector.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -86,7 +86,7 @@ async def dispatch_reconciliation_to_sumit(
             result = await post(payload)
             external_id = _external_id_from_result(result)
             row.reconciliation_dispatch_status = "confirmed"
-            row.reconciliation_dispatched_at = datetime.utcnow()
+            row.reconciliation_dispatched_at = datetime.now(timezone.utc)
             row.external_reconciliation_id = external_id
             row.reconciliation_error = None
             items.append(_item(row, status="confirmed", result=result))

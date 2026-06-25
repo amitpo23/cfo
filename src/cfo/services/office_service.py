@@ -135,7 +135,7 @@ def register_client(
         existing.name = name
         existing.status = "active"
         existing.target_organization_id = client_org.id
-        existing.updated_at = datetime.utcnow()
+        existing.updated_at = datetime.now(timezone.utc)
         roster = existing
     else:
         roster = SumitCompany(
@@ -251,7 +251,7 @@ def _upsert_integration(db, org_id: int, source: str, credentials: dict) -> None
     if conn:
         conn.status = "active"
         conn.credentials_encrypted = encrypt_credentials(credentials)
-        conn.updated_at = datetime.utcnow()
+        conn.updated_at = datetime.now(timezone.utc)
     else:
         db.add(IntegrationConnection(
             organization_id=org_id,

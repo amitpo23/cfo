@@ -3,7 +3,7 @@ Tasks, Alerts, Notes, and Reports API routes.
 """
 import csv
 import io
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -115,7 +115,7 @@ async def update_task(
         task.status = payload.status
     if payload.due_date is not None:
         task.due_date = payload.due_date
-    task.updated_at = datetime.utcnow()
+    task.updated_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(task)
@@ -173,9 +173,9 @@ async def update_alert(
     if payload.status is not None:
         alert.status = payload.status
         if payload.status == AlertStatus.ACKNOWLEDGED:
-            alert.acknowledged_at = datetime.utcnow()
+            alert.acknowledged_at = datetime.now(timezone.utc)
         elif payload.status == AlertStatus.RESOLVED:
-            alert.resolved_at = datetime.utcnow()
+            alert.resolved_at = datetime.now(timezone.utc)
 
     db.commit()
     return {"id": alert.id, "status": alert.status.value}

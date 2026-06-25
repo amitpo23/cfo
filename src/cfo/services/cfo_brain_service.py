@@ -4,7 +4,7 @@ CFO Brain service.
 Persists internal financial memory, generates actionable insights, and creates
 tasks from SUMIT, bank/Open Finance, budget, and reconciliation data.
 """
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -99,7 +99,7 @@ class CFOBrainService:
 
         return {
             "organization_id": self.organization_id,
-            "analyzed_at": datetime.utcnow().isoformat(),
+            "analyzed_at": datetime.now(timezone.utc).isoformat(),
             "insights_generated": len(persisted),
             "tasks_created": tasks_created,
             "overview": overview,
@@ -149,7 +149,7 @@ class CFOBrainService:
 
         return {
             "organization_id": self.organization_id,
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "count": len(recommendations),
             "disclaimer": self.RECOMMENDATION_DISCLAIMER,
             "recommendations": recommendations,
@@ -169,9 +169,9 @@ class CFOBrainService:
             raise ValueError("Insight not found")
 
         insight.status = status
-        insight.updated_at = datetime.utcnow()
+        insight.updated_at = datetime.now(timezone.utc)
         if status == "resolved":
-            insight.resolved_at = datetime.utcnow()
+            insight.resolved_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(insight)
         return self._serialize_insight(insight)
@@ -207,7 +207,7 @@ class CFOBrainService:
             CfoMemory.organization_id == self.organization_id,
             CfoMemory.memory_key == key,
         ).first()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if existing:
             existing.memory_type = memory_type
             existing.value = value
@@ -499,7 +499,7 @@ class CFOBrainService:
             CfoInsight.organization_id == self.organization_id,
             CfoInsight.fingerprint == item["fingerprint"],
         ).first()
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if existing:
             existing.insight_type = item["insight_type"]
             existing.severity = item["severity"]
@@ -572,7 +572,7 @@ class CFOBrainService:
         insight_type = insight.insight_type or "general"
         priority = self.SEVERITY_PRIORITY.get(insight.severity or "info", 10)
         if insight.updated_at:
-            age_days = max((datetime.utcnow() - insight.updated_at).days, 0)
+            age_days = max((datetime.now(timezone.utc) - insight.updated_at).days, 0)
             priority = max(priority - min(age_days, 20), 1)
 
         return {

@@ -100,7 +100,7 @@ class SyncEngine:
             sync_type="full" if not entity_types else "partial",
             entity_types=",".join(types_to_sync),
             status=SyncStatus.RUNNING,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
             counts={},
         )
         self.db.add(sync_run)
@@ -127,7 +127,7 @@ class SyncEngine:
         sync_run.status = SyncStatus.PARTIAL if has_errors else SyncStatus.COMPLETED
         if all(isinstance(c, dict) and "error" in c for c in counts.values()):
             sync_run.status = SyncStatus.FAILED
-        sync_run.finished_at = datetime.utcnow()
+        sync_run.finished_at = datetime.now(timezone.utc)
         sync_run.counts = counts
         if errors:
             sync_run.error_summary = f"{len(errors)} entity types had errors"
@@ -137,7 +137,7 @@ class SyncEngine:
         if self.connection_id:
             conn = self.db.query(IntegrationConnection).get(self.connection_id)
             if conn:
-                conn.last_synced_at = datetime.utcnow()
+                conn.last_synced_at = datetime.now(timezone.utc)
 
         self.db.commit()
         self.db.refresh(sync_run)
@@ -222,7 +222,7 @@ class SyncEngine:
             existing.account_type = acct_type
             existing.balance = item.balance
             existing.currency = item.currency
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
         account = Account(
@@ -264,7 +264,7 @@ class SyncEngine:
             existing.is_active = item.is_active
             existing.raw_data = item.raw_data
             existing.payload_hash = payload_hash
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
         contact_type_map = {
@@ -340,7 +340,7 @@ class SyncEngine:
             existing.line_items = item.line_items
             existing.raw_data = item.raw_data
             existing.payload_hash = payload_hash
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
         invoice = Invoice(
@@ -414,7 +414,7 @@ class SyncEngine:
             existing.line_items = item.line_items
             existing.raw_data = item.raw_data
             existing.payload_hash = payload_hash
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
         bill = Bill(
