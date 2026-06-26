@@ -125,3 +125,17 @@ def test_dispatch_records_failure_without_crashing(fresh_org):
         assert summary["failed"] >= 1
     finally:
         db.close()
+
+
+def test_cron_collection_requires_secret(client):
+    r = client.get("/api/cron/collection-reminders")
+    assert r.status_code in (401, 403)
+
+
+def test_cron_collection_runs_for_enabled_orgs(client, monkeypatch):
+    from cfo.config import settings
+    monkeypatch.setattr(settings, "cron_secret", "testsecret", raising=False)
+    r = client.get("/api/cron/collection-reminders",
+                   headers={"Authorization": "Bearer testsecret"})
+    assert r.status_code == 200
+    assert "summary" in r.json()

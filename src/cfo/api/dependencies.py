@@ -189,6 +189,27 @@ async def get_sumit_integration(
     return SumitIntegration(api_key=api_key, company_id=company_id)
 
 
+def sumit_for_org(db: Session, org_id: int):
+    """בונה SumitIntegration לארגון נתון מחוץ ל-request (ל-cron). None אם אין מפתח."""
+    from ..integrations.sumit_integration import SumitIntegration
+    from ..models import IntegrationConnection
+    from ..services.credentials_vault import decrypt_credentials
+
+    conn = db.query(IntegrationConnection).filter(
+        IntegrationConnection.organization_id == org_id,
+        IntegrationConnection.source == "sumit",
+        IntegrationConnection.status == "active",
+    ).order_by(IntegrationConnection.id).first()
+    creds = decrypt_credentials(conn.credentials_encrypted) if conn else {}
+
+    env_allowed = org_id == 1
+    api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
+    company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
+    if not api_key:
+        return None
+    return SumitIntegration(api_key=api_key, company_id=company_id)
+
+
 def require_admin(current_user: dict = Depends(get_current_user)):
     """
     Require admin role
