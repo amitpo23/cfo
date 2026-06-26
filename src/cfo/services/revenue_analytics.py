@@ -196,7 +196,7 @@ class RevenueAnalyticsService:
         # Growing customers — מבוסס על נתון אמיתי (revenue לפי לקוח)
         customers = self.analyze_revenue_by_customer(days=days, limit=50)
         for cust in customers:
-            if cust["invoice_count"] >= 4 and cust["percentage_of_total"] < 15:
+            if cust["invoice_count"] >= 4 and cust["percentage_of_total_revenue"] < 15:
                 opportunities.append({
                     "type": "growing_customer",
                     "customer_id": cust["customer_id"],

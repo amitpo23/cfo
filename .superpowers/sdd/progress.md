@@ -41,3 +41,11 @@ T1.1: complete (commit 8fbf3f0..b0b95bc, review clean) — real AR/AP aging via 
 Base before T1.2: b0b95bc
 T1.2: complete (commit b0b95bc..6bcb980; controller-verified, 5 dashboard tests pass) — fabricated COGS removed, honest null+flag
 Base before T1.3: 6bcb980
+T1.3: complete (commit 6bcb980..a2ff8e8; controller-verified) — honest AI fallback, placeholder removed
+Base before T1.4: a2ff8e8
+T1.4: complete (commit a2ff8e8..421c734) — real average_days_to_payment + gross_profit null. Epic 1 DONE.
+Base before T1.4 review: a2ff8e8
+T1.4 review: clean. EPIC 1 COMPLETE (T1.1-T1.4).
+T2.1: complete (commit 421c734..80f0938; controller-verified: grep status_code-in empty, 394/394 pass)
+  T2.1 SURFACED BUG: revenue_analytics:199 cust['percentage_of_total'] vs 'percentage_of_total_revenue' -> 500 on /opportunities + /ai/executive-summary when customer has >=4 invoices.
+Base before T2.1b (bug fix): 0f3136e
