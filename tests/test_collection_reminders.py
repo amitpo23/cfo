@@ -75,6 +75,20 @@ def test_plan_reminders_respects_cooldown(fresh_org):
         db.close()
 
 
+from cfo.services.email_sender import send_email_smtp
+
+
+def test_email_sender_disabled_when_unconfigured():
+    import asyncio
+    class S:  # minimal settings stub, no SMTP host
+        smtp_host = None
+        smtp_port = 587
+        smtp_user = None
+        smtp_password = None
+        smtp_from = None
+    assert asyncio.run(send_email_smtp("a@b.com", "s", "body", S())) is False
+
+
 import asyncio
 from cfo.services.collection_service import CollectionService, dispatch_reminders
 

@@ -97,6 +97,13 @@ class Settings(BaseSettings):
     reports_output_dir: str = "./reports"
     timezone: str = "Asia/Jerusalem"
 
+    # SMTP Email
+    smtp_host: Optional[str] = None
+    smtp_port: int = 587
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from: Optional[str] = None
+
     @field_validator("database_url", mode="before")
     @classmethod
     def default_empty_database_url(cls, value):
