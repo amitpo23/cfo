@@ -59,3 +59,9 @@ endpoint שמחזיר 500 עובר את ה-assertion. זה שורש העובדה
 
 ## הערכה
 ה-audit הרב-סוכני אינו אמין לקביעות "תקין/solid". כל ממצא כאן אומת ידנית או דטרמיניסטית.
+
+## עדכון ספרינט (2026-06-26) — קבוצה B נסגרה + שער אימות
+**Epic 1 (נתון מומצא) — נסגר:** cashflow AR/AP aging (אפסים→ARAPAgingService אמיתי), dashboard COGS×0.3→null+דגל, AI fallback מזויף→הודעה כנה, `average_days_to_payment:30`→נגזר, gross-profit×0.7→null. + תוקן באג 500 שחיזוק-הטסטים חשף (`identify_investment_opportunities` מפתח שגוי).
+**Epic 2 (חיזוק טסטים) — נסגר:** טסטי analytics ריקים (auth-less) הוחלפו ב-auth+200+shape; `scripts/colscan.py` חובר ל-CI (test שתופס Model.עמודה-לא-קיימת); כיסוי ל-AlertEngine+CFOBrainService.
+**Epic 4 — שער אימות עבר:** 401 טסטים · colscan נקי · grep נתון-מומצא ריק · grep status-in-list ריק · audit_routes: 39 כשלים כולם env-gated (SUMIT/OF), 0 באגי-קוד; כל `/api/analytics/*`=200.
+**Epic 3 (category/region) — דולג** (החלטה: keep unsupported). **Epic 5 (P0)** — פעולת-משתמש (ראה PROJECT_STATUS §4).
