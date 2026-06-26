@@ -628,7 +628,7 @@ class CollectionReminder(Base):
     days_overdue = Column(Integer, default=0)
     status = Column(String(20), default="sent")          # sent | failed
     error = Column(Text, nullable=True)
-    sent_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    sent_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index("ix_collreminder_org_contact", "organization_id", "contact_id"),

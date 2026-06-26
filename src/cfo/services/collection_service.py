@@ -93,5 +93,5 @@ class CollectionService:
 
     def _company_name(self) -> str:
         from ..models import Organization
-        org = self.db.query(Organization).get(self.org_id)
+        org = self.db.get(Organization, self.org_id)
         return org.name if org else ""

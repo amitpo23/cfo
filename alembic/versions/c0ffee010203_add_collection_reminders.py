@@ -20,7 +20,7 @@ def upgrade():
         sa.Column("days_overdue", sa.Integer, server_default="0"),
         sa.Column("status", sa.String(20), server_default="sent"),
         sa.Column("error", sa.Text, nullable=True),
-        sa.Column("sent_at", sa.DateTime, nullable=True),
+        sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index("ix_collreminder_org_contact", "collection_reminders",
                     ["organization_id", "contact_id"])
