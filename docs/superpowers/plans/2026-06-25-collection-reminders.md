@@ -622,50 +622,80 @@ def test_cron_collection_runs_for_enabled_orgs(client, monkeypatch):
 Run: `python -m pytest tests/test_collection_reminders.py -k cron -v`
 Expected: FAIL — 404 (route not registered)
 
-- [ ] **Step 3: Implement the cron route**
+- [ ] **Step 3a: Add an org-scoped SUMIT builder (no request context)**
+
+The request dependency `get_sumit_integration` (in `src/cfo/api/dependencies.py`)
+needs `get_current_org_id` — unavailable in cron. Factor its credential logic
+into a plain function reused by cron. Add to `src/cfo/api/dependencies.py`:
+
+```python
+def sumit_for_org(db: Session, org_id: int):
+    """בונה SumitIntegration לארגון נתון מחוץ ל-request (ל-cron). None אם אין מפתח."""
+    from ..integrations.sumit_integration import SumitIntegration
+    from ..models import IntegrationConnection
+    from ..services.credentials_vault import decrypt_credentials
+
+    conn = db.query(IntegrationConnection).filter(
+        IntegrationConnection.organization_id == org_id,
+        IntegrationConnection.source == "sumit",
+        IntegrationConnection.status == "active",
+    ).order_by(IntegrationConnection.id).first()
+    creds = decrypt_credentials(conn.credentials_encrypted) if conn else {}
+
+    env_allowed = org_id == 1
+    api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
+    company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
+    if not api_key:
+        return None
+    return SumitIntegration(api_key=api_key, company_id=company_id)
+```
+
+- [ ] **Step 3b: Implement the cron route**
 
 ```python
 # src/cfo/api/routes/cron.py — add a new route (mirror existing cron handlers)
 from ...services.collection_service import CollectionService, dispatch_reminders
 from ...services.email_sender import send_email_smtp
+from ..dependencies import sumit_for_org
 from ...config import settings
 from ...models import Organization
+from ...integrations.sumit_models import SMSRequest
 from datetime import date
 
 @router.get("/cron/collection-reminders", dependencies=[Depends(_verify_cron_secret)])
 async def run_collection_reminders(db: Session = Depends(get_db)):
-    from ...integrations.sumit_integration import get_sumit_client  # existing accessor
-    from ...integrations.sumit_models import SMSRequest
-
     orgs = db.query(Organization).filter(
         Organization.collection_reminders_enabled.is_(True)
     ).all()
 
-    totals = {"sms_sent": 0, "email_sent": 0, "failed": 0}
+    totals = {"sms_sent": 0, "email_sent": 0, "failed": 0, "skipped_no_sumit": 0}
     for org in orgs:
         planned = CollectionService(db, org.id).plan_reminders(date.today())
         if not planned:
             continue
-        sumit = get_sumit_client(db, org.id)  # adapt to the project's real accessor
-
-        async def sms_sender(phone, message, _sender=org.collection_sms_sender):
-            resp = await sumit.send_sms(SMSRequest(
-                phone_number=phone, message=message, sender_name=_sender))
-            return bool(resp)
+        sumit = sumit_for_org(db, org.id)
 
         async def email_sender(to, subject, body):
             return await send_email_smtp(to, subject, body, settings)
 
+        if sumit is None:
+            # אין SUMIT לארגון — מייל בלבד (SMS ידלג כי אין שולח)
+            async def sms_sender(phone, message):
+                return False
+            totals["skipped_no_sumit"] += 1
+        else:
+            async def sms_sender(phone, message, _s=org.collection_sms_sender, _c=sumit):
+                return bool(await _c.send_sms(SMSRequest(
+                    phone_number=phone, message=message, sender_name=_s)))
+
         summary = await dispatch_reminders(
             db, org.id, planned, sms_sender, email_sender,
             sms_sender_name=org.collection_sms_sender)
-        for k in totals:
+        for k in ("sms_sent", "email_sent", "failed"):
             totals[k] += summary.get(k, 0)
 
     return {"status": "ok", "orgs": len(orgs), "summary": totals}
 ```
-
-> Note: replace `get_sumit_client(db, org.id)` with the project's real SUMIT client accessor (see how `sync_engine`/`communications.py` obtains a `SumitIntegration`). Confirm the exact import before running.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -713,6 +743,9 @@ Expected: FAIL — 404
 ```python
 # src/cfo/api/routes/financial_management.py
 from datetime import date
+from ..dependencies import get_sumit_integration, require_admin
+from ...integrations.sumit_integration import SumitIntegration
+from ...integrations.sumit_models import SMSRequest
 from ...services.collection_service import CollectionService, dispatch_reminders
 from ...services.email_sender import send_email_smtp
 from ...config import settings
@@ -729,13 +762,11 @@ async def collection_due(db: Session = Depends(get_db),
         for p in planned
     ]}
 
-@router.post("/collection/run")
+@router.post("/collection/run", dependencies=[Depends(require_admin)])
 async def collection_run(db: Session = Depends(get_db),
-                         org_id: int = Depends(get_current_org_id)):
-    from ...integrations.sumit_integration import get_sumit_client
-    from ...integrations.sumit_models import SMSRequest
+                         org_id: int = Depends(get_current_org_id),
+                         sumit: SumitIntegration = Depends(get_sumit_integration)):
     planned = CollectionService(db, org_id).plan_reminders(date.today())
-    sumit = get_sumit_client(db, org_id)
     async def sms_sender(phone, message):
         return bool(await sumit.send_sms(SMSRequest(phone_number=phone, message=message)))
     async def email_sender(to, subject, body):
@@ -744,7 +775,9 @@ async def collection_run(db: Session = Depends(get_db),
     return {"status": "ok", "summary": summary}
 ```
 
-> Apply the project's RBAC dependency used by other write routes in this file (e.g. the owner/admin guard) to `POST /collection/run`. Confirm the exact dependency name before running.
+> Note: `get_sumit_integration` raises 400 if the org has no SUMIT key. That is
+> acceptable for a manual admin-triggered run. `require_admin` + `get_current_org_id`
+> + `get_db` all come from `src/cfo/api/dependencies.py` (verified present).
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -789,8 +822,8 @@ git commit -m "feat(collections): register daily collection-reminders cron"
 
 ## Self-Review notes
 - **Coverage:** overdue detection (Task 3), escalation+cooldown (Task 3), SMS send (Task 4), email send (Task 5), automation (Task 6), manual control (Task 7), schedule (Task 8). ✓
-- **Open confirmations before execution (not placeholders — verify against real code):**
-  1. SUMIT client accessor name/signature (`get_sumit_client`) — match `communications.py`/`sync_engine`.
-  2. The AR/financial router's RBAC dependency name for `POST /collection/run`.
-  3. `get_current_org_id` dependency import path (used elsewhere in `financial_management.py`).
+- **Integration facts (verified 2026-06-26 against real code):**
+  1. SUMIT request client = `get_sumit_integration` dependency → `SumitIntegration` (raises 400 if no key). Cron uses the new `sumit_for_org(db, org_id)` helper (Task 6, Step 3a).
+  2. RBAC guard = `require_admin` (in `dependencies.py`); applied to `POST /collection/run`.
+  3. `get_current_org_id`, `get_db`, `require_admin`, `get_sumit_integration` all in `src/cfo/api/dependencies.py`.
 - **Out of scope (separate plan):** physical-letter escalation (`send_letter_by_click`), small-claims, late-payment interest (Prime+2%) — see roadmap P2.
