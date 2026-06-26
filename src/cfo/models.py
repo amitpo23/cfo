@@ -1,7 +1,7 @@
 """
 Data models for the CFO system
 """
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from decimal import Decimal
 from typing import Optional, List
 from enum import Enum
@@ -609,6 +609,27 @@ class Payment(Base):
 
     __table_args__ = (
         Index("ix_payment_org_ext", "organization_id", "external_id", "source", unique=True),
+    )
+
+
+class CollectionReminder(Base):
+    """תיעוד תזכורת גבייה שנשלחה — מצב להסלמה ומניעת ספאם."""
+    __tablename__ = "collection_reminders"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
+    invoice_numbers = Column(String(500), nullable=True)
+    reminder_type = Column(String(20), nullable=False)   # first | second | final
+    channel = Column(String(20), nullable=False)         # sms | email
+    amount = Column(Numeric(precision=12, scale=2), default=0)
+    days_overdue = Column(Integer, default=0)
+    status = Column(String(20), default="sent")          # sent | failed
+    error = Column(Text, nullable=True)
+    sent_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_collreminder_org_contact", "organization_id", "contact_id"),
     )
 
 
