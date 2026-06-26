@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..dependencies import get_db, get_current_org_id, get_sumit_integration, require_admin
+from ..dependencies import get_db, get_current_org_id, require_admin
 from ...models import BankTransaction
 from ...services import (
     BudgetService,
@@ -833,7 +833,6 @@ async def run_scheduled_reports(
 
 # ============ Collection Reminder Routes ============
 
-from ...integrations.sumit_integration import SumitIntegration
 from ...integrations.sumit_models import SMSRequest
 from ...services.collection_service import CollectionService, dispatch_reminders
 from ...services.email_sender import send_email_smtp
@@ -864,12 +863,20 @@ async def collection_due(
 async def collection_run(
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
-    sumit: SumitIntegration = Depends(get_sumit_integration),
 ):
     """הרצה ידנית של תזכורות גבייה (מנהל בלבד)"""
+    from ...models import Organization
+    from ..dependencies import sumit_for_org
+    org = db.get(Organization, org_id)
+    if not org or not org.collection_reminders_enabled:
+        raise HTTPException(status_code=403,
+                            detail="Collection reminders are disabled for this organization")
     planned = CollectionService(db, org_id).plan_reminders(date.today())
+    sumit = sumit_for_org(db, org_id)
 
     async def sms_sender(phone, message):
+        if sumit is None:
+            return False
         return bool(await sumit.send_sms(SMSRequest(phone_number=phone, message=message)))
 
     async def email_sender(to, subject, body):

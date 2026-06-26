@@ -145,3 +145,9 @@ def test_collection_due_preview(client, owner):
     r = client.get("/api/financial/collection/due", headers=owner["headers"])
     assert r.status_code == 200
     assert "due" in r.json()
+
+
+def test_collection_run_blocked_when_org_disabled(client, owner):
+    # owner is admin of the default org, which has collection_reminders_enabled=False by default
+    r = client.post("/api/financial/collection/run", headers=owner["headers"])
+    assert r.status_code == 403
