@@ -39,3 +39,5 @@ Decisions: T-DEC-1 honest-null+flag; T-DEC-2 keep unsupported (Epic 3 skipped)
 Base before T1.1: 8fbf3f0
 T1.1: complete (commit 8fbf3f0..b0b95bc, review clean) — real AR/AP aging via ARAPAgingService
 Base before T1.2: b0b95bc
+T1.2: complete (commit b0b95bc..6bcb980; controller-verified, 5 dashboard tests pass) — fabricated COGS removed, honest null+flag
+Base before T1.3: 6bcb980

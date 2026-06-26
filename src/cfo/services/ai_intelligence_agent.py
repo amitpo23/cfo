@@ -259,7 +259,8 @@ class AIIntelligenceAgent:
             )
 
         else:
-            return "Based on your financial data, here's what I found: [Analysis would be provided here]"
+            return ("I don't have enough information to answer that specific question. "
+                    "Try asking about your revenue, expenses, or financial trends.")
 
     def _calculate_confidence(self, data: Dict[str, Any]) -> float:
         """Calculate confidence in answer (0-1)"""
