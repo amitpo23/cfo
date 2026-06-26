@@ -73,3 +73,41 @@ def test_plan_reminders_respects_cooldown(fresh_org):
         assert CollectionService(db, org_id).plan_reminders(date.today()) == []
     finally:
         db.close()
+
+
+import asyncio
+from cfo.services.collection_service import CollectionService, dispatch_reminders
+
+
+def test_dispatch_sends_sms_and_records(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _overdue_invoice(db, org_id, days_overdue=5)
+        planned = CollectionService(db, org_id).plan_reminders(date.today())
+        sent = []
+        async def fake_sms(phone, message): sent.append((phone, message)); return True
+        async def fake_email(to, subject, body): return True
+        summary = asyncio.run(dispatch_reminders(
+            db, org_id, planned, sms_sender=fake_sms, email_sender=fake_email))
+        from cfo.models import CollectionReminder
+        rows = db.query(CollectionReminder).filter_by(organization_id=org_id).all()
+        assert summary["sms_sent"] == 1
+        assert sent and sent[0][0] == "0501234567"
+        assert any(r.channel == "sms" and r.status == "sent" for r in rows)
+    finally:
+        db.close()
+
+
+def test_dispatch_records_failure_without_crashing(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _overdue_invoice(db, org_id, days_overdue=5)
+        planned = CollectionService(db, org_id).plan_reminders(date.today())
+        async def boom_sms(phone, message): raise RuntimeError("sumit 403")
+        async def fake_email(to, subject, body): return True
+        summary = asyncio.run(dispatch_reminders(db, org_id, planned, boom_sms, fake_email))
+        assert summary["failed"] >= 1
+    finally:
+        db.close()

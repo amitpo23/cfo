@@ -95,3 +95,43 @@ class CollectionService:
         from ..models import Organization
         org = self.db.get(Organization, self.org_id)
         return org.name if org else ""
+
+
+async def dispatch_reminders(db, org_id, planned, sms_sender, email_sender,
+                             sms_sender_name=None) -> dict:
+    from decimal import Decimal
+    summary = {"sms_sent": 0, "email_sent": 0, "failed": 0}
+    for p in planned:
+        for channel, target, send in (
+            ("sms", p.phone, sms_sender),
+            ("email", p.email, email_sender),
+        ):
+            if not target:
+                continue
+            try:
+                if channel == "sms":
+                    ok = await send(target, p.message)
+                else:
+                    ok = await send(target, "תזכורת תשלום", p.message)
+            except Exception as exc:  # record failure, never crash the batch
+                _record(db, org_id, p, channel, "failed", str(exc))
+                summary["failed"] += 1
+                continue
+            if ok:
+                _record(db, org_id, p, channel, "sent", None)
+                summary["sms_sent" if channel == "sms" else "email_sent"] += 1
+            else:
+                _record(db, org_id, p, channel, "failed", "sender returned False")
+                summary["failed"] += 1
+    db.commit()
+    return summary
+
+
+def _record(db, org_id, p, channel, status, error):
+    from decimal import Decimal
+    db.add(CollectionReminder(
+        organization_id=org_id, contact_id=p.contact_id,
+        invoice_numbers=", ".join(p.invoice_numbers), reminder_type=p.reminder_type,
+        channel=channel, amount=Decimal(str(p.total_amount)), days_overdue=p.days_overdue,
+        status=status, error=error, sent_at=datetime.now(timezone.utc),
+    ))
