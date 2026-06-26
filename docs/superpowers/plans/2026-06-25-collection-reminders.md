@@ -663,7 +663,8 @@ from ...integrations.sumit_models import SMSRequest
 from datetime import date
 
 @router.get("/cron/collection-reminders", dependencies=[Depends(_verify_cron_secret)])
-async def run_collection_reminders(db: Session = Depends(get_db)):
+async def run_collection_reminders(db: Session = Depends(get_db_session)):
+    # NOTE: cron.py uses get_db_session (from ...database), already imported in this file.
     orgs = db.query(Organization).filter(
         Organization.collection_reminders_enabled.is_(True)
     ).all()
