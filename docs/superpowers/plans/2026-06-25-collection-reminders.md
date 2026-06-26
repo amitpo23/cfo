@@ -255,7 +255,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from ..models import Contact, Invoice, CollectionReminder
-from .ar_service import ARService
+from .ar_service import AccountsReceivableService
 
 OVERDUE_STATUSES = ["sent", "partially_paid", "overdue"]
 
@@ -285,7 +285,7 @@ class CollectionService:
     def __init__(self, db: Session, org_id: int):
         self.db = db
         self.org_id = org_id
-        self._templates = ARService(db, org_id).reminder_templates
+        self._templates = AccountsReceivableService(db, org_id).reminder_templates
 
     def plan_reminders(self, today: date, cooldown_days: int = 7) -> List[PlannedReminder]:
         rows = self.db.query(Invoice, Contact).join(
