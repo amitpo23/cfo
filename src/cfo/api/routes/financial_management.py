@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..dependencies import get_db, get_current_org_id
+from ..dependencies import get_db, get_current_org_id, get_sumit_integration, require_admin
 from ...models import BankTransaction
 from ...services import (
     BudgetService,
@@ -829,3 +829,51 @@ async def run_scheduled_reports(
     # בפרודקשן - background task
     executions = await service.run_scheduled_reports()
     return {"status": "success", "data": [vars(e) for e in executions]}
+
+
+# ============ Collection Reminder Routes ============
+
+from ...integrations.sumit_integration import SumitIntegration
+from ...integrations.sumit_models import SMSRequest
+from ...services.collection_service import CollectionService, dispatch_reminders
+from ...services.email_sender import send_email_smtp
+from ...config import settings
+
+
+@router.get("/collection/due")
+async def collection_due(
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """תצוגה מקדימה של תזכורות גבייה מתוכננות (ללא שליחה)"""
+    planned = CollectionService(db, org_id).plan_reminders(date.today())
+    return {"due": [
+        {
+            "contact_name": p.contact_name,
+            "total_amount": p.total_amount,
+            "days_overdue": p.days_overdue,
+            "reminder_type": p.reminder_type,
+            "channels": [c for c in (("sms" if p.phone else None),
+                                     ("email" if p.email else None)) if c],
+        }
+        for p in planned
+    ]}
+
+
+@router.post("/collection/run", dependencies=[Depends(require_admin)])
+async def collection_run(
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+    sumit: SumitIntegration = Depends(get_sumit_integration),
+):
+    """הרצה ידנית של תזכורות גבייה (מנהל בלבד)"""
+    planned = CollectionService(db, org_id).plan_reminders(date.today())
+
+    async def sms_sender(phone, message):
+        return bool(await sumit.send_sms(SMSRequest(phone_number=phone, message=message)))
+
+    async def email_sender(to, subject, body):
+        return await send_email_smtp(to, subject, body, settings)
+
+    summary = await dispatch_reminders(db, org_id, planned, sms_sender, email_sender)
+    return {"status": "ok", "summary": summary}

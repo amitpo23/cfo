@@ -139,3 +139,9 @@ def test_cron_collection_runs_for_enabled_orgs(client, monkeypatch):
                    headers={"Authorization": "Bearer testsecret"})
     assert r.status_code == 200
     assert "summary" in r.json()
+
+
+def test_collection_due_preview(client, owner):
+    r = client.get("/api/financial/collection/due", headers=owner["headers"])
+    assert r.status_code == 200
+    assert "due" in r.json()
