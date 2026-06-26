@@ -38,9 +38,10 @@ An Israeli-market CFO platform on FastAPI + SQLAlchemy: AR/AP, P&L, cash-flow + 
 - Deploy secrets: `DATABASE_URL`, Google OAuth, cron secret, **SMTP** (for collection email).
 - **Merge `feat/sumit-ar-ap-documents-ocr` → main** — Vercel only sees main (cron + features invisible until merged).
 
-**Sprint remainder (code, in progress):**
-- Epic 2 — test hardening: T2.1 de-vacuous analytics tests (in progress), T2.2 wire `colscan.py` into CI, T2.3 cover `alert_engine`/`cfo_brain`.
-- Epic 4 — verification gate: full suite + colscan + `scripts/audit_routes.py` + smoke.
+**Sprint — Epic 1/2/4 COMPLETE (2026-06-26):**
+- ✅ Epic 1 — every fabricated value removed (+ fixed a 500 the new tests surfaced).
+- ✅ Epic 2 — de-vacuous analytics tests, `scripts/colscan.py` CI guard, AlertEngine/CFOBrain coverage.
+- ✅ Epic 4 — verification gate passed: 401 tests · colscan clean · zero fabricated-value/status-in-list greps · audit_routes 39 fails all env-gated (SUMIT/OF), 0 code bugs, all `/api/analytics/*` = 200.
 
 **Deferred (decided):** revenue by category (could derive from `Invoice.line_items`) / region (needs `Contact` geo fields) — kept "unsupported"; Form 6111; late-payment interest (Prime+2%); legal escalation (demand letters / small claims).
 
