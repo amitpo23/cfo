@@ -46,7 +46,9 @@
 **TDD:** seed payments → `average_days_to_payment` reflects them; with none → `None`.
 **Acceptance:** no unlabeled fabricated number reaches the user.
 
-### T-DEC-1 (decision, user) — for T1.2/T1.4: prefer "honest null + label" over "labeled estimate"? Confirm before implementing those two.
+### T-DEC-1 (RESOLVED 2026-06-26 — user chose "honest null + flag")
+T1.2: COGS → `null`, present operating profit (revenue − total expenses), add `cogs_available: false`. No `* 0.3`.
+T1.4: `average_days_to_payment` derived from real Payments (None when none). The unlabeled `*0.7` gross-profit and `*0.3` growth estimates → REMOVE (or null) rather than keep as labeled estimates.
 
 ---
 
@@ -69,13 +71,10 @@
 
 ---
 
-## Epic 3 — Schema-gap resolution (revenue category/region) — VERIFIED, needs decision
-
-### T3.1 — revenue-by-category (currently "unsupported")
-**Decision (T-DEC-2):** implement by deriving category from `Invoice.line_items` (JSON) OR keep "unsupported". If implement: add `analyze_revenue_by_category` real impl + TDD (seed invoices with line_items categories → grouped revenue).
-
-### T3.2 — revenue-by-region (currently "unsupported")
-**Decision (T-DEC-2):** add geographic fields to `Contact` (migration) + populate, OR keep "unsupported". Adding fields is a product call (where does geo data come from?). Default: keep "unsupported" until a data source exists.
+## Epic 3 — Schema-gap resolution (revenue category/region) — SKIPPED
+**T-DEC-2 (RESOLVED 2026-06-26 — user chose "keep unsupported"):** `analyze_revenue_by_category`
+and `analyze_revenue_by_region` stay as explicit `{"status":"unsupported"}` until a real data
+source exists. No work this sprint. (Already non-crashing from the prior session.)
 
 ---
 
