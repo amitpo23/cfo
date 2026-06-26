@@ -9,7 +9,7 @@ from statistics import mean
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, case
 
-from ..models import Organization, Invoice, Contact, BankTransaction
+from ..models import Organization, Invoice, Contact, BankTransaction, Payment
 
 
 class RevenueAnalyticsService:
@@ -166,13 +166,15 @@ class RevenueAnalyticsService:
         """
         customers = self.analyze_revenue_by_customer(days=days, limit=50)
 
-        # For now, return based on revenue; would need cost allocation to be precise
+        # gross_profit_estimate is not available: no cost data in the current schema.
+        # Return None rather than a fabricated 70% margin estimate.
         return [
             {
                 "customer_id": c["customer_id"],
                 "customer_name": c["customer_name"],
                 "revenue": c["total_revenue"],
-                "gross_profit_estimate": c["total_revenue"] * 0.7,  # Estimate 70% margin
+                "gross_profit_estimate": None,
+                "gross_profit_available": False,
                 "profitability_score": c["amount_paid"] / c["total_revenue"] if c["total_revenue"] > 0 else 0,
                 "payment_reliability": "good" if c["amount_paid"] / c["total_revenue"] > 0.9 else "fair" if c["amount_paid"] / c["total_revenue"] > 0.7 else "poor",
             }
@@ -256,6 +258,30 @@ class RevenueAnalyticsService:
             "trend_percent": float(trend_percent) if mid_point > 0 else None,
         }
 
+    def _average_days_to_payment(self) -> Optional[float]:
+        """Compute mean days between invoice.issue_date and payment.payment_date.
+
+        Fetches all Payment rows for this org that have a linked invoice with an
+        issue_date.  Skips rows where either date is missing.  Returns None when
+        there are no qualifying payments.
+        """
+        payments = (
+            self.db.query(Payment)
+            .filter(Payment.organization_id == self.org_id)
+            .all()
+        )
+        deltas = []
+        for pmt in payments:
+            if pmt.payment_date is None:
+                continue
+            if pmt.invoice is None or pmt.invoice.issue_date is None:
+                continue
+            delta = (pmt.payment_date - pmt.invoice.issue_date).days
+            deltas.append(delta)
+        if not deltas:
+            return None
+        return round(sum(deltas) / len(deltas), 1)
+
     def get_sales_pipeline_health(self) -> Dict[str, Any]:
         """
         Get health of sales pipeline
@@ -265,7 +291,7 @@ class RevenueAnalyticsService:
         """
         # Get invoices from last 90 days
         start_date = datetime.now(timezone.utc) - timedelta(days=90)
-        
+
         invoices = self.db.query(Invoice).filter(
             Invoice.organization_id == self.org_id,
             Invoice.created_at >= start_date
@@ -287,7 +313,7 @@ class RevenueAnalyticsService:
             "paid_invoices": len(paid_invoices),
             "paid_value": float(paid_value),
             "conversion_rate": float((len(paid_invoices) / len(invoices) * 100)) if invoices else 0,
-            "average_days_to_payment": 30,  # Would calculate from actual dates
+            "average_days_to_payment": self._average_days_to_payment(),
         }
 
     def _concentration_recommendation(self, hhi: float) -> str:
