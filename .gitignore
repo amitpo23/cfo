@@ -68,3 +68,5 @@ Thumbs.db
 
 # Supabase CLI artifacts
 supabase/.temp/
+*.bak
+cfo.db.*.bak

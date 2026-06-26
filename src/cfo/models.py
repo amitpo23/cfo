@@ -1,7 +1,7 @@
 """
 Data models for the CFO system
 """
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from decimal import Decimal
 from typing import Optional, List
 from enum import Enum
@@ -113,7 +113,7 @@ class TaskStatus(str, Enum):
 class Organization(Base):
     """ארגון/לקוח במערכת"""
     __tablename__ = "organizations"
-    
+
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)  # שם הארגון
     business_type = Column(String, nullable=True)  # סוג העסק (מסעדה, חברת שירותים וכו')
@@ -121,18 +121,20 @@ class Organization(Base):
     phone = Column(String, nullable=True)
     email = Column(String, nullable=True)
     address = Column(Text, nullable=True)
-    
+
     # Integration settings
     integration_type = Column(SQLEnum(IntegrationType), default=IntegrationType.MANUAL)
     api_credentials = Column(JSON, nullable=True)  # {api_key, company_id, etc}
-    
+
     # Settings & Configuration
     settings = Column(JSON, default={})  # הגדרות כלליות
     is_active = Column(Boolean, default=True)
-    
+    collection_reminders_enabled = Column(Boolean, default=False, nullable=False)
+    collection_sms_sender = Column(String(20), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relationships
     users = relationship("User", back_populates="organization")
     accounts = relationship("Account", back_populates="organization")
@@ -194,11 +196,18 @@ class Account(Base):
     balance = Column(Numeric(precision=10, scale=2), default=0)
     currency = Column(String, default="ILS")
     external_id = Column(String, nullable=True)  # ID ממערכת חיצונית
+    # Provenance — distinguishes SUMIT synthesized accounts from real Open Finance
+    # bank accounts so the two sources coexist without external_id collisions.
+    source = Column(String(50), default="manual")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     organization = relationship("Organization", back_populates="accounts")
     transactions = relationship("Transaction", back_populates="account")
+
+    __table_args__ = (
+        Index("ix_account_org_ext_source", "organization_id", "external_id", "source", unique=True),
+    )
 
 
 class Transaction(Base):
@@ -246,6 +255,161 @@ class IntegrationConnection(Base):
     )
 
 
+class BankConnection(Base):
+    """A bank/card consent link established through Open Finance (one per bank).
+
+    Tracks the consent-journey lifecycle so the UI can launch `connect_url`, show
+    status, and trigger refreshes. The org-level API credentials live in
+    `IntegrationConnection`; this row is the per-bank consent state under it.
+    """
+    __tablename__ = "bank_connections"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    source = Column(String(50), default="open_finance")
+    connection_id = Column(String(255), nullable=True)  # Open Finance connection id
+    provider_id = Column(String(100), nullable=True)    # providerFriendlyId (bank)
+    bank_name = Column(String(255), nullable=True)
+    status = Column(String(40), default="INACTIVE")     # Open Finance connection status
+    connect_url = Column(Text, nullable=True)           # hosted consent journey link
+    psu_id = Column(String(64), nullable=True)
+    expiry_date = Column(DateTime, nullable=True)
+    accounts_count = Column(Integer, nullable=True)
+    transactions_count = Column(Integer, nullable=True)
+    last_refresh_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    raw_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_bankconn_org_conn", "organization_id", "connection_id", unique=True),
+        Index("ix_bankconn_org_status", "organization_id", "status"),
+    )
+
+
+class OpenFinancePayment(Base):
+    """A payment initiated/tracked through the Open Finance PIS surface.
+
+    Distinct from the SUMIT-billing ``Payment`` model — this mirrors Open
+    Finance's Payment resource (``paymentId`` + status lifecycle). Rows are
+    upserted from the Payment Status Change webhook, which carries
+    ``{paymentId, paymentStatus, userId, orgId, ...}`` but no amount/currency
+    (those are populated later from ``GET /payments/{id}/status``), so amount and
+    currency are nullable. The unique ``(organization_id, external_payment_id)``
+    constraint makes webhook delivery idempotent.
+    """
+    __tablename__ = "open_finance_payments"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    external_payment_id = Column(String(255), nullable=False, index=True)  # Open Finance paymentId
+    status = Column(String(40), nullable=True)  # Payment.status enum (ACCC, RJCT, PENDING, ...)
+    amount = Column(Numeric(precision=14, scale=2), nullable=True)
+    currency = Column(String(10), nullable=True)
+    raw_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_ofpayment_org_ext", "organization_id", "external_payment_id", unique=True),
+    )
+
+
+class SumitCompany(Base):
+    """A SUMIT company file (תיק חברה) managed by an accounting office.
+
+    Supports the multi-company "ניהול משרד" model: one office organization can
+    manage many SUMIT company files. Each file syncs into a `target_organization`
+    (its own tenant by default), enabling cross-company (רוחבי) synthesis rollups.
+    """
+    __tablename__ = "sumit_companies"
+
+    id = Column(Integer, primary_key=True)
+    # The managing office organization.
+    office_organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    # SUMIT company id (e.g. 844329067).
+    company_id = Column(String(50), nullable=False)
+    name = Column(String(255), nullable=True)
+    status = Column(String(20), default="active")  # active, inactive
+    # Where this file's books/bank data land (defaults to the office org).
+    target_organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    raw_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    office_organization = relationship("Organization", foreign_keys=[office_organization_id])
+
+    __table_args__ = (
+        Index("ix_sumitco_office_company", "office_organization_id", "company_id", unique=True),
+    )
+
+
+class Employee(Base):
+    """An employee for the payroll module (org-scoped)."""
+    __tablename__ = "employees"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    tax_id = Column(String(20), nullable=True)             # תעודת זהות
+    email = Column(String(255), nullable=True)
+    phone = Column(String(50), nullable=True)
+    gross_salary = Column(Numeric(precision=12, scale=2), default=0)   # monthly gross
+    credit_points = Column(Numeric(precision=4, scale=2), default=2.25)  # נקודות זיכוי
+    pension_pct = Column(Numeric(precision=4, scale=2), default=6.0)
+    start_date = Column(Date, nullable=True)
+    # Bank details for salary payment via Masav.
+    bank_code = Column(String(2), nullable=True)
+    bank_branch = Column(String(3), nullable=True)
+    bank_account_number = Column(String(20), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+    payslips = relationship("Payslip", back_populates="employee")
+
+    __table_args__ = (
+        Index("ix_employee_org", "organization_id", "is_active"),
+    )
+
+
+class Payslip(Base):
+    """A generated payslip (תלוש שכר) for an employee for a given month."""
+    __tablename__ = "payslips"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    gross = Column(Numeric(precision=12, scale=2), default=0)
+    income_tax = Column(Numeric(precision=12, scale=2), default=0)
+    ni_employee = Column(Numeric(precision=12, scale=2), default=0)
+    health_tax = Column(Numeric(precision=12, scale=2), default=0)
+    pension_employee = Column(Numeric(precision=12, scale=2), default=0)
+    net = Column(Numeric(precision=12, scale=2), default=0)
+    employer_ni = Column(Numeric(precision=12, scale=2), default=0)
+    employer_pension = Column(Numeric(precision=12, scale=2), default=0)
+    employer_severance = Column(Numeric(precision=12, scale=2), default=0)
+    employer_cost = Column(Numeric(precision=12, scale=2), default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+    employee = relationship("Employee", back_populates="payslips")
+
+    __table_args__ = (
+        Index("ix_payslip_unique", "organization_id", "employee_id", "year", "month", unique=True),
+        Index("ix_payslip_period", "organization_id", "year", "month"),
+    )
+
+
 class SyncRun(Base):
     """Tracks each sync execution for auditability and resumption"""
     __tablename__ = "sync_runs"
@@ -272,6 +436,39 @@ class SyncRun(Base):
     )
 
 
+class OnboardingTask(Base):
+    """One codified data-mapping step in a business's onboarding checklist.
+
+    When a business connects an integration, a fixed list of ingestion steps
+    (onboarding_service.ONBOARDING_STEPS) is materialized as one row per step. The
+    pipeline runs them in order and re-runs incomplete/failed steps until the whole
+    checklist completes — i.e. every part of the business's data is mapped AND
+    reconciled against the source. Persisted so progress survives restarts and the
+    same checklist runs identically for every new business.
+    """
+    __tablename__ = "onboarding_tasks"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    source = Column(String(50), nullable=False)  # sumit, open_finance
+    step = Column(String(64), nullable=False)  # codified step key
+    seq = Column(Integer, default=0)  # run/display order
+    status = Column(String(20), default="pending")  # pending, running, completed, failed, skipped
+    result = Column(JSON, default={})  # counts/totals/reconciliation for the step
+    error = Column(Text, nullable=True)
+    attempts = Column(Integer, default=0)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_onboarding_org_source_step", "organization_id", "source", "step", unique=True),
+    )
+
+
 class Contact(Base):
     """Normalized customer/vendor record"""
     __tablename__ = "contacts"
@@ -285,8 +482,16 @@ class Contact(Base):
     email = Column(String(255), nullable=True)
     phone = Column(String(50), nullable=True)
     tax_id = Column(String(50), nullable=True)
+    # שיעור ניכוי מס במקור לספק (0 = יש אישור ניכוי/פטור; 0.30 ספק ללא אישור, 0.20 קבלן).
+    # ברירת מחדל 0 — דיווח 856 כולל רק ספקים שסומנו במפורש כחייבי ניכוי.
+    withholding_rate = Column(Numeric(precision=5, scale=4), default=0)
     address = Column(Text, nullable=True)
     currency = Column(String(10), default="ILS")
+    # Bank account details for Masav (מס"ב) supplier payments
+    bank_code = Column(String(2), nullable=True)            # קוד בנק
+    bank_branch = Column(String(3), nullable=True)          # מספר סניף
+    bank_account_number = Column(String(20), nullable=True) # מספר חשבון
+    bank_account_holder = Column(String(255), nullable=True)  # שם בעל החשבון (אם שונה משם הספק)
     raw_data = Column(JSON, nullable=True)  # original payload from source
     payload_hash = Column(String(64), nullable=True)  # SHA-256 of raw_data for change detection
     is_active = Column(Boolean, default=True)
@@ -312,6 +517,8 @@ class Invoice(Base):
     source = Column(String(50), default="manual")
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
     invoice_number = Column(String(100), nullable=True)
+    # מספר הקצאה (חשבונית ישראל) — SUMIT מפיק מול רשות המסים; נמשך מ-AssignmentNumber.
+    allocation_number = Column(String(50), nullable=True)
     issue_date = Column(Date, nullable=True)
     due_date = Column(Date, nullable=True)
     status = Column(SQLEnum(InvoiceStatus), default=InvoiceStatus.DRAFT)
@@ -407,6 +614,91 @@ class Payment(Base):
     )
 
 
+class CollectionReminder(Base):
+    """תיעוד תזכורת גבייה שנשלחה — מצב להסלמה ומניעת ספאם."""
+    __tablename__ = "collection_reminders"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
+    invoice_numbers = Column(String(500), nullable=True)
+    reminder_type = Column(String(20), nullable=False)   # first | second | final
+    channel = Column(String(20), nullable=False)         # sms | email
+    amount = Column(Numeric(precision=12, scale=2), default=0)
+    days_overdue = Column(Integer, default=0)
+    status = Column(String(20), default="sent")          # sent | failed
+    error = Column(Text, nullable=True)
+    sent_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_collreminder_org_contact", "organization_id", "contact_id"),
+    )
+
+
+class InventoryItem(Base):
+    """Inventory / stock item — מלאי"""
+    __tablename__ = "inventory_items"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    external_id = Column(String(255), nullable=True)  # SUMIT item ID
+    source = Column(String(50), default="manual")
+    sku = Column(String(100), nullable=True)          # מק"ט
+    name = Column(String(255), nullable=False)        # שם הפריט
+    quantity = Column(Numeric(precision=12, scale=2), default=0)    # כמות במלאי
+    unit = Column(String(50), default="unit")         # יחידת מידה
+    unit_cost = Column(Numeric(precision=12, scale=2), default=0)   # עלות ליחידה
+    unit_price = Column(Numeric(precision=12, scale=2), default=0)  # מחיר מכירה
+    reorder_level = Column(Numeric(precision=12, scale=2), default=0)  # סף התראת מלאי נמוך
+    is_active = Column(Boolean, default=True)
+    raw_data = Column(JSON, nullable=True)
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_inventory_org_ext", "organization_id", "external_id", "source", unique=True),
+    )
+
+
+class Expense(Base):
+    """הוצאה לתיוק — supplier expense to be filed in SUMIT"""
+    __tablename__ = "expenses"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    external_id = Column(String(255), nullable=True)   # SUMIT document ID (when pulled)
+    source = Column(String(50), default="manual")
+    supplier_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
+    supplier_name = Column(String(255), nullable=False)
+    supplier_tax_id = Column(String(20), nullable=True)  # ח.פ/עוסק של הספק (נדרש ל-PCN874)
+    sumit_item_name = Column(String(255), nullable=True)  # שם פריט ההוצאה ב-SUMIT — אות הסיווג האמין
+    amount = Column(Numeric(precision=12, scale=2), nullable=False, default=0)  # before VAT
+    vat_amount = Column(Numeric(precision=12, scale=2), default=0)
+    total = Column(Numeric(precision=12, scale=2), default=0)
+    expense_date = Column(Date, nullable=False)
+    category = Column(String(100), nullable=True)
+    description = Column(Text, nullable=True)
+    receipt_file = Column(Text, nullable=True)         # base64 receipt (optional)
+    invoice_number = Column(String(100), nullable=True)
+    status = Column(String(20), default="pending")     # pending, filed, error
+    sumit_expense_id = Column(String(255), nullable=True)
+    filing_error = Column(Text, nullable=True)
+    classifier_feedback = Column(JSON, nullable=True)  # learning feedback: [{"timestamp": "...", "old_category": "...", "new_category": "...", "supplier": "...", "feedback_text": "..."}]
+    raw_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+    supplier = relationship("Contact")
+
+    __table_args__ = (
+        Index("ix_expense_org_status", "organization_id", "status"),
+        Index("ix_expense_org_ext", "organization_id", "external_id", "source"),
+    )
+
+
 class BankTransaction(Base):
     """Bank/credit card transaction for reconciliation"""
     __tablename__ = "bank_transactions"
@@ -424,6 +716,10 @@ class BankTransaction(Base):
     matched_entity_type = Column(String(50), nullable=True)  # invoice, bill, payment
     matched_entity_id = Column(Integer, nullable=True)
     is_reconciled = Column(Boolean, default=False)
+    reconciliation_dispatch_status = Column(String(30), default="not_sent")
+    reconciliation_dispatched_at = Column(DateTime, nullable=True)
+    external_reconciliation_id = Column(String(255), nullable=True)
+    reconciliation_error = Column(Text, nullable=True)
     raw_data = Column(JSON, nullable=True)
     payload_hash = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -591,6 +887,71 @@ class CashflowAssumption(Base):
     organization = relationship("Organization")
 
 
+class LedgerOpeningBalance(Base):
+    """Opening balance per account for the derived ledger (carry-forward).
+
+    One row per (org, account_code) effective `as_of`. Stored as signed debit/credit;
+    the ledger injects a single balanced opening entry (auto-plugging any residual to
+    the equity account) so the trial balance stays balanced. See ledger_service.
+    """
+    __tablename__ = "ledger_opening_balances"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    account_code = Column(String(10), nullable=False)
+    as_of = Column(Date, nullable=False)
+    debit = Column(Numeric(precision=14, scale=2), default=0)
+    credit = Column(Numeric(precision=14, scale=2), default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "account_code", name="uq_opening_balance"),
+    )
+
+
+class CashflowAgreement(Base):
+    """Persisted agreement for the agreement-based cash-flow service.
+
+    The service keeps rich dataclasses in memory; this table is their durable store
+    (one JSON blob per agreement) so agreements survive restarts. See
+    services/agreement_cashflow_service.py.
+    """
+    __tablename__ = "cashflow_agreements"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    agreement_id = Column(String(50), nullable=False)
+    data = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "agreement_id", name="uq_cashflow_agreement"),
+    )
+
+
+class CashflowEntry(Base):
+    """Persisted cash-flow entry (income/expense, actual/forecast) for the service."""
+    __tablename__ = "cashflow_entries"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    entry_id = Column(String(50), nullable=False)
+    data = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "entry_id", name="uq_cashflow_entry"),
+    )
+
+
 class AlertRule(Base):
     """Configurable alert rules"""
     __tablename__ = "alert_rules"
@@ -714,6 +1075,12 @@ class UserCreate(BaseModel):
     role: UserRole = UserRole.USER
     organization_id: Optional[int] = None
     registration_code: Optional[str] = None
+    selected_plan: Optional[str] = None
+    annual_revenue: Optional[str] = None
+    annual_report_requested: Optional[bool] = None
+    payment_template: Optional[str] = None
+    checkout_session_id: Optional[str] = None
+    payment_status: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
@@ -744,6 +1111,18 @@ class UserLogin(BaseModel):
     """התחברות למערכת"""
     email: EmailStr
     password: str
+
+
+class GoogleLogin(BaseModel):
+    """Google Sign-In token exchange"""
+    id_token: str
+    registration_code: Optional[str] = None
+    selected_plan: Optional[str] = None
+    annual_revenue: Optional[str] = None
+    annual_report_requested: Optional[bool] = None
+    payment_template: Optional[str] = None
+    checkout_session_id: Optional[str] = None
+    payment_status: Optional[str] = None
 
 
 class Token(BaseModel):

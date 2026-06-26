@@ -209,6 +209,101 @@ async def issue_invoice(
     return await service.issue_invoice_to_sumit(invoice_id, send_email)
 
 
+# ==================== Document Issuance (all types) ====================
+# כל סוגי המסמכים נתמכים דרך אותו שירות: חשבונית/קבלה/חשבונית עסקה/הצעת מחיר/
+# הזמנה/הזמנת רכש/הזמנת עבודה/תעודת משלוח/זיכוי. נחשפים כאן באופן מפורש.
+
+DOCUMENT_TYPE_LABELS = {
+    "invoice": "חשבונית מס",
+    "receipt": "קבלה",
+    "invoice_receipt": "חשבונית מס קבלה",
+    "proforma": "חשבונית עסקה",
+    "quote": "הצעת מחיר",
+    "order": "הזמנה",
+    "purchase_order": "הזמנת רכש",
+    "work_order": "הזמנת עבודה",
+    "delivery_note": "תעודת משלוח",
+    "credit_note": "חשבונית זיכוי",
+}
+
+
+class CreateDocumentRequest(BaseModel):
+    """הוצאת מסמך מכל סוג (חשבונית/הצעת מחיר/הזמנה/תעודת משלוח/זיכוי וכו')."""
+    document_type: str = Field(..., description="סוג מסמך (ראה /financial/documents/types)")
+    customer_id: str = Field(..., description="מזהה לקוח/ספק")
+    customer_name: str = Field(..., description="שם לקוח/ספק")
+    customer_email: Optional[str] = None
+    customer_address: Optional[str] = None
+    items: List[InvoiceItemRequest] = Field(..., description="פריטים")
+    issue_date: Optional[str] = None
+    due_date: Optional[str] = None
+    notes: Optional[str] = None
+    send_to_sumit: bool = Field(default=True, description="הפקה ב-SUMIT")
+    send_email: bool = Field(default=False, description="שליחת המסמך במייל ללקoח")
+
+
+@router.get("/documents/types")
+async def list_document_types():
+    """כל סוגי המסמכים שניתן להפיק מהמערכת (מול SUMIT)."""
+    return {
+        "status": "success",
+        "data": [{"value": v, "label": l} for v, l in DOCUMENT_TYPE_LABELS.items()],
+    }
+
+
+@router.post("/documents")
+async def create_document(
+    request: CreateDocumentRequest,
+    db: Session = Depends(get_db),
+):
+    """הוצאת מסמך מכל סוג. אותו זרימה כמו חשבונית — נשמר מקומית ומופק ב-SUMIT."""
+    try:
+        doc_type = DocumentType(request.document_type)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"סוג מסמך לא נתמך: {request.document_type}. "
+                   f"ראה /financial/documents/types",
+        )
+    service = InvoiceService(db)
+    items = [
+        {
+            "description": it.description,
+            "quantity": it.quantity,
+            "unit_price": it.unit_price,
+            "vat_rate": it.vat_rate,
+            "discount": it.discount,
+        }
+        for it in request.items
+    ]
+    issue_date = date.fromisoformat(request.issue_date) if request.issue_date else None
+    due_date = date.fromisoformat(request.due_date) if request.due_date else None
+
+    if request.send_to_sumit:
+        return await service.create_and_issue_invoice(
+            customer_id=request.customer_id,
+            customer_name=request.customer_name,
+            customer_email=request.customer_email,
+            items=items,
+            document_type=doc_type,
+            issue_date=issue_date,
+            due_date=due_date,
+            notes=request.notes,
+            send_email=request.send_email,
+        )
+    return await service.create_invoice(
+        customer_id=request.customer_id,
+        customer_name=request.customer_name,
+        customer_email=request.customer_email,
+        customer_address=request.customer_address,
+        items=items,
+        document_type=doc_type,
+        issue_date=issue_date,
+        due_date=due_date,
+        notes=request.notes,
+    )
+
+
 @router.post("/invoices/receive")
 async def receive_invoice(
     request: ReceivedInvoiceRequest,
@@ -275,7 +370,7 @@ async def list_received_invoices(
     to_dt = date.fromisoformat(to_date) if to_date else None
     
     return await service.list_received_invoices(
-        vendor_name=vendor_name,
+        supplier_id=vendor_name,
         category=cat_enum,
         from_date=from_dt,
         to_date=to_dt

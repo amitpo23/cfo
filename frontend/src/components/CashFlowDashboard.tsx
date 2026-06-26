@@ -25,8 +25,14 @@ import {
   RefreshCw,
   AlertTriangle,
   CheckCircle,
+  Wallet,
+  Activity,
+  BarChart3,
+  LineChart as LineChartIcon,
+  PieChart as PieChartIcon,
 } from 'lucide-react';
 import api from '../services/api';
+import { AgentPanel, FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
 
 const COLORS = ['#10B981', '#EF4444', '#3B82F6', '#F59E0B', '#8B5CF6', '#EC4899'];
 
@@ -128,17 +134,23 @@ const CashFlowDashboard: React.FC = () => {
     : [];
 
   return (
-    <div className="container mx-auto px-4 py-8" dir="rtl">
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-800">תזרים מזומנים</h1>
-          <p className="text-gray-600 mt-1">ניתוח ומעקב תזרים מזומנים</p>
-        </div>
-        <div className="flex items-center gap-4">
+    <FinancePageShell
+      eyebrow="Cash Flow"
+      title="ניהול תזרים מזומנים"
+      description="מבט עבודה על הכסף שנכנס, הכסף שיוצא, runway, יחסי נזילות ותחזית יומית. המטרה היא לדעת מראש איפה יהיה לחץ ומה עושים."
+      icon={Wallet}
+      metrics={[
+        { label: 'כניסות', value: formatCurrency(totalInflows), tone: 'emerald' },
+        { label: 'יציאות', value: formatCurrency(totalOutflows), tone: 'rose' },
+        { label: 'תזרים נקי', value: formatCurrency(netCashFlow), tone: netCashFlow >= 0 ? 'emerald' : 'rose' },
+        { label: 'Runway', value: burnRate?.runway_months === Infinity ? '∞' : `${(burnRate?.runway_months || 0).toFixed(1)} חודשים`, tone: (burnRate?.runway_months || 0) > 6 ? 'emerald' : 'amber' },
+      ]}
+      actions={
+        <>
           <select
             value={timeRange}
             onChange={(e) => setTimeRange(Number(e.target.value))}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value={6}>6 חודשים</option>
             <option value={12}>12 חודשים</option>
@@ -148,69 +160,28 @@ const CashFlowDashboard: React.FC = () => {
             <RefreshCw size={18} />
             רענון
           </button>
-        </div>
-      </div>
+        </>
+      }
+    >
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className="p-3 bg-green-100 rounded-lg">
-              <ArrowUpRight className="text-green-600" size={24} />
-            </div>
-            <span className="text-sm text-gray-500">סה"כ כניסות</span>
-          </div>
-          <p className="text-2xl font-bold text-gray-800">{formatCurrency(totalInflows)}</p>
-          <p className="text-sm text-green-600 mt-2">+12% מהתקופה הקודמת</p>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className="p-3 bg-red-100 rounded-lg">
-              <ArrowDownRight className="text-red-600" size={24} />
-            </div>
-            <span className="text-sm text-gray-500">סה"כ יציאות</span>
-          </div>
-          <p className="text-2xl font-bold text-gray-800">{formatCurrency(totalOutflows)}</p>
-          <p className="text-sm text-red-600 mt-2">+5% מהתקופה הקודמת</p>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className={`p-3 ${netCashFlow >= 0 ? 'bg-green-100' : 'bg-red-100'} rounded-lg`}>
-              <DollarSign className={netCashFlow >= 0 ? 'text-green-600' : 'text-red-600'} size={24} />
-            </div>
-            <span className="text-sm text-gray-500">תזרים נקי</span>
-          </div>
-          <p className={`text-2xl font-bold ${netCashFlow >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {formatCurrency(netCashFlow)}
-          </p>
-          <p className="text-sm text-gray-500 mt-2">{timeRange} חודשים אחרונים</p>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className={`p-3 ${(burnRate?.runway_months || 0) > 6 ? 'bg-green-100' : 'bg-yellow-100'} rounded-lg`}>
-              <Calendar className={(burnRate?.runway_months || 0) > 6 ? 'text-green-600' : 'text-yellow-600'} size={24} />
-            </div>
-            <span className="text-sm text-gray-500">Runway</span>
-          </div>
-          <p className="text-2xl font-bold text-gray-800">
-            {burnRate?.runway_months === Infinity ? '∞' : `${(burnRate?.runway_months || 0).toFixed(1)} חודשים`}
-          </p>
-          <p className="text-sm text-gray-500 mt-2">
-            {burnRate?.net_monthly_burn && burnRate.net_monthly_burn > 0
-              ? `שריפה: ${formatCurrency(burnRate.net_monthly_burn)}/חודש`
-              : 'ללא שריפת מזומנים'}
-          </p>
-        </div>
+        <MetricCard icon={ArrowUpRight} label="כניסות" value={formatCurrency(totalInflows)} detail="+12% מהתקופה הקודמת" tone="emerald" />
+        <MetricCard icon={ArrowDownRight} label="יציאות" value={formatCurrency(totalOutflows)} detail="+5% מהתקופה הקודמת" tone="rose" />
+        <MetricCard icon={DollarSign} label="תזרים נקי" value={formatCurrency(netCashFlow)} detail={`${timeRange} חודשים אחרונים`} tone={netCashFlow >= 0 ? 'emerald' : 'rose'} />
+        <MetricCard
+          icon={Calendar}
+          label="Runway"
+          value={burnRate?.runway_months === Infinity ? '∞' : `${(burnRate?.runway_months || 0).toFixed(1)} חודשים`}
+          detail={burnRate?.net_monthly_burn && burnRate.net_monthly_burn > 0 ? `שריפה: ${formatCurrency(burnRate.net_monthly_burn)}/חודש` : 'ללא שריפת מזומנים'}
+          tone={(burnRate?.runway_months || 0) > 6 ? 'emerald' : 'amber'}
+        />
       </div>
 
       {/* Charts Row 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         {/* Monthly Cash Flow Chart */}
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">תזרים מזומנים חודשי</h3>
+        <FinanceCard title="תזרים מזומנים חודשי" subtitle="כניסות ויציאות לפי חודש, לזיהוי עונות ותקופות לחץ" icon={BarChart3}>
           {loadingMonthly ? (
             <div className="h-64 flex items-center justify-center">
               <RefreshCw className="animate-spin text-gray-400" size={32} />
@@ -231,11 +202,10 @@ const CashFlowDashboard: React.FC = () => {
               </BarChart>
             </ResponsiveContainer>
           )}
-        </div>
+        </FinanceCard>
 
         {/* Cumulative Cash Flow */}
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">תזרים מצטבר</h3>
+        <FinanceCard title="תזרים מצטבר" subtitle="האם העסק צובר או שורף מזומן לאורך התקופה" icon={Activity}>
           {loadingMonthly ? (
             <div className="h-64 flex items-center justify-center">
               <RefreshCw className="animate-spin text-gray-400" size={32} />
@@ -266,14 +236,13 @@ const CashFlowDashboard: React.FC = () => {
               </AreaChart>
             </ResponsiveContainer>
           )}
-        </div>
+        </FinanceCard>
       </div>
 
       {/* Charts Row 2 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         {/* Daily Cash Position */}
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100 lg:col-span-2">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">מצב מזומנים יומי (30 ימים אחרונים)</h3>
+        <FinanceCard title="מצב מזומנים יומי" subtitle="30 ימים אחרונים, כדי לראות ימים בעייתיים לפני שהם קורים" icon={LineChartIcon} className="lg:col-span-2">
           {loadingDaily ? (
             <div className="h-64 flex items-center justify-center">
               <RefreshCw className="animate-spin text-gray-400" size={32} />
@@ -297,11 +266,10 @@ const CashFlowDashboard: React.FC = () => {
               </LineChart>
             </ResponsiveContainer>
           )}
-        </div>
+        </FinanceCard>
 
         {/* Category Breakdown */}
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">התפלגות לפי קטגוריה</h3>
+        <FinanceCard title="התפלגות לפי קטגוריה" subtitle="איפה נוצר או נשרף המזומן" icon={PieChartIcon}>
           {loadingCategory ? (
             <div className="h-64 flex items-center justify-center">
               <RefreshCw className="animate-spin text-gray-400" size={32} />
@@ -330,12 +298,11 @@ const CashFlowDashboard: React.FC = () => {
               </PieChart>
             </ResponsiveContainer>
           )}
-        </div>
+        </FinanceCard>
       </div>
 
       {/* Liquidity Ratios */}
-      <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100 mb-8">
-        <h3 className="text-lg font-semibold text-gray-800 mb-6">יחסי נזילות</h3>
+      <FinanceCard title="יחסי נזילות" subtitle="חיווי מהיר למצב העסק מול התחייבויות קרובות" icon={CheckCircle} className="mb-8">
         {loadingRatios ? (
           <div className="h-32 flex items-center justify-center">
             <RefreshCw className="animate-spin text-gray-400" size={32} />
@@ -380,12 +347,11 @@ const CashFlowDashboard: React.FC = () => {
             />
           </div>
         )}
-      </div>
+      </FinanceCard>
 
       {/* Burn Rate Details */}
       {burnRate && (
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <h3 className="text-lg font-semibold text-gray-800 mb-6">ניתוח קצב שריפה</h3>
+        <FinanceCard title="ניתוח קצב שריפה" subtitle="הסוכן בודק כמה זמן העסק יכול להמשיך בקצב הנוכחי" icon={AlertTriangle}>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="text-center p-4 bg-gray-50 rounded-lg">
               <p className="text-sm text-gray-600 mb-2">הוצאות חודשיות ממוצעות</p>
@@ -425,9 +391,22 @@ const CashFlowDashboard: React.FC = () => {
               </div>
             </div>
           )}
-        </div>
+        </FinanceCard>
       )}
-    </div>
+
+      <AgentPanel
+        insights={[
+          {
+            title: 'פעולה לפני מחסור במזומן',
+            text: netCashFlow < 0 ? 'התזרים הנקי שלילי בתקופה שנבחרה. מומלץ לתעדף גבייה ולבדוק דחיית תשלומים לא קריטיים.' : 'התזרים חיובי. מומלץ לנעול תחזית ל-30 יום ולבדוק אם יש כסף פנוי להקדמת תשלומים בהנחה.',
+          },
+          {
+            title: 'החלפת עבודה ידנית',
+            text: 'המסך מרכז כניסות, יציאות, runway ויחסי נזילות כך שלא צריך לבנות דוח תזרים ידני באקסל בכל שבוע.',
+          },
+        ]}
+      />
+    </FinancePageShell>
   );
 };
 

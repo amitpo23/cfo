@@ -2,7 +2,6 @@
  * Analytics and Reports Dashboard
  */
 import React from 'react';
-import { useQuery } from '@tanstack/react-query';
 import {
   LineChart,
   Line,
@@ -19,14 +18,8 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { TrendingUp, TrendingDown, DollarSign, Users, FileText, CreditCard } from 'lucide-react';
-import apiService from '../services/api';
 
 export const AnalyticsDashboard: React.FC = () => {
-  const { data: _balance } = useQuery({
-    queryKey: ['balance'],
-    queryFn: () => apiService.getBalance(),
-  });
-
   // Mock data for charts
   const revenueData = [
     { month: 'Jan', revenue: 45000 },

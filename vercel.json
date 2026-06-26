@@ -21,23 +21,6 @@
   ],
   "headers": [
     {
-      "source": "/api/(.*)",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        },
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "GET, POST, PUT, DELETE, OPTIONS"
-        },
-        {
-          "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type, Authorization"
-        }
-      ]
-    },
-    {
       "source": "/assets/(.*)",
       "headers": [
         {
@@ -68,6 +51,14 @@
     {
       "path": "/api/cron/sync",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/enrich-expenses",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/collection-reminders",
+      "schedule": "0 7 * * *"
     }
   ]
 }

@@ -13,6 +13,7 @@ from sqlalchemy import and_, func, extract
 from ..models import (
     Account, Transaction, AccountType, TransactionType
 )
+from .ar_ap_aging import ARAPAgingService
 
 
 class CashFlowCategory(str, Enum):
@@ -386,7 +387,7 @@ class CashFlowService:
         if net_burn > 0:
             runway_months = float(current_balance / net_burn)
         else:
-            runway_months = float('inf')  # אין שריפת מזומנים
+            runway_months = 999.0  # אין שריפת מזומנים (ערך סופי תקין ל-JSON)
         
         return {
             'monthly_burn_rate': float(monthly_burn),
@@ -405,15 +406,15 @@ class CashFlowService:
         גיול חובות לקוחות
         Accounts receivable aging report
         """
-        # TODO: לממש עם נתוני חשבוניות מ-SUMIT
-        today = datetime.now()
-        
+        report = ARAPAgingService(self.db, organization_id).ar_aging_report()
+        aging = report["aging"]
+        total_count = sum(aging[b]["count"] for b in aging)
         return {
-            'current': {'amount': 0, 'count': 0, 'label': '0-30 ימים'},
-            'days_30_60': {'amount': 0, 'count': 0, 'label': '31-60 ימים'},
-            'days_60_90': {'amount': 0, 'count': 0, 'label': '61-90 ימים'},
-            'over_90': {'amount': 0, 'count': 0, 'label': 'מעל 90 ימים'},
-            'total': {'amount': 0, 'count': 0}
+            'current': {'amount': aging['current']['amount'], 'count': aging['current']['count'], 'label': '0-30 ימים'},
+            'days_30_60': {'amount': aging['31_60']['amount'], 'count': aging['31_60']['count'], 'label': '31-60 ימים'},
+            'days_60_90': {'amount': aging['61_90']['amount'], 'count': aging['61_90']['count'], 'label': '61-90 ימים'},
+            'over_90': {'amount': aging['90plus']['amount'], 'count': aging['90plus']['count'], 'label': 'מעל 90 ימים'},
+            'total': {'amount': report['total_receivable'], 'count': total_count},
         }
     
     def get_payables_aging(
@@ -424,13 +425,15 @@ class CashFlowService:
         גיול חובות לספקים
         Accounts payable aging report
         """
-        # TODO: לממש עם נתוני הוצאות מ-SUMIT
+        report = ARAPAgingService(self.db, organization_id).ap_aging_report()
+        aging = report["aging"]
+        total_count = sum(aging[b]["count"] for b in aging)
         return {
-            'current': {'amount': 0, 'count': 0, 'label': '0-30 ימים'},
-            'days_30_60': {'amount': 0, 'count': 0, 'label': '31-60 ימים'},
-            'days_60_90': {'amount': 0, 'count': 0, 'label': '61-90 ימים'},
-            'over_90': {'amount': 0, 'count': 0, 'label': 'מעל 90 ימים'},
-            'total': {'amount': 0, 'count': 0}
+            'current': {'amount': aging['current']['amount'], 'count': aging['current']['count'], 'label': '0-30 ימים'},
+            'days_30_60': {'amount': aging['31_60']['amount'], 'count': aging['31_60']['count'], 'label': '31-60 ימים'},
+            'days_60_90': {'amount': aging['61_90']['amount'], 'count': aging['61_90']['count'], 'label': '61-90 ימים'},
+            'over_90': {'amount': aging['90plus']['amount'], 'count': aging['90plus']['count'], 'label': 'מעל 90 ימים'},
+            'total': {'amount': report['total_payable'], 'count': total_count},
         }
     
     def get_liquidity_ratios(
@@ -457,14 +460,14 @@ class CashFlowService:
             )
         ).scalar() or Decimal("0")
         
-        # יחס שוטף
-        current_ratio = float(current_assets / current_liabilities) if current_liabilities > 0 else float('inf')
-        
+        # יחס שוטף (999 = אין התחייבויות שוטפות; ערך סופי תקין ל-JSON)
+        current_ratio = float(current_assets / current_liabilities) if current_liabilities > 0 else 999.0
+
         # יחס מהיר (בהנחה ש-80% מהנכסים נזילים)
-        quick_ratio = float((current_assets * Decimal("0.8")) / current_liabilities) if current_liabilities > 0 else float('inf')
-        
+        quick_ratio = float((current_assets * Decimal("0.8")) / current_liabilities) if current_liabilities > 0 else 999.0
+
         # יחס מזומנים
-        cash_ratio = float((current_assets * Decimal("0.5")) / current_liabilities) if current_liabilities > 0 else float('inf')
+        cash_ratio = float((current_assets * Decimal("0.5")) / current_liabilities) if current_liabilities > 0 else 999.0
         
         return {
             'current_ratio': current_ratio,

@@ -1,6 +1,10 @@
 """
 Database connection and session management
 """
+import json
+from datetime import date, datetime
+from decimal import Decimal
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool
@@ -11,8 +15,24 @@ from .config import settings
 from .models import Base, IntegrationType, Organization
 
 
+def _json_default(o):
+    """JSON encoder fallback for values SUMIT/normalized data carry in JSON
+    columns (raw_data/line_items): Decimal and date/datetime are not
+    JSON-serializable by default and would abort the whole sync commit."""
+    if isinstance(o, Decimal):
+        # ערך מספרי — שומרים כ-float כדי לשמר חישוביות
+        return float(o)
+    if isinstance(o, (date, datetime)):
+        return o.isoformat()
+    return str(o)
+
+
+def _json_serializer(obj):
+    return json.dumps(obj, default=_json_default, ensure_ascii=False)
+
+
 def _engine_kwargs():
-    kwargs = {"echo": settings.debug}
+    kwargs = {"echo": settings.debug, "json_serializer": _json_serializer}
     if "sqlite" in settings.database_url:
         kwargs["connect_args"] = {"check_same_thread": False}
     elif "postgresql+psycopg" in settings.database_url:

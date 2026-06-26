@@ -18,6 +18,14 @@ import {
   Brain,
   FileCheck,
   Banknote,
+  Package,
+  Landmark,
+  Sparkles,
+  Calculator,
+  BookOpen,
+  FileWarning,
+  Cpu,
+  LayoutGrid,
   ScrollText,
   ChevronLeft,
   ChevronRight,
@@ -29,6 +37,7 @@ import {
   Sun,
   HelpCircle,
   ChevronDown,
+  ClipboardCheck,
 } from 'lucide-react';
 
 // Dashboard Components
@@ -38,6 +47,18 @@ import PaymentInterface from './components/PaymentInterface';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
 import ForecastingDashboard from './components/ForecastingDashboard';
 import BankStatementDashboard from './components/BankStatementDashboard';
+import BankInsightsDashboard from './components/BankInsightsDashboard';
+import OfficeDashboard from './components/OfficeDashboard';
+import AdminClientsDashboard from './components/AdminClientsDashboard';
+import CalculatorsDashboard from './components/CalculatorsDashboard';
+import PayrollDashboard from './components/PayrollDashboard';
+import OpenFinanceOpsDashboard from './components/OpenFinanceOpsDashboard';
+import LedgerDashboard from './components/LedgerDashboard';
+import DailyReportsDashboard from './components/DailyReportsDashboard';
+import AnnualReportsDashboard from './components/AnnualReportsDashboard';
+import EngineDashboard from './components/EngineDashboard';
+import BusinessMenuDashboard from './components/BusinessMenuDashboard';
+import SumitCoverageDashboard from './components/SumitCoverageDashboard';
 import ReportsDashboard from './components/ReportsDashboard';
 import BudgetDashboard from './components/BudgetDashboard';
 import KPIDashboard from './components/KPIDashboard';
@@ -47,15 +68,24 @@ import AIAnalyticsDashboard from './components/AIAnalyticsDashboard';
 import InvoicesDashboard from './components/InvoicesDashboard';
 import PaymentsDashboard from './components/PaymentsDashboard';
 import AgreementCashFlowDashboard from './components/AgreementCashFlowDashboard';
+import MasavDashboard from './components/MasavDashboard';
+import InventoryDashboard from './components/InventoryDashboard';
+import BankReportDashboard from './components/BankReportDashboard';
+import ExecutiveDashboard from './components/ExecutiveDashboard';
+import BudgetEntry from './components/BudgetEntry';
+import YearComparison from './components/YearComparison';
+import ExpenseFiling from './components/ExpenseFiling';
 
 // CFO Command Center Components
 import CFOOverview from './components/CFOOverview';
 import CFOARDashboard from './components/CFOARDashboard';
+import CFOAPDashboard from './components/CFOAPDashboard';
 import CFOSyncDashboard from './components/CFOSyncDashboard';
 import CFOAlertsTasks from './components/CFOAlertsTasks';
 import CFOCashFlowProjection from './components/CFOCashFlowProjection';
+import CashFlowDashboard from './components/CashFlowDashboard';
 
-import Login from './components/Login';
+import RezefLanding from './components/RezefLanding';
 
 import './App.css';
 
@@ -74,19 +104,27 @@ const navigationConfig = [
     section: 'CFO',
     items: [
       { to: '/', icon: LayoutDashboard, label: 'Command Center', description: 'CFO overview' },
+      { to: '/executive', icon: Gauge, label: 'דשבורד מנהלים', description: '8 פאנלים של מצב העסק' },
       { to: '/cashflow', icon: Wallet, label: 'Cash Flow', description: 'Projections & scenarios' },
+      { to: '/cashflow-detail', icon: TrendingUp, label: 'תזרים — מפורט', description: 'חודשי/יומי, burn-rate ויחסי נזילות' },
       { to: '/ar', icon: Receipt, label: 'AR / Collections', description: 'Aging & follow-up' },
       { to: '/ap', icon: CreditCard, label: 'AP / Payables', description: 'Bills & payments' },
       { to: '/budget', icon: Target, label: 'Budget', description: 'Budget vs actual' },
+      { to: '/budget-entry', icon: Target, label: 'הזנת תקציב', description: 'הזנה ידנית / ייבוא Excel' },
+      { to: '/year-comparison', icon: BarChart3, label: 'השוואה שנתית', description: 'מול שנה קודמת' },
     ]
   },
   {
     section: 'Operations',
     items: [
       { to: '/invoices', icon: FileCheck, label: 'Invoices', description: 'Create & manage invoices' },
+      { to: '/documents', icon: ScrollText, label: 'הוצאת מסמכים', description: 'חשבונית/הצעת מחיר/הזמנה/תעודת משלוח' },
       { to: '/payment-requests', icon: Banknote, label: 'Payment Requests', description: 'Requests & standing orders' },
       { to: '/agreements', icon: ScrollText, label: 'Agreements', description: 'Contracts & cash flow' },
+      { to: '/expenses', icon: Receipt, label: 'תיוק הוצאות', description: 'הוצאות ותיוקן ב-SUMIT' },
       { to: '/payments', icon: CreditCard, label: 'Payments', description: 'Payment processing' },
+      { to: '/masav', icon: Banknote, label: 'תשלומי ספקים (מס"ב)', description: 'יצירת קובץ מס"ב' },
+      { to: '/inventory', icon: Package, label: 'מלאי', description: 'דוח מלאי קיים' },
     ]
   },
   {
@@ -95,6 +133,19 @@ const navigationConfig = [
       { to: '/alerts', icon: Bell, label: 'Alerts & Tasks', description: 'Action items' },
       { to: '/kpis', icon: Gauge, label: 'KPIs', description: 'Performance metrics' },
       { to: '/reports', icon: FileSpreadsheet, label: 'Reports', description: 'Generate & export' },
+      { to: '/bank-report', icon: Landmark, label: 'דוח לבנק', description: 'דוח מצב עסקי לבנק' },
+      { to: '/business-menu', icon: LayoutGrid, label: 'תפריט יכולות', description: 'סילבוס מלא של כל מה שהמערכת עושה לעסק — עם סטטוס חי' },
+      { to: '/sumit-coverage', icon: ClipboardCheck, label: 'כיסוי מודולי SUMIT', description: 'מפת API: מוכן, חלקי, חסום' },
+      { to: '/engine', icon: Cpu, label: 'המנוע המאחד', description: 'מרכז בקרה אחד מעל הכל — סטטוס, הנה"ח, סינתזה ודוחות' },
+      { to: '/bank-insights', icon: Sparkles, label: 'תובנות בנק', description: 'אנומליות, מנויים, עמלות וחיסכון מדפי הבנק' },
+      { to: '/office', icon: Building2, label: 'ניהול משרד', description: 'תיקי לקוחות, סנכרון רוחבי והתאמות נדרשות' },
+      { to: '/admin-clients', icon: Database, label: 'אדמין — כל הלקוחות', description: 'תצוגת על של כל תיקי הלקוחות' },
+      { to: '/calculators', icon: Calculator, label: 'מחשבונים', description: 'חישובי שכר/מס/ב"ל דטרמיניסטיים, בלי צ\'אט' },
+      { to: '/payroll', icon: Users, label: 'שכר', description: 'עובדים, תלושים ודוח 102/126' },
+      { to: '/ledger', icon: BookOpen, label: 'הנה"ח כפולה', description: 'מאזן בוחן, פקודות יומן וכרטסת — נגזר מהמסמכים' },
+      { to: '/daily-reports', icon: TrendingUp, label: 'דוחות יומיים', description: 'רווח/הפסד מצטבר, גיול חובות וספקים תוך-חודשי' },
+      { to: '/annual-reports', icon: FileWarning, label: 'דוחות שנתיים', description: 'טיוטת 1301 (יחיד) / 1214 (חברה) — לבדיקת רו"ח' },
+      { to: '/of-ops', icon: CreditCard, label: 'Open Finance תפעול', description: 'תשלומים, אשראי, לקוחות וסוחרים' },
     ]
   },
   {
@@ -124,7 +175,7 @@ function App() {
   const [authed, setAuthed] = useState(() => Boolean(localStorage.getItem('auth_token')));
 
   if (!authed) {
-    return <Login darkMode={darkMode} onSuccess={() => setAuthed(true)} />;
+    return <RezefLanding darkMode={darkMode} onSuccess={() => setAuthed(true)} />;
   }
 
   return (
@@ -141,8 +192,8 @@ function App() {
                 </div>
                 {!sidebarCollapsed && (
                   <div>
-                    <h1 className={`text-xl font-bold ${darkMode ? 'text-white' : 'text-gray-800'}`}>CFO System</h1>
-                    <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>Financial Management</p>
+                    <h1 className={`text-xl font-bold ${darkMode ? 'text-white' : 'text-gray-800'}`}>רצף Rezef</h1>
+                    <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>CFO Operating System</p>
                   </div>
                 )}
               </div>
@@ -268,8 +319,9 @@ function App() {
                 {/* CFO Command Center */}
                 <Route path="/" element={<CFOOverview darkMode={darkMode} />} />
                 <Route path="/cashflow" element={<CFOCashFlowProjection darkMode={darkMode} />} />
+                <Route path="/cashflow-detail" element={<CashFlowDashboard />} />
                 <Route path="/ar" element={<CFOARDashboard darkMode={darkMode} />} />
-                <Route path="/ap" element={<CFOARDashboard darkMode={darkMode} />} />
+                <Route path="/ap" element={<CFOAPDashboard darkMode={darkMode} />} />
                 <Route path="/alerts" element={<CFOAlertsTasks darkMode={darkMode} />} />
                 <Route path="/tasks" element={<CFOAlertsTasks darkMode={darkMode} />} />
                 <Route path="/sync" element={<CFOSyncDashboard darkMode={darkMode} />} />
@@ -284,6 +336,18 @@ function App() {
                 <Route path="/ai-analytics" element={<AIAnalyticsDashboard />} />
                 <Route path="/reports" element={<ReportsDashboard />} />
                 <Route path="/bank" element={<BankStatementDashboard />} />
+                <Route path="/bank-insights" element={<BankInsightsDashboard />} />
+                <Route path="/office" element={<OfficeDashboard />} />
+                <Route path="/admin-clients" element={<AdminClientsDashboard />} />
+                <Route path="/calculators" element={<CalculatorsDashboard />} />
+                <Route path="/payroll" element={<PayrollDashboard />} />
+                <Route path="/of-ops" element={<OpenFinanceOpsDashboard />} />
+                <Route path="/ledger" element={<LedgerDashboard />} />
+                <Route path="/daily-reports" element={<DailyReportsDashboard />} />
+                <Route path="/annual-reports" element={<AnnualReportsDashboard />} />
+                <Route path="/engine" element={<EngineDashboard />} />
+                <Route path="/business-menu" element={<BusinessMenuDashboard />} />
+                <Route path="/sumit-coverage" element={<SumitCoverageDashboard darkMode={darkMode} />} />
                 <Route path="/analytics" element={<AnalyticsDashboard />} />
                 <Route path="/settings" element={<SettingsPage darkMode={darkMode} />} />
 
@@ -291,6 +355,13 @@ function App() {
                 <Route path="/invoices" element={<InvoicesDashboard />} />
                 <Route path="/payment-requests" element={<PaymentsDashboard />} />
                 <Route path="/agreements" element={<AgreementCashFlowDashboard />} />
+                <Route path="/masav" element={<MasavDashboard darkMode={darkMode} />} />
+                <Route path="/inventory" element={<InventoryDashboard darkMode={darkMode} />} />
+                <Route path="/bank-report" element={<BankReportDashboard darkMode={darkMode} />} />
+                <Route path="/executive" element={<ExecutiveDashboard darkMode={darkMode} />} />
+                <Route path="/budget-entry" element={<BudgetEntry darkMode={darkMode} />} />
+                <Route path="/year-comparison" element={<YearComparison darkMode={darkMode} />} />
+                <Route path="/expenses" element={<ExpenseFiling darkMode={darkMode} />} />
               </Routes>
             </main>
           </div>

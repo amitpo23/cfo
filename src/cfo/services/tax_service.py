@@ -10,7 +10,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 
-from ..models import Transaction, Account
+from ..models import Transaction, Account, TransactionType
 from ..database import SessionLocal
 
 
@@ -141,7 +141,7 @@ class ComplianceReport:
 
 # שיעורי מס בישראל (2024)
 TAX_RATES = {
-    'vat': 0.17,  # 17% מע"מ
+    'vat': 0.18,  # 18% מע"מ (החל מ-1 בינואר 2025)
     'corporate_tax': 0.23,  # 23% מס חברות
     'withholding_supplier': 0.30,  # 30% ניכוי ספקים (ללא אישור)
     'withholding_contractor': 0.20,  # 20% ניכוי קבלנים
@@ -170,9 +170,11 @@ class TaxComplianceService:
     def __init__(self, db: Session, organization_id: int = 1):
         self.db = db
         self.organization_id = organization_id
-        
-        # הגדרות חברה
-        self.company_vat_number = '123456789'
+
+        # ח.פ נטען מה-Organization (נדרש לייצוא SHAAM תקין); fallback בלבד אם חסר.
+        from ..models import Organization
+        org = db.query(Organization).filter(Organization.id == organization_id).first()
+        self.company_vat_number = (org.tax_id if org and org.tax_id else '000000000')
         self.reporting_frequency = 'monthly'  # או bi-monthly
     
     def generate_vat_report(
@@ -205,7 +207,9 @@ class TaxComplianceService:
         sales_exempt = sum(t['amount'] for t in transactions if t['type'] == 'sale' and t['vat_type'] == 'exempt')
         sales_zero = sum(t['amount'] for t in transactions if t['type'] == 'sale' and t['vat_type'] == 'zero')
         total_sales = sales_taxable + sales_exempt + sales_zero
-        output_vat = sales_taxable * TAX_RATES['vat']
+        # מע"מ עסקאות = סכום שדות המע"מ האמיתיים מהמסמכים (לא אומדן net×18%).
+        output_vat = sum(t['vat_amount'] for t in transactions
+                         if t['type'] == 'sale' and t['vat_type'] == 'taxable')
         
         # סיכום רכישות
         purchases_taxable = sum(t['amount'] for t in transactions if t['type'] == 'purchase' and t['vat_type'] == 'taxable')
@@ -598,86 +602,184 @@ class TaxComplianceService:
             }
     
     def _get_vat_transactions(self, start_date: date, end_date: date) -> List[Dict]:
-        """שליפת עסקאות למע"מ"""
-        import random
-        transactions = []
-        
-        # מכירות
-        for i in range(15):
+        """עסקאות מע"מ ממסמכי ה-ledger עם שדות נטו+מע"מ אמיתיים.
+
+        מקור אמת אחד עם financial_synthesis.compute_vat_position — קורא את
+        Invoice.tax / Bill.tax / Expense.vat_amount במקום לאמוד 18% שטוח על
+        טבלת Transaction המנופחת. סיווג: מע"מ>0 ⇒ חייב; מע"מ=0 ⇒ פטור.
+
+        סייג: ללא דגל פטור/אפס מפורש מהמקור, מסמך ללא מע"מ מסווג 'פטור' (לא 'אפס').
+        """
+        from ..models import Invoice, Bill, Expense
+        from .vat_utils import invoice_counts, bill_counts, expense_counts
+
+        def _in_period(d) -> bool:
+            return d is not None and start_date <= d <= end_date
+
+        def _net(row, net_attr, gross_attr, tax_attr) -> float:
+            net = getattr(row, net_attr, None)
+            if net is not None:
+                return float(net)
+            return float(getattr(row, gross_attr, 0) or 0) - float(getattr(row, tax_attr, 0) or 0)
+
+        org = self.organization_id
+        transactions: List[Dict] = []
+
+        for r in self.db.query(Invoice).filter(Invoice.organization_id == org).all():
+            d = getattr(r, "issue_date", None) or getattr(r, "due_date", None)
+            if not _in_period(d) or not invoice_counts(r.status):
+                continue
+            vat = float(r.tax or 0)
             transactions.append({
-                'id': f'INV-{1000 + i}',
-                'date': (start_date + timedelta(days=random.randint(0, 28))).isoformat(),
-                'type': 'sale',
-                'description': f'מכירה {i + 1}',
-                'amount': random.randint(5000, 50000),
-                'vat_amount': random.randint(850, 8500),
-                'vat_type': random.choice(['taxable', 'taxable', 'taxable', 'exempt', 'zero']),
-                'customer': f'לקוח {i + 1}'
+                'id': str(r.id), 'date': d.isoformat(),
+                'type': 'sale', 'description': r.invoice_number or 'מכירה',
+                'amount': abs(_net(r, 'subtotal', 'total', 'tax')),
+                'vat_amount': abs(vat),
+                'vat_type': 'taxable' if vat else 'exempt',
             })
-        
-        # רכישות
-        for i in range(10):
-            amount = random.randint(2000, 30000)
+
+        for r in self.db.query(Bill).filter(Bill.organization_id == org).all():
+            d = getattr(r, "issue_date", None) or getattr(r, "due_date", None)
+            if not _in_period(d) or not bill_counts(r.status):
+                continue
+            vat = float(r.tax or 0)
             transactions.append({
-                'id': f'PINV-{2000 + i}',
-                'date': (start_date + timedelta(days=random.randint(0, 28))).isoformat(),
-                'type': 'purchase',
-                'description': f'רכישה {i + 1}',
-                'amount': amount,
-                'vat_amount': amount * 0.17,
-                'vat_type': 'taxable',
-                'is_fixed_asset': random.random() > 0.8,
-                'supplier': f'ספק {i + 1}'
+                'id': str(r.id), 'date': d.isoformat(),
+                'type': 'purchase', 'description': r.bill_number or 'רכישה',
+                'amount': abs(_net(r, 'subtotal', 'total', 'tax')),
+                'vat_amount': abs(vat),
+                'vat_type': 'taxable' if vat else 'exempt',
+                'is_fixed_asset': False,
             })
-        
+
+        for r in self.db.query(Expense).filter(Expense.organization_id == org).all():
+            d = getattr(r, "expense_date", None)
+            if not _in_period(d) or not expense_counts(getattr(r, "status", None)):
+                continue
+            vat = float(r.vat_amount or 0)
+            transactions.append({
+                'id': str(r.id), 'date': d.isoformat(),
+                'type': 'purchase', 'description': r.description or r.supplier_name or 'הוצאה',
+                'amount': abs(_net(r, 'amount', 'total', 'vat_amount')),
+                'vat_amount': abs(vat),
+                'vat_type': 'taxable' if vat else 'exempt',
+                'is_fixed_asset': False,
+            })
+
         return transactions
-    
+
     def _get_annual_profit_estimate(self, year: int) -> float:
-        """הערכת רווח שנתי"""
-        import random
-        return random.randint(300000, 600000)
-    
+        """הערכת רווח שנתי לפני מס — מ-P&L מבוסס-ledger (עקבי עם פאזה 1).
+
+        קודם קרא מטבלת Transaction (אפס לארגוני ledger). כעת נשען על
+        FinancialReportsService שקורא מ-Invoice/Bill/Expense בנטו.
+        """
+        from .financial_reports_service import FinancialReportsService
+        pl = FinancialReportsService(self.db).generate_profit_loss(
+            self.organization_id, date(year, 1, 1), date(year, 12, 31),
+            compare_previous=False,
+        )
+        return pl.net_income_before_tax
+
     def _get_previous_payments(self, year: int, month: int, tax_type: TaxType) -> float:
-        """תשלומים קודמים"""
+        """תשלומים קודמים — לא נרשמים במערכת כרגע."""
         return 0
-    
+
     def _get_employee_data(self, year: int, month: int) -> List[Dict]:
-        """נתוני עובדים"""
-        import random
-        employees = []
-        
-        for i in range(5):
-            gross = random.randint(8000, 25000)
-            employees.append({
-                'id': f'EMP-{i + 1}',
-                'name': f'עובד {i + 1}',
-                'gross_salary': gross,
-                'income_tax': gross * 0.15,
-                'social_security_employee': gross * 0.12,
-                'health_tax': gross * 0.05,
-                'social_security_employer': gross * 0.0755,
-                'net_salary': gross * 0.68
-            })
-        
-        return employees
-    
+        """נתוני עובדים מהמודול שכר (תלושים שהופקו) עבור דוח 102."""
+        from .payroll_service import employee_withholding_rows
+        return employee_withholding_rows(self.db, self.organization_id, year, month)
+
     def _get_supplier_withholding(self, year: int, month: int) -> List[Dict]:
-        """ניכויי ספקים"""
-        import random
-        suppliers = []
-        
-        for i in range(3):
-            amount = random.randint(5000, 20000)
-            suppliers.append({
-                'id': f'SUP-{i + 1}',
-                'name': f'ספק {i + 1}',
-                'type': random.choice(['supplier', 'contractor']),
-                'gross_amount': amount,
-                'withholding': amount * 0.3,
-                'net_payment': amount * 0.7
+        """ניכויי מס במקור לספקים — מחושב מהמסמכים לפי שיעור הניכוי שהוגדר לכל ספק.
+
+        רק ספקים שסומנו במפורש בשיעור ניכוי > 0 (Contact.withholding_rate) נכללים —
+        רוב הספקים פטורים (יש אישור ניכוי), ולכן ברירת המחדל היא ריק עד שמסמנים ספק.
+        """
+        from ..models import Expense, Bill, Contact
+
+        start = date(year, month, 1)
+        if month == 12:
+            end = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end = date(year, month + 1, 1) - timedelta(days=1)
+
+        contacts = {c.id: c for c in self.db.query(Contact).filter(
+            Contact.organization_id == self.organization_id).all()}
+
+        def _rate(contact) -> float:
+            return float(getattr(contact, "withholding_rate", 0) or 0) if contact else 0.0
+
+        out: List[Dict] = []
+
+        for exp in self.db.query(Expense).filter(
+                Expense.organization_id == self.organization_id).all():
+            d = getattr(exp, "expense_date", None)
+            if not (d and start <= d <= end):
+                continue
+            contact = contacts.get(getattr(exp, "supplier_id", None))
+            rate = _rate(contact)
+            if rate <= 0:
+                continue
+            base = float(getattr(exp, "amount", 0) or 0)  # net of VAT
+            out.append({
+                "type": "contractor" if rate <= 0.20 else "supplier",
+                "supplier": getattr(exp, "supplier_name", None) or (contact.name if contact else ""),
+                "tax_id": getattr(exp, "supplier_tax_id", None) or (contact.tax_id if contact else None),
+                "amount": round(base, 2),
+                "rate": rate,
+                "withholding": round(base * rate, 2),
             })
-        
-        return suppliers
+
+        for bill in self.db.query(Bill).filter(
+                Bill.organization_id == self.organization_id).all():
+            d = getattr(bill, "issue_date", None) or getattr(bill, "due_date", None)
+            if not (d and start <= d <= end):
+                continue
+            contact = contacts.get(getattr(bill, "vendor_id", None))
+            rate = _rate(contact)
+            if rate <= 0:
+                continue
+            base = float(getattr(bill, "subtotal", 0) or 0)
+            out.append({
+                "type": "contractor" if rate <= 0.20 else "supplier",
+                "supplier": contact.name if contact else "",
+                "tax_id": contact.tax_id if contact else None,
+                "amount": round(base, 2),
+                "rate": rate,
+                "withholding": round(base * rate, 2),
+            })
+
+        return out
+
+    def generate_856(self, year: int) -> Dict:
+        """דוח 856 שנתי — סיכום ניכויי מס במקור מספקים, מקובץ לפי ספק.
+
+        טיוטה לאימות מול רו"ח: מבוסס על הספקים שסומנו בשיעור ניכוי והמסמכים בשנה.
+        """
+        by_supplier: Dict[str, Dict] = {}
+        total_base = total_wh = 0.0
+        for month in range(1, 13):
+            for row in self._get_supplier_withholding(year, month):
+                key = row.get("tax_id") or row["supplier"]
+                agg = by_supplier.setdefault(key, {
+                    "supplier": row["supplier"], "tax_id": row.get("tax_id"),
+                    "rate": row["rate"], "amount": 0.0, "withholding": 0.0})
+                agg["amount"] = round(agg["amount"] + row["amount"], 2)
+                agg["withholding"] = round(agg["withholding"] + row["withholding"], 2)
+                total_base += row["amount"]
+                total_wh += row["withholding"]
+        return {
+            "form": "856",
+            "title": "דוח שנתי על ניכויים מספקים (856)",
+            "year": year,
+            "suppliers": sorted(by_supplier.values(), key=lambda s: s["withholding"], reverse=True),
+            "supplier_count": len(by_supplier),
+            "total_base": round(total_base, 2),
+            "total_withholding": round(total_wh, 2),
+            "draft": True,
+            "disclaimer": "טיוטת 856 — מבוססת על ספקים שסומנו בשיעור ניכוי. לבדיקת רו\"ח.",
+        }
     
     def _format_shaam_file(self, report: VATReport) -> str:
         """פורמט שע"מ"""

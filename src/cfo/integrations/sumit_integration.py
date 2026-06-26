@@ -60,6 +60,10 @@ from .sumit_models import (
 logger = logging.getLogger(__name__)
 
 
+class SumitAPIError(Exception):
+    """Raised when SUMIT returns a business/API error envelope."""
+
+
 # Mapping from this codebase's document type names to SUMIT's
 # Accounting_Typed_DocumentType enum names.
 _DOCUMENT_TYPE_TO_SUMIT = {
@@ -76,6 +80,9 @@ _DOCUMENT_TYPE_TO_SUMIT = {
     "quote": "PriceQuotation",
     "price_quotation": "PriceQuotation",
     "order": "Order",
+    # הזמנת רכש / הזמנת עבודה — SUMIT מייצג שתיהן כ-Order (הזמנה).
+    "purchase_order": "Order",
+    "work_order": "Order",
     "delivery_note": "DeliveryNote",
     "payment_request": "PaymentRequest",
     "expense": "ExpenseInvoice",
@@ -217,7 +224,11 @@ class SumitIntegration(BaseIntegration):
 
         except httpx.HTTPStatusError as e:
             self._log_error(e, f"HTTP error on {endpoint}")
-            raise Exception(f"SUMIT API error: {e.response.text}")
+            # כולל את קוד הסטטוס בהודעה — ל-403 (rate limit) התגובה לרוב ריקה,
+            # וקוראים מסתמכים על זיהוי "403" בטקסט כדי לבצע backoff.
+            raise SumitAPIError(
+                f"SUMIT API error {e.response.status_code}: {e.response.text}"
+            )
         except Exception as e:
             self._log_error(e, f"Request failed on {endpoint}")
             raise
@@ -238,7 +249,7 @@ class SumitIntegration(BaseIntegration):
         """
         response = await self._make_request(endpoint, data=payload, params=params)
         if not isinstance(response, dict):
-            raise Exception(f"SUMIT API error: unexpected response from {endpoint}")
+            raise SumitAPIError(f"SUMIT API error: unexpected response from {endpoint}")
         status = response.get("Status", 0)
         if status not in (0, "0", "Success"):
             message = (
@@ -246,7 +257,7 @@ class SumitIntegration(BaseIntegration):
                 or response.get("TechnicalErrorDetails")
                 or f"Status={status}"
             )
-            raise Exception(f"SUMIT API error: {message}")
+            raise SumitAPIError(f"SUMIT API error: {message}")
         data = response.get("Data")
         return data if isinstance(data, dict) else ({} if data is None else data)
 
@@ -275,7 +286,7 @@ class SumitIntegration(BaseIntegration):
                     or body.get("TechnicalErrorDetails")
                     or f"Status={body.get('Status')}"
                 )
-                raise Exception(f"SUMIT API error: {message}")
+                raise SumitAPIError(f"SUMIT API error: {message}")
         return response.content
 
     # ==================== Conversion helpers ====================
@@ -377,10 +388,33 @@ class SumitIntegration(BaseIntegration):
             created_at=datetime.now(),
         )
 
+    @staticmethod
+    def _extract_vat(doc: Dict[str, Any]) -> Optional[Decimal]:
+        """Return an explicit VAT amount from a SUMIT list record, or None.
+
+        SUMIT's list payload historically omits VAT, but guard for variants that
+        expose it so a real value always wins over derivation.
+        """
+        for key in ("VAT", "Vat", "VATAmount", "VatAmount", "DocumentVAT",
+                    "TotalVAT", "VAT_Amount"):
+            if doc.get(key) is not None:
+                try:
+                    return Decimal(str(doc.get(key)))
+                except (TypeError, ValueError):
+                    continue
+        return None
+
     def _document_response_from_list(self, doc: Dict[str, Any]) -> DocumentResponse:
         """Build a DocumentResponse from a /accounting/documents/list/ record."""
         total = Decimal(str(doc.get("DocumentValue") or 0))
         issue = self._parse_date(doc.get("Date")) or date.today()
+        # SUMIT's list payload returns only the VAT-inclusive gross. Prefer an
+        # explicit VAT field if the response ever carries one; otherwise recover the
+        # split deterministically from the gross + date so downstream VAT isn't zeroed.
+        vat_amount = self._extract_vat(doc)
+        if vat_amount is None:
+            from ..services.vat_utils import split_inclusive
+            _subtotal, vat_amount = split_inclusive(total, issue)
         if doc.get("IsDraft"):
             status = "draft"
         elif doc.get("IsClosed"):
@@ -394,7 +428,7 @@ class SumitIntegration(BaseIntegration):
             document_type=self._unmap_document_type(doc.get("Type")),
             customer_id=str(doc.get("CustomerID") or ""),
             total_amount=total,
-            vat_amount=Decimal("0"),
+            vat_amount=vat_amount,
             status=status,
             issue_date=issue,
             due_date=self._parse_date(doc.get("DueDate")),
@@ -405,6 +439,8 @@ class SumitIntegration(BaseIntegration):
             date=issue,
             customer_name=doc.get("CustomerName"),
             currency=str(doc.get("Currency") or "ILS"),
+            allocation_number=(str(doc.get("AssignmentNumber")).strip()
+                               if doc.get("AssignmentNumber") else None),
         )
 
     def _payment_response(
@@ -670,6 +706,8 @@ class SumitIntegration(BaseIntegration):
             date=issue,
             customer_name=customer.get("Name"),
             currency=str(document.get("Currency") or "ILS"),
+            allocation_number=(str(document.get("AssignmentNumber")).strip()
+                               if document.get("AssignmentNumber") else None),
         )
 
     async def create_document(
@@ -788,6 +826,52 @@ class SumitIntegration(BaseIntegration):
         result["expense_id"] = str(document_id) if document_id is not None else None
         return result
 
+    async def get_document_supplier(self, document_id: str) -> str:
+        """Return the supplier/customer name on a document (from getdetails)."""
+        details = await self.get_document_supplier_details(document_id)
+        return details["name"]
+
+    async def get_document_supplier_details(self, document_id: str) -> Dict[str, Any]:
+        """Return supplier name + tax id (CompanyNumber) + VAT + total for a
+        document — everything PCN874 needs, only reachable via getdetails.
+        """
+        data = await self._post(
+            "/accounting/documents/getdetails/",
+            {"DocumentID": self._to_int(document_id)}
+        )
+        document = data.get("Document") or {}
+        customer = document.get("Customer") or {}
+        items = data.get("Items") or []
+        # מע"מ: קודם סכימת Items, ואז fallback לשדות ברמת מסמך שמכילים 'vat'
+        vat = Decimal("0")
+        for it in items:
+            vat += Decimal(str(it.get("VAT") or 0))
+        if vat == 0:
+            for k, v in document.items():
+                if "vat" in k.lower() and v:
+                    try:
+                        vat = abs(Decimal(str(v)))
+                        break
+                    except Exception:
+                        pass
+        total = abs(Decimal(str(document.get("DocumentValue") or 0)))
+        # שם פריט ההוצאה ב-SUMIT (למשל "הוצאות נסיעה") — אות הסיווג האמין,
+        # נבחר הפריט הראשון עם שם לא-ריק.
+        item_name = ""
+        for it in items:
+            nm = ((it.get("Item") or {}).get("Name") or "").strip()
+            if nm:
+                item_name = nm
+                break
+        return {
+            "name": (customer.get("Name") or "").strip(),
+            "tax_id": str(customer.get("CompanyNumber") or "").strip(),
+            "vat": float(vat),
+            "total": float(total),
+            "no_vat": bool(customer.get("NoVAT")),
+            "item_name": item_name,
+        }
+
     async def cancel_document(self, document_id: str) -> Dict[str, Any]:
         """
         Cancel a document (POST /accounting/documents/cancel/)
@@ -851,7 +935,10 @@ class SumitIntegration(BaseIntegration):
         Returns:
             List of debt records
         """
-        payload: Dict[str, Any] = {}
+        # DebitSource/CreditSource הם שדות-חובה (enum מספרי) שבוחרים אילו סוגי
+        # מסמכים נספרים כחיוב/זיכוי (אחרת ה-API מחזיר "שדה חסר: DebitSource").
+        # 2/1 מחזיר את רשומות החוב; ערכים אחרים (1/1, 2/2) החזירו 0 בבדיקה.
+        payload: Dict[str, Any] = {"DebitSource": 2, "CreditSource": 1}
         if request.include_paid:
             payload["IncludeDraftDocuments"] = True
         data = await self._post("/accounting/documents/getdebtreport/", payload)
@@ -888,9 +975,17 @@ class SumitIntegration(BaseIntegration):
             [request.document_type] if request.document_type else None
         )
         if type_names:
-            payload["DocumentTypes"] = [
-                self._map_document_type(t) for t in type_names
-            ]
+            # SUMIT's documents/list accepts the numeric Accounting_Typed_DocumentType
+            # codes directly (e.g. 0=Invoice, 5=Receipt, 15=ExpenseInvoice). Filtering by
+            # those numeric codes is reliable; the enum *name* filter is not (e.g.
+            # "ExpenseInvoice" returns nothing). Pass an int through unchanged; map names.
+            def _doc_type(t):
+                if isinstance(t, int):
+                    return t
+                if isinstance(t, str) and t.lstrip("-").isdigit():
+                    return int(t)
+                return self._map_document_type(t)
+            payload["DocumentTypes"] = [_doc_type(t) for t in type_names]
         if request.from_date:
             payload["DateFrom"] = request.from_date.isoformat()
         if request.to_date:

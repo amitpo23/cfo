@@ -99,10 +99,10 @@ const ForecastingDashboard: React.FC = () => {
   const { data: revenueForecast, isLoading: loadingRevenue } = useQuery<ForecastResult[]>({
     queryKey: ['revenue-forecast', forecastPeriods, forecastMethod],
     queryFn: async () => {
-      const response = await api.get<{ data: ForecastResult[] }>(
+      const response = await api.get<{ data?: ForecastResult[] } | ForecastResult[]>(
         `/cashflow/forecast/revenue?periods=${forecastPeriods}&method=${forecastMethod}`
       );
-      return response.data as ForecastResult[];
+      return (Array.isArray(response) ? response : response.data) || [];
     },
   });
 
@@ -110,10 +110,10 @@ const ForecastingDashboard: React.FC = () => {
   const { data: expenseForecast, isLoading: loadingExpense } = useQuery<ForecastResult[]>({
     queryKey: ['expense-forecast', forecastPeriods, forecastMethod],
     queryFn: async () => {
-      const response = await api.get<{ data: ForecastResult[] }>(
+      const response = await api.get<{ data?: ForecastResult[] } | ForecastResult[]>(
         `/cashflow/forecast/expenses?periods=${forecastPeriods}&method=${forecastMethod}`
       );
-      return response.data as ForecastResult[];
+      return (Array.isArray(response) ? response : response.data) || [];
     },
   });
 
@@ -121,10 +121,10 @@ const ForecastingDashboard: React.FC = () => {
   const { data: cashFlowForecast, isLoading: loadingCashFlow } = useQuery<CashFlowForecast[]>({
     queryKey: ['cashflow-forecast', forecastPeriods],
     queryFn: async () => {
-      const response = await api.get<{ data: CashFlowForecast[] }>(
+      const response = await api.get<{ data?: CashFlowForecast[] } | CashFlowForecast[]>(
         `/cashflow/forecast/cash-flow?periods=${forecastPeriods}&current_balance=0`
       );
-      return response.data as CashFlowForecast[];
+      return (Array.isArray(response) ? response : response.data) || [];
     },
   });
 
@@ -132,10 +132,10 @@ const ForecastingDashboard: React.FC = () => {
   const { data: scenarios, isLoading: loadingScenarios } = useQuery<ScenarioData>({
     queryKey: ['scenarios', forecastPeriods],
     queryFn: async () => {
-      const response = await api.get<{ data: ScenarioData }>(
+      const response = await api.get<{ data?: ScenarioData } | ScenarioData>(
         `/cashflow/forecast/scenarios?periods=${forecastPeriods}&current_balance=0`
       );
-      return response.data as ScenarioData;
+      return ('data' in response && response.data ? response.data : response) as ScenarioData;
     },
     enabled: showScenarios,
   });
@@ -144,8 +144,8 @@ const ForecastingDashboard: React.FC = () => {
   const { data: trends } = useQuery<TrendAnalysis>({
     queryKey: ['trends'],
     queryFn: async () => {
-      const response = await api.get<{ data: TrendAnalysis }>('/cashflow/forecast/trends?months=12');
-      return response.data as TrendAnalysis;
+      const response = await api.get<{ data?: TrendAnalysis } | TrendAnalysis>('/cashflow/forecast/trends?months=12');
+      return ('data' in response && response.data ? response.data : response) as TrendAnalysis;
     },
   });
 
@@ -153,8 +153,12 @@ const ForecastingDashboard: React.FC = () => {
   const { data: mlForecast, isLoading: loadingML } = useQuery<MLForecast>({
     queryKey: ['ml-forecast', forecastPeriods],
     queryFn: async () => {
-      const response = await api.get<{ data: MLForecast }>(`/cashflow/forecast/ml/ensemble?periods=${forecastPeriods}`);
-      return response.data as MLForecast;
+      try {
+        const response = await api.get<{ data?: MLForecast } | MLForecast>(`/cashflow/forecast/ml/ensemble?periods=${forecastPeriods}`);
+        return ('data' in response && response.data ? response.data : response) as MLForecast;
+      } catch {
+        return { ensemble: [], lstm: [], prophet: [], xgboost: [], weights: { lstm: 0, prophet: 0, xgboost: 0 } };
+      }
     },
   });
 
@@ -162,8 +166,8 @@ const ForecastingDashboard: React.FC = () => {
   const { data: accuracy } = useQuery<{ mape: number }>({
     queryKey: ['forecast-accuracy'],
     queryFn: async () => {
-      const response = await api.get<{ data: { mape: number } }>('/cashflow/forecast/accuracy?test_months=3');
-      return response.data as { mape: number };
+      const response = await api.get<{ data?: { mape: number } } | { mape: number }>('/cashflow/forecast/accuracy?test_months=3');
+      return ('data' in response && response.data ? response.data : response) as { mape: number };
     },
   });
 

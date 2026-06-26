@@ -5,7 +5,7 @@ Sync API routes.
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,13 @@ class OpenFinanceConfigRequest(BaseModel):
 class SumitConfigRequest(BaseModel):
     api_key: str = Field(..., min_length=1)
     company_id: Optional[str] = None
+
+
+def _kickoff_onboarding(db: Session, org_id: int, source: str, background_tasks) -> None:
+    """Materialize the onboarding checklist now and run it in the background."""
+    from ...services import onboarding_service
+    onboarding_service.ensure_tasks(db, org_id, source)
+    background_tasks.add_task(onboarding_service.run_onboarding_bg, org_id, source)
 
 
 def _upsert_connection(db: Session, org_id: int, source: str, credentials: dict, entities: list):
@@ -120,6 +127,7 @@ async def integration_status(
 @router.post("/integration/open-finance/configure")
 async def configure_open_finance(
     request: OpenFinanceConfigRequest,
+    background_tasks: BackgroundTasks,
     org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
@@ -140,6 +148,7 @@ async def configure_open_finance(
         credentials["oauth_url"] = request.oauth_url
 
     conn = _upsert_connection(db, org_id, "open_finance", credentials, ["accounts", "bank_transactions"])
+    _kickoff_onboarding(db, org_id, "open_finance", background_tasks)
 
     return {
         "id": conn.id,
@@ -147,16 +156,22 @@ async def configure_open_finance(
         "source": conn.source,
         "status": conn.status,
         "configured": True,
+        "onboarding": "started",
     }
 
 
 @router.post("/integration/sumit/configure")
 async def configure_sumit(
     request: SumitConfigRequest,
+    background_tasks: BackgroundTasks,
     org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
-    """Store per-organization SUMIT credentials (never returned in responses)."""
+    """Store per-organization SUMIT credentials (never returned in responses).
+
+    On success we kick off the codified onboarding pipeline so the new business's
+    data is mapped + reconciled automatically (see services/onboarding_service.py).
+    """
     credentials = {"api_key": request.api_key}
     if request.company_id:
         credentials["company_id"] = request.company_id
@@ -165,6 +180,7 @@ async def configure_sumit(
         db, org_id, "sumit", credentials,
         ["customers", "invoices", "bills", "payments", "bank_transactions"],
     )
+    _kickoff_onboarding(db, org_id, "sumit", background_tasks)
 
     return {
         "id": conn.id,
@@ -172,6 +188,7 @@ async def configure_sumit(
         "source": conn.source,
         "status": conn.status,
         "configured": True,
+        "onboarding": "started",
     }
 
 
@@ -276,10 +293,13 @@ async def list_sync_runs(
 @router.get("/sync/runs/{run_id}")
 async def get_sync_run(
     run_id: int,
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
     """Get details of a specific sync run."""
-    run = db.query(SyncRun).get(run_id)
+    run = db.query(SyncRun).filter(
+        SyncRun.id == run_id, SyncRun.organization_id == org_id,
+    ).first()
     if not run:
         raise HTTPException(status_code=404, detail="Sync run not found")
 

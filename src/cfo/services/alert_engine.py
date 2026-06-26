@@ -2,7 +2,7 @@
 Alert engine: evaluates rules and creates alerts.
 Runs after each sync or on-demand.
 """
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -139,7 +139,7 @@ class AlertEngine:
         recent = self.db.query(Transaction).filter(
             Transaction.organization_id == self.org_id,
             Transaction.amount >= Decimal(str(threshold)),
-            Transaction.transaction_date >= datetime.utcnow() - timedelta(days=7),
+            Transaction.transaction_date >= datetime.now(timezone.utc) - timedelta(days=7),
         ).all()
 
         alerts = []

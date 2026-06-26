@@ -10,7 +10,7 @@ from enum import Enum
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 
-from ..models import Transaction, Account
+from ..models import Transaction, Account, Bill, Contact, Payment, BankTransaction
 from ..database import SessionLocal
 
 
@@ -539,56 +539,53 @@ class AccountsPayableService:
         )
     
     def _get_pending_invoices(self) -> List[Dict]:
-        """שליפת חשבוניות ממתינות"""
-        import random
-        invoices = []
-        
-        vendors = [
-            ('V001', 'ספק אלקטרוניקה'),
-            ('V002', 'שירותי תוכנה'),
-            ('V003', 'חומרי גלם'),
-            ('V004', 'שירותי ניקיון'),
-            ('V005', 'ספק משרדי')
-        ]
-        
-        for i in range(12):
-            vendor = random.choice(vendors)
-            days_due = random.randint(-5, 45)
-            due_date = (date.today() + timedelta(days=days_due)).isoformat()
-            inv_date = (date.today() - timedelta(days=30 - days_due)).isoformat()
-            
+        """שליפת חשבוניות ספק פתוחות מהדאטאבייס (יתרה > 0)."""
+        rows = (
+            self.db.query(Bill, Contact)
+            .outerjoin(Contact, Bill.vendor_id == Contact.id)
+            .filter(
+                Bill.organization_id == self.organization_id,
+                Bill.balance > 0,
+            )
+            .all()
+        )
+        invoices: List[Dict] = []
+        for bill, vendor in rows:
+            ref_date = bill.issue_date or bill.due_date or date.today()
+            due_date = bill.due_date or ref_date
             invoices.append({
-                'number': f'PINV-{2000 + i}',
-                'vendor_id': vendor[0],
-                'vendor_name': vendor[1],
-                'date': inv_date,
-                'due_date': due_date,
-                'amount': random.randint(2000, 30000),
-                'terms': random.choice(['שוטף+30', 'שוטף+45', 'שוטף+60']),
-                'discount_percent': random.choice([0, 0, 0, 2, 3]),
-                'discount_deadline': (date.today() + timedelta(days=10)).isoformat() if random.random() > 0.7 else None
+                'number': bill.bill_number or bill.external_id or f'BILL-{bill.id}',
+                'vendor_id': str(bill.vendor_id) if bill.vendor_id else f'bill-{bill.id}',
+                'vendor_name': (vendor.name if vendor else None) or 'ספק לא ידוע',
+                'date': ref_date.isoformat(),
+                'due_date': due_date.isoformat(),
+                'amount': float(bill.balance or 0),
+                'terms': 'שוטף+30',
+                'discount_percent': 0,
+                'discount_deadline': None,
             })
-        
         return invoices
-    
+
     def _get_book_transactions(self) -> List[Dict]:
-        """שליפת תנועות מהספרים"""
-        import random
-        transactions = []
-        
-        for i in range(20):
-            days_ago = random.randint(0, 30)
-            amount = random.choice([1, -1]) * random.randint(1000, 20000)
-            
+        """תנועות תשלום אמיתיות מהספרים (תשלומים יוצאים לספקים)."""
+        payments = (
+            self.db.query(Payment)
+            .filter(
+                Payment.organization_id == self.organization_id,
+                Payment.bill_id.isnot(None),
+            )
+            .all()
+        )
+        transactions: List[Dict] = []
+        for p in payments:
             transactions.append({
-                'date': (date.today() - timedelta(days=days_ago)).isoformat(),
-                'description': f'תנועה {i+1}',
-                'amount': amount,
-                'reference': f'REF-{i+1}'
+                'date': p.payment_date.isoformat(),
+                'description': p.reference or f'תשלום ספק {p.bill_id}',
+                'amount': -float(p.amount or 0),  # תשלום יוצא = שלילי
+                'reference': p.reference or f'PAY-{p.id}',
             })
-        
         return transactions
-    
+
     def _find_suggested_match(self, bank_item: Dict, book_items: List[Dict]) -> Optional[str]:
         """מציאת התאמה מוצעת"""
         for book in book_items:
@@ -598,18 +595,70 @@ class AccountsPayableService:
         return None
     
     def _get_vendor_data(self, vendor_id: str) -> Dict:
-        """נתוני ספק"""
-        import random
+        """נתוני ספק אמיתיים מתוך חשבוניות הספק והתשלומים."""
+        try:
+            vid = int(vendor_id)
+        except (TypeError, ValueError):
+            vid = -1
+
+        vendor = (
+            self.db.query(Contact)
+            .filter(
+                Contact.organization_id == self.organization_id,
+                Contact.id == vid,
+            )
+            .first()
+        )
+        bills = (
+            self.db.query(Bill)
+            .filter(
+                Bill.organization_id == self.organization_id,
+                Bill.vendor_id == vid,
+            )
+            .all()
+        )
+        total_purchases = float(sum((b.total or 0) for b in bills))
+        total_paid = float(sum((b.paid_amount or 0) for b in bills))
+        outstanding = float(sum((b.balance or 0) for b in bills))
+
+        # זמן תשלום ושיעור תשלום בזמן
+        days_to_pay: List[int] = []
+        on_time = 0
+        considered = 0
+        for b in bills:
+            if not b.due_date:
+                continue
+            pay = (
+                self.db.query(Payment)
+                .filter(
+                    Payment.organization_id == self.organization_id,
+                    Payment.bill_id == b.id,
+                )
+                .order_by(Payment.payment_date.desc())
+                .first()
+            )
+            if not pay:
+                continue
+            considered += 1
+            if b.issue_date:
+                days_to_pay.append((pay.payment_date - b.issue_date).days)
+            if pay.payment_date <= b.due_date:
+                on_time += 1
+
+        avg_days = sum(days_to_pay) / len(days_to_pay) if days_to_pay else 30
+        on_time_rate = (on_time / considered) if considered else 0.8
+        score = int(min(100, on_time_rate * 100))
+
         return {
-            'name': f'ספק {vendor_id}',
-            'total_purchases_ytd': random.randint(50000, 300000),
-            'total_paid_ytd': random.randint(40000, 280000),
-            'outstanding': random.randint(5000, 50000),
-            'average_payment_days': random.randint(20, 50),
+            'name': vendor.name if vendor else f'ספק {vendor_id}',
+            'total_purchases_ytd': total_purchases,
+            'total_paid_ytd': total_paid,
+            'outstanding': outstanding,
+            'average_payment_days': avg_days,
             'terms': 'שוטף+30',
-            'discount_captured': random.randint(1000, 5000),
-            'discount_missed': random.randint(500, 3000),
-            'on_time_rate': random.uniform(0.7, 1.0),
-            'score': random.randint(60, 95),
-            'category': random.choice(['חומרים', 'שירותים', 'ציוד'])
+            'discount_captured': 0,
+            'discount_missed': 0,
+            'on_time_rate': on_time_rate,
+            'score': score,
+            'category': 'ספקים',
         }

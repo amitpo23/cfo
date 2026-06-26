@@ -674,19 +674,7 @@ class ForecastingService:
         end_date = datetime.now()
         start_date = self._add_months(end_date, -months)
         
-        results = self.db.query(
-            func.date_trunc('month', Transaction.transaction_date).label('month'),
-            func.sum(Transaction.amount).label('total')
-        ).filter(
-            and_(
-                Transaction.organization_id == organization_id,
-                Transaction.transaction_type == TransactionType.INCOME,
-                Transaction.transaction_date >= start_date,
-                Transaction.transaction_date <= end_date
-            )
-        ).group_by(func.date_trunc('month', Transaction.transaction_date)).order_by('month').all()
-        
-        return [{'date': r.month, 'amount': float(r.total)} for r in results]
+        return self._monthly_totals(organization_id, TransactionType.INCOME, start_date, end_date)
     
     def _get_monthly_expenses(
         self,
@@ -697,20 +685,34 @@ class ForecastingService:
         end_date = datetime.now()
         start_date = self._add_months(end_date, -months)
         
-        results = self.db.query(
-            func.date_trunc('month', Transaction.transaction_date).label('month'),
-            func.sum(Transaction.amount).label('total')
-        ).filter(
+        return self._monthly_totals(organization_id, TransactionType.EXPENSE, start_date, end_date)
+
+    def _monthly_totals(self, organization_id, tx_type, start_date, end_date):
+        """סכומים חודשיים — אגרגציה ב-Python (ניטרלית-dialect; SQLite חסר date_trunc).
+
+        מחזיר רשימה ממוינת [{'date': 'YYYY-MM', 'amount': float}] לפי חודש קלנדרי.
+        """
+        rows = self.db.query(Transaction).filter(
             and_(
                 Transaction.organization_id == organization_id,
-                Transaction.transaction_type == TransactionType.EXPENSE,
+                Transaction.transaction_type == tx_type,
                 Transaction.transaction_date >= start_date,
-                Transaction.transaction_date <= end_date
+                Transaction.transaction_date <= end_date,
             )
-        ).group_by(func.date_trunc('month', Transaction.transaction_date)).order_by('month').all()
-        
-        return [{'date': r.month, 'amount': float(r.total)} for r in results]
-    
+        ).all()
+        buckets: Dict[str, float] = {}
+        for t in rows:
+            if t.transaction_date is None:
+                continue
+            key = t.transaction_date.strftime('%Y-%m')
+            buckets[key] = buckets.get(key, 0.0) + float(t.amount or 0)
+        # 'date' כ-datetime (ראשון לחודש) לשמירת החוזה הקודם של date_trunc —
+        # קוד במורד הזרם (route) קורא r.date.strftime(...).
+        return [
+            {'date': datetime.strptime(k, '%Y-%m'), 'amount': v}
+            for k, v in sorted(buckets.items())
+        ]
+
     # ============= Utility Methods =============
     
     def _add_months(self, date: datetime, months: int) -> datetime:

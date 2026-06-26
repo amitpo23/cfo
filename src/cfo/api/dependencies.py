@@ -82,8 +82,17 @@ async def get_current_org_id(
 
     Routes must derive the tenant from the token, never from a
     caller-controlled query parameter.
+
+    A user with no organization (e.g. a super-admin row) must NOT silently fall
+    back to org 1 — that would read/write another tenant's data. Reject instead;
+    such users must select an org explicitly via an admin path.
     """
-    return current_user.organization_id or 1
+    if current_user.organization_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not scoped to an organization",
+        )
+    return current_user.organization_id
 
 
 async def get_current_active_user(
@@ -142,28 +151,63 @@ async def get_organization_admin(
     return current_user
 
 
-async def get_sumit_integration():
-    """
-    Get SUMIT integration instance
-    
-    Returns:
-        SumitIntegration instance
-        
+async def get_sumit_integration(
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """Get a SUMIT integration instance scoped to the caller's organization.
+
+    Resolves credentials from the per-org encrypted vault (IntegrationConnection,
+    source="sumit"). Environment credentials are honored ONLY for the default org
+    (org 1); every other tenant must configure its own SUMIT key, so its requests
+    never silently run against another org's SUMIT account.
+
     Raises:
-        HTTPException: If API key is not configured
+        HTTPException 400: if no SUMIT credentials are configured for this org.
     """
     from ..integrations.sumit_integration import SumitIntegration
-    
-    if not settings.sumit_api_key:
+    from ..models import IntegrationConnection
+    from ..services.credentials_vault import decrypt_credentials
+
+    conn = db.query(IntegrationConnection).filter(
+        IntegrationConnection.organization_id == org_id,
+        IntegrationConnection.source == "sumit",
+        IntegrationConnection.status == "active",
+    ).order_by(IntegrationConnection.id).first()
+    creds = decrypt_credentials(conn.credentials_encrypted) if conn else {}
+
+    env_allowed = org_id == 1
+    api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
+    company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
+
+    if not api_key:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SUMIT API key not configured"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SUMIT API key not configured for this organization",
         )
-    
-    return SumitIntegration(
-        api_key=settings.sumit_api_key,
-        company_id=settings.sumit_company_id
-    )
+
+    return SumitIntegration(api_key=api_key, company_id=company_id)
+
+
+def sumit_for_org(db: Session, org_id: int):
+    """בונה SumitIntegration לארגון נתון מחוץ ל-request (ל-cron). None אם אין מפתח."""
+    from ..integrations.sumit_integration import SumitIntegration
+    from ..models import IntegrationConnection
+    from ..services.credentials_vault import decrypt_credentials
+
+    conn = db.query(IntegrationConnection).filter(
+        IntegrationConnection.organization_id == org_id,
+        IntegrationConnection.source == "sumit",
+        IntegrationConnection.status == "active",
+    ).order_by(IntegrationConnection.id).first()
+    creds = decrypt_credentials(conn.credentials_encrypted) if conn else {}
+
+    env_allowed = org_id == 1
+    api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
+    company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
+    if not api_key:
+        return None
+    return SumitIntegration(api_key=api_key, company_id=company_id)
 
 
 def require_admin(current_user: dict = Depends(get_current_user)):

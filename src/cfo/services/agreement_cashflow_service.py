@@ -5,7 +5,7 @@ Agreement-based Cash Flow Service
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from enum import Enum
 import uuid
 from sqlalchemy.orm import Session
@@ -167,6 +167,27 @@ class CashFlowSummary:
     overdue_invoices_count: int
 
 
+def _jsonable(value):
+    """Recursively coerce enums to their value so the dict is JSON-serializable."""
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    return value
+
+
+def _agreement_from_dict(data: dict) -> "Agreement":
+    d = dict(data)
+    d["milestones"] = [AgreementMilestone(**m) for m in (d.get("milestones") or [])]
+    return Agreement(**d)
+
+
+def _entry_from_dict(data: dict) -> "CashFlowEntry":
+    return CashFlowEntry(**data)
+
+
 class AgreementCashFlowService:
     """
     שירות תזרים מזומנים מבוסס הסכמים
@@ -176,11 +197,46 @@ class AgreementCashFlowService:
     def __init__(self, db: Session, organization_id: int = 1):
         self.db = db
         self.organization_id = organization_id
-        
-        # אחסון זמני (בפרודקשן - database)
+
+        # Durable store (cashflow_agreements / cashflow_entries tables). Loaded into
+        # the in-memory working dataclasses on init; written back after each mutation.
         self._agreements: Dict[str, Agreement] = {}
         self._cash_flow_entries: List[CashFlowEntry] = []
-    
+        self._load()
+
+    # ==================== Persistence ====================
+
+    def _load(self) -> None:
+        """Load this org's agreements + cash-flow entries from the database."""
+        try:
+            from ..models import CashflowAgreement, CashflowEntry
+        except ImportError:
+            return
+        for row in self.db.query(CashflowAgreement).filter(
+                CashflowAgreement.organization_id == self.organization_id).all():
+            ag = _agreement_from_dict(row.data)
+            self._agreements[ag.agreement_id] = ag
+        self._cash_flow_entries = [
+            _entry_from_dict(r.data) for r in self.db.query(CashflowEntry).filter(
+                CashflowEntry.organization_id == self.organization_id).all()
+        ]
+
+    def _save(self) -> None:
+        """Write the full in-memory state back to the database (small per-org)."""
+        from ..models import CashflowAgreement, CashflowEntry
+        org = self.organization_id
+        self.db.query(CashflowAgreement).filter(
+            CashflowAgreement.organization_id == org).delete()
+        for ag in self._agreements.values():
+            self.db.add(CashflowAgreement(
+                organization_id=org, agreement_id=ag.agreement_id, data=_jsonable(asdict(ag))))
+        self.db.query(CashflowEntry).filter(
+            CashflowEntry.organization_id == org).delete()
+        for e in self._cash_flow_entries:
+            self.db.add(CashflowEntry(
+                organization_id=org, entry_id=e.entry_id, data=_jsonable(asdict(e))))
+        self.db.commit()
+
     # ==================== Agreement Management ====================
     
     async def create_agreement(
@@ -246,9 +302,10 @@ class AgreementCashFlowService:
         
         # יצירת רשומות תזרים עתידיות
         await self._generate_cash_flow_entries(agreement)
-        
+
+        self._save()
         return agreement
-    
+
     async def update_agreement(
         self,
         agreement_id: str,
@@ -270,9 +327,10 @@ class AgreementCashFlowService:
         
         # עדכון תזרים
         await self._regenerate_cash_flow_entries(agreement)
-        
+
+        self._save()
         return agreement
-    
+
     async def cancel_agreement(
         self,
         agreement_id: str,
@@ -294,7 +352,8 @@ class AgreementCashFlowService:
             e for e in self._cash_flow_entries
             if not (e.source_id == agreement_id and not e.is_actual)
         ]
-        
+
+        self._save()
         return agreement
     
     async def list_agreements(
@@ -459,11 +518,9 @@ class AgreementCashFlowService:
     
     def _add_months(self, d: date, months: int) -> date:
         """הוספת חודשים לתאריך"""
-        month = d.month + months
-        year = d.year
-        while month > 12:
-            month -= 12
-            year += 1
+        month_index = d.year * 12 + (d.month - 1) + months
+        year = month_index // 12
+        month = month_index % 12 + 1
         day = min(d.day, 28)
         return date(year, month, day)
     
@@ -521,7 +578,9 @@ class AgreementCashFlowService:
         except Exception as e:
             # במקרה של שגיאה, נחזיר רשימה ריקה
             pass
-        
+
+        if entries:
+            self._save()
         return entries
     
     async def add_expected_expense(
@@ -551,8 +610,9 @@ class AgreementCashFlowService:
         )
         
         self._cash_flow_entries.append(entry)
+        self._save()
         return entry
-    
+
     async def record_actual_transaction(
         self,
         amount: float,
@@ -581,10 +641,11 @@ class AgreementCashFlowService:
             actual_date=date.isoformat(),
             actual_amount=amount
         )
-        
+
         self._cash_flow_entries.append(entry)
+        self._save()
         return entry
-    
+
     # ==================== Cash Flow Analysis ====================
     
     async def get_cash_flow_projection(

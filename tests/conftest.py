@@ -36,6 +36,33 @@ def owner(client):
     return {"headers": {"Authorization": f"Bearer {data['access_token']}"}, "user": data["user"]}
 
 
+_iso_counter = {"n": 0}
+
+
+@pytest.fixture
+def fresh_org(client, owner):
+    """Factory for an isolated organization (its own user) per test.
+
+    Use when a test asserts exact aggregate amounts derived across ALL of an org's
+    documents (ledger trial balance, cumulative P&L, annual reports) — the
+    session-scoped `owner` org is shared across files and would pollute such totals.
+
+    Depends on `owner` so the default org (first registered user) is always claimed
+    by owner@example.com before any isolated org is created, regardless of test order.
+    """
+    def _make():
+        _iso_counter["n"] += 1
+        email = f"iso{_iso_counter['n']}@example.com"
+        resp = client.post("/api/admin/auth/register", json={
+            "email": email, "password": "secret123", "full_name": "Iso",
+        })
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        return {"headers": {"Authorization": f"Bearer {data['access_token']}"},
+                "org_id": data["user"]["organization_id"]}
+    return _make
+
+
 @pytest.fixture(scope="session")
 def tenant(client, owner):
     """Second self-registered user — gets an organization of their own."""

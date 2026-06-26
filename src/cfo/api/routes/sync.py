@@ -35,7 +35,7 @@ async def sync_documents(
     סנכרון מסמכים מ-SUMIT
     Sync documents from SUMIT API
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
     
     try:
@@ -58,7 +58,7 @@ async def sync_payments(
     סנכרון תשלומים מ-SUMIT
     Sync payments from SUMIT API
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
     
     try:
@@ -81,7 +81,7 @@ async def sync_billing(
     סנכרון עסקאות סליקה מ-SUMIT
     Sync billing/credit card transactions from SUMIT API
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
     
     try:
@@ -103,7 +103,7 @@ async def get_debts(
     שליפת דוח חובות מ-SUMIT
     Get debt report from SUMIT API
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
     
     try:
@@ -122,7 +122,7 @@ async def get_income_items(
     שליפת פריטי הכנסה מ-SUMIT
     Get income items from SUMIT API
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
     
     try:
@@ -142,7 +142,7 @@ async def get_vat_rate(
     שליפת שיעור מע"מ מ-SUMIT
     Get current VAT rate from SUMIT API
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
     
     try:
@@ -163,7 +163,7 @@ async def get_exchange_rate(
     שליפת שער חליפין מ-SUMIT
     Get exchange rate from SUMIT API
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
     
     try:
@@ -188,7 +188,7 @@ async def sync_all_data(
     סנכרון מלא של כל הנתונים מ-SUMIT
     Full sync of all data from SUMIT API
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
     
     try:
@@ -227,7 +227,7 @@ async def import_bank_statement(
     - generic (גנרי)
     - auto (זיהוי אוטומטי)
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = BankStatementService(db, org_id)
     
     # זיהוי סוג הקובץ
@@ -267,7 +267,7 @@ async def parse_bank_statement(
     ניתוח דף בנק ללא שמירה
     Parse bank statement without saving (preview mode)
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = BankStatementService(db, org_id)
     
     filename = file.filename.lower() if file.filename else ''
@@ -305,7 +305,7 @@ async def get_spending_patterns(
     ניתוח דפוסי הוצאות
     Analyze spending patterns from imported bank transactions
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = BankStatementService(db, org_id)
     
     result = service.get_spending_patterns(from_date, to_date)
@@ -321,7 +321,7 @@ async def get_recurring_transactions(
     זיהוי עסקאות חוזרות
     Detect recurring transactions from bank statements
     """
-    org_id = current_user.get('organization_id', 1)
+    org_id = (current_user.organization_id or 1)
     service = BankStatementService(db, org_id)
     
     result = service.detect_recurring_transactions()

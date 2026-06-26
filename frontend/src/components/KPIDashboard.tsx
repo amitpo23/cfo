@@ -18,11 +18,15 @@ import {
 import api from '../services/api';
 
 interface KPI {
+  kpi_id?: string;
   name: string;
-  hebrew_name: string;
+  hebrew_name?: string;
+  name_hebrew?: string;
   value: number;
   target: number;
   unit: string;
+  formatted_value?: string;
+  target_formatted?: string;
   status: string;
   trend: string;
   category: string;
@@ -30,15 +34,21 @@ interface KPI {
 
 interface ExecutiveSummary {
   period: string;
-  revenue: number;
-  expenses: number;
-  net_income: number;
-  gross_margin: number;
-  net_margin: number;
-  cash_balance: number;
-  highlights: string[];
-  concerns: string[];
-  recommendations: string[];
+  revenue?: number;
+  expenses?: number;
+  net_income?: number;
+  gross_margin?: number;
+  net_margin?: number;
+  cash_balance?: number;
+  financial_snapshot?: {
+    revenue_mtd?: number;
+    expenses_mtd?: number;
+    net_income_mtd?: number;
+    cash_balance?: number;
+  };
+  highlights?: string[];
+  concerns?: string[];
+  recommendations?: string[];
 }
 
 const KPI_CATEGORIES = [
@@ -56,8 +66,8 @@ export const KPIDashboard: React.FC = () => {
   const { data: kpiData, isLoading: loadingKPIs } = useQuery({
     queryKey: ['kpi-dashboard'],
     queryFn: async () => {
-      const response = await api.get<{ kpis: KPI[] }>('/api/financial/kpis');
-      return response;
+      const response = await api.get<{ data: { kpis: KPI[] } }>('/api/financial/kpis');
+      return response.data;
     },
   });
 
@@ -65,8 +75,8 @@ export const KPIDashboard: React.FC = () => {
   const { data: execSummary, isLoading: loadingSummary } = useQuery({
     queryKey: ['executive-summary'],
     queryFn: async () => {
-      const response = await api.get<ExecutiveSummary>('/api/financial/kpis/executive-summary');
-      return response;
+      const response = await api.get<{ data: ExecutiveSummary }>('/api/financial/kpis/executive-summary');
+      return response.data;
     },
   });
 
@@ -74,10 +84,10 @@ export const KPIDashboard: React.FC = () => {
   const { data: kpiTrends } = useQuery({
     queryKey: ['kpi-trends'],
     queryFn: async () => {
-      const response = await api.get<Record<string, Array<{ month: string; value: number }>>>('/api/financial/kpis/trends', {
+      const response = await api.get<{ data: Record<string, Array<{ month: string; value: number }>> }>('/api/financial/kpis/trends', {
         params: { kpi_names: ['revenue_growth', 'gross_margin', 'net_margin'] }
       });
-      return response;
+      return response.data;
     },
   });
 
@@ -85,19 +95,49 @@ export const KPIDashboard: React.FC = () => {
   const { data: benchmarkData } = useQuery({
     queryKey: ['industry-benchmark'],
     queryFn: async () => {
-      const response = await api.get<{ comparisons: Array<{ kpi_name: string; company_value: number; industry_avg: number }> }>('/api/financial/kpis/benchmark');
-      return response;
+      const response = await api.get<{
+        data: { comparisons?: Array<{ kpi_name: string; company_value: number; industry_avg: number }> } | Array<{
+          kpi: string;
+          name_hebrew: string;
+          our_value: number;
+          industry_average: number;
+        }>;
+      }>('/api/financial/kpis/benchmark');
+      return response.data;
     },
   });
 
-  const formatCurrency = (value: number) => `₪${value.toLocaleString()}`;
-  const formatPercent = (value: number) => `${value.toFixed(1)}%`;
+  const safeNumber = (value: unknown, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+  const formatCurrency = (value: unknown) => `₪${safeNumber(value).toLocaleString()}`;
+  const formatPercent = (value: unknown) => `${safeNumber(value).toFixed(1)}%`;
+  const kpiName = (kpi: KPI) => kpi.hebrew_name || kpi.name_hebrew || kpi.name || kpi.kpi_id || 'KPI';
+  const kpiId = (kpi: KPI) => kpi.kpi_id || kpi.name || kpiName(kpi);
+  const formatKpiValue = (kpi: KPI, value: unknown = kpi.value) => {
+    if (kpi.formatted_value && value === kpi.value) return kpi.formatted_value;
+    if (kpi.unit === '%') return formatPercent(value);
+    if (kpi.unit === 'currency' || kpi.unit === 'ILS') return formatCurrency(value);
+    return safeNumber(value).toFixed(kpi.unit === 'x' ? 2 : 1);
+  };
+  const formatKpiTarget = (kpi: KPI) => {
+    if (kpi.target_formatted) return kpi.target_formatted;
+    if (kpi.unit === '%') return formatPercent(kpi.target);
+    if (kpi.unit === 'currency' || kpi.unit === 'ILS') return formatCurrency(kpi.target);
+    return String(kpi.target ?? 0);
+  };
+  const targetRatio = (kpi: KPI) => {
+    const target = safeNumber(kpi.target);
+    if (!target) return 0;
+    return Math.min((safeNumber(kpi.value) / target) * 100, 100);
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'above_target': return 'text-green-600 bg-green-100';
       case 'on_target': return 'text-blue-600 bg-blue-100';
       case 'below_target': return 'text-yellow-600 bg-yellow-100';
+      case 'excellent': return 'text-green-600 bg-green-100';
+      case 'good': return 'text-blue-600 bg-blue-100';
+      case 'warning': return 'text-yellow-600 bg-yellow-100';
       case 'critical': return 'text-red-600 bg-red-100';
       default: return 'text-gray-600 bg-gray-100';
     }
@@ -117,6 +157,9 @@ export const KPIDashboard: React.FC = () => {
       case 'above_target': return 'מעל היעד';
       case 'on_target': return 'ביעד';
       case 'below_target': return 'מתחת ליעד';
+      case 'excellent': return 'מצוין';
+      case 'good': return 'טוב';
+      case 'warning': return 'אזהרה';
       case 'critical': return 'קריטי';
       default: return status;
     }
@@ -136,11 +179,13 @@ export const KPIDashboard: React.FC = () => {
     : kpis.filter((kpi: KPI) => kpi.category === selectedCategory);
 
   // Prepare radar data for benchmark comparison
-  const radarData = benchmarkData?.comparisons?.slice(0, 6).map((item: any) => ({
-    subject: item.kpi_name,
-    company: item.company_value,
-    industry: item.industry_avg,
-  })) || [];
+  const benchmarkItems = Array.isArray(benchmarkData) ? benchmarkData : benchmarkData?.comparisons || [];
+  const radarData = benchmarkItems.slice(0, 6).map((item: any) => ({
+    subject: item.name_hebrew || item.kpi_name || item.kpi,
+    company: item.our_value ?? item.company_value ?? 0,
+    industry: item.industry_average ?? item.industry_avg ?? 0,
+  }));
+  const snapshot = execSummary?.financial_snapshot || {};
 
   return (
     <div className="p-6 space-y-6 bg-gray-50 min-h-screen" dir="rtl">
@@ -176,16 +221,16 @@ export const KPIDashboard: React.FC = () => {
           <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
             <div>
               <p className="text-blue-100 text-sm">הכנסות</p>
-              <p className="text-2xl font-bold">{formatCurrency(execSummary.revenue)}</p>
+              <p className="text-2xl font-bold">{formatCurrency(execSummary.revenue ?? snapshot.revenue_mtd)}</p>
             </div>
             <div>
               <p className="text-blue-100 text-sm">הוצאות</p>
-              <p className="text-2xl font-bold">{formatCurrency(execSummary.expenses)}</p>
+              <p className="text-2xl font-bold">{formatCurrency(execSummary.expenses ?? snapshot.expenses_mtd)}</p>
             </div>
             <div>
               <p className="text-blue-100 text-sm">רווח נקי</p>
-              <p className={`text-2xl font-bold ${execSummary.net_income >= 0 ? 'text-green-300' : 'text-red-300'}`}>
-                {formatCurrency(execSummary.net_income)}
+              <p className={`text-2xl font-bold ${safeNumber(execSummary.net_income ?? snapshot.net_income_mtd) >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                {formatCurrency(execSummary.net_income ?? snapshot.net_income_mtd)}
               </p>
             </div>
             <div>
@@ -198,7 +243,7 @@ export const KPIDashboard: React.FC = () => {
             </div>
             <div>
               <p className="text-blue-100 text-sm">יתרת מזומן</p>
-              <p className="text-2xl font-bold">{formatCurrency(execSummary.cash_balance)}</p>
+              <p className="text-2xl font-bold">{formatCurrency(execSummary.cash_balance ?? snapshot.cash_balance)}</p>
             </div>
           </div>
 
@@ -265,22 +310,20 @@ export const KPIDashboard: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {filteredKPIs.map((kpi: KPI) => (
           <div
-            key={kpi.name}
+            key={kpiId(kpi)}
             className="bg-white rounded-xl shadow-sm p-5 border border-gray-100 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
           >
             <div className="flex justify-between items-start mb-3">
               <div>
-                <h4 className="font-bold text-gray-900">{kpi.hebrew_name}</h4>
-                <p className="text-xs text-gray-500">{kpi.name}</p>
+                <h4 className="font-bold text-gray-900">{kpiName(kpi)}</h4>
+                <p className="text-xs text-gray-500">{kpi.name || kpi.kpi_id}</p>
               </div>
               <span className="text-xl">{getTrendIcon(kpi.trend)}</span>
             </div>
             
             <div className="flex items-baseline gap-2 mb-2">
               <span className="text-3xl font-bold text-gray-900">
-                {kpi.unit === '%' ? formatPercent(kpi.value) : 
-                 kpi.unit === 'currency' ? formatCurrency(kpi.value) :
-                 kpi.value.toFixed(1)}
+                {formatKpiValue(kpi)}
               </span>
               {kpi.unit !== '%' && kpi.unit !== 'currency' && (
                 <span className="text-gray-500 text-sm">{kpi.unit}</span>
@@ -289,9 +332,7 @@ export const KPIDashboard: React.FC = () => {
 
             <div className="flex justify-between items-center">
               <span className="text-sm text-gray-500">
-                יעד: {kpi.unit === '%' ? formatPercent(kpi.target) : 
-                      kpi.unit === 'currency' ? formatCurrency(kpi.target) :
-                      kpi.target}
+                יעד: {formatKpiTarget(kpi)}
               </span>
               <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(kpi.status)}`}>
                 {getStatusLabel(kpi.status)}
@@ -309,7 +350,7 @@ export const KPIDashboard: React.FC = () => {
                         ? 'bg-red-500' 
                         : 'bg-yellow-500'
                   }`}
-                  style={{ width: `${Math.min((kpi.value / kpi.target) * 100, 100)}%` }}
+                  style={{ width: `${targetRatio(kpi)}%` }}
                 ></div>
               </div>
             </div>
@@ -389,26 +430,22 @@ export const KPIDashboard: React.FC = () => {
                 <tr key={kpi.name} className="hover:bg-gray-50">
                   <td className="px-4 py-3 whitespace-nowrap">
                     <div>
-                      <p className="text-sm font-medium text-gray-900">{kpi.hebrew_name}</p>
-                      <p className="text-xs text-gray-500">{kpi.name}</p>
+                      <p className="text-sm font-medium text-gray-900">{kpiName(kpi)}</p>
+                      <p className="text-xs text-gray-500">{kpi.name || kpi.kpi_id}</p>
                     </div>
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
                     {KPI_CATEGORIES.find(c => c.id === kpi.category)?.name || kpi.category}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
-                    {kpi.unit === '%' ? formatPercent(kpi.value) : 
-                     kpi.unit === 'currency' ? formatCurrency(kpi.value) :
-                     kpi.value.toFixed(2)}
+                    {formatKpiValue(kpi)}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
-                    {kpi.unit === '%' ? formatPercent(kpi.target) : 
-                     kpi.unit === 'currency' ? formatCurrency(kpi.target) :
-                     kpi.target}
+                    {formatKpiTarget(kpi)}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm">
-                    <span className={kpi.value >= kpi.target ? 'text-green-600' : 'text-red-600'}>
-                      {((kpi.value / kpi.target) * 100).toFixed(0)}%
+                    <span className={safeNumber(kpi.value) >= safeNumber(kpi.target) ? 'text-green-600' : 'text-red-600'}>
+                      {targetRatio(kpi).toFixed(0)}%
                     </span>
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-xl">

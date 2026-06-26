@@ -9,7 +9,7 @@ Sync engine: orchestrates data ingestion from accounting connectors.
 import hashlib
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -100,7 +100,7 @@ class SyncEngine:
             sync_type="full" if not entity_types else "partial",
             entity_types=",".join(types_to_sync),
             status=SyncStatus.RUNNING,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
             counts={},
         )
         self.db.add(sync_run)
@@ -127,7 +127,7 @@ class SyncEngine:
         sync_run.status = SyncStatus.PARTIAL if has_errors else SyncStatus.COMPLETED
         if all(isinstance(c, dict) and "error" in c for c in counts.values()):
             sync_run.status = SyncStatus.FAILED
-        sync_run.finished_at = datetime.utcnow()
+        sync_run.finished_at = datetime.now(timezone.utc)
         sync_run.counts = counts
         if errors:
             sync_run.error_summary = f"{len(errors)} entity types had errors"
@@ -137,7 +137,7 @@ class SyncEngine:
         if self.connection_id:
             conn = self.db.query(IntegrationConnection).get(self.connection_id)
             if conn:
-                conn.last_synced_at = datetime.utcnow()
+                conn.last_synced_at = datetime.now(timezone.utc)
 
         self.db.commit()
         self.db.refresh(sync_run)
@@ -202,6 +202,7 @@ class SyncEngine:
         existing = self.db.query(Account).filter(
             Account.organization_id == self.org_id,
             Account.external_id == item.external_id,
+            Account.source == self.source,
         ).first()
 
         account_type_map = {
@@ -221,12 +222,13 @@ class SyncEngine:
             existing.account_type = acct_type
             existing.balance = item.balance
             existing.currency = item.currency
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
         account = Account(
             organization_id=self.org_id,
             external_id=item.external_id,
+            source=self.source,
             name=item.name,
             account_type=acct_type,
             balance=item.balance,
@@ -262,7 +264,7 @@ class SyncEngine:
             existing.is_active = item.is_active
             existing.raw_data = item.raw_data
             existing.payload_hash = payload_hash
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
         contact_type_map = {
@@ -325,6 +327,7 @@ class SyncEngine:
                 return "skipped"
             existing.contact_id = contact_id or existing.contact_id
             existing.invoice_number = item.invoice_number or existing.invoice_number
+            existing.allocation_number = item.allocation_number or existing.allocation_number
             existing.issue_date = item.issue_date
             existing.due_date = item.due_date
             existing.status = status
@@ -337,7 +340,7 @@ class SyncEngine:
             existing.line_items = item.line_items
             existing.raw_data = item.raw_data
             existing.payload_hash = payload_hash
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
         invoice = Invoice(
@@ -346,6 +349,7 @@ class SyncEngine:
             source=self.source,
             contact_id=contact_id,
             invoice_number=item.invoice_number,
+            allocation_number=item.allocation_number,
             issue_date=item.issue_date,
             due_date=item.due_date,
             status=status,
@@ -410,7 +414,7 @@ class SyncEngine:
             existing.line_items = item.line_items
             existing.raw_data = item.raw_data
             existing.payload_hash = payload_hash
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
         bill = Bill(

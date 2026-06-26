@@ -30,6 +30,8 @@ class DocumentType(str, Enum):
     CREDIT_NOTE = "credit_note"  # חשבונית זיכוי
     DELIVERY_NOTE = "delivery_note"  # תעודת משלוח
     PURCHASE_ORDER = "purchase_order"  # הזמנת רכש
+    ORDER = "order"  # הזמנה
+    WORK_ORDER = "work_order"  # הזמנת עבודה
 
 
 class InvoiceStatus(str, Enum):

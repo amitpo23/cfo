@@ -17,6 +17,7 @@ from ..models import (
     Transaction, Account, Organization, TransactionType, AccountType
 )
 from ..config import settings
+from .vat_utils import invoice_counts, bill_counts, expense_counts
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +99,13 @@ class BalanceSheetReport:
     # בדיקת איזון
     total_liabilities_and_equity: float
     is_balanced: bool
-    
+
     def to_dict(self) -> Dict:
-        return asdict(self)
+        data = asdict(self)
+        # Derived from synced documents — not the official books (parity with ledger_service).
+        data["derived"] = True
+        data["disclaimer"] = "נגזר מהמסמכים — לא הספרים הרשמיים. לבדיקת רו\"ח."
+        return data
 
 
 @dataclass
@@ -223,15 +228,15 @@ class FinancialReportsService:
                 Transaction.transaction_date <= prev_end
             ).all()
         
-        # ארגון נתונים לפי קטגוריה
-        revenue_items = self._categorize_transactions(
-            [t for t in transactions if t.transaction_type == TransactionType.INCOME],
-            [t for t in prev_transactions if t.transaction_type == TransactionType.INCOME]
+        # ארגון נתונים לפי קטגוריה — מקור אמת: שכבת ה-ledger (Invoice/Bill/Expense)
+        # בסכומי נטו מפוצלי-מע"מ. טבלת Transaction מנופחת (כולל מע"מ) ולא משמשת כאן.
+        # פקודות יומן ידניות (Transaction בלי מסמך מקור) נכללות בנפרד דרך
+        # _manual_journal_items כדי לא לאבד תנועות שאינן הד-מסמך.
+        revenue_items = self._ledger_revenue_items(
+            organization_id, start_date, end_date, prev_start, prev_end, compare_previous
         )
-        
-        expense_items = self._categorize_transactions(
-            [t for t in transactions if t.transaction_type == TransactionType.EXPENSE],
-            [t for t in prev_transactions if t.transaction_type == TransactionType.EXPENSE]
+        expense_items = self._ledger_expense_items(
+            organization_id, start_date, end_date, prev_start, prev_end, compare_previous
         )
         
         # חישובים
@@ -239,20 +244,28 @@ class FinancialReportsService:
         
         # הפרדת עלות מכר מהוצאות תפעוליות
         cogs_categories = ['cost_of_goods', 'materials', 'direct_labor']
+        # הוצאות לא-תפעוליות (מימון בלבד). הקטגוריה "other" היא קוד-מחדל
+        # להוצאה תפעולית לא-מסווגת — היא נשארת בתפעוליות ואינה "הוצאה אחרת".
+        non_operating_exp_categories = ['interest_expense']
         cogs_items = [i for i in expense_items if i.category in cogs_categories]
-        operating_items = [i for i in expense_items if i.category not in cogs_categories]
-        
+        other_expense_items = [i for i in expense_items if i.category in non_operating_exp_categories]
+        # תפעוליות = כל מה שאינו COGS ואינו לא-תפעולי (קבוצות זרות — בלי כפל-מנייה).
+        operating_items = [
+            i for i in expense_items
+            if i.category not in cogs_categories
+            and i.category not in non_operating_exp_categories
+        ]
+
         total_cogs = sum(item.amount for item in cogs_items)
         gross_profit = total_revenue - total_cogs
         gross_margin = (gross_profit / total_revenue * 100) if total_revenue else 0
-        
+
         total_operating = sum(item.amount for item in operating_items)
         operating_income = gross_profit - total_operating
         operating_margin = (operating_income / total_revenue * 100) if total_revenue else 0
-        
-        # הכנסות והוצאות אחרות
+
+        # הכנסות והוצאות אחרות (לא-תפעוליות)
         other_income_items = [i for i in revenue_items if i.category in ['interest_income', 'other_income']]
-        other_expense_items = [i for i in operating_items if i.category in ['interest_expense', 'other']]
         
         # רווח לפני מס
         total_other_income = sum(i.amount for i in other_income_items)
@@ -268,7 +281,7 @@ class FinancialReportsService:
         for item in revenue_items:
             item.percentage = (item.amount / total_revenue * 100) if total_revenue else 0
         
-        total_expenses = total_cogs + total_operating
+        total_expenses = total_cogs + total_operating + total_other_expense
         for item in expense_items:
             item.percentage = (item.amount / total_expenses * 100) if total_expenses else 0
         
@@ -374,8 +387,13 @@ class FinancialReportsService:
         
         total_liabilities = total_current_liabilities + total_long_term_liabilities
         
-        # הון עצמי
-        retained_earnings = total_assets - total_liabilities - balances.get('share_capital', 0)
+        # הון עצמי — עודפים נגזרים מרווח נקי מצטבר (חישוב עצמאי מ-P&L), לא
+        # plug של assets−liabilities−capital שמכריח is_balanced=True ומסתיר
+        # אי-התאמות במקור. is_balanced למטה הוא השוואה אמיתית.
+        accumulated = self.generate_profit_loss(
+            organization_id, date(1900, 1, 1), as_of_date, compare_previous=False
+        )
+        retained_earnings = accumulated.net_income
         equity = [
             BalanceSheetItem('share_capital', 'הון מניות', balances.get('share_capital', 0), prev_balances.get('share_capital', 0)),
             BalanceSheetItem('retained_earnings', 'עודפים', retained_earnings, prev_balances.get('retained_earnings', 0)),
@@ -419,27 +437,15 @@ class FinancialReportsService:
         end_date = date.today()
         start_date = end_date - timedelta(days=180)
         
-        transactions = self.db.query(Transaction).filter(
-            Transaction.organization_id == organization_id,
-            Transaction.transaction_date >= start_date,
-            Transaction.transaction_date <= end_date
-        ).all()
-        
-        # חישוב ממוצעים היסטוריים
-        income_txs = [t for t in transactions if t.transaction_type == TransactionType.INCOME]
-        expense_txs = [t for t in transactions if t.transaction_type == TransactionType.EXPENSE]
-        
-        # קיבוץ לפי חודש
-        monthly_income = self._group_by_month(income_txs)
-        monthly_expense = self._group_by_month(expense_txs)
-        
+        # מקור: מסמכי ה-ledger בסכומי ברוטו (total) — תזרים עוסק בתנועת מזומן
+        # בפועל, הכוללת מע"מ. (P&L לעומת זאת משתמש בנטו.)
+        (monthly_income, monthly_expense,
+         income_by_category, expense_by_category) = self._ledger_cash_aggregates(
+            organization_id, start_date, end_date)
+
         # ממוצעים
         avg_income = sum(monthly_income.values()) / max(len(monthly_income), 1)
         avg_expense = sum(monthly_expense.values()) / max(len(monthly_expense), 1)
-        
-        # פירוט לפי קטגוריה
-        income_by_category = self._sum_by_category(income_txs)
-        expense_by_category = self._sum_by_category(expense_txs)
         
         # נרמול לחודש
         num_months = max(len(monthly_income), 1)
@@ -460,8 +466,8 @@ class FinancialReportsService:
         min_balance = current_balance
         max_balance = current_balance
         
-        # גורמי עונתיות
-        seasonality = self._calculate_seasonality(transactions)
+        # גורמי עונתיות — מחושב מהכנסות ה-ledger החודשיות
+        seasonality = self._seasonality_from_monthly(monthly_income)
         
         for i in range(months):
             proj_date = date.today() + timedelta(days=30 * (i + 1))
@@ -471,16 +477,10 @@ class FinancialReportsService:
             # התאמת עונתיות
             season_factor = seasonality.get(month_num, 1.0)
             
-            # חיזוי כניסות ויציאות
+            # חיזוי כניסות ויציאות — דטרמיניסטי, ללא רעש אקראי מלאכותי.
             projected_inflows = avg_income * season_factor
             projected_outflows = avg_expense
-            
-            # הוספת אי-ודאות קלה (±5%)
-            import random
-            random.seed(i)  # לשחזוריות
-            projected_inflows *= (1 + random.uniform(-0.05, 0.05))
-            projected_outflows *= (1 + random.uniform(-0.03, 0.03))
-            
+
             net_flow = projected_inflows - projected_outflows
             closing = current_balance + net_flow
             
@@ -932,6 +932,189 @@ class FinancialReportsService:
     
     # ============= Helper Methods =============
     
+    @staticmethod
+    def _net_of(row, net_attr: str, gross_attr: str, tax_attr: str) -> float:
+        """סכום נטו (ללא מע"מ) משורת ledger, עם נפילה חיננית ל-ברוטו−מע"מ."""
+        net = getattr(row, net_attr, None)
+        if net is not None:
+            return float(net)
+        gross = float(getattr(row, gross_attr, 0) or 0)
+        tax = float(getattr(row, tax_attr, 0) or 0)
+        return gross - tax
+
+    @staticmethod
+    def _doc_date(row):
+        return (getattr(row, "issue_date", None)
+                or getattr(row, "expense_date", None)
+                or getattr(row, "due_date", None))
+
+    def _ledger_revenue_items(
+        self, organization_id, start_date, end_date, prev_start, prev_end, compare_previous
+    ) -> List[ProfitLossItem]:
+        """הכנסה נטו (subtotal) מחשבוניות ב-ledger, מקובצת לפי קטגוריה."""
+        from ..models import Invoice
+        rows = self.db.query(Invoice).filter(
+            Invoice.organization_id == organization_id).all()
+
+        def _bucket(lo, hi):
+            sums: Dict[str, float] = {}
+            for r in rows:
+                d = self._doc_date(r)
+                if d is None or not (lo <= d <= hi) or not invoice_counts(r.status):
+                    continue
+                cat = "sales"
+                sums[cat] = sums.get(cat, 0.0) + self._net_of(r, "subtotal", "total", "tax")
+            return sums
+
+        current = _bucket(start_date, end_date)
+        previous = _bucket(prev_start, prev_end) if compare_previous else {}
+        self._merge_sums(current, self._manual_sums(
+            organization_id, start_date, end_date, TransactionType.INCOME))
+        if compare_previous:
+            self._merge_sums(previous, self._manual_sums(
+                organization_id, prev_start, prev_end, TransactionType.INCOME))
+        return self._items_from_sums(current, previous)
+
+    def _ledger_expense_items(
+        self, organization_id, start_date, end_date, prev_start, prev_end, compare_previous
+    ) -> List[ProfitLossItem]:
+        """הוצאה נטו מספקים (Bill.subtotal) והוצאות (Expense.amount), לפי קטגוריה.
+        המגניטודה חיובית — מסמכים שמורים לעיתים בסימן שלילי (כסף יוצא)."""
+        from ..models import Bill, Expense
+        bills = self.db.query(Bill).filter(Bill.organization_id == organization_id).all()
+        exps = self.db.query(Expense).filter(Expense.organization_id == organization_id).all()
+
+        def _bucket(lo, hi):
+            sums: Dict[str, float] = {}
+            for r in bills:
+                d = self._doc_date(r)
+                if d is None or not (lo <= d <= hi) or not bill_counts(r.status):
+                    continue
+                sums["other"] = sums.get("other", 0.0) + abs(self._net_of(r, "subtotal", "total", "tax"))
+            for r in exps:
+                d = self._doc_date(r)
+                if d is None or not (lo <= d <= hi) or not expense_counts(getattr(r, "status", None)):
+                    continue
+                cat = (getattr(r, "category", None) or "other")
+                sums[cat] = sums.get(cat, 0.0) + abs(self._net_of(r, "amount", "total", "vat_amount"))
+            return sums
+
+        current = _bucket(start_date, end_date)
+        previous = _bucket(prev_start, prev_end) if compare_previous else {}
+        self._merge_sums(current, self._manual_sums(
+            organization_id, start_date, end_date, TransactionType.EXPENSE))
+        if compare_previous:
+            self._merge_sums(previous, self._manual_sums(
+                organization_id, prev_start, prev_end, TransactionType.EXPENSE))
+        return self._items_from_sums(current, previous)
+
+    def _ledger_cash_aggregates(self, organization_id, start_date, end_date):
+        """אגרגציות תזרים ממסמכי ledger בברוטו (total) — תנועת מזומן בפועל.
+        מחזיר: (monthly_income, monthly_expense, income_by_cat, expense_by_cat)."""
+        from ..models import Invoice, Bill, Expense
+        monthly_income: Dict[str, float] = {}
+        monthly_expense: Dict[str, float] = {}
+        income_by_cat: Dict[str, float] = {}
+        expense_by_cat: Dict[str, float] = {}
+
+        def _ok(d):
+            return d is not None and start_date <= d <= end_date
+
+        for r in self.db.query(Invoice).filter(Invoice.organization_id == organization_id).all():
+            d = self._doc_date(r)
+            if not _ok(d) or not invoice_counts(r.status):
+                continue
+            amt = abs(float(r.total or 0))
+            monthly_income[d.strftime('%Y-%m')] = monthly_income.get(d.strftime('%Y-%m'), 0) + amt
+            income_by_cat['sales'] = income_by_cat.get('sales', 0) + amt
+
+        for r in self.db.query(Bill).filter(Bill.organization_id == organization_id).all():
+            d = self._doc_date(r)
+            if not _ok(d) or not bill_counts(r.status):
+                continue
+            amt = abs(float(r.total or 0))
+            monthly_expense[d.strftime('%Y-%m')] = monthly_expense.get(d.strftime('%Y-%m'), 0) + amt
+            expense_by_cat['other'] = expense_by_cat.get('other', 0) + amt
+
+        for r in self.db.query(Expense).filter(Expense.organization_id == organization_id).all():
+            d = self._doc_date(r)
+            if not _ok(d) or not expense_counts(getattr(r, "status", None)):
+                continue
+            amt = abs(float(r.total or 0))
+            monthly_expense[d.strftime('%Y-%m')] = monthly_expense.get(d.strftime('%Y-%m'), 0) + amt
+            cat = getattr(r, 'category', None) or 'other'
+            expense_by_cat[cat] = expense_by_cat.get(cat, 0) + amt
+
+        return monthly_income, monthly_expense, income_by_cat, expense_by_cat
+
+    @staticmethod
+    def _seasonality_from_monthly(monthly_income: Dict[str, float]) -> Dict[int, float]:
+        """גורם עונתיות לכל מספר-חודש מתוך הכנסות חודשיות (ממוצע חודש / ממוצע כללי)."""
+        by_month_num: Dict[int, List[float]] = {}
+        for key, val in monthly_income.items():
+            mn = int(key.split('-')[1])
+            by_month_num.setdefault(mn, []).append(val)
+        all_vals = [v for vals in by_month_num.values() for v in vals]
+        overall = (sum(all_vals) / len(all_vals)) if all_vals else 1.0
+        return {
+            mn: ((sum(vals) / len(vals)) / overall if overall else 1.0)
+            for mn, vals in by_month_num.items()
+        }
+
+    @staticmethod
+    def _merge_sums(into: Dict[str, float], extra: Dict[str, float]) -> None:
+        for k, v in extra.items():
+            into[k] = into.get(k, 0.0) + v
+
+    def _ledger_external_ids(self, organization_id) -> set:
+        """כל ה-external_id של מסמכי ledger בארגון — לזיהוי הד-מסמך ב-Transaction."""
+        from ..models import Invoice, Bill, Expense
+        ids = set()
+        for model in (Invoice, Bill, Expense):
+            for (ext,) in self.db.query(model.external_id).filter(
+                model.organization_id == organization_id).all():
+                if ext:
+                    ids.add(str(ext))
+        return ids
+
+    def _manual_sums(self, organization_id, lo, hi, tx_type) -> Dict[str, float]:
+        """סכומי תנועות ידניות (Transaction שאינו הד-מסמך של ledger) לפי קטגוריה.
+        מונע ספירה כפולה: מסמך שכבר נספר ב-Invoice/Bill/Expense מדולג."""
+        ledger_ids = self._ledger_external_ids(organization_id)
+        rows = self.db.query(Transaction).filter(
+            Transaction.organization_id == organization_id,
+            Transaction.transaction_type == tx_type,
+            Transaction.transaction_date >= lo,
+            Transaction.transaction_date <= hi,
+        ).all()
+        sums: Dict[str, float] = {}
+        for t in rows:
+            ext = str(t.external_id) if t.external_id else ""
+            if ext and ext in ledger_ids:
+                continue  # הד-מסמך — כבר נספר ב-ledger
+            cat = t.category or "other"
+            sums[cat] = sums.get(cat, 0.0) + abs(float(t.amount or 0))
+        return sums
+
+    def _items_from_sums(
+        self, current_sums: Dict[str, float], previous_sums: Dict[str, float]
+    ) -> List[ProfitLossItem]:
+        """בניית ProfitLossItem מרשימות סכומים-לפי-קטגוריה (משותף ל-revenue/expense)."""
+        items: List[ProfitLossItem] = []
+        for cat in set(current_sums) | set(previous_sums):
+            curr = current_sums.get(cat, 0.0)
+            prev = previous_sums.get(cat, 0.0)
+            change = ((curr - prev) / prev * 100) if prev else 0
+            items.append(ProfitLossItem(
+                category=cat,
+                category_hebrew=self.CATEGORY_HEBREW.get(cat, cat),
+                amount=curr,
+                previous_amount=prev,
+                change_percentage=change,
+            ))
+        items.sort(key=lambda x: x.amount, reverse=True)
+        return items
+
     def _categorize_transactions(
         self,
         current: List[Transaction],
@@ -1029,3 +1212,92 @@ class FinancialReportsService:
                 seasonality[month] = 1.0
         
         return seasonality
+
+
+    def _monthly_series(self, organization_id: int, year: int) -> Dict[int, Dict[str, float]]:
+        """הכנסות/הוצאות לכל חודש בשנה נתונה."""
+        rows = (
+            self.db.query(
+                extract('month', Transaction.transaction_date),
+                Transaction.transaction_type,
+                func.coalesce(func.sum(Transaction.amount), 0),
+            )
+            .filter(
+                Transaction.organization_id == organization_id,
+                extract('year', Transaction.transaction_date) == year,
+            )
+            .group_by(
+                extract('month', Transaction.transaction_date),
+                Transaction.transaction_type,
+            )
+            .all()
+        )
+        series = {m: {"income": 0.0, "expense": 0.0} for m in range(1, 13)}
+        for month, ttype, amount in rows:
+            if month is None:
+                continue
+            key = "income" if ttype == TransactionType.INCOME else "expense"
+            series[int(month)][key] += float(amount or 0)
+        return series
+
+    def generate_year_comparison(
+        self,
+        organization_id: int,
+        year: Optional[int] = None,
+        end_date: Optional[date] = None,
+    ) -> Dict:
+        """דוח השוואת נתונים מול השנה הקודמת (אותה תקופה)."""
+        today = end_date or date.today()
+        cur_year = year or today.year
+        prev_year = cur_year - 1
+
+        # אותה תקופה בשתי השנים (מתחילת השנה ועד התאריך הנוכחי)
+        if cur_year == today.year:
+            cur_start, cur_end = date(cur_year, 1, 1), today
+            prev_start, prev_end = date(prev_year, 1, 1), today.replace(year=prev_year)
+        else:
+            cur_start, cur_end = date(cur_year, 1, 1), date(cur_year, 12, 31)
+            prev_start, prev_end = date(prev_year, 1, 1), date(prev_year, 12, 31)
+
+        cur = self.generate_profit_loss(organization_id, cur_start, cur_end, compare_previous=False)
+        prev = self.generate_profit_loss(organization_id, prev_start, prev_end, compare_previous=False)
+
+        def _delta(a: float, b: float) -> Dict:
+            a, b = float(a or 0), float(b or 0)
+            return {
+                "current": a,
+                "previous": b,
+                "change": a - b,
+                "change_pct": ((a - b) / b * 100) if b else 0,
+            }
+
+        metrics = {
+            "revenue": _delta(cur.total_revenue, prev.total_revenue),
+            "expenses": _delta(cur.total_expenses, prev.total_expenses),
+            "gross_profit": _delta(cur.gross_profit, prev.gross_profit),
+            "operating_income": _delta(cur.operating_income, prev.operating_income),
+            "net_income": _delta(cur.net_income, prev.net_income),
+        }
+
+        cur_series = self._monthly_series(organization_id, cur_year)
+        prev_series = self._monthly_series(organization_id, prev_year)
+        monthly = []
+        month_names = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
+                       "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"]
+        for m in range(1, 13):
+            monthly.append({
+                "month": m,
+                "month_name": month_names[m - 1],
+                "current_revenue": cur_series[m]["income"],
+                "previous_revenue": prev_series[m]["income"],
+                "current_expense": cur_series[m]["expense"],
+                "previous_expense": prev_series[m]["expense"],
+            })
+
+        return {
+            "current_year": cur_year,
+            "previous_year": prev_year,
+            "period": {"start": cur_start.isoformat(), "end": cur_end.isoformat()},
+            "metrics": metrics,
+            "monthly": monthly,
+        }

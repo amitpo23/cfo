@@ -3,7 +3,7 @@ Tasks, Alerts, Notes, and Reports API routes.
 """
 import csv
 import io
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -98,9 +98,12 @@ async def list_tasks(
 async def update_task(
     task_id: int,
     payload: TaskUpdateSchema,
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
-    task = db.query(Task).get(task_id)
+    task = db.query(Task).filter(
+        Task.id == task_id, Task.organization_id == org_id,
+    ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -112,7 +115,7 @@ async def update_task(
         task.status = payload.status
     if payload.due_date is not None:
         task.due_date = payload.due_date
-    task.updated_at = datetime.utcnow()
+    task.updated_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(task)
@@ -158,18 +161,21 @@ async def list_alerts(
 async def update_alert(
     alert_id: int,
     payload: AlertUpdate,
+    org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
-    alert = db.query(Alert).get(alert_id)
+    alert = db.query(Alert).filter(
+        Alert.id == alert_id, Alert.organization_id == org_id,
+    ).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
     if payload.status is not None:
         alert.status = payload.status
         if payload.status == AlertStatus.ACKNOWLEDGED:
-            alert.acknowledged_at = datetime.utcnow()
+            alert.acknowledged_at = datetime.now(timezone.utc)
         elif payload.status == AlertStatus.RESOLVED:
-            alert.resolved_at = datetime.utcnow()
+            alert.resolved_at = datetime.now(timezone.utc)
 
     db.commit()
     return {"id": alert.id, "status": alert.status.value}
@@ -210,6 +216,30 @@ async def list_cfo_insights(
     """List persisted CFO insights."""
     brain = CFOBrainService(db, org_id)
     return brain.list_insights(status=status, severity=severity, limit=limit)
+
+
+@router.get("/brain/recommendations")
+async def list_financial_recommendations(
+    status: str = Query("active"),
+    limit: int = Query(50, ge=1, le=200),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """User-facing financial recommendations derived from live org data."""
+    brain = CFOBrainService(db, org_id)
+    return brain.list_recommendations(status=status, limit=limit, refresh=False)
+
+
+@router.post("/brain/recommendations/refresh")
+async def refresh_financial_recommendations(
+    status: str = Query("active"),
+    limit: int = Query(50, ge=1, le=200),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """Run analysis, persist insights/tasks, then return current recommendations."""
+    brain = CFOBrainService(db, org_id)
+    return brain.list_recommendations(status=status, limit=limit, refresh=True)
 
 
 @router.patch("/brain/insights/{insight_id}")

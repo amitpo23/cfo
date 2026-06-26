@@ -41,6 +41,7 @@ class NormalizedInvoice:
     external_id: str
     contact_external_id: Optional[str] = None
     invoice_number: Optional[str] = None
+    allocation_number: Optional[str] = None  # מספר הקצאה (מ-SUMIT AssignmentNumber)
     issue_date: Optional[date] = None
     due_date: Optional[date] = None
     status: str = "draft"

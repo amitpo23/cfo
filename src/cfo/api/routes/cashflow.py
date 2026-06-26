@@ -149,7 +149,7 @@ async def get_cash_flow_statement(
     Get cash flow statement for a period
     """
     service = CashFlowService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     statement = service.get_cash_flow_statement(
         organization_id=organization_id,
@@ -207,7 +207,7 @@ async def get_monthly_cash_flow(
     Get monthly cash flow analysis
     """
     service = CashFlowService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     data = service.get_monthly_cash_flow(organization_id, months)
     
@@ -225,7 +225,7 @@ async def get_daily_cash_position(
     Get daily cash position
     """
     service = CashFlowService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     data = service.get_daily_cash_position(organization_id, days)
     
@@ -243,7 +243,7 @@ async def get_burn_rate(
     Calculate cash burn rate
     """
     service = CashFlowService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     data = service.get_cash_burn_rate(organization_id, months)
     
@@ -262,7 +262,7 @@ async def get_cash_flow_by_category(
     Get cash flow breakdown by category
     """
     service = CashFlowService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     data = service.get_cash_flow_by_category(
         organization_id,
@@ -292,7 +292,7 @@ async def get_liquidity_ratios(
     Get liquidity ratios
     """
     service = CashFlowService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     data = service.get_liquidity_ratios(organization_id)
     
@@ -309,7 +309,7 @@ async def get_receivables_aging(
     Get accounts receivable aging report
     """
     service = CashFlowService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     return service.get_receivables_aging(organization_id)
 
@@ -324,7 +324,7 @@ async def get_payables_aging(
     Get accounts payable aging report
     """
     service = CashFlowService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     return service.get_payables_aging(organization_id)
 
@@ -343,7 +343,7 @@ async def forecast_revenue(
     Forecast revenue
     """
     service = ForecastingService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     try:
         forecast_method = ForecastMethod(method)
@@ -375,7 +375,7 @@ async def forecast_expenses(
     Forecast expenses
     """
     service = ForecastingService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     try:
         forecast_method = ForecastMethod(method)
@@ -407,7 +407,7 @@ async def forecast_cash_flow(
     Forecast cash flow
     """
     service = ForecastingService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     results = service.forecast_cash_flow(organization_id, periods, current_balance)
     
@@ -426,7 +426,7 @@ async def get_scenario_analysis(
     Get scenario analysis (best/worst/expected)
     """
     service = ForecastingService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     return service.get_scenario_analysis(organization_id, periods, current_balance)
 
@@ -442,7 +442,7 @@ async def analyze_budget_variance(
     Analyze budget variance
     """
     service = ForecastingService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     results = service.analyze_budget_variance(
         organization_id,
@@ -474,7 +474,7 @@ async def detect_trends(
     Detect financial trends
     """
     service = ForecastingService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     return service.detect_trends(organization_id, months)
 
@@ -490,7 +490,7 @@ async def forecast_financial_ratios(
     Forecast financial ratios
     """
     service = ForecastingService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     return service.calculate_financial_ratios_forecast(organization_id, periods)
 
@@ -506,7 +506,7 @@ async def evaluate_forecast_accuracy(
     Evaluate forecast accuracy
     """
     service = ForecastingService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     metrics = service.evaluate_forecast_accuracy(organization_id, test_months)
     
@@ -531,16 +531,23 @@ async def get_ml_ensemble_forecast(
     Get ensemble ML forecast (LSTM + Prophet + XGBoost)
     """
     forecasting_service = ForecastingService(db)
-    organization_id = current_user.get('organization_id', 1)
+    organization_id = (current_user.organization_id or 1)
     
     # שליפת נתונים היסטוריים
     historical = forecasting_service._get_monthly_revenue(organization_id, 24)
     
     if len(historical) < 12:
-        raise HTTPException(
-            status_code=400,
-            detail="אין מספיק נתונים היסטוריים לתחזית ML (נדרשים לפחות 12 חודשים)"
-        )
+        return {
+            "ensemble": [],
+            "lstm": [],
+            "prophet": [],
+            "xgboost": [],
+            "weights": {"lstm": 0, "prophet": 0, "xgboost": 0},
+            "status": "insufficient_data",
+            "detail": "אין מספיק נתונים היסטוריים לתחזית ML (נדרשים לפחות 12 חודשים)",
+            "required_months": 12,
+            "available_months": len(historical),
+        }
     
     dates = [h['date'] for h in historical]
     values = [h['amount'] for h in historical]

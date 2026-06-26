@@ -100,6 +100,7 @@ class DocumentResponse(BaseModel):
     date: Optional[date_type] = None
     customer_name: Optional[str] = None
     currency: Optional[str] = None
+    allocation_number: Optional[str] = None  # מספר הקצאה (SUMIT AssignmentNumber)
 
 
 class SendDocumentRequest(BaseModel):

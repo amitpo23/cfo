@@ -22,6 +22,27 @@ from .connector_base import (
 logger = logging.getLogger(__name__)
 
 
+def _derive_subtotal_tax(doc, total: Decimal) -> tuple[Decimal, Decimal]:
+    """Derive (subtotal, tax) for a SUMIT document.
+
+    SUMIT documents are VAT-inclusive. When the document exposes an explicit
+    ``vat_amount`` we trust it; otherwise we recover the split deterministically
+    via :func:`vat_utils.split_inclusive` instead of zeroing VAT (which would
+    silently under-report VAT in the derived ledger / VAT report / P&L).
+    """
+    raw_vat = getattr(doc, "vat_amount", None)
+    if raw_vat is None:
+        from .vat_utils import split_inclusive
+        doc_day = getattr(doc, "date", None)
+        if not isinstance(doc_day, date):
+            doc_day = date.today()
+        return split_inclusive(total, doc_day)
+    tax = Decimal(str(raw_vat or 0))
+    raw_subtotal = getattr(doc, "subtotal", None)
+    subtotal = Decimal(str(raw_subtotal)) if raw_subtotal is not None else (total - tax)
+    return subtotal, tax
+
+
 class SumitConnector(AccountingConnector):
     """
     Connector for SUMIT accounting system.
@@ -52,6 +73,54 @@ class SumitConnector(AccountingConnector):
         except Exception as e:
             logger.error("SUMIT connection test failed: %s", e)
             return False
+
+    async def list_stock(self):
+        """Passthrough to SUMIT stock list (used by the inventory sync)."""
+        client = await self._get_client()
+        async with client:
+            return await client.list_stock()
+
+    async def add_expense(self, expense_request):
+        """Passthrough: file an expense in SUMIT (used by expense filing)."""
+        client = await self._get_client()
+        async with client:
+            return await client.add_expense(expense_request)
+
+    async def list_documents(self, request):
+        """Passthrough: list SUMIT documents (used by pending-expense sync)."""
+        client = await self._get_client()
+        async with client:
+            return await client.list_documents(request)
+
+    async def move_document_to_books(self, document_id: str):
+        """Passthrough: finalize/approve a SUMIT draft document (file a pending expense)."""
+        client = await self._get_client()
+        async with client:
+            return await client.move_document_to_books(document_id)
+
+    async def cancel_document(self, document_id: str):
+        """Passthrough: cancel a SUMIT document (used to replace an auto-scanned draft)."""
+        client = await self._get_client()
+        async with client:
+            return await client.cancel_document(document_id)
+
+    async def get_document_pdf(self, document_id: str) -> bytes:
+        """Passthrough: fetch a document's scan/PDF (used by the OCR pipeline)."""
+        client = await self._get_client()
+        async with client:
+            return await client.get_document_pdf(document_id)
+
+    async def get_document_supplier(self, document_id: str):
+        """Passthrough: resolve a document's supplier/customer name via getdetails."""
+        client = await self._get_client()
+        async with client:
+            return await client.get_document_supplier(document_id)
+
+    async def get_document_supplier_details(self, document_id: str):
+        """Passthrough: resolve supplier name + tax id + VAT for a document."""
+        client = await self._get_client()
+        async with client:
+            return await client.get_document_supplier_details(document_id)
 
     async def fetch_accounts(
         self,
@@ -141,6 +210,41 @@ class SumitConnector(AccountingConnector):
         # Vendors will be created from expense documents
         return FetchResult(items=[], has_more=False)
 
+    async def _list_documents_all(self, client, type_code: str,
+                                  updated_since: Optional[datetime],
+                                  page_size: int = 200, max_pages: int = 500):
+        """Fetch ALL SUMIT documents of one numeric type, paginating to the end.
+
+        Two correctness fixes over a single capped call:
+        - full sync (updated_since=None) reaches back years, not just 365 days, so
+          earlier-in-the-year history is not silently dropped;
+        - pages are walked until exhausted (SUMIT's default page size caps a single
+          call at ~100), de-duplicated by document id, with guards against an
+          offset that never advances.
+        """
+        from ..integrations.sumit_models import DocumentListRequest
+        from_date = updated_since.date() if updated_since else date(2015, 1, 1)
+        all_docs, seen, offset = [], set(), 0
+        for _ in range(max_pages):
+            page = await client.list_documents(DocumentListRequest(
+                from_date=from_date, to_date=date.today(),
+                document_types=[type_code], limit=page_size, offset=offset,
+            ))
+            if not page:
+                break
+            before = len(seen)
+            for d in page:
+                did = str(getattr(d, "id", "") or "")
+                if did and did not in seen:
+                    seen.add(did)
+                    all_docs.append(d)
+            offset += len(page)
+            if len(seen) == before:  # offset ignored or nothing new — stop
+                break
+            if len(page) < page_size:  # genuine last (partial) page
+                break
+        return all_docs
+
     async def fetch_invoices(
         self,
         updated_since: Optional[datetime] = None,
@@ -150,20 +254,10 @@ class SumitConnector(AccountingConnector):
         try:
             client = await self._get_client()
             async with client:
-                from ..integrations.sumit_models import DocumentListRequest
-
-                from_date = (
-                    updated_since.date()
-                    if updated_since
-                    else date.today() - timedelta(days=365)
-                )
-
-                request = DocumentListRequest(
-                    from_date=from_date,
-                    to_date=date.today(),
-                    document_types=["invoice", "tax_invoice", "receipt", "credit_invoice"],
-                )
-                documents = await client.list_documents(request)
+                # SUMIT numeric DocumentType code 0 = Invoice (income/sales documents).
+                # Filtering by the enum *name* proved unreliable; the numeric code is exact.
+                # Paginated + full-history fetch (see _list_documents_all).
+                documents = await self._list_documents_all(client, "0", updated_since)
 
                 invoices = []
                 for doc in documents:
@@ -171,16 +265,18 @@ class SumitConnector(AccountingConnector):
                     total = Decimal(str(doc.total or 0))
                     paid = Decimal(str(getattr(doc, "paid_amount", 0) or 0))
 
+                    subtotal, tax = _derive_subtotal_tax(doc, total)
                     invoices.append(NormalizedInvoice(
                         external_id=str(doc.id),
                         contact_external_id=str(doc.customer_id) if doc.customer_id else None,
                         invoice_number=getattr(doc, "document_number", None),
+                        allocation_number=getattr(doc, "allocation_number", None),
                         issue_date=doc.date if isinstance(doc.date, date) else None,
                         due_date=getattr(doc, "due_date", None),
                         status=status,
                         currency=getattr(doc, "currency", "ILS") or "ILS",
-                        subtotal=Decimal(str(getattr(doc, "subtotal", total))),
-                        tax=Decimal(str(getattr(doc, "vat_amount", 0) or 0)),
+                        subtotal=subtotal,
+                        tax=tax,
                         total=total,
                         paid_amount=paid,
                         balance=total - paid,
@@ -201,26 +297,18 @@ class SumitConnector(AccountingConnector):
         try:
             client = await self._get_client()
             async with client:
-                from ..integrations.sumit_models import DocumentListRequest
-
-                from_date = (
-                    updated_since.date()
-                    if updated_since
-                    else date.today() - timedelta(days=365)
-                )
-
-                request = DocumentListRequest(
-                    from_date=from_date,
-                    to_date=date.today(),
-                    document_types=["expense", "expense_invoice"],
-                )
-                documents = await client.list_documents(request)
+                # SUMIT numeric DocumentType code 15 = ExpenseInvoice (supplier/expense
+                # documents). The name "ExpenseInvoice" returns nothing; the numeric code
+                # is the reliable filter for purchase/expense documents.
+                # Paginated + full-history fetch (see _list_documents_all).
+                documents = await self._list_documents_all(client, "15", updated_since)
 
                 bills = []
                 for doc in documents:
                     total = Decimal(str(doc.total or 0))
                     paid = Decimal(str(getattr(doc, "paid_amount", 0) or 0))
 
+                    subtotal, tax = _derive_subtotal_tax(doc, total)
                     bills.append(NormalizedBill(
                         external_id=str(doc.id),
                         vendor_external_id=str(doc.customer_id) if doc.customer_id else None,
@@ -229,8 +317,8 @@ class SumitConnector(AccountingConnector):
                         due_date=getattr(doc, "due_date", None),
                         status="received",
                         currency=getattr(doc, "currency", "ILS") or "ILS",
-                        subtotal=Decimal(str(getattr(doc, "subtotal", total))),
-                        tax=Decimal(str(getattr(doc, "vat_amount", 0) or 0)),
+                        subtotal=subtotal,
+                        tax=tax,
                         total=total,
                         paid_amount=paid,
                         balance=total - paid,
@@ -257,22 +345,45 @@ class SumitConnector(AccountingConnector):
                     else date.today() - timedelta(days=365)
                 )
 
-                raw_payments = await client.list_payments(
-                    from_date=from_date,
-                    to_date=date.today(),
-                )
-
                 payments = []
-                for p in raw_payments:
+
+                # (a) Billing-system payments (credit-card charges via /billing/payments).
+                try:
+                    raw_payments = await client.list_payments(
+                        from_date=from_date,
+                        to_date=date.today(),
+                    )
+                    for p in raw_payments:
+                        payments.append(NormalizedPayment(
+                            external_id=str(p.id),
+                            contact_external_id=str(getattr(p, "customer_id", None)),
+                            payment_date=p.date if isinstance(p.date, date) else None,
+                            amount=Decimal(str(p.amount or 0)),
+                            currency=getattr(p, "currency", "ILS") or "ILS",
+                            method=getattr(p, "payment_method", None),
+                            reference=getattr(p, "reference", None),
+                            raw_data=p.__dict__ if hasattr(p, "__dict__") else {},
+                        ))
+                except Exception as e:
+                    logger.warning("list_payments unavailable, continuing: %s", e)
+
+                # (b) Receipt documents (SUMIT numeric DocumentType 5 = Receipt / קבלה):
+                # collection events that close invoices. Stored negative; the payment
+                # amount is the absolute value. Captured for AR/collection visibility.
+                receipts = await self._list_documents_all(client, "5", updated_since)
+                for doc in receipts:
+                    amount = abs(Decimal(str(doc.total or 0)))
+                    if amount == 0:
+                        continue
                     payments.append(NormalizedPayment(
-                        external_id=str(p.id),
-                        contact_external_id=str(getattr(p, "customer_id", None)),
-                        payment_date=p.date if isinstance(p.date, date) else None,
-                        amount=Decimal(str(p.amount or 0)),
-                        currency=getattr(p, "currency", "ILS") or "ILS",
-                        method=getattr(p, "payment_method", None),
-                        reference=getattr(p, "reference", None),
-                        raw_data=p.__dict__ if hasattr(p, "__dict__") else {},
+                        external_id=str(doc.id),
+                        contact_external_id=str(doc.customer_id) if doc.customer_id else None,
+                        payment_date=doc.date if isinstance(doc.date, date) else None,
+                        amount=amount,
+                        currency=getattr(doc, "currency", "ILS") or "ILS",
+                        method="receipt",
+                        reference=getattr(doc, "document_number", None),
+                        raw_data=doc.__dict__ if hasattr(doc, "__dict__") else {},
                     ))
 
                 return FetchResult(items=payments, has_more=False)
