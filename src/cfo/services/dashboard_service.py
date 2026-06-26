@@ -377,9 +377,9 @@ class DashboardService:
 
             revenue = float(self._get_month_revenue(month_start, month_end))
             expenses = float(self._get_month_expenses(month_start, month_end))
-            cogs = expenses * 0.3  # simplified estimate
-            gross_profit = revenue - cogs
-            opex = expenses - cogs
+            cogs = None  # Cannot separate cost-of-sales without additional data
+            gross_profit = None  # Not computable without COGS
+            opex = expenses  # All expenses treated as operating when COGS unknown
             net_profit = revenue - expenses
 
             # Category breakdown from transactions
@@ -389,6 +389,7 @@ class DashboardService:
                 "month": month_start.strftime("%Y-%m"),
                 "revenue": revenue,
                 "cogs": cogs,
+                "cogs_available": False,
                 "gross_profit": gross_profit,
                 "opex": opex,
                 "net_profit": net_profit,

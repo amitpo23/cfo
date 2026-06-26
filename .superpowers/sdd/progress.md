@@ -32,3 +32,10 @@ Final review: Needs-fixes -> all resolved.
   Important opt-in gate on manual run (user: gate it): fixed 02b2c4e (403 when disabled)
   Minors (a,b,c,f,g): deferred per final-review triage.
 FEATURE COMPLETE: 8 tasks + 3 fix commits, full suite 384 passed. HEAD 02b2c4e.
+
+# === SPRINT: completion + test-hardening ===
+Plan: docs/superpowers/plans/2026-06-26-completion-sprint.md
+Decisions: T-DEC-1 honest-null+flag; T-DEC-2 keep unsupported (Epic 3 skipped)
+Base before T1.1: 8fbf3f0
+T1.1: complete (commit 8fbf3f0..b0b95bc, review clean) — real AR/AP aging via ARAPAgingService
+Base before T1.2: b0b95bc
