@@ -113,7 +113,7 @@ class TaskStatus(str, Enum):
 class Organization(Base):
     """ארגון/לקוח במערכת"""
     __tablename__ = "organizations"
-    
+
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)  # שם הארגון
     business_type = Column(String, nullable=True)  # סוג העסק (מסעדה, חברת שירותים וכו')
@@ -121,18 +121,20 @@ class Organization(Base):
     phone = Column(String, nullable=True)
     email = Column(String, nullable=True)
     address = Column(Text, nullable=True)
-    
+
     # Integration settings
     integration_type = Column(SQLEnum(IntegrationType), default=IntegrationType.MANUAL)
     api_credentials = Column(JSON, nullable=True)  # {api_key, company_id, etc}
-    
+
     # Settings & Configuration
     settings = Column(JSON, default={})  # הגדרות כלליות
     is_active = Column(Boolean, default=True)
-    
+    collection_reminders_enabled = Column(Boolean, default=False, nullable=False)
+    collection_sms_sender = Column(String(20), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relationships
     users = relationship("User", back_populates="organization")
     accounts = relationship("Account", back_populates="organization")
