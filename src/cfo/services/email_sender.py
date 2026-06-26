@@ -17,7 +17,7 @@ async def send_email_smtp(to: str, subject: str, body: str, settings) -> bool:
         msg["Subject"] = subject
         msg["From"] = settings.smtp_from
         msg["To"] = to
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
             server.starttls()
             if settings.smtp_user:
                 server.login(settings.smtp_user, settings.smtp_password)

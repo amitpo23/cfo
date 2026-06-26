@@ -156,29 +156,35 @@ async def run_collection_reminders(db: Session = Depends(get_db_session)):
     ).all()
 
     totals = {"sms_sent": 0, "email_sent": 0, "failed": 0, "skipped_no_sumit": 0}
+    errors = []
     for org in orgs:
-        planned = CollectionService(db, org.id).plan_reminders(date.today())
-        if not planned:
-            continue
-        sumit = sumit_for_org(db, org.id)
+        try:
+            planned = CollectionService(db, org.id).plan_reminders(date.today())
+            if not planned:
+                continue
+            sumit = sumit_for_org(db, org.id)
 
-        async def email_sender(to, subject, body):
-            return await send_email_smtp(to, subject, body, settings)
+            async def email_sender(to, subject, body):
+                return await send_email_smtp(to, subject, body, settings)
 
-        if sumit is None:
-            # אין SUMIT לארגון — מייל בלבד (SMS ידלג כי אין שולח)
-            async def sms_sender(phone, message):
-                return False
-            totals["skipped_no_sumit"] += 1
-        else:
-            async def sms_sender(phone, message, _s=org.collection_sms_sender, _c=sumit):
-                return bool(await _c.send_sms(SMSRequest(
-                    phone_number=phone, message=message, sender_name=_s)))
+            if sumit is None:
+                # אין SUMIT לארגון — מייל בלבד (SMS ידלג כי אין שולח)
+                async def sms_sender(phone, message):
+                    return False
+                totals["skipped_no_sumit"] += 1
+            else:
+                async def sms_sender(phone, message, _s=org.collection_sms_sender, _c=sumit):
+                    return bool(await _c.send_sms(SMSRequest(
+                        phone_number=phone, message=message, sender_name=_s)))
 
-        summary = await dispatch_reminders(
-            db, org.id, planned, sms_sender, email_sender,
-            sms_sender_name=org.collection_sms_sender)
-        for k in ("sms_sent", "email_sent", "failed"):
-            totals[k] += summary.get(k, 0)
+            summary = await dispatch_reminders(
+                db, org.id, planned, sms_sender, email_sender,
+                sms_sender_name=org.collection_sms_sender)
+            for k in ("sms_sent", "email_sent", "failed"):
+                totals[k] += summary.get(k, 0)
+        except Exception as exc:
+            logger.error("Collection reminders failed for org %s: %s", org.id, exc)
+            db.rollback()
+            errors.append({"org": org.id, "error": str(exc)})
 
-    return {"status": "ok", "orgs": len(orgs), "summary": totals}
+    return {"status": "ok", "orgs": len(orgs), "summary": totals, "errors": errors}
