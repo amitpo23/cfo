@@ -49,3 +49,25 @@ T1.4 review: clean. EPIC 1 COMPLETE (T1.1-T1.4).
 T2.1: complete (commit 421c734..80f0938; controller-verified: grep status_code-in empty, 394/394 pass)
   T2.1 SURFACED BUG: revenue_analytics:199 cust['percentage_of_total'] vs 'percentage_of_total_revenue' -> 500 on /opportunities + /ai/executive-summary when customer has >=4 invoices.
 Base before T2.1b (bug fix): 0f3136e
+T2.1b: complete (commit 80f0938..ea041c3; 395/395) — fixed surfaced 500 (percentage_of_total_revenue key)
+Base before T2.2: ea041c3
+T2.2: complete (commit ea041c3..3cddf28; 396 passed; colscan guard catches Invoice.total_amount probe, removed before commit)
+Base before T2.3: 3cddf28
+T2.3: complete (commit 3cddf28..b6b2844; 401 passed). EPIC 2 COMPLETE.
+
+# === Admin User Mgmt build ===
+Plan: docs/superpowers/plans/2026-06-28-admin-user-management.md
+Decision: admin types password; gaps = provisioning + role mgmt (isolation already complete)
+Base before T1: bf47e02
+T1: complete (commit bf47e02..34c5e81) — app-user CRUD; SUMIT create moved to /sumit-users
+SECFIX: complete (commit 35f3bf1) — org-scope + privilege-ceiling on POST/PATCH/DELETE users; 6 sec tests RED->GREEN (caught by auto security review)
+NOTE: test_check_aging_report (test_phase9_features.py:144) FAILS at base 3920d86 too — pre-existing date-sensitive flaky test, NOT a regression. Optional separate fix.
+Base before T2 (frontend): 35f3bf1
+T2: complete (commit 35f3bf1..efc1662) — AdminDashboard wired (create/role-edit/deactivate). EPIC done.
+
+# === SDD run (Task 1 backend, this session) ===
+T1 (SDD): complete (commit bf47e02..12d7b0c) — implementer 34c5e81 + fix wave 12d7b0c. Task reviewer (opus) flagged Important org-scoping gap on all 3 endpoints + tests encoding cross-org violation; fix added cross-org 403 + super_admin privilege-ceiling + rewrote last-admin tests (SUPER_ADMIN cross-org actor reaches genuine 409). Re-review (opus): APPROVED, spec-compliant. 23/23 admin tests pass; full suite green except pre-existing test_check_aging_report (fails at base bf47e02 too).
+  Minor (for final review): unauth test asserts 403 not 401 — correct per HTTPBearer(auto_error=True), codebase-wide convention; no test hits PATCH/DELETE 404 branch (impl correct, coverage gap); renamed /sumit-users dropped response_model=UserResponse (intentional — SUMIT output isn't a UserResponse).
+  NOTE: branch HEAD advanced to efc1662 (frontend T2) by concurrent actor during this run.
+FINAL REVIEW (opus): Ready to merge — BOLA/IDOR+escalation fully closed on POST/PATCH/DELETE; passwords bcrypt+not exposed; guards intact; FE omits super_admin.
+  Minor (follow-up, non-blocking): (1) no AuditLog on user mutations; (2) PATCH ignores email field; (3) super-admin POST with bad org_id -> 500 on Postgres; (4) 404-before-403 user enumeration.
