@@ -880,6 +880,20 @@ async def create_app_user(
             detail="organization_id is required",
         )
 
+    # Multi-tenancy / privilege-ceiling guards (non-super admins only)
+    is_super = current_user.role == UserRole.SUPER_ADMIN
+    if not is_super:
+        if user_data.organization_id != current_user.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot provision users in another organization",
+            )
+        if user_data.role == UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only a super admin can grant super_admin",
+            )
+
     # Enforce minimum password length
     if len(user_data.password) < 8:
         raise HTTPException(
@@ -921,6 +935,25 @@ async def update_app_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Multi-tenancy / privilege-ceiling guards (non-super admins only)
+    is_super = current_user.role == UserRole.SUPER_ADMIN
+    if not is_super:
+        if user.organization_id != current_user.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied",
+            )
+        if user.role == UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot modify a super admin user",
+            )
+        if user_update.role == UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only a super admin can grant super_admin",
+            )
 
     # Self-guards (checked BEFORE last-admin protection)
     if user_update.is_active is False and current_user.id == user.id:
@@ -983,6 +1016,20 @@ async def delete_app_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Multi-tenancy / privilege-ceiling guards (non-super admins only)
+    is_super = current_user.role == UserRole.SUPER_ADMIN
+    if not is_super:
+        if user.organization_id != current_user.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied",
+            )
+        if user.role == UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot delete a super admin user",
+            )
 
     # Self-guard (checked BEFORE last-admin)
     if current_user.id == user.id:

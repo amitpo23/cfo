@@ -240,26 +240,24 @@ def test_patch_self_role_change_blocked(client, owner):
 # 11. test_patch_last_admin_protection
 # ---------------------------------------------------------------------------
 
-def test_patch_last_admin_protection(client, owner, fresh_org):
+def test_patch_last_admin_protection(client, owner, fresh_org, sec_actors):
     """
     Last-admin protection: cannot demote the last active admin of an org → 409.
-    Strategy: use fresh_org to create an isolated org with exactly 1 admin.
-    Then owner (acting as caller) patches that sole admin to role=user → 409.
+    A SUPER_ADMIN can operate cross-org, so use them as the caller — this verifies
+    the last-admin guard fires even for SUPER_ADMIN.
     """
     # fresh_org creates a new isolated org; its creator is an ADMIN
     iso = fresh_org()
-    iso_token = iso["headers"]["Authorization"].split(" ")[1]
 
     # Get the iso org's admin user id (the user who registered)
     me_resp = client.get("/api/admin/auth/me", headers=iso["headers"])
     assert me_resp.status_code == 200, me_resp.text
     iso_admin_id = me_resp.json()["id"]
-    iso_org_id = me_resp.json()["organization_id"]
 
-    # owner tries to demote the sole admin of the iso org to role=user → 409
+    # SUPER_ADMIN tries to demote the sole admin of the iso org to role=user → 409
     resp = client.patch(f"/api/admin/users/{iso_admin_id}", json={
         "role": "user",
-    }, headers=owner["headers"])
+    }, headers=sec_actors["super_admin_headers"])
     assert resp.status_code == 409, f"Expected 409 (last admin protection), got {resp.status_code}: {resp.text}"
 
 
@@ -305,11 +303,11 @@ def test_delete_self_blocked(client, owner):
 # 14. test_delete_last_admin_blocked
 # ---------------------------------------------------------------------------
 
-def test_delete_last_admin_blocked(client, owner, fresh_org):
+def test_delete_last_admin_blocked(client, owner, fresh_org, sec_actors):
     """
     DELETE the last active admin of an org → 409.
     Strategy: use fresh_org to create an isolated org with exactly 1 admin.
-    owner deletes that sole admin → 409.
+    SUPER_ADMIN (cross-org allowed) tries to delete that sole admin → 409.
     """
     iso = fresh_org()
 
@@ -318,6 +316,220 @@ def test_delete_last_admin_blocked(client, owner, fresh_org):
     assert me_resp.status_code == 200, me_resp.text
     iso_admin_id = me_resp.json()["id"]
 
-    # owner tries to delete the sole admin of the iso org → 409
-    resp = client.delete(f"/api/admin/users/{iso_admin_id}", headers=owner["headers"])
+    # SUPER_ADMIN tries to delete the sole admin of the iso org → 409
+    resp = client.delete(f"/api/admin/users/{iso_admin_id}", headers=sec_actors["super_admin_headers"])
     assert resp.status_code == 409, f"Expected 409 (last admin protection), got {resp.status_code}: {resp.text}"
+
+
+# ===========================================================================
+# Security: Multi-tenancy / privilege-escalation guards
+# ===========================================================================
+#
+# Helper fixture: create an admin in org B and a super_admin we can use.
+#
+# We need:
+#  - org_b_admin: ADMIN of a second (isolated) org
+#  - super_admin_headers: headers for a SUPER_ADMIN user
+#
+# Strategy for super_admin: register fresh org → that user is ADMIN → use the
+# DB (via SessionLocal) to promote to SUPER_ADMIN and re-issue a token by
+# logging in (role claim is read from DB on each login).
+#
+
+@pytest.fixture(scope="session")
+def sec_actors(client, owner):
+    """
+    Returns dict with:
+      org_b_admin:      headers + user info for an ADMIN in org B
+      super_admin:      headers for a SUPER_ADMIN (promoted from a fresh org)
+      owner_org_id:     organization_id of the owner (org A)
+    """
+    from cfo.database import SessionLocal
+    from cfo.models import User, UserRole
+
+    # Create org B by registering a new user (they become ADMIN of a new org)
+    org_b_resp = client.post("/api/admin/auth/register", json={
+        "email": "sec_org_b_admin@example.com",
+        "password": "secret123",
+        "full_name": "Org B Admin",
+    })
+    assert org_b_resp.status_code == 201, org_b_resp.text
+    org_b_data = org_b_resp.json()
+    org_b_headers = {"Authorization": f"Bearer {org_b_data['access_token']}"}
+    org_b_user = org_b_data["user"]
+    org_b_id = org_b_user["organization_id"]
+
+    # Create a fresh user to be promoted to SUPER_ADMIN
+    sa_resp = client.post("/api/admin/auth/register", json={
+        "email": "sec_super_admin@example.com",
+        "password": "secret123",
+        "full_name": "Super Admin",
+    })
+    assert sa_resp.status_code == 201, sa_resp.text
+    sa_data = sa_resp.json()
+    sa_user_id = sa_data["user"]["id"]
+
+    # Promote directly via DB
+    db = SessionLocal()
+    try:
+        u = db.query(User).filter(User.id == sa_user_id).first()
+        u.role = UserRole.SUPER_ADMIN
+        db.commit()
+    finally:
+        db.close()
+
+    # Login again to get a fresh token reflecting SUPER_ADMIN role
+    login_resp = client.post("/api/admin/auth/login", json={
+        "email": "sec_super_admin@example.com",
+        "password": "secret123",
+    })
+    assert login_resp.status_code == 200, login_resp.text
+    sa_token = login_resp.json()["access_token"]
+    sa_headers = {"Authorization": f"Bearer {sa_token}"}
+
+    return {
+        "org_b_admin_headers": org_b_headers,
+        "org_b_admin_user": org_b_user,
+        "org_b_id": org_b_id,
+        "super_admin_headers": sa_headers,
+        "super_admin_email": "sec_super_admin@example.com",
+        "owner_org_id": owner["user"]["organization_id"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# SEC-1. POST /users cross-org blocked for non-super ADMIN
+# ---------------------------------------------------------------------------
+
+def test_create_user_cross_org_blocked(client, owner, sec_actors):
+    """ADMIN of org A cannot create a user in org B → 403."""
+    org_b_id = sec_actors["org_b_id"]
+    resp = client.post("/api/admin/users", json={
+        "email": "sec_cross_org_create@example.com",
+        "password": "securepass",
+        "full_name": "Cross Org",
+        "organization_id": org_b_id,
+        "role": "user",
+    }, headers=owner["headers"])
+    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# SEC-2. POST /users privilege escalation to super_admin blocked
+# ---------------------------------------------------------------------------
+
+def test_create_user_super_admin_role_blocked(client, owner):
+    """ADMIN cannot create a user with role=super_admin → 403."""
+    org_id = owner["user"]["organization_id"]
+    resp = client.post("/api/admin/users", json={
+        "email": "sec_escalate_create@example.com",
+        "password": "securepass",
+        "full_name": "Escalate",
+        "organization_id": org_id,
+        "role": "super_admin",
+    }, headers=owner["headers"])
+    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# SEC-3. PATCH user in org B blocked for non-super ADMIN
+# ---------------------------------------------------------------------------
+
+def test_patch_cross_org_blocked(client, owner, sec_actors):
+    """ADMIN of org A cannot PATCH a user belonging to org B → 403."""
+    org_b_user = sec_actors["org_b_admin_user"]
+    resp = client.patch(f"/api/admin/users/{org_b_user['id']}", json={
+        "full_name": "Hacked Name",
+    }, headers=owner["headers"])
+    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# SEC-4. PATCH to set role=super_admin blocked for non-super ADMIN
+# ---------------------------------------------------------------------------
+
+def test_patch_escalate_to_super_admin_blocked(client, owner):
+    """ADMIN cannot PATCH a user to role=super_admin → 403."""
+    org_id = owner["user"]["organization_id"]
+    # Create a regular user in same org
+    create_resp = client.post("/api/admin/users", json={
+        "email": "sec_escalate_patch_target@example.com",
+        "password": "securepass",
+        "full_name": "Escalate Target",
+        "organization_id": org_id,
+        "role": "user",
+    }, headers=owner["headers"])
+    assert create_resp.status_code == 201, create_resp.text
+    user_id = create_resp.json()["id"]
+
+    resp = client.patch(f"/api/admin/users/{user_id}", json={
+        "role": "super_admin",
+    }, headers=owner["headers"])
+    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# SEC-5. PATCH a super_admin user blocked for non-super ADMIN
+# ---------------------------------------------------------------------------
+
+def test_patch_super_admin_user_blocked(client, owner, sec_actors):
+    """ADMIN cannot PATCH a user who is a SUPER_ADMIN → 403."""
+    # sec_actors.super_admin user id
+    sa_me = client.get("/api/admin/auth/me", headers=sec_actors["super_admin_headers"])
+    assert sa_me.status_code == 200
+    sa_user_id = sa_me.json()["id"]
+
+    resp = client.patch(f"/api/admin/users/{sa_user_id}", json={
+        "full_name": "Hacked SA",
+    }, headers=owner["headers"])
+    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# SEC-6. DELETE user in org B blocked for non-super ADMIN
+# ---------------------------------------------------------------------------
+
+def test_delete_cross_org_blocked(client, owner, sec_actors):
+    """ADMIN of org A cannot DELETE a user belonging to org B → 403."""
+    org_b_user = sec_actors["org_b_admin_user"]
+    resp = client.delete(f"/api/admin/users/{org_b_user['id']}", headers=owner["headers"])
+    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# SEC-7. SUPER_ADMIN can create in any org with any role (sanity)
+# ---------------------------------------------------------------------------
+
+def test_super_admin_can_create_cross_org(client, sec_actors):
+    """SUPER_ADMIN can create a user in any org (sanity)."""
+    org_b_id = sec_actors["org_b_id"]
+    resp = client.post("/api/admin/users", json={
+        "email": "sec_sa_cross_create@example.com",
+        "password": "securepass",
+        "full_name": "SA Cross Create",
+        "organization_id": org_b_id,
+        "role": "user",
+    }, headers=sec_actors["super_admin_headers"])
+    assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+
+
+def test_super_admin_can_assign_super_admin_role(client, sec_actors):
+    """SUPER_ADMIN can create a user with role=super_admin (sanity)."""
+    org_b_id = sec_actors["org_b_id"]
+    resp = client.post("/api/admin/users", json={
+        "email": "sec_sa_role_assign@example.com",
+        "password": "securepass",
+        "full_name": "SA Role Assign",
+        "organization_id": org_b_id,
+        "role": "super_admin",
+    }, headers=sec_actors["super_admin_headers"])
+    assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+
+
+def test_super_admin_can_patch_cross_org(client, sec_actors):
+    """SUPER_ADMIN can PATCH a user in any org (sanity)."""
+    org_b_user = sec_actors["org_b_admin_user"]
+    resp = client.patch(f"/api/admin/users/{org_b_user['id']}", json={
+        "full_name": "SA Patched",
+    }, headers=sec_actors["super_admin_headers"])
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
