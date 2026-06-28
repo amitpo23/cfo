@@ -133,8 +133,8 @@ def test_create_app_user_unauthenticated(client, owner):
         "organization_id": org_id,
     }
     resp = client.post("/api/admin/users", json=payload)
-    # FastAPI HTTPBearer raises 403 when no token is supplied
-    assert resp.status_code in (401, 403), resp.text
+    # FastAPI HTTPBearer raises 403 (not 401) when no Bearer token is supplied
+    assert resp.status_code == 403, resp.text
 
 
 # ---------------------------------------------------------------------------
