@@ -489,7 +489,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
             <button
               type="button"
               onClick={goToLogin}
-              className="inline-flex items-center gap-2 rounded-lg border border-white/25 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20"
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-bold text-white shadow-md ring-1 ring-emerald-300/50 hover:bg-emerald-400"
             >
               <LogIn className="h-4 w-4" /> כניסה ללקוחות רשומים
             </button>
