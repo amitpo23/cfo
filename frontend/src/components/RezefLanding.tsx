@@ -17,6 +17,7 @@ import {
   Layers3,
   LineChart,
   Loader2,
+  LogIn,
   ShieldCheck,
   Sparkles,
   TrendingUp,
@@ -292,6 +293,26 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
   const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
 
+  const goToLogin = () => {
+    setMode('login');
+    setTimeout(
+      () => document.getElementById('signup')?.scrollIntoView({ behavior: 'smooth' }),
+      50,
+    );
+  };
+
+  // Open directly in login mode when arriving at /login (or any *login* path/hash).
+  useEffect(() => {
+    const loc = window.location;
+    if (
+      loc.pathname.toLowerCase().includes('login') ||
+      loc.hash.toLowerCase().includes('login')
+    ) {
+      goToLogin();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const selectedPlanName = useMemo(
     () => plans.find((plan) => plan.id === selectedPlan)?.name || plans[1].name,
     [selectedPlan],
@@ -457,13 +478,22 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
     <div className="min-h-screen bg-slate-50 text-slate-950" dir="rtl">
       <header className="sticky top-0 z-40 border-b border-white/10 bg-slate-950/92 text-white backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-3">
-          <a href="#top" className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-lg font-bold text-slate-950 shadow-sm">ר</div>
-            <div>
-              <div className="text-xl font-bold tracking-normal">רצף <span className="text-blue-200">Rezef</span></div>
-              <div className="text-xs text-slate-400">Autonomous digital CFO</div>
-            </div>
-          </a>
+          <div className="flex items-center gap-4">
+            <a href="#top" className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-lg font-bold text-slate-950 shadow-sm">ר</div>
+              <div>
+                <div className="text-xl font-bold tracking-normal">רצף <span className="text-blue-200">Rezef</span></div>
+                <div className="text-xs text-slate-400">Autonomous digital CFO</div>
+              </div>
+            </a>
+            <button
+              type="button"
+              onClick={goToLogin}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/25 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20"
+            >
+              <LogIn className="h-4 w-4" /> כניסה ללקוחות רשומים
+            </button>
+          </div>
           <nav className="hidden items-center gap-6 text-sm text-slate-300 lg:flex">
             <a href="#pain" className="hover:text-white">הכאב</a>
             <a href="#solution" className="hover:text-white">הפתרון</a>

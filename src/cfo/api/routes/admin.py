@@ -855,15 +855,210 @@ async def update_company(
 
 # ==================== Users ====================
 
-@router.post("/users", response_model=UserResponse)
-async def create_user(
+@router.post("/sumit-users")
+async def create_sumit_user(
     user: UserRequest,
     sumit: SumitIntegration = Depends(get_sumit_integration),
     current_user: dict = Depends(require_admin)
 ):
-    """Create new user"""
+    """Create new user in SUMIT (external accounting system)"""
     async with sumit:
         return await sumit.create_user(user)
+
+
+@router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED, tags=["Users"])
+async def create_app_user(
+    user_data: UserCreate,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(require_admin)
+):
+    """Provision a new application user (login account) under the admin's org."""
+    # organization_id is required — admin must specify which org to provision into
+    if user_data.organization_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="organization_id is required",
+        )
+
+    # Multi-tenancy / privilege-ceiling guards (non-super admins only)
+    is_super = current_user.role == UserRole.SUPER_ADMIN
+    if not is_super:
+        if user_data.organization_id != current_user.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot provision users in another organization",
+            )
+        if user_data.role == UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only a super admin can grant super_admin",
+            )
+
+    # Enforce minimum password length
+    if len(user_data.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must be at least 8 characters",
+        )
+
+    # Email uniqueness
+    existing = db.query(User).filter(User.email == user_data.email).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered",
+        )
+
+    new_user = User(
+        email=user_data.email,
+        password_hash=get_password_hash(user_data.password),
+        full_name=user_data.full_name,
+        phone=user_data.phone,
+        role=user_data.role,
+        organization_id=user_data.organization_id,
+        is_active=True,
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return UserResponse.model_validate(new_user)
+
+
+@router.patch("/users/{user_id}", response_model=UserResponse, tags=["Users"])
+async def update_app_user(
+    user_id: int,
+    user_update: UserUpdate,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(require_admin)
+):
+    """Update role / is_active / full_name / phone of an app user."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Multi-tenancy / privilege-ceiling guards (non-super admins only)
+    is_super = current_user.role == UserRole.SUPER_ADMIN
+    if not is_super:
+        if user.organization_id != current_user.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied",
+            )
+        if user.role == UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot modify a super admin user",
+            )
+        if user_update.role == UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only a super admin can grant super_admin",
+            )
+
+    # Self-guards (checked BEFORE last-admin protection)
+    if user_update.is_active is False and current_user.id == user.id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot deactivate yourself",
+        )
+    if user_update.role is not None and current_user.id == user.id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot change your own role",
+        )
+
+    # Last-admin protection — applies when:
+    #   (a) deactivating the user, or
+    #   (b) demoting from ADMIN/SUPER_ADMIN to a lower role
+    _admin_roles = (UserRole.ADMIN, UserRole.SUPER_ADMIN)
+    _losing_admin = (
+        (user_update.is_active is False and user.role in _admin_roles)
+        or (user_update.role is not None and user.role in _admin_roles and user_update.role not in _admin_roles)
+    )
+    if _losing_admin:
+        active_admin_count = (
+            db.query(User)
+            .filter(
+                User.organization_id == user.organization_id,
+                User.is_active == True,
+                User.role.in_(_admin_roles),
+            )
+            .count()
+        )
+        if active_admin_count <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Last admin protection: cannot remove the last active admin of the organization",
+            )
+
+    # Apply only provided fields
+    if user_update.full_name is not None:
+        user.full_name = user_update.full_name
+    if user_update.phone is not None:
+        user.phone = user_update.phone
+    if user_update.role is not None:
+        user.role = user_update.role
+    if user_update.is_active is not None:
+        user.is_active = user_update.is_active
+
+    db.commit()
+    db.refresh(user)
+    return UserResponse.model_validate(user)
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Users"])
+async def delete_app_user(
+    user_id: int,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(require_admin)
+):
+    """Soft-delete (deactivate) an app user. Cannot delete self or the last admin."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Multi-tenancy / privilege-ceiling guards (non-super admins only)
+    is_super = current_user.role == UserRole.SUPER_ADMIN
+    if not is_super:
+        if user.organization_id != current_user.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied",
+            )
+        if user.role == UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot delete a super admin user",
+            )
+
+    # Self-guard (checked BEFORE last-admin)
+    if current_user.id == user.id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot delete yourself",
+        )
+
+    # Last-admin protection
+    _admin_roles = (UserRole.ADMIN, UserRole.SUPER_ADMIN)
+    if user.role in _admin_roles:
+        active_admin_count = (
+            db.query(User)
+            .filter(
+                User.organization_id == user.organization_id,
+                User.is_active == True,
+                User.role.in_(_admin_roles),
+            )
+            .count()
+        )
+        if active_admin_count <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Last admin protection: cannot remove the last active admin of the organization",
+            )
+
+    # Soft-delete
+    user.is_active = False
+    db.commit()
 
 
 @router.post("/users/{user_id}/permissions")

@@ -35,17 +35,31 @@ interface User {
   full_name: string;
   role: string;
   organization_id?: number;
+  phone?: string;
   is_active: boolean;
   last_login?: string;
   created_at: string;
 }
+
+const ROLE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'admin', label: 'מנהל ארגון' },
+  { value: 'accountant', label: 'רואה חשבון' },
+  { value: 'manager', label: 'מנהל' },
+  { value: 'user', label: 'משתמש' },
+  { value: 'viewer', label: 'צופה' },
+];
 
 const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'organizations' | 'users' | 'audit'>('organizations');
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editItem, setEditItem] = useState<any>(null);
-  
+
+  // User modal state (separate from org modal)
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [editUser, setEditUser] = useState<User | null>(null);
+  const [userError, setUserError] = useState<string | null>(null);
+
   const queryClient = useQueryClient();
 
   // Fetch Organizations
@@ -100,6 +114,80 @@ const AdminDashboard: React.FC = () => {
     }
   });
 
+  // Create User Mutation
+  const createUserMutation = useMutation({
+    mutationFn: async (data: {
+      email: string;
+      password: string;
+      full_name: string;
+      phone?: string;
+      role: string;
+      organization_id?: number;
+    }) => {
+      const token = localStorage.getItem('auth_token');
+      return axios.post(`${API_BASE}/users`, data, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      setShowUserModal(false);
+      setEditUser(null);
+      setUserError(null);
+    },
+    onError: (err: unknown) => {
+      if (axios.isAxiosError(err)) {
+        setUserError(err.response?.data?.detail ?? 'שגיאה ביצירת המשתמש');
+      } else {
+        setUserError('שגיאה ביצירת המשתמש');
+      }
+    }
+  });
+
+  // Update User Mutation
+  const updateUserMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: number; data: { role?: string; is_active?: boolean; full_name?: string; phone?: string } }) => {
+      const token = localStorage.getItem('auth_token');
+      return axios.patch(`${API_BASE}/users/${id}`, data, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      setShowUserModal(false);
+      setEditUser(null);
+      setUserError(null);
+    },
+    onError: (err: unknown) => {
+      if (axios.isAxiosError(err)) {
+        setUserError(err.response?.data?.detail ?? 'שגיאה בעדכון המשתמש');
+      } else {
+        setUserError('שגיאה בעדכון המשתמש');
+      }
+    }
+  });
+
+  // Delete User Mutation
+  const deleteUserMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const token = localStorage.getItem('auth_token');
+      return axios.delete(`${API_BASE}/users/${id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      setUserError(null);
+    },
+    onError: (err: unknown) => {
+      if (axios.isAxiosError(err)) {
+        setUserError(err.response?.data?.detail ?? 'שגיאה בהשבתת המשתמש');
+      } else {
+        setUserError('שגיאה בהשבתת המשתמש');
+      }
+    }
+  });
+
   const getRoleBadgeColor = (role: string) => {
     const colors: Record<string, string> = {
       super_admin: 'bg-purple-100 text-purple-800',
@@ -120,6 +208,37 @@ const AdminDashboard: React.FC = () => {
       manual: '📝'
     };
     return icons[type] || '📋';
+  };
+
+  const handleCreateUserSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setUserError(null);
+    const formData = new FormData(e.currentTarget);
+    const orgIdRaw = formData.get('organization_id') as string;
+    const phoneRaw = formData.get('phone') as string;
+    const payload = {
+      email: formData.get('email') as string,
+      password: formData.get('password') as string,
+      full_name: formData.get('full_name') as string,
+      role: formData.get('role') as string,
+      ...(orgIdRaw ? { organization_id: Number(orgIdRaw) } : {}),
+      ...(phoneRaw ? { phone: phoneRaw } : {}),
+    };
+    createUserMutation.mutate(payload);
+  };
+
+  const handleEditUserSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!editUser) return;
+    setUserError(null);
+    const formData = new FormData(e.currentTarget);
+    const role = formData.get('role') as string;
+    const isActiveCheckbox = formData.get('is_active');
+    const payload: { role?: string; is_active?: boolean } = {
+      role,
+      is_active: isActiveCheckbox === 'on',
+    };
+    updateUserMutation.mutate({ id: editUser.id, data: payload });
   };
 
   return (
@@ -184,7 +303,7 @@ const AdminDashboard: React.FC = () => {
             className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
         </div>
-        
+
         {activeTab === 'organizations' && (
           <button
             onClick={() => setShowModal(true)}
@@ -194,7 +313,31 @@ const AdminDashboard: React.FC = () => {
             ארגון חדש
           </button>
         )}
+
+        {activeTab === 'users' && (
+          <button
+            onClick={() => {
+              setEditUser(null);
+              setUserError(null);
+              setShowUserModal(true);
+            }}
+            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <Plus size={20} />
+            ➕ הוסף משתמש/לקוח
+          </button>
+        )}
       </div>
+
+      {/* Delete error banner (shown outside modal, e.g. after delete) */}
+      {userError && !showUserModal && activeTab === 'users' && (
+        <div className="bg-red-50 border border-red-300 text-red-800 rounded-lg px-4 py-3 mb-4 flex items-center justify-between">
+          <span>{userError}</span>
+          <button onClick={() => setUserError(null)} className="text-red-600 hover:text-red-900">
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {/* Content */}
       <div className="bg-white rounded-lg shadow-sm overflow-hidden">
@@ -345,16 +488,30 @@ const AdminDashboard: React.FC = () => {
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {user.last_login 
+                        {user.last_login
                           ? new Date(user.last_login).toLocaleDateString('he-IL')
                           : 'אף פעם'}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex items-center gap-2">
-                          <button className="text-blue-600 hover:text-blue-900">
+                          <button
+                            onClick={() => {
+                              setEditUser(user);
+                              setUserError(null);
+                              setShowUserModal(true);
+                            }}
+                            className="text-blue-600 hover:text-blue-900"
+                          >
                             <Edit size={18} />
                           </button>
-                          <button className="text-red-600 hover:text-red-900">
+                          <button
+                            onClick={() => {
+                              if (confirm('להשבית את המשתמש?')) {
+                                deleteUserMutation.mutate(user.id);
+                              }
+                            }}
+                            className="text-red-600 hover:text-red-900"
+                          >
                             <Trash2 size={18} />
                           </button>
                         </div>
@@ -446,6 +603,170 @@ const AdminDashboard: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal for Create/Edit User */}
+      {showUserModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full">
+            <h3 className="text-xl font-bold mb-4">
+              {editUser ? 'ערוך משתמש' : 'משתמש/לקוח חדש'}
+            </h3>
+
+            {/* Inline error inside modal */}
+            {userError && (
+              <div className="bg-red-50 border border-red-300 text-red-800 rounded-lg px-4 py-3 mb-4 flex items-center justify-between">
+                <span>{userError}</span>
+                <button onClick={() => setUserError(null)} className="text-red-600 hover:text-red-900">
+                  <X size={16} />
+                </button>
+              </div>
+            )}
+
+            {editUser ? (
+              /* Edit form — role + is_active only */
+              <form onSubmit={handleEditUserSubmit}>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">תפקיד</label>
+                    <select
+                      name="role"
+                      defaultValue={editUser.role}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    >
+                      {ROLE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      name="is_active"
+                      id="edit_is_active"
+                      defaultChecked={editUser.is_active}
+                      className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                    />
+                    <label htmlFor="edit_is_active" className="text-sm font-medium text-gray-700">
+                      משתמש פעיל
+                    </label>
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-6">
+                  <button
+                    type="submit"
+                    disabled={updateUserMutation.isPending}
+                    className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60"
+                  >
+                    {updateUserMutation.isPending ? 'שומר...' : 'שמור'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUserModal(false);
+                      setEditUser(null);
+                      setUserError(null);
+                    }}
+                    className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-300"
+                  >
+                    ביטול
+                  </button>
+                </div>
+              </form>
+            ) : (
+              /* Create form */
+              <form onSubmit={handleCreateUserSubmit}>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">אימייל</label>
+                    <input
+                      name="email"
+                      type="email"
+                      required
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">שם מלא</label>
+                    <input
+                      name="full_name"
+                      type="text"
+                      required
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      סיסמה ראשונית
+                      <span className="text-gray-400 font-normal mr-1">(מינ׳ 8 תווים — הלקוח יוכל לשנותה)</span>
+                    </label>
+                    <input
+                      name="password"
+                      type="password"
+                      required
+                      minLength={8}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">תפקיד</label>
+                    <select
+                      name="role"
+                      required
+                      defaultValue="user"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    >
+                      {ROLE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">ארגון</label>
+                    <select
+                      name="organization_id"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">ללא ארגון</option>
+                      {organizations?.map((org) => (
+                        <option key={org.id} value={org.id}>{org.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      טלפון <span className="text-gray-400 font-normal">(אופציונלי)</span>
+                    </label>
+                    <input
+                      name="phone"
+                      type="tel"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-6">
+                  <button
+                    type="submit"
+                    disabled={createUserMutation.isPending}
+                    className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-60"
+                  >
+                    {createUserMutation.isPending ? 'יוצר...' : 'צור משתמש'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUserModal(false);
+                      setUserError(null);
+                    }}
+                    className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-lg hover:bg-gray-300"
+                  >
+                    ביטול
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
