@@ -24,6 +24,15 @@ class ApiService {
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
         }
+        // Super-admin "act as organization" override. When an active org is
+        // selected it rides on every request; the backend honors the header
+        // ONLY for SUPER_ADMIN (silently ignored for everyone else), so it is
+        // always safe to send. This drives the whole app — dashboards, AR/AP,
+        // sync — to the chosen client org.
+        const activeOrg = localStorage.getItem('active_org_id');
+        if (activeOrg) {
+          config.headers['X-Active-Org-Id'] = activeOrg;
+        }
         // נרמול נתיב: בקומפוננטות יש שתי קונבנציות ('/api/financial/..' ו-'/ar/..')
         // ועם baseURL שמסתיים ב-/api נוצרת כפילות '/api/api/..' (404),
         // גם כאשר baseURL יחסי בפרודקשן וגם כאשר הוא מוחלט בסביבת dev.

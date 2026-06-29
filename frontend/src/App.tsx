@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import api from './services/api';
+import OrgSwitcher, { CurrentUser } from './components/OrgSwitcher';
 import {
   LayoutDashboard,
   Users,
@@ -173,6 +175,17 @@ function App() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [authed, setAuthed] = useState(() => Boolean(localStorage.getItem('auth_token')));
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+
+  // Resolve the real signed-in identity (drives the header label + the
+  // super-admin org switcher). Previously the header showed a hardcoded
+  // "Admin User", so a super_admin had no way to see their role or switch org.
+  useEffect(() => {
+    if (!authed) return;
+    api.get<CurrentUser>('/admin/auth/me')
+      .then(setCurrentUser)
+      .catch(() => setCurrentUser(null));
+  }, [authed]);
 
   if (!authed) {
     return <RezefLanding darkMode={darkMode} onSuccess={() => setAuthed(true)} />;
@@ -259,6 +272,9 @@ function App() {
 
               {/* Right Side Actions */}
               <div className="flex items-center gap-4">
+                {/* Super-admin: act-as-client organization switcher */}
+                {currentUser && <OrgSwitcher currentUser={currentUser} darkMode={darkMode} />}
+
                 {/* Dark Mode Toggle */}
                 <button
                   onClick={() => setDarkMode(!darkMode)}
@@ -303,11 +319,13 @@ function App() {
                     <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
                       <User size={16} className="text-white" />
                     </div>
-                    <span className={`text-sm font-medium ${darkMode ? 'text-white' : 'text-gray-700'}`}>Admin</span>
+                    <span className={`text-sm font-medium ${darkMode ? 'text-white' : 'text-gray-700'}`}>
+                      {currentUser?.full_name || 'Admin'}
+                    </span>
                     <ChevronDown size={16} className={darkMode ? 'text-gray-400' : 'text-gray-500'} />
                   </button>
                   {showUserMenu && (
-                    <UserDropdown darkMode={darkMode} onClose={() => setShowUserMenu(false)} />
+                    <UserDropdown darkMode={darkMode} currentUser={currentUser} onClose={() => setShowUserMenu(false)} />
                   )}
                 </div>
               </div>
@@ -465,14 +483,29 @@ const NotificationsDropdown: React.FC<{ darkMode: boolean; onClose: () => void }
 };
 
 // User Dropdown
-const UserDropdown: React.FC<{ darkMode: boolean; onClose: () => void }> = ({ darkMode, onClose: _onClose }) => {
+const ROLE_LABELS: Record<string, string> = {
+  super_admin: 'מנהל על',
+  admin: 'מנהל',
+  user: 'משתמש',
+};
+
+const UserDropdown: React.FC<{ darkMode: boolean; currentUser: CurrentUser | null; onClose: () => void }> = ({ darkMode, currentUser, onClose: _onClose }) => {
   return (
     <div className={`absolute right-0 mt-2 w-56 rounded-xl shadow-xl border ${
       darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
     } z-50`}>
       <div className={`p-4 border-b ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
-        <p className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Admin User</p>
-        <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>admin@company.com</p>
+        <p className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{currentUser?.full_name || 'משתמש'}</p>
+        <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{currentUser?.email || ''}</p>
+        {currentUser?.role && (
+          <span className={`inline-block mt-2 text-[11px] px-2 py-0.5 rounded-full ${
+            currentUser.role === 'super_admin'
+              ? (darkMode ? 'bg-purple-900/40 text-purple-200' : 'bg-purple-100 text-purple-700')
+              : (darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-100 text-gray-600')
+          }`}>
+            {ROLE_LABELS[currentUser.role] || currentUser.role}
+          </span>
+        )}
       </div>
       <div className="p-2">
         <button className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition ${

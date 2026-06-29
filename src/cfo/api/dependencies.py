@@ -75,18 +75,82 @@ async def get_current_user(
     return user
 
 
+ACTIVE_ORG_HEADER = "X-Active-Org-Id"
+
+
+def _resolve_super_admin_active_org(request: Request, current_user: User) -> Optional[int]:
+    """Resolve a SUPER_ADMIN's chosen active organization from the request header.
+
+    Returns the validated target org id, or None when no override applies. The
+    override is the single chokepoint that lets one operator act inside any
+    client org; it is therefore honored ONLY for a confirmed SUPER_ADMIN (role
+    read from the DB via get_current_user, never a token claim). For any other
+    role the header is silently ignored — sending it must never widen scope.
+
+    Mutating requests (anything other than GET/HEAD/OPTIONS) under an active
+    override are recorded to AuditLog so writes/sync done while impersonating an
+    org leave an attributable trail.
+    """
+    if request is None or current_user.role != UserRole.SUPER_ADMIN:
+        return None
+    raw = request.headers.get(ACTIVE_ORG_HEADER)
+    if not raw:
+        return None
+    try:
+        target = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {ACTIVE_ORG_HEADER} header",
+        )
+
+    db = SessionLocal()
+    try:
+        from ..models import Organization, AuditLog
+
+        org = db.query(Organization).filter(Organization.id == target).first()
+        if org is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Organization not found",
+            )
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            db.add(AuditLog(
+                user_id=current_user.id,
+                organization_id=target,
+                action="IMPERSONATE",
+                entity_type="Organization",
+                entity_id=target,
+                details={"method": request.method, "path": request.url.path},
+            ))
+            db.commit()
+    finally:
+        db.close()
+    return target
+
+
 async def get_current_org_id(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    request: Request = None,
 ) -> int:
     """Organization scope of the authenticated user.
 
     Routes must derive the tenant from the token, never from a
     caller-controlled query parameter.
 
-    A user with no organization (e.g. a super-admin row) must NOT silently fall
-    back to org 1 — that would read/write another tenant's data. Reject instead;
-    such users must select an org explicitly via an admin path.
+    Exception — a SUPER_ADMIN may target any organization by sending the
+    ``X-Active-Org-Id`` header (validated and audited in
+    _resolve_super_admin_active_org). This is the deliberate "select an org
+    explicitly via an admin path" mechanism, and it reaches every org-scoped
+    route (reads, writes, sync) through this one dependency.
+
+    A non-super user with no organization (e.g. a stray row) must NOT silently
+    fall back to org 1 — that would read/write another tenant's data. Reject.
     """
+    active = _resolve_super_admin_active_org(request, current_user)
+    if active is not None:
+        return active
+
     if current_user.organization_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
