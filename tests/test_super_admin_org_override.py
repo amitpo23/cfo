@@ -109,3 +109,31 @@ def test_super_override_write_is_audited(client, owner, superadmin):
         assert rows, "expected an IMPERSONATE audit row for the targeted org"
     finally:
         db.close()
+
+
+def test_super_admin_control_lists_all_orgs(client, owner, tenant, superadmin):
+    resp = client.get("/api/admin/control/clients", headers=superadmin["headers"])
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    org_ids = {c["organization_id"] for c in body["clients"]}
+    assert owner["user"]["organization_id"] in org_ids
+    assert tenant["user"]["organization_id"] in org_ids
+    assert body["totals"]["organizations"] >= 2
+
+
+def test_non_super_cannot_read_control_plane(client, owner):
+    resp = client.get("/api/admin/control/clients", headers=owner["headers"])
+    assert resp.status_code == 403
+
+
+def test_super_admin_can_trigger_client_sync_without_connections(client, fresh_org, superadmin):
+    client_org = fresh_org()
+
+    resp = client.post(
+        f"/api/admin/control/clients/{client_org['org_id']}/sync",
+        headers=superadmin["headers"],
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["organization_id"] == client_org["org_id"]
+    assert body["results"] == []

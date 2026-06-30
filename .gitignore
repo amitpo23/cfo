@@ -33,6 +33,7 @@ frontend/node_modules/
 # Environment Variables
 .env
 .env.local
+docker/.env.docker
 
 # IDE
 .vscode/

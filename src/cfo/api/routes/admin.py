@@ -11,12 +11,14 @@ from urllib.parse import urlencode
 
 from ...database import get_db_session
 from ...models import (
-    User, Organization, AuditLog,
+    User, Organization, AuditLog, IntegrationConnection, SyncRun,
     UserCreate, UserUpdate, UserResponse, UserLogin, GoogleLogin, Token,
     OrganizationCreate, OrganizationUpdate, OrganizationResponse,
     UserRole, IntegrationType
 )
 from ...auth import verify_password, get_password_hash, create_access_token
+from ...config import settings
+from ...services.sync_engine import SyncEngine, get_connector_for_org
 from ..dependencies import (
     get_current_user, 
     get_super_admin, 
@@ -605,6 +607,118 @@ async def list_organizations(
     """רשימת כל הארגונים (רק super admin)"""
     orgs = db.query(Organization).offset(skip).limit(limit).all()
     return [OrganizationResponse.model_validate(org) for org in orgs]
+
+
+@router.get("/control/clients", tags=["Super Admin Control"])
+async def super_admin_clients_overview(
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """Global super-admin control plane over every tenant organization."""
+    orgs = db.query(Organization).order_by(Organization.id.asc()).all()
+    clients = []
+
+    for org in orgs:
+        connections = db.query(IntegrationConnection).filter(
+            IntegrationConnection.organization_id == org.id,
+        ).all()
+        connection_statuses = {c.source: c.status for c in connections}
+        if org.id == 1 and settings.sumit_api_key and "sumit" not in connection_statuses:
+            connection_statuses["sumit"] = "env"
+
+        last_sync = db.query(SyncRun).filter(
+            SyncRun.organization_id == org.id,
+        ).order_by(SyncRun.created_at.desc()).first()
+
+        users_count = db.query(User).filter(User.organization_id == org.id).count()
+        active_connections = [
+            source for source, status_value in connection_statuses.items()
+            if status_value in {"active", "env", "ACTIVE"}
+        ]
+
+        clients.append({
+            "organization_id": org.id,
+            "name": org.name,
+            "business_type": org.business_type,
+            "tax_id": org.tax_id,
+            "email": org.email,
+            "is_active": org.is_active,
+            "users_count": users_count,
+            "connections": active_connections,
+            "connection_statuses": connection_statuses,
+            "last_sync": {
+                "id": last_sync.id,
+                "source": last_sync.source,
+                "status": last_sync.status.value if last_sync.status else None,
+                "started_at": last_sync.started_at.isoformat() if last_sync.started_at else None,
+                "finished_at": last_sync.finished_at.isoformat() if last_sync.finished_at else None,
+                "error_summary": last_sync.error_summary,
+                "counts": last_sync.counts,
+            } if last_sync else None,
+        })
+
+    totals = {
+        "organizations": len(clients),
+        "connected_sumit": sum(1 for c in clients if "sumit" in c["connections"]),
+        "connected_open_finance": sum(1 for c in clients if "open_finance" in c["connections"]),
+        "with_sync_errors": sum(1 for c in clients if (c["last_sync"] or {}).get("error_summary")),
+    }
+    return {"operator_org_id": current_user.organization_id, "totals": totals, "clients": clients}
+
+
+@router.post("/control/clients/{org_id}/sync", tags=["Super Admin Control"])
+async def super_admin_sync_client(
+    org_id: int,
+    entity_types: Optional[str] = Query(None),
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """Run an on-demand sync for one tenant as super admin."""
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    targets = {
+        conn.source for conn in db.query(IntegrationConnection).filter(
+            IntegrationConnection.organization_id == org_id,
+            IntegrationConnection.status == "active",
+        ).all()
+    }
+    if org_id == 1 and settings.sumit_api_key:
+        targets.add("sumit")
+
+    if not targets:
+        return {"organization_id": org_id, "synced": 0, "results": []}
+
+    types = [t.strip() for t in entity_types.split(",") if t.strip()] if entity_types else None
+    results = []
+    for source in sorted(targets):
+        connector = None
+        try:
+            connector, conn_id, resolved = get_connector_for_org(db, org_id, source)
+            engine = SyncEngine(db, connector, org_id, resolved, conn_id)
+            run = await engine.run_full_sync(entity_types=types)
+            results.append({
+                "source": resolved,
+                "sync_run_id": run.id,
+                "status": run.status.value if run.status else None,
+                "counts": run.counts,
+                "error_summary": run.error_summary,
+            })
+        except Exception as exc:  # noqa: BLE001 - surfaced to operator dashboard
+            results.append({"source": source, "status": "error", "error": str(exc)})
+        finally:
+            if connector is not None:
+                try:
+                    await connector.close()
+                except Exception:
+                    pass
+
+    return {
+        "organization_id": org_id,
+        "synced": sum(1 for r in results if r.get("status") in {"completed", "partial"}),
+        "results": results,
+    }
 
 
 @router.get("/organizations/{org_id}", response_model=OrganizationResponse, tags=["Organizations"])
