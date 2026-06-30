@@ -14,7 +14,9 @@ from typing import Any, Iterable, Optional
 
 from sqlalchemy.orm import Session
 
-from ..models import IntegrationConnection, SumitCompany
+from ..config import settings
+from ..models import IntegrationConnection, Organization, SumitCompany
+from .credentials_vault import decrypt_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,93 @@ def active_sources(db: Session, organization_id: int) -> list[str]:
             IntegrationConnection.status == "active",
         ).order_by(IntegrationConnection.source.asc()).all()
     ]
+
+
+def repair_missing_client_roster(
+    db: Session,
+    *,
+    office_organization_id: int = 1,
+) -> list[dict[str, Any]]:
+    """Backfill roster rows for legacy tenants that already have SUMIT credentials.
+
+    New clients go through ``office_service.register_client`` and get a roster row
+    immediately. This repair covers older production databases where integrations
+    existed before the office roster became the source of truth.
+    """
+    repaired: list[dict[str, Any]] = []
+
+    def ensure_row(target_org: Organization, company_id: str, source: str) -> None:
+        if not company_id:
+            return
+        existing = db.query(SumitCompany).filter(
+            SumitCompany.office_organization_id == office_organization_id,
+            SumitCompany.company_id == str(company_id),
+        ).first()
+        if existing:
+            changed = False
+            if existing.target_organization_id != target_org.id:
+                existing.target_organization_id = target_org.id
+                changed = True
+            if existing.status != "active":
+                existing.status = "active"
+                changed = True
+            if not existing.name:
+                existing.name = target_org.name
+                changed = True
+            if changed:
+                existing.updated_at = datetime.now(timezone.utc)
+            return
+
+        db.add(SumitCompany(
+            office_organization_id=office_organization_id,
+            company_id=str(company_id),
+            name=target_org.name,
+            status="active",
+            target_organization_id=target_org.id,
+            raw_data={
+                "automation": {
+                    "enabled": True,
+                    "state": "repaired",
+                    "target_organization_id": target_org.id,
+                    "sources": active_sources(db, target_org.id) or [source],
+                    "queued_at": datetime.now(timezone.utc).isoformat(),
+                    "loop": "hourly_cron",
+                    "repair_source": "legacy_integration",
+                }
+            },
+        ))
+        repaired.append({
+            "organization_id": target_org.id,
+            "company_id": str(company_id),
+            "source": source,
+        })
+
+    if settings.sumit_api_key and settings.sumit_company_id:
+        default_org = db.query(Organization).filter(Organization.id == office_organization_id).first()
+        if default_org:
+            ensure_row(default_org, settings.sumit_company_id, "sumit")
+
+    rows = db.query(IntegrationConnection).filter(
+        IntegrationConnection.source == "sumit",
+        IntegrationConnection.status == "active",
+    ).all()
+    for conn in rows:
+        org = db.query(Organization).filter(Organization.id == conn.organization_id).first()
+        if not org:
+            continue
+        creds = decrypt_credentials(conn.credentials_encrypted) if conn.credentials_encrypted else {}
+        ensure_row(org, str(creds.get("company_id") or ""), conn.source)
+
+    if repaired:
+        db.commit()
+        for item in repaired:
+            enqueue_client_automation(
+                db,
+                office_organization_id=office_organization_id,
+                client_company_id=item["company_id"],
+                target_organization_id=item["organization_id"],
+            )
+    return repaired
 
 
 def roster_sync_targets(db: Session) -> list[tuple[int, str]]:

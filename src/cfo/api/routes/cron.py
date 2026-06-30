@@ -17,6 +17,7 @@ from ...models import IntegrationConnection, Organization
 from ...services.sync_engine import SyncEngine, get_connector_for_org
 from ...services.client_automation_service import (
     mark_client_loop_result,
+    repair_missing_client_roster,
     roster_sync_targets,
     run_post_sync_tasks,
 )
@@ -40,6 +41,7 @@ def _verify_cron_secret(authorization: str = Header(None)):
 @router.get("/cron/sync", dependencies=[Depends(_verify_cron_secret)])
 async def scheduled_sync(db: Session = Depends(get_db_session)):
     """Run a sync for every organization with an active integration."""
+    repaired_roster = repair_missing_client_roster(db)
     # Org/source pairs from configured connections, plus the default org's
     # env-credential SUMIT fallback.
     targets = {
@@ -102,7 +104,7 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
             except Exception:
                 pass
 
-    return {"synced": len(results), "results": results}
+    return {"synced": len(results), "repaired_roster": repaired_roster, "results": results}
 
 
 @router.get("/cron/enrich-expenses", dependencies=[Depends(_verify_cron_secret)])

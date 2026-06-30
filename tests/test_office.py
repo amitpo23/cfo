@@ -1,8 +1,13 @@
 """End-to-end tests for the accounting-office (multi-company) routes."""
 
 from cfo.database import SessionLocal
-from cfo.models import IntegrationConnection, OnboardingTask, SumitCompany
-from cfo.services.client_automation_service import mark_client_loop_result, roster_sync_targets
+from cfo.models import IntegrationConnection, IntegrationType, OnboardingTask, Organization, SumitCompany
+from cfo.services.client_automation_service import (
+    mark_client_loop_result,
+    repair_missing_client_roster,
+    roster_sync_targets,
+)
+from cfo.services.credentials_vault import encrypt_credentials
 
 
 def test_office_routes_require_auth(client):
@@ -138,6 +143,42 @@ def test_admin_clients_view(client, owner):
     assert rec["organization_id"] == rec["target_organization_id"]
     assert "connection_statuses" in rec
     assert "automation" in rec
+
+
+def test_cron_repair_backfills_legacy_sumit_roster(client, owner):
+    db = SessionLocal()
+    try:
+        legacy = Organization(
+            name="Legacy SUMIT Client",
+            business_type="legacy",
+            integration_type=IntegrationType.SUMIT,
+            is_active=True,
+        )
+        db.add(legacy)
+        db.flush()
+        db.add(IntegrationConnection(
+            organization_id=legacy.id,
+            source="sumit",
+            status="active",
+            credentials_encrypted=encrypt_credentials({
+                "api_key": "legacy-key",
+                "company_id": "303030303",
+            }),
+            config={},
+        ))
+        db.commit()
+
+        repaired = repair_missing_client_roster(db, office_organization_id=owner["user"]["organization_id"])
+        assert any(row["company_id"] == "303030303" for row in repaired)
+        roster = db.query(SumitCompany).filter(
+            SumitCompany.company_id == "303030303",
+            SumitCompany.target_organization_id == legacy.id,
+        ).first()
+        assert roster is not None
+        assert roster.raw_data["automation"]["state"] == "queued"
+        assert (legacy.id, "sumit") in roster_sync_targets(db)
+    finally:
+        db.close()
 
 
 def test_office_rollup_aggregates_clients(client, owner):
