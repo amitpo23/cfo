@@ -109,7 +109,7 @@ class ApiService {
   // ==================== Accounting - Documents ====================
 
   async createDocument(document: any) {
-    return this.post('/accounting/documents', document);
+    return this.post('/financial/documents', document);
   }
 
   async getDocument(documentId: string) {
@@ -117,12 +117,11 @@ class ApiService {
   }
 
   async listDocuments(params?: any) {
-    return this.get<any>('/accounting/documents', { params });
+    return this.get<any>('/financial/documents', { params });
   }
 
   async sendDocument(documentId: string, email: string) {
-    return this.post('/accounting/documents/send', {
-      document_id: documentId,
+    return this.post(`/financial/documents/${documentId}/send`, {
       recipient_email: email,
     });
   }
@@ -136,7 +135,7 @@ class ApiService {
   }
 
   async cancelDocument(documentId: string) {
-    return this.post(`/accounting/documents/${documentId}/cancel`);
+    return this.post(`/financial/documents/${documentId}/cancel`);
   }
 
   // ==================== Accounting - Income Items ====================

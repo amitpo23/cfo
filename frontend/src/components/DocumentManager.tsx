@@ -8,11 +8,15 @@ import { format } from 'date-fns';
 import apiService from '../services/api';
 
 interface Document {
-  document_id: string;
-  document_number: string;
+  id?: number;
+  external_id?: string;
+  document_id?: string;
+  document_number?: string;
   document_type: string;
-  customer_id: string;
-  total_amount: number;
+  document_label?: string;
+  customer_id?: string;
+  total_amount?: number;
+  total?: number;
   status: string;
   issue_date: string;
   due_date?: string;
@@ -38,7 +42,8 @@ export const DocumentManager: React.FC = () => {
     queryKey: ['documents', filterType],
     queryFn: async (): Promise<Document[]> => {
       const params = filterType !== 'all' ? { document_type: filterType } : {};
-      return apiService.listDocuments(params);
+      const res: any = await apiService.listDocuments(params);
+      return res.data || res;
     },
     enabled: isSumitConfigured,
   });
@@ -132,18 +137,18 @@ export const DocumentManager: React.FC = () => {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {documents?.map((doc: Document) => (
-                <tr key={doc.document_id} className="hover:bg-gray-50">
+                <tr key={doc.id || doc.document_id || doc.external_id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                    {doc.document_number}
+                    {doc.document_number || doc.external_id || doc.id}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {doc.document_type}
+                    {doc.document_label || doc.document_type}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {format(new Date(doc.issue_date), 'MMM dd, yyyy')}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ₪{doc.total_amount.toFixed(2)}
+                    ₪{Number(doc.total ?? doc.total_amount ?? 0).toFixed(2)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span
@@ -159,7 +164,8 @@ export const DocumentManager: React.FC = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <div className="flex justify-end gap-2">
                       <button
-                        onClick={() => downloadPdf(doc.document_id)}
+                        onClick={() => downloadPdf(doc.external_id || doc.document_id || '')}
+                        disabled={!doc.external_id && !doc.document_id}
                         className="text-gray-600 hover:text-primary-600"
                         title="Download PDF"
                       >
@@ -170,7 +176,7 @@ export const DocumentManager: React.FC = () => {
                           const email = prompt('Enter email address:');
                           if (email) {
                             sendDocumentMutation.mutate({
-                              documentId: doc.document_id,
+                              documentId: String(doc.id || doc.document_id || doc.external_id),
                               email,
                             });
                           }

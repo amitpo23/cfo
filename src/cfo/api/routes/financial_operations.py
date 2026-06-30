@@ -9,9 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..dependencies import get_db
+from ..dependencies import get_db, get_current_org_id
 from ...services.invoice_service import (
     InvoiceService, DocumentType, InvoiceStatus, ExpenseCategory
+)
+from ...services.document_issuance_service import (
+    DocumentIssuanceService, ISSUABLE_DOCUMENT_TYPES
 )
 from ...services.payment_request_service import (
     PaymentRequestService, PaymentRequestStatus, PaymentMethod, RecurringFrequency
@@ -149,53 +152,26 @@ class ForecastRequest(BaseModel):
 @router.post("/invoices")
 async def create_invoice(
     request: CreateInvoiceRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
 ):
     """יצירת חשבונית"""
-    service = InvoiceService(db)
-    
-    # המרת פריטים
-    items = [
-        {
-            'description': item.description,
-            'quantity': item.quantity,
-            'unit_price': item.unit_price,
-            'vat_rate': item.vat_rate,
-            'discount': item.discount
-        }
-        for item in request.items
-    ]
-    
-    doc_type = DocumentType(request.document_type)
-    issue_date = date.fromisoformat(request.issue_date) if request.issue_date else None
-    due_date = date.fromisoformat(request.due_date) if request.due_date else None
-    
-    if request.send_to_sumit:
-        invoice = await service.create_and_issue_invoice(
+    service = DocumentIssuanceService(db, organization_id=org_id)
+    try:
+        return {"status": "success", "data": await service.create_document(
+            document_type=request.document_type,
             customer_id=request.customer_id,
             customer_name=request.customer_name,
-            customer_email=request.customer_email,
-            items=items,
-            document_type=doc_type,
-            issue_date=issue_date,
-            due_date=due_date,
+            recipient_email=request.customer_email,
+            items=[item.model_dump() for item in request.items],
+            issue_date=date.fromisoformat(request.issue_date) if request.issue_date else None,
+            due_date=date.fromisoformat(request.due_date) if request.due_date else None,
             notes=request.notes,
-            send_email=True
-        )
-    else:
-        invoice = await service.create_invoice(
-            customer_id=request.customer_id,
-            customer_name=request.customer_name,
-            customer_email=request.customer_email,
-            customer_address=request.customer_address,
-            items=items,
-            document_type=doc_type,
-            issue_date=issue_date,
-            due_date=due_date,
-            notes=request.notes
-        )
-    
-    return invoice
+            send_to_sumit=request.send_to_sumit,
+            send_email=bool(request.customer_email and request.send_to_sumit),
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/invoices/{invoice_id}/issue")
@@ -242,66 +218,106 @@ class CreateDocumentRequest(BaseModel):
     send_email: bool = Field(default=False, description="שליחת המסמך במייל ללקoח")
 
 
+class SendExistingDocumentRequest(BaseModel):
+    recipient_email: Optional[str] = None
+    subject: Optional[str] = None
+    message: Optional[str] = None
+
+
+class CancelDocumentRequest(BaseModel):
+    reason: Optional[str] = None
+
+
 @router.get("/documents/types")
 async def list_document_types():
     """כל סוגי המסמכים שניתן להפיק מהמערכת (מול SUMIT)."""
     return {
         "status": "success",
-        "data": [{"value": v, "label": l} for v, l in DOCUMENT_TYPE_LABELS.items()],
+        "data": [{"value": v, "label": l} for v, l in ISSUABLE_DOCUMENT_TYPES.items()],
     }
+
+
+@router.get("/documents")
+async def list_documents(
+    status: Optional[str] = None,
+    document_type: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """רשימת מסמכים שהופקו/נוצרו מתוך רצף ונשמרו ב-DB."""
+    service = DocumentIssuanceService(db, organization_id=org_id)
+    try:
+        return {"status": "success", "data": service.list_documents(
+            status=status,
+            document_type=document_type,
+            limit=limit,
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/documents")
 async def create_document(
     request: CreateDocumentRequest,
     db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
 ):
     """הוצאת מסמך מכל סוג. אותו זרימה כמו חשבונית — נשמר מקומית ומופק ב-SUMIT."""
+    service = DocumentIssuanceService(db, organization_id=org_id)
     try:
-        doc_type = DocumentType(request.document_type)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"סוג מסמך לא נתמך: {request.document_type}. "
-                   f"ראה /financial/documents/types",
-        )
-    service = InvoiceService(db)
-    items = [
-        {
-            "description": it.description,
-            "quantity": it.quantity,
-            "unit_price": it.unit_price,
-            "vat_rate": it.vat_rate,
-            "discount": it.discount,
-        }
-        for it in request.items
-    ]
-    issue_date = date.fromisoformat(request.issue_date) if request.issue_date else None
-    due_date = date.fromisoformat(request.due_date) if request.due_date else None
-
-    if request.send_to_sumit:
-        return await service.create_and_issue_invoice(
+        return {"status": "success", "data": await service.create_document(
+            document_type=request.document_type,
             customer_id=request.customer_id,
             customer_name=request.customer_name,
-            customer_email=request.customer_email,
-            items=items,
-            document_type=doc_type,
-            issue_date=issue_date,
-            due_date=due_date,
+            recipient_email=request.customer_email,
+            items=[it.model_dump() for it in request.items],
+            issue_date=date.fromisoformat(request.issue_date) if request.issue_date else None,
+            due_date=date.fromisoformat(request.due_date) if request.due_date else None,
             notes=request.notes,
+            send_to_sumit=request.send_to_sumit,
             send_email=request.send_email,
-        )
-    return await service.create_invoice(
-        customer_id=request.customer_id,
-        customer_name=request.customer_name,
-        customer_email=request.customer_email,
-        customer_address=request.customer_address,
-        items=items,
-        document_type=doc_type,
-        issue_date=issue_date,
-        due_date=due_date,
-        notes=request.notes,
-    )
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/documents/{document_id}/send")
+async def send_existing_document(
+    document_id: int,
+    request: SendExistingDocumentRequest,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """שליחה חוזרת של מסמך שכבר הופק ב-SUMIT דרך רצף."""
+    service = DocumentIssuanceService(db, organization_id=org_id)
+    try:
+        return {"status": "success", "data": await service.send_document(
+            document_id,
+            recipient_email=request.recipient_email,
+            subject=request.subject,
+            message=request.message,
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/documents/{document_id}/cancel")
+async def cancel_existing_document(
+    document_id: int,
+    request: CancelDocumentRequest,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """ביטול מסמך ב-SUMIT ועדכון הסטטוס אצלנו."""
+    service = DocumentIssuanceService(db, organization_id=org_id)
+    try:
+        return {"status": "success", "data": await service.cancel_document(
+            document_id,
+            reason=request.reason,
+        )}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/invoices/receive")

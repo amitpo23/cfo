@@ -70,7 +70,7 @@ class DocumentItem(BaseModel):
 class DocumentRequest(BaseModel):
     """Create document request"""
     customer_id: str
-    document_type: Literal["invoice", "receipt", "quote", "credit_note", "proforma"]
+    document_type: str
     items: List[DocumentItem]
     issue_date: Optional[date] = None
     due_date: Optional[date] = None
