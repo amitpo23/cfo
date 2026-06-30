@@ -11,6 +11,7 @@ import { ACTIVE_ORG_KEY } from './OrgSwitcher';
 interface AdminClient {
   id: number;
   organization_id?: number;
+  sumit_company_id?: string;
   company_id: string;
   name: string;
   is_active?: boolean;
@@ -94,7 +95,8 @@ export default function AdminClientsDashboard() {
         clients: control.clients.map((c: any) => ({
           id: c.organization_id,
           organization_id: c.organization_id,
-          company_id: c.tax_id || String(c.organization_id),
+          sumit_company_id: c.sumit_company_id,
+          company_id: c.sumit_company_id || c.tax_id || String(c.organization_id),
           name: c.name,
           is_active: c.is_active,
           connections: c.connections || [],
