@@ -14,12 +14,12 @@ from ...models import (
     User, Organization, AuditLog, IntegrationConnection, SyncRun,
     UserCreate, UserUpdate, UserResponse, UserLogin, GoogleLogin, Token,
     OrganizationCreate, OrganizationUpdate, OrganizationResponse,
-    UserRole, IntegrationType
+    UserRole, IntegrationType, SumitCompany
 )
 from ...auth import verify_password, get_password_hash, create_access_token
 from ...config import settings
 from ...services.sync_engine import SyncEngine, get_connector_for_org
-from ...services.client_automation_service import run_post_sync_tasks
+from ...services.client_automation_service import mark_client_loop_result, run_post_sync_tasks
 from ..dependencies import (
     get_current_user, 
     get_super_admin, 
@@ -617,9 +617,16 @@ async def super_admin_clients_overview(
 ):
     """Global super-admin control plane over every tenant organization."""
     orgs = db.query(Organization).order_by(Organization.id.asc()).all()
+    roster_by_org: Dict[int, SumitCompany] = {
+        row.target_organization_id: row
+        for row in db.query(SumitCompany).filter(
+            SumitCompany.target_organization_id.isnot(None),
+        ).all()
+    }
     clients = []
 
     for org in orgs:
+        roster = roster_by_org.get(org.id)
         connections = db.query(IntegrationConnection).filter(
             IntegrationConnection.organization_id == org.id,
         ).all()
@@ -640,6 +647,9 @@ async def super_admin_clients_overview(
         clients.append({
             "organization_id": org.id,
             "name": org.name,
+            "roster_id": roster.id if roster else None,
+            "sumit_company_id": roster.company_id if roster else None,
+            "office_organization_id": roster.office_organization_id if roster else None,
             "business_type": org.business_type,
             "tax_id": org.tax_id,
             "email": org.email,
@@ -647,6 +657,8 @@ async def super_admin_clients_overview(
             "users_count": users_count,
             "connections": active_connections,
             "connection_statuses": connection_statuses,
+            "automation": (roster.raw_data or {}).get("automation", {}) if roster else {},
+            "roster_last_synced_at": roster.last_synced_at.isoformat() if roster and roster.last_synced_at else None,
             "last_sync": {
                 "id": last_sync.id,
                 "source": last_sync.source,
@@ -660,6 +672,7 @@ async def super_admin_clients_overview(
 
     totals = {
         "organizations": len(clients),
+        "roster_clients": sum(1 for c in clients if c["roster_id"] is not None),
         "connected_sumit": sum(1 for c in clients if "sumit" in c["connections"]),
         "connected_open_finance": sum(1 for c in clients if "open_finance" in c["connections"]),
         "with_sync_errors": sum(1 for c in clients if (c["last_sync"] or {}).get("error_summary")),
@@ -702,6 +715,20 @@ async def super_admin_sync_client(
             automation = await run_post_sync_tasks(
                 db, org_id, sources=[resolved], resume_onboarding=True
             )
+            mark_client_loop_result(
+                db,
+                organization_id=org_id,
+                source=resolved,
+                ok=run.status.value in {"completed", "partial"},
+                summary={
+                    "sync_run_id": run.id,
+                    "status": run.status.value if run.status else None,
+                    "counts": run.counts,
+                    "error_summary": run.error_summary,
+                },
+                error=run.error_summary,
+            )
+            db.commit()
             results.append({
                 "source": resolved,
                 "sync_run_id": run.id,

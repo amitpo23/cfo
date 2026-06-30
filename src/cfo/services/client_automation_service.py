@@ -29,6 +29,68 @@ def active_sources(db: Session, organization_id: int) -> list[str]:
     ]
 
 
+def roster_sync_targets(db: Session) -> list[tuple[int, str]]:
+    """Return org/source pairs that must participate in the Rezef loop.
+
+    The roster is the source of truth for office-managed client files. Cron also
+    scans IntegrationConnection directly, but this makes the invariant explicit:
+    every active client row with a target tenant is eligible for the automation
+    loop as soon as it has active credentials.
+    """
+    targets: set[tuple[int, str]] = set()
+    rows = db.query(SumitCompany).filter(
+        SumitCompany.status == "active",
+        SumitCompany.target_organization_id.isnot(None),
+    ).all()
+    for row in rows:
+        for source in active_sources(db, row.target_organization_id):
+            targets.add((row.target_organization_id, source))
+    return sorted(targets)
+
+
+def mark_client_loop_result(
+    db: Session,
+    *,
+    organization_id: int,
+    source: str,
+    ok: bool,
+    summary: Optional[dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> None:
+    """Persist the last automation-loop state on the office roster row."""
+    rows = db.query(SumitCompany).filter(
+        SumitCompany.target_organization_id == organization_id,
+    ).all()
+    if not rows:
+        return
+
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        raw = dict(row.raw_data or {})
+        automation = dict(raw.get("automation") or {})
+        source_state = dict((automation.get("sources_state") or {}).get(source) or {})
+        source_state.update({
+            "state": "completed" if ok else "error",
+            "last_run_at": now.isoformat(),
+            "summary": summary or {},
+            "error": error,
+        })
+        sources_state = dict(automation.get("sources_state") or {})
+        sources_state[source] = source_state
+        automation.update({
+            "enabled": True,
+            "state": "active" if ok else "error",
+            "last_run_at": now.isoformat(),
+            "loop": "hourly_cron",
+            "sources_state": sources_state,
+        })
+        raw["automation"] = automation
+        row.raw_data = raw
+        row.updated_at = now
+        if ok:
+            row.last_synced_at = now
+
+
 def enqueue_client_automation(
     db: Session,
     *,

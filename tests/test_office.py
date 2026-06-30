@@ -1,7 +1,8 @@
 """End-to-end tests for the accounting-office (multi-company) routes."""
 
 from cfo.database import SessionLocal
-from cfo.models import IntegrationConnection, OnboardingTask
+from cfo.models import IntegrationConnection, OnboardingTask, SumitCompany
+from cfo.services.client_automation_service import mark_client_loop_result, roster_sync_targets
 
 
 def test_office_routes_require_auth(client):
@@ -46,6 +47,24 @@ def test_register_client_provisions_isolated_tenant(client, owner):
             OnboardingTask.organization_id == org_id,
             OnboardingTask.source == "sumit",
         ).count() >= 1
+
+        assert (org_id, "sumit") in roster_sync_targets(db)
+
+        mark_client_loop_result(
+            db,
+            organization_id=org_id,
+            source="sumit",
+            ok=True,
+            summary={"sync_run_id": 123, "status": "completed"},
+        )
+        db.commit()
+        roster = db.query(SumitCompany).filter(
+            SumitCompany.target_organization_id == org_id,
+        ).first()
+        assert roster.last_synced_at is not None
+        automation = roster.raw_data["automation"]
+        assert automation["state"] == "active"
+        assert automation["sources_state"]["sumit"]["summary"]["sync_run_id"] == 123
     finally:
         db.close()
 
@@ -116,6 +135,9 @@ def test_admin_clients_view(client, owner):
     assert "totals" in body and "clients" in body
     rec = next(c for c in body["clients"] if c["company_id"] == "707070707")
     assert "required_actions" in rec and "net_vat" in rec and "connections" in rec
+    assert rec["organization_id"] == rec["target_organization_id"]
+    assert "connection_statuses" in rec
+    assert "automation" in rec
 
 
 def test_office_rollup_aggregates_clients(client, owner):

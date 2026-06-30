@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 from ..models import (
     Organization, IntegrationConnection, IntegrationType, SumitCompany,
+    SyncRun, User,
 )
 from .credentials_vault import encrypt_credentials, decrypt_credentials
 from .client_automation_service import enqueue_client_automation
@@ -176,23 +177,40 @@ def list_clients(db, office_organization_id: int) -> list[dict[str, Any]]:
     )
     out = []
     for r in rows:
-        sources = [
-            c.source for c in db.query(IntegrationConnection).filter(
+        connections = db.query(IntegrationConnection).filter(
                 IntegrationConnection.organization_id == r.target_organization_id,
-                IntegrationConnection.status == "active",
-            ).all()
-        ] if r.target_organization_id else []
+            ).all() if r.target_organization_id else []
+        sources = [c.source for c in connections if c.status == "active"]
+        connection_statuses = {c.source: c.status for c in connections}
         onboarding = _onboarding_summary(db, r.target_organization_id)
+        last_sync = db.query(SyncRun).filter(
+            SyncRun.organization_id == r.target_organization_id,
+        ).order_by(SyncRun.created_at.desc()).first() if r.target_organization_id else None
+        users_count = db.query(User).filter(
+            User.organization_id == r.target_organization_id,
+        ).count() if r.target_organization_id else 0
         out.append({
             "id": r.id,
             "company_id": r.company_id,
             "name": r.name,
             "status": r.status,
             "target_organization_id": r.target_organization_id,
+            "organization_id": r.target_organization_id,
             "connections": sources,
+            "connection_statuses": connection_statuses,
             "automation": (r.raw_data or {}).get("automation", {}),
             "onboarding": onboarding,
             "last_synced_at": r.last_synced_at.isoformat() if r.last_synced_at else None,
+            "users_count": users_count,
+            "last_sync": {
+                "id": last_sync.id,
+                "source": last_sync.source,
+                "status": last_sync.status.value if last_sync.status else None,
+                "started_at": last_sync.started_at.isoformat() if last_sync.started_at else None,
+                "finished_at": last_sync.finished_at.isoformat() if last_sync.finished_at else None,
+                "error_summary": last_sync.error_summary,
+                "counts": last_sync.counts,
+            } if last_sync else None,
         })
     return out
 

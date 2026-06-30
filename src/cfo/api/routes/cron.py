@@ -15,7 +15,11 @@ from ...config import settings
 from ...database import get_db_session
 from ...models import IntegrationConnection, Organization
 from ...services.sync_engine import SyncEngine, get_connector_for_org
-from ...services.client_automation_service import run_post_sync_tasks
+from ...services.client_automation_service import (
+    mark_client_loop_result,
+    roster_sync_targets,
+    run_post_sync_tasks,
+)
 from ...services.collection_service import CollectionService, dispatch_reminders
 from ...services.email_sender import send_email_smtp
 from ..dependencies import sumit_for_org
@@ -44,6 +48,7 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
             IntegrationConnection.status == "active",
         ).all()
     }
+    targets.update(roster_sync_targets(db))
     if settings.sumit_api_key:
         targets.add((1, "sumit"))
 
@@ -67,9 +72,29 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
             result["automation"] = await run_post_sync_tasks(
                 db, org_id, sources=[resolved], resume_onboarding=True
             )
+            mark_client_loop_result(
+                db,
+                organization_id=org_id,
+                source=resolved,
+                ok=True,
+                summary={
+                    "sync_run_id": run.id,
+                    "status": run.status.value if run.status else None,
+                    "counts": run.counts,
+                },
+            )
+            db.commit()
             results.append(result)
         except Exception as exc:
             logger.error("Scheduled sync failed for org %s source %s: %s", org_id, source, exc)
+            mark_client_loop_result(
+                db,
+                organization_id=org_id,
+                source=source,
+                ok=False,
+                error=str(exc),
+            )
+            db.commit()
             results.append({"organization_id": org_id, "source": source, "error": str(exc)})
         finally:
             try:

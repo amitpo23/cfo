@@ -18,6 +18,7 @@ services:
       retries: 10
 
   api:
+    image: rezef-local-api:latest
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -40,6 +41,7 @@ services:
       retries: 5
 
   frontend:
+    image: rezef-local-frontend:latest
     build:
       context: .
       dockerfile: Dockerfile.frontend
