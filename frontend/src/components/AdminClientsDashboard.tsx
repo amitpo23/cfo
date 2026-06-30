@@ -16,6 +16,20 @@ interface AdminClient {
   is_active?: boolean;
   connections: string[];
   connection_statuses?: Record<string, string>;
+  automation?: {
+    state?: string;
+    account_scope?: string;
+    loop?: string;
+  };
+  finance?: {
+    invoice_count: number;
+    bill_count: number;
+    bank_transaction_count: number;
+    revenue: number;
+    expenses: number;
+    net_profit: number;
+    has_activity: boolean;
+  };
   last_synced_at: string | null;
   last_sync?: {
     id: number;
@@ -38,6 +52,10 @@ interface AdminResponse {
     connected_sumit?: number;
     connected_open_finance?: number;
     with_sync_errors?: number;
+    total_revenue?: number;
+    total_expenses?: number;
+    net_profit?: number;
+    with_financial_activity?: number;
     output_vat: number;
     input_vat: number;
     net_vat: number;
@@ -64,6 +82,10 @@ export default function AdminClientsDashboard() {
           connected_sumit: control.totals.connected_sumit,
           connected_open_finance: control.totals.connected_open_finance,
           with_sync_errors: control.totals.with_sync_errors,
+          total_revenue: control.totals.total_revenue,
+          total_expenses: control.totals.total_expenses,
+          net_profit: control.totals.net_profit,
+          with_financial_activity: control.totals.with_financial_activity,
           required_actions: control.totals.with_sync_errors,
           output_vat: 0,
           input_vat: 0,
@@ -77,6 +99,8 @@ export default function AdminClientsDashboard() {
           is_active: c.is_active,
           connections: c.connections || [],
           connection_statuses: c.connection_statuses || {},
+          automation: c.automation || {},
+          finance: c.finance,
           last_synced_at: c.last_sync?.finished_at || null,
           last_sync: c.last_sync,
           users_count: c.users_count,
@@ -115,6 +139,22 @@ export default function AdminClientsDashboard() {
     window.location.href = '/';
   };
 
+  const fmtMoney = (n?: number) => `₪${Math.round(n || 0).toLocaleString('he-IL')}`;
+  const statusLabel = (c: AdminClient) => {
+    const state = c.automation?.state;
+    if (state === 'pending_credentials') return 'ממתין לחיבור';
+    if (c.last_sync?.error_summary) return 'שגיאת sync';
+    if (state === 'active' || c.last_sync?.status === 'completed') return 'פעיל';
+    return c.is_active === false ? 'לא פעיל' : 'טרם סונכרן';
+  };
+  const statusClass = (c: AdminClient) => {
+    const label = statusLabel(c);
+    if (label === 'פעיל') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+    if (label === 'ממתין לחיבור') return 'bg-amber-50 text-amber-700 border-amber-200';
+    if (label === 'שגיאת sync') return 'bg-red-50 text-red-700 border-red-200';
+    return 'bg-slate-50 text-slate-600 border-slate-200';
+  };
+
   const syncClient = async (orgId?: number) => {
     if (!orgId) return;
     setSyncingOrg(orgId);
@@ -151,11 +191,24 @@ export default function AdminClientsDashboard() {
       {data && (
         <div className="grid sm:grid-cols-4 gap-3 mb-6">
           <Stat label="סה״כ לקוחות" value={data.totals.clients} />
+          {data.totals.with_financial_activity !== undefined && (
+            <Stat label="לקוחות עם פעילות" value={data.totals.with_financial_activity} />
+          )}
           {data.totals.connected_sumit !== undefined && (
             <Stat label="חיבורי הנה״ח" value={data.totals.connected_sumit} />
           )}
           {data.totals.connected_open_finance !== undefined && (
             <Stat label="חיבורי בנק" value={data.totals.connected_open_finance} />
+          )}
+          {data.totals.total_revenue !== undefined && (
+            <Stat label="הכנסות מצטברות" value={fmtMoney(data.totals.total_revenue)} accent="text-emerald-700" />
+          )}
+          {data.totals.total_expenses !== undefined && (
+            <Stat label="הוצאות מצטברות" value={fmtMoney(data.totals.total_expenses)} accent="text-rose-600" />
+          )}
+          {data.totals.net_profit !== undefined && (
+            <Stat label="רווח / הפסד נטו" value={fmtMoney(data.totals.net_profit)}
+              accent={data.totals.net_profit >= 0 ? 'text-emerald-700' : 'text-rose-600'} />
           )}
           <Stat label="התאמות נדרשות (סה״כ)" value={data.totals.required_actions}
             accent={data.totals.required_actions ? 'text-orange-600' : ''} />
@@ -177,6 +230,8 @@ export default function AdminClientsDashboard() {
               <th className="text-right px-4 py-2">תיק</th>
               <th className="text-right px-4 py-2">משתמשים</th>
               <th className="text-right px-4 py-2">חיבורים</th>
+              <th className="text-right px-4 py-2">פעילות כספית</th>
+              <th className="text-right px-4 py-2">רווח/הפסד</th>
               <th className="text-right px-4 py-2">התאמות בנק</th>
               <th className="text-right px-4 py-2">סטטוס sync</th>
               <th className="text-right px-4 py-2">סנכרון אחרון</th>
@@ -185,7 +240,7 @@ export default function AdminClientsDashboard() {
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={8} className="text-center py-10 text-slate-400">אין לקוחות.</td></tr>
+              <tr><td colSpan={10} className="text-center py-10 text-slate-400">אין לקוחות.</td></tr>
             ) : filtered.map((c) => (
               <tr key={c.id} className="border-t hover:bg-slate-50">
                 <td className="px-4 py-2 font-medium">{c.name}</td>
@@ -197,6 +252,18 @@ export default function AdminClientsDashboard() {
                         <span key={s} className="inline-block text-xs bg-slate-100 rounded px-2 py-0.5 ml-1">{s}</span>))
                     : <span className="text-slate-400">—</span>}
                 </td>
+                <td className="px-4 py-2 text-xs text-slate-600">
+                  {c.finance ? (
+                    <div className="space-y-0.5">
+                      <div>הכנסות: {fmtMoney(c.finance.revenue)} · {c.finance.invoice_count} מסמכים</div>
+                      <div>הוצאות: {fmtMoney(c.finance.expenses)} · {c.finance.bill_count} מסמכים</div>
+                      <div>בנק: {c.finance.bank_transaction_count} תנועות</div>
+                    </div>
+                  ) : '—'}
+                </td>
+                <td className={`px-4 py-2 font-semibold ${(c.finance?.net_profit || 0) >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                  {c.finance ? fmtMoney(c.finance.net_profit) : '—'}
+                </td>
                 <td className="px-4 py-2 text-slate-600">
                   {c.reconciliation ? `${c.reconciliation.matched}/${c.reconciliation.txn_count}` : '—'}
                 </td>
@@ -206,9 +273,9 @@ export default function AdminClientsDashboard() {
                       <AlertCircle className="w-4 h-4" /> שגיאה
                     </span>
                   ) : c.last_sync?.status ? (
-                    <span className="text-slate-700">{c.last_sync.status}</span>
+                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${statusClass(c)}`}>{statusLabel(c)}</span>
                   ) : (
-                    <span className="text-slate-400">טרם</span>
+                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${statusClass(c)}`}>{statusLabel(c)}</span>
                   )}
                 </td>
                 <td className="px-4 py-2 text-slate-500 text-xs">

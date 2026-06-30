@@ -4,6 +4,7 @@ Admin API routes
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 import secrets
@@ -14,7 +15,7 @@ from ...models import (
     User, Organization, AuditLog, IntegrationConnection, SyncRun,
     UserCreate, UserUpdate, UserResponse, UserLogin, GoogleLogin, Token,
     OrganizationCreate, OrganizationUpdate, OrganizationResponse,
-    UserRole, IntegrationType, SumitCompany
+    UserRole, IntegrationType, SumitCompany, Invoice, Bill, BankTransaction
 )
 from ...auth import verify_password, get_password_hash, create_access_token
 from ...config import settings
@@ -624,6 +625,29 @@ async def super_admin_clients_overview(
         ).all()
     }
     clients = []
+    invoice_stats = {
+        row.organization_id: row
+        for row in db.query(
+            Invoice.organization_id,
+            func.count(Invoice.id).label("count"),
+            func.coalesce(func.sum(Invoice.total), 0).label("total"),
+        ).group_by(Invoice.organization_id).all()
+    }
+    bill_stats = {
+        row.organization_id: row
+        for row in db.query(
+            Bill.organization_id,
+            func.count(Bill.id).label("count"),
+            func.coalesce(func.sum(Bill.total), 0).label("total"),
+        ).group_by(Bill.organization_id).all()
+    }
+    bank_stats = {
+        row.organization_id: row
+        for row in db.query(
+            BankTransaction.organization_id,
+            func.count(BankTransaction.id).label("count"),
+        ).group_by(BankTransaction.organization_id).all()
+    }
 
     for org in orgs:
         roster = roster_by_org.get(org.id)
@@ -643,6 +667,12 @@ async def super_admin_clients_overview(
             source for source, status_value in connection_statuses.items()
             if status_value in {"active", "env", "ACTIVE"}
         ]
+        inv = invoice_stats.get(org.id)
+        bills = bill_stats.get(org.id)
+        bank = bank_stats.get(org.id)
+        revenue = float(inv.total or 0) if inv else 0.0
+        expenses = abs(float(bills.total or 0)) if bills else 0.0
+        net_profit = revenue - expenses
 
         clients.append({
             "organization_id": org.id,
@@ -659,6 +689,15 @@ async def super_admin_clients_overview(
             "connection_statuses": connection_statuses,
             "automation": (roster.raw_data or {}).get("automation", {}) if roster else {},
             "roster_last_synced_at": roster.last_synced_at.isoformat() if roster and roster.last_synced_at else None,
+            "finance": {
+                "invoice_count": int(inv.count) if inv else 0,
+                "bill_count": int(bills.count) if bills else 0,
+                "bank_transaction_count": int(bank.count) if bank else 0,
+                "revenue": revenue,
+                "expenses": expenses,
+                "net_profit": net_profit,
+                "has_activity": bool((inv and inv.count) or (bills and bills.count) or (bank and bank.count)),
+            },
             "last_sync": {
                 "id": last_sync.id,
                 "source": last_sync.source,
@@ -676,6 +715,10 @@ async def super_admin_clients_overview(
         "connected_sumit": sum(1 for c in clients if "sumit" in c["connections"]),
         "connected_open_finance": sum(1 for c in clients if "open_finance" in c["connections"]),
         "with_sync_errors": sum(1 for c in clients if (c["last_sync"] or {}).get("error_summary")),
+        "total_revenue": sum(c["finance"]["revenue"] for c in clients),
+        "total_expenses": sum(c["finance"]["expenses"] for c in clients),
+        "net_profit": sum(c["finance"]["net_profit"] for c in clients),
+        "with_financial_activity": sum(1 for c in clients if c["finance"]["has_activity"]),
     }
     return {"operator_org_id": current_user.organization_id, "totals": totals, "clients": clients}
 
