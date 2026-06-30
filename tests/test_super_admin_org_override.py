@@ -8,9 +8,25 @@ org, must reach writes/sync (not just reads), and must NEVER apply to a
 non-super user — that would be a cross-tenant financial-data leak.
 """
 import pytest
+from datetime import date, datetime, timedelta
 
 from cfo.database import SessionLocal
-from cfo.models import User, UserRole, AuditLog
+from cfo.models import (
+    Alert,
+    AlertSeverity,
+    AlertStatus,
+    AuditLog,
+    BankTransaction,
+    Bill,
+    Invoice,
+    OnboardingTask,
+    SyncRun,
+    SyncStatus,
+    Task,
+    TaskStatus,
+    User,
+    UserRole,
+)
 
 
 def _promote_to_super(email: str) -> None:
@@ -119,6 +135,80 @@ def test_super_admin_control_lists_all_orgs(client, owner, tenant, superadmin):
     assert owner["user"]["organization_id"] in org_ids
     assert tenant["user"]["organization_id"] in org_ids
     assert body["totals"]["organizations"] >= 2
+
+
+def test_super_admin_control_includes_command_center_queues(client, fresh_org, superadmin):
+    target = fresh_org()
+    org_id = target["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Invoice(
+            organization_id=org_id,
+            source="test",
+            invoice_number="INV-QA",
+            due_date=date.today() - timedelta(days=3),
+            total=1000,
+            balance=1000,
+        ))
+        db.add(Bill(
+            organization_id=org_id,
+            source="test",
+            bill_number="BILL-QA",
+            due_date=date.today() + timedelta(days=7),
+            total=300,
+            balance=300,
+        ))
+        db.add(BankTransaction(
+            organization_id=org_id,
+            source="test",
+            external_id="BT-QA",
+            transaction_date=date.today(),
+            description="unmatched",
+            amount=1000,
+            is_reconciled=False,
+        ))
+        db.add(Alert(
+            organization_id=org_id,
+            alert_type="qa",
+            severity=AlertSeverity.WARNING,
+            status=AlertStatus.ACTIVE,
+            title="QA alert",
+        ))
+        db.add(Task(
+            organization_id=org_id,
+            title="QA task",
+            status=TaskStatus.OPEN,
+        ))
+        db.add(OnboardingTask(
+            organization_id=org_id,
+            source="sumit",
+            step="qa_step",
+            status="pending",
+        ))
+        db.add(SyncRun(
+            organization_id=org_id,
+            source="sumit",
+            status=SyncStatus.COMPLETED,
+            finished_at=datetime.utcnow() - timedelta(hours=30),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.get("/api/admin/control/clients", headers=superadmin["headers"])
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    row = next(c for c in body["clients"] if c["organization_id"] == org_id)
+
+    assert row["freshness"]["is_stale"] is True
+    assert row["work_queues"]["unreconciled_bank_transactions"] >= 1
+    assert row["work_queues"]["overdue_receivables"] >= 1
+    assert row["work_queues"]["payables_due_14d"] >= 1
+    assert row["work_queues"]["open_alerts"] >= 1
+    assert row["work_queues"]["open_tasks"] >= 1
+    assert row["work_queues"]["onboarding_pending"] >= 1
+    assert row["reconciliation"]["unmatched_txns"] >= 1
+    assert body["totals"]["action_score"] >= row["work_queues"]["action_score"]
 
 
 def test_non_super_cannot_read_control_plane(client, owner):

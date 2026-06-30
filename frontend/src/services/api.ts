@@ -5,6 +5,7 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+const AUTH_BYPASS = import.meta.env.VITE_AUTH_BYPASS === 'true';
 
 class ApiService {
   private client: AxiosInstance;
@@ -29,7 +30,7 @@ class ApiService {
         // ONLY for SUPER_ADMIN (silently ignored for everyone else), so it is
         // always safe to send. This drives the whole app — dashboards, AR/AP,
         // sync — to the chosen client org.
-        const activeOrg = localStorage.getItem('active_org_id');
+        const activeOrg = localStorage.getItem('active_org_id') || (AUTH_BYPASS ? '1' : null);
         if (activeOrg) {
           config.headers['X-Active-Org-Id'] = activeOrg;
         }

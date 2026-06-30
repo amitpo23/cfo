@@ -4,18 +4,20 @@ Admin API routes
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 import secrets
 from urllib.parse import urlencode
+from datetime import date, datetime, timedelta, timezone
 
 from ...database import get_db_session
 from ...models import (
     User, Organization, AuditLog, IntegrationConnection, SyncRun,
     UserCreate, UserUpdate, UserResponse, UserLogin, GoogleLogin, Token,
     OrganizationCreate, OrganizationUpdate, OrganizationResponse,
-    UserRole, IntegrationType, SumitCompany, Invoice, Bill, BankTransaction
+    UserRole, IntegrationType, SumitCompany, Invoice, Bill, BankTransaction,
+    Alert, Task, OnboardingTask, AlertStatus, TaskStatus,
 )
 from ...auth import verify_password, get_password_hash, create_access_token
 from ...config import settings
@@ -61,6 +63,40 @@ class CheckoutCreate(BaseModel):
     email: Optional[str] = None
     success_path: str = "/"
     cancel_path: str = "/"
+
+
+def _to_float(value) -> float:
+    return float(value or 0)
+
+
+def _freshness_status(last_finished_at: Optional[datetime]) -> dict:
+    if not last_finished_at:
+        return {
+            "state": "never_synced",
+            "age_hours": None,
+            "label": "טרם סונכרן",
+            "is_stale": True,
+        }
+    now = datetime.now(timezone.utc)
+    finished = last_finished_at
+    if finished.tzinfo is None:
+        finished = finished.replace(tzinfo=timezone.utc)
+    age_hours = max((now - finished).total_seconds() / 3600, 0)
+    if age_hours <= 2:
+        state = "fresh"
+        label = "מעודכן"
+    elif age_hours <= 24:
+        state = "aging"
+        label = "דורש רענון"
+    else:
+        state = "stale"
+        label = "לא מעודכן"
+    return {
+        "state": state,
+        "age_hours": round(age_hours, 1),
+        "label": label,
+        "is_stale": age_hours > 24,
+    }
 
 
 async def _assert_registration_allowed(
@@ -646,10 +682,40 @@ async def super_admin_clients_overview(
         for row in db.query(
             BankTransaction.organization_id,
             func.count(BankTransaction.id).label("count"),
+            func.sum(case((BankTransaction.is_reconciled.is_(False), 1), else_=0)).label("unreconciled_count"),
         ).group_by(BankTransaction.organization_id).all()
+    }
+    alert_stats = {
+        row.organization_id: row
+        for row in db.query(
+            Alert.organization_id,
+            func.count(Alert.id).label("open_count"),
+        ).filter(
+            Alert.status.in_([AlertStatus.ACTIVE, AlertStatus.ACKNOWLEDGED])
+        ).group_by(Alert.organization_id).all()
+    }
+    task_stats = {
+        row.organization_id: row
+        for row in db.query(
+            Task.organization_id,
+            func.count(Task.id).label("open_count"),
+        ).filter(
+            Task.status.in_([TaskStatus.OPEN, TaskStatus.IN_PROGRESS])
+        ).group_by(Task.organization_id).all()
+    }
+    onboarding_stats = {
+        row.organization_id: row
+        for row in db.query(
+            OnboardingTask.organization_id,
+            func.count(OnboardingTask.id).label("total"),
+            func.sum(case((OnboardingTask.status == "completed", 1), else_=0)).label("completed"),
+            func.sum(case((OnboardingTask.status == "failed", 1), else_=0)).label("failed"),
+        ).group_by(OnboardingTask.organization_id).all()
     }
 
     for org in orgs:
+        today = date.today()
+        soon = today + timedelta(days=14)
         roster = roster_by_org.get(org.id)
         connections = db.query(IntegrationConnection).filter(
             IntegrationConnection.organization_id == org.id,
@@ -670,9 +736,52 @@ async def super_admin_clients_overview(
         inv = invoice_stats.get(org.id)
         bills = bill_stats.get(org.id)
         bank = bank_stats.get(org.id)
+        alerts = alert_stats.get(org.id)
+        tasks = task_stats.get(org.id)
+        onboarding = onboarding_stats.get(org.id)
         revenue = float(inv.total or 0) if inv else 0.0
         expenses = abs(float(bills.total or 0)) if bills else 0.0
         net_profit = revenue - expenses
+        ar_open = _to_float(db.query(func.coalesce(func.sum(Invoice.balance), 0)).filter(
+            Invoice.organization_id == org.id,
+            Invoice.balance > 0,
+        ).scalar())
+        ap_open = _to_float(db.query(func.coalesce(func.sum(Bill.balance), 0)).filter(
+            Bill.organization_id == org.id,
+            Bill.balance > 0,
+        ).scalar())
+        overdue_ar = int(db.query(func.count(Invoice.id)).filter(
+            Invoice.organization_id == org.id,
+            Invoice.balance > 0,
+            Invoice.due_date.isnot(None),
+            Invoice.due_date < today,
+        ).scalar() or 0)
+        due_ap_14d = int(db.query(func.count(Bill.id)).filter(
+            Bill.organization_id == org.id,
+            Bill.balance > 0,
+            Bill.due_date.isnot(None),
+            Bill.due_date >= today,
+            Bill.due_date <= soon,
+        ).scalar() or 0)
+        unreconciled_count = int(bank.unreconciled_count or 0) if bank else 0
+        open_alerts = int(alerts.open_count or 0) if alerts else 0
+        open_tasks = int(tasks.open_count or 0) if tasks else 0
+        onboarding_total = int(onboarding.total or 0) if onboarding else 0
+        onboarding_completed = int(onboarding.completed or 0) if onboarding else 0
+        onboarding_failed = int(onboarding.failed or 0) if onboarding else 0
+        onboarding_pending = max(onboarding_total - onboarding_completed - onboarding_failed, 0)
+        freshness = _freshness_status(last_sync.finished_at if last_sync else None)
+        action_score = (
+            (1 if (last_sync and last_sync.error_summary) else 0)
+            + (1 if freshness["is_stale"] else 0)
+            + min(unreconciled_count, 10)
+            + min(overdue_ar, 10)
+            + min(due_ap_14d, 10)
+            + min(open_alerts, 10)
+            + min(open_tasks, 10)
+            + onboarding_failed
+            + onboarding_pending
+        )
 
         clients.append({
             "organization_id": org.id,
@@ -696,7 +805,28 @@ async def super_admin_clients_overview(
                 "revenue": revenue,
                 "expenses": expenses,
                 "net_profit": net_profit,
+                "ar_open": ar_open,
+                "ap_open": ap_open,
+                "overdue_ar_count": overdue_ar,
+                "ap_due_14d_count": due_ap_14d,
                 "has_activity": bool((inv and inv.count) or (bills and bills.count) or (bank and bank.count)),
+            },
+            "freshness": freshness,
+            "work_queues": {
+                "unreconciled_bank_transactions": unreconciled_count,
+                "overdue_receivables": overdue_ar,
+                "payables_due_14d": due_ap_14d,
+                "open_alerts": open_alerts,
+                "open_tasks": open_tasks,
+                "onboarding_pending": onboarding_pending,
+                "onboarding_failed": onboarding_failed,
+                "action_score": action_score,
+            },
+            "reconciliation": {
+                "matched": int((bank.count or 0) - unreconciled_count) if bank else 0,
+                "txn_count": int(bank.count or 0) if bank else 0,
+                "unmatched_txns": unreconciled_count,
+                "coverage_pct": round((((bank.count or 0) - unreconciled_count) / bank.count) * 100, 1) if bank and bank.count else None,
             },
             "last_sync": {
                 "id": last_sync.id,
@@ -719,6 +849,14 @@ async def super_admin_clients_overview(
         "total_expenses": sum(c["finance"]["expenses"] for c in clients),
         "net_profit": sum(c["finance"]["net_profit"] for c in clients),
         "with_financial_activity": sum(1 for c in clients if c["finance"]["has_activity"]),
+        "stale_clients": sum(1 for c in clients if c["freshness"]["is_stale"]),
+        "unreconciled_bank_transactions": sum(c["work_queues"]["unreconciled_bank_transactions"] for c in clients),
+        "overdue_receivables": sum(c["work_queues"]["overdue_receivables"] for c in clients),
+        "payables_due_14d": sum(c["work_queues"]["payables_due_14d"] for c in clients),
+        "open_alerts": sum(c["work_queues"]["open_alerts"] for c in clients),
+        "open_tasks": sum(c["work_queues"]["open_tasks"] for c in clients),
+        "onboarding_pending": sum(c["work_queues"]["onboarding_pending"] for c in clients),
+        "action_score": sum(c["work_queues"]["action_score"] for c in clients),
     }
     return {"operator_org_id": current_user.organization_id, "totals": totals, "clients": clients}
 

@@ -1,5 +1,7 @@
 # Rezef / רצף
 
+Current release: `0.2.0`
+
 Rezef is a multi-tenant finance operating system for Israeli companies and
 accounting offices. It combines a CFO dashboard, double-entry accounting
 workflows, document issuance, daily P&L, cash-flow control, collections,
@@ -51,6 +53,12 @@ Known gated items:
 ## Main Capabilities
 
 - Super-admin client roster and cross-company overview.
+- Super-admin Command Center with per-client freshness, sync health, work
+  queues, unreconciled bank transaction counts, overdue receivables, payables
+  due soon, onboarding state, and action score.
+- Read-only Accounting Event Plane at `/api/accounting-events`, normalizing
+  invoices, bills, payments, expenses, and bank transactions into an
+  explainable org-scoped event stream.
 - Per-organization SUMIT sync into Rezef's local database.
 - Daily P&L, revenue, expenses, cash-flow, AR/AP, VAT position, dashboards, and
   CFO insights.
@@ -201,6 +209,9 @@ Verify:
 curl -fsS https://cfo-2.vercel.app/api/health
 vercel inspect https://cfo-2.vercel.app
 ```
+
+Release notes and QA evidence are tracked in
+[`docs/RELEASE_0.2.0.md`](docs/RELEASE_0.2.0.md).
 
 ## Important Boundaries
 

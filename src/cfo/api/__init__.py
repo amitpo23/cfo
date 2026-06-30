@@ -9,7 +9,7 @@ from .routes import (
     cashflow, sync, reports, financial_management, financial_operations
 )
 from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, manual_reconciliation, advanced_features, phase10_12, analytics
-from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding
+from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding, accounting_events
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
@@ -142,6 +142,12 @@ app.include_router(
 # Derived double-entry shadow ledger — organization-scoped, not the official books
 app.include_router(
     ledger.router, prefix="/api", tags=["Ledger (Derived)"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Read-only accounting event plane — normalized operational events, not a source of truth
+app.include_router(
+    accounting_events.router, prefix="/api", tags=["Accounting Events (Derived)"],
     dependencies=[Depends(get_current_user)],
 )
 
