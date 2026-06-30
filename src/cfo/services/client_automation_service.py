@@ -114,6 +114,7 @@ def repair_missing_client_roster(
                 office_organization_id=office_organization_id,
                 client_company_id=item["company_id"],
                 target_organization_id=item["organization_id"],
+                sources=[item["source"]],
             )
     return repaired
 
@@ -166,11 +167,13 @@ def mark_client_loop_result(
         })
         sources_state = dict(automation.get("sources_state") or {})
         sources_state[source] = source_state
+        sources = sorted(set([*(automation.get("sources") or []), source]))
         automation.update({
             "enabled": True,
             "state": "active" if ok else "error",
             "last_run_at": now.isoformat(),
             "loop": "hourly_cron",
+            "sources": sources,
             "sources_state": sources_state,
         })
         raw["automation"] = automation

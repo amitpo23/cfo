@@ -69,6 +69,7 @@ def test_register_client_provisions_isolated_tenant(client, owner):
         assert roster.last_synced_at is not None
         automation = roster.raw_data["automation"]
         assert automation["state"] == "active"
+        assert "sumit" in automation["sources"]
         assert automation["sources_state"]["sumit"]["summary"]["sync_run_id"] == 123
     finally:
         db.close()
@@ -176,6 +177,7 @@ def test_cron_repair_backfills_legacy_sumit_roster(client, owner):
         ).first()
         assert roster is not None
         assert roster.raw_data["automation"]["state"] == "queued"
+        assert "sumit" in roster.raw_data["automation"]["sources"]
         assert (legacy.id, "sumit") in roster_sync_targets(db)
     finally:
         db.close()
