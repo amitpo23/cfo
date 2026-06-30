@@ -76,40 +76,48 @@ async def integration_status(
         ).all()
     }
 
-    required = {
-        "production_database": ["DATABASE_URL"],
-        "security": ["JWT_SECRET_KEY"],
-        "sumit": ["SUMIT_API_KEY"],
-        "open_finance": [
-            "OPEN_FINANCE_CLIENT_ID",
-            "OPEN_FINANCE_CLIENT_SECRET",
-            "OPEN_FINANCE_USER_ID",
-        ],
-        "ai": ["OPENAI_API_KEY"],
-    }
-
     # Env credentials only apply to the default organization; every other
     # tenant must configure its own credentials.
     env_allowed = org_id == 1
+    sumit_configured = connections.get("sumit") == "active" or (env_allowed and bool(settings.sumit_api_key))
+    open_finance_configured = connections.get("open_finance") == "active" or (env_allowed and all([
+        settings.open_finance_client_id,
+        settings.open_finance_client_secret,
+        settings.open_finance_user_id,
+    ]))
     configured = {
         "production_database": not settings.database_url.startswith("sqlite:"),
         "security": settings.jwt_secret_key != "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING",
-        "sumit": connections.get("sumit") == "active" or (env_allowed and bool(settings.sumit_api_key)),
-        "open_finance": connections.get("open_finance") == "active" or (env_allowed and all([
-            settings.open_finance_client_id,
-            settings.open_finance_client_secret,
-            settings.open_finance_user_id,
-        ])),
+        "sumit": sumit_configured,
+        "open_finance": open_finance_configured,
         "ai": bool(settings.openai_api_key),
     }
+    missing = {
+        "production_database": [] if configured["production_database"] else ["DATABASE_URL"],
+        "security": [] if configured["security"] else ["JWT_SECRET_KEY"],
+        "sumit": [] if sumit_configured else ["SUMIT_API_KEY"],
+        "open_finance": [],
+        "ai": [] if configured["ai"] else ["OPENAI_API_KEY"],
+    }
+    if not open_finance_configured:
+        if connections.get("open_finance") == "active":
+            missing["open_finance"] = []
+        elif env_allowed:
+            missing["open_finance"] = [
+                name for name, value in {
+                    "OPEN_FINANCE_CLIENT_ID": settings.open_finance_client_id,
+                    "OPEN_FINANCE_CLIENT_SECRET": settings.open_finance_client_secret,
+                    "OPEN_FINANCE_USER_ID": settings.open_finance_user_id,
+                }.items()
+                if not value
+            ]
+        else:
+            missing["open_finance"] = ["organization_open_finance_credentials"]
 
     return {
         "organization_id": org_id,
         "configured": configured,
-        "missing": {
-            key: [] if value else required[key]
-            for key, value in configured.items()
-        },
+        "missing": missing,
         "connections": connections,
         "notes": {
             "production_database": (

@@ -2,22 +2,21 @@
 
 ## Goal
 
-Run the CFO system in production on Vercel with a persistent Supabase Postgres
-database, live SUMIT integration, live Open Finance integration, and working
+Run the CFO system in production on Vercel with a persistent Postgres
+database, live SUMIT integration, gated Open Finance integration, and working
 financial workflows for cash flow, profit and loss, balance sheet, bank
 reconciliation, categories, and office/client management.
 
 ## Current Readiness Snapshot
 
 - Vercel project: `cfo-2`
-- Supabase project: `cfo` (`gslybxwjpjkligtvuepw`)
 - Live site responds at `https://cfo-2.vercel.app`
 - Local backend/frontend tests pass
-- SUMIT local credentials are valid and read calls work
+- Production `DATABASE_URL` is configured, persistent, and reachable
+- SUMIT production credentials are configured and ping successfully
 - Open Finance is not testable until `OPEN_FINANCE_USER_ID` is configured
-- Production Vercel env has been populated for SUMIT, security, CORS, and
-  Open Finance client credentials where local values existed
-- `DATABASE_URL` is still missing a usable Supabase Postgres URL with password
+- Production Vercel env has been populated for SUMIT, security, CORS,
+  persistent DB, and Open Finance client credentials where values existed
 - `OPEN_FINANCE_USER_ID` and Google OAuth client IDs must be supplied before
   those login/integration paths can be live-tested
 
@@ -45,12 +44,12 @@ VITE_GOOGLE_CLIENT_ID=...
 
 ## Deployment Checklist
 
-1. Put the real Supabase Postgres connection string in `DATABASE_URL`.
-2. Add all missing Open Finance variables, especially `OPEN_FINANCE_USER_ID`.
+1. Keep `DATABASE_URL` pointed at the persistent managed Postgres database.
+2. Add the remaining Open Finance variable: `OPEN_FINANCE_USER_ID`.
 3. Add Google OAuth client IDs if Google Sign-In should appear in the UI.
 4. Add separate strong secrets for JWT, credential encryption, cron, registration,
    and Open Finance webhook verification.
-5. Run Alembic migrations against the Supabase database.
+5. Run Alembic migrations against the production database.
 6. Deploy the current branch to Vercel.
 7. Verify:
    - `/api/health`

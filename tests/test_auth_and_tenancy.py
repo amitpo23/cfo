@@ -161,6 +161,19 @@ def test_env_credentials_only_for_default_org(client, owner, tenant):
     assert tenant_status["configured"]["sumit"] is False
 
 
+def test_integration_status_reports_precise_open_finance_missing(client, owner, monkeypatch):
+    from cfo.api.routes import cfo_sync
+
+    monkeypatch.setattr(cfo_sync.settings, "open_finance_client_id", "of-client")
+    monkeypatch.setattr(cfo_sync.settings, "open_finance_client_secret", "of-secret")
+    monkeypatch.setattr(cfo_sync.settings, "open_finance_user_id", "")
+
+    status = client.get("/api/integration/status", headers=owner["headers"]).json()
+
+    assert status["configured"]["open_finance"] is False
+    assert status["missing"]["open_finance"] == ["OPEN_FINANCE_USER_ID"]
+
+
 def test_tenant_configures_own_sumit_credentials(client, tenant):
     resp = client.post("/api/integration/sumit/configure", json={
         "api_key": "tenant-own-key", "company_id": "123",
