@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
     auto_create_db: bool = False if os.getenv("VERCEL") else True
+    # Development/QA only. When enabled, API requests without a Bearer token are
+    # treated as a super-admin session. Do not enable on public production.
+    auth_bypass_enabled: bool = False
     cors_allowed_origins: str = (
         "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173"
         if not os.getenv("VERCEL")

@@ -8,6 +8,18 @@ def test_protected_routes_require_token(client):
         assert client.get(path).status_code == 403, path
 
 
+def test_auth_bypass_allows_unauthed_super_admin(client, owner, monkeypatch):
+    from cfo.api import dependencies
+    from cfo.models import UserRole
+
+    monkeypatch.setattr(dependencies.settings, "auth_bypass_enabled", True)
+
+    resp = client.get("/api/admin/auth/me")
+
+    assert resp.status_code == 200
+    assert resp.json()["role"] == UserRole.SUPER_ADMIN.value
+
+
 def test_first_user_is_admin_of_default_org(owner):
     assert owner["user"]["role"] == "admin"
     assert owner["user"]["organization_id"] == 1

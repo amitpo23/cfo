@@ -100,6 +100,8 @@ const queryClient = new QueryClient({
   },
 });
 
+const AUTH_BYPASS = import.meta.env.VITE_AUTH_BYPASS === 'true';
+
 // Navigation configuration
 const navigationConfig = [
   {
@@ -174,7 +176,7 @@ function App() {
   const [darkMode, setDarkMode] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [authed, setAuthed] = useState(() => Boolean(localStorage.getItem('auth_token')));
+  const [authed, setAuthed] = useState(() => AUTH_BYPASS || Boolean(localStorage.getItem('auth_token')));
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   // Resolve the real signed-in identity (drives the header label + the
@@ -187,7 +189,7 @@ function App() {
       .catch(() => setCurrentUser(null));
   }, [authed]);
 
-  if (!authed) {
+  if (!authed && !AUTH_BYPASS) {
     return <RezefLanding darkMode={darkMode} onSuccess={() => setAuthed(true)} />;
   }
 

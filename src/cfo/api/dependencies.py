@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db_session, SessionLocal
-from ..models import User, UserRole
+from ..models import Organization, User, UserRole
 from ..auth import decode_access_token
+from ..auth import get_password_hash
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -27,7 +28,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db_session)
 ) -> User:
     """
@@ -43,28 +44,44 @@ async def get_current_user(
     Raises:
         HTTPException: If token is invalid or user not found
     """
-    credentials_exception = HTTPException(
+    missing_credentials_exception = HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    invalid_credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    
+
+    if credentials is None:
+        if settings.auth_bypass_enabled:
+            return _get_or_create_auth_bypass_user(db)
+        raise missing_credentials_exception
+
     token = credentials.credentials
     payload = decode_access_token(token)
     
     if payload is None:
-        raise credentials_exception
+        if settings.auth_bypass_enabled:
+            return _get_or_create_auth_bypass_user(db)
+        raise invalid_credentials_exception
     
     # "sub" is stored as a string in the JWT (python-jose requirement);
     # convert back to the integer primary key before querying.
     try:
         user_id = int(payload.get("sub"))
     except (TypeError, ValueError):
-        raise credentials_exception
+        if settings.auth_bypass_enabled:
+            return _get_or_create_auth_bypass_user(db)
+        raise invalid_credentials_exception
 
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
-        raise credentials_exception
+        if settings.auth_bypass_enabled:
+            return _get_or_create_auth_bypass_user(db)
+        raise invalid_credentials_exception
     
     if not user.is_active:
         raise HTTPException(
@@ -72,6 +89,42 @@ async def get_current_user(
             detail="User account is disabled"
         )
     
+    return user
+
+
+def _get_or_create_auth_bypass_user(db: Session) -> User:
+    """Return a deterministic development super-admin user.
+
+    This is intentionally controlled by `AUTH_BYPASS_ENABLED`; it lets local QA
+    use the whole system without login while keeping org-scoping behavior intact.
+    """
+    user = db.query(User).filter(User.role == UserRole.SUPER_ADMIN, User.is_active == True).first()
+    if user:
+        return user
+
+    org = db.query(Organization).order_by(Organization.id.asc()).first()
+    if not org:
+        org = Organization(name="Rezef Dev", is_active=True)
+        db.add(org)
+        db.flush()
+
+    user = db.query(User).filter(User.email == "dev@rezef.local").first()
+    if user:
+        user.role = UserRole.SUPER_ADMIN
+        user.is_active = True
+        user.organization_id = None
+    else:
+        user = User(
+            email="dev@rezef.local",
+            password_hash=get_password_hash("auth-bypass-disabled-password"),
+            full_name="Rezef Dev Super Admin",
+            role=UserRole.SUPER_ADMIN,
+            organization_id=None,
+            is_active=True,
+        )
+        db.add(user)
+    db.commit()
+    db.refresh(user)
     return user
 
 
