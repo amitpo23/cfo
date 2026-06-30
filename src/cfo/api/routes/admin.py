@@ -19,6 +19,7 @@ from ...models import (
 from ...auth import verify_password, get_password_hash, create_access_token
 from ...config import settings
 from ...services.sync_engine import SyncEngine, get_connector_for_org
+from ...services.client_automation_service import run_post_sync_tasks
 from ..dependencies import (
     get_current_user, 
     get_super_admin, 
@@ -309,12 +310,12 @@ def _create_self_registered_user(
     is_first_user = db.query(User).first() is None
 
     # Every self-registered user gets an organization of their own (and is
-    # its admin), so integrations/credentials are isolated per tenant. The
-    # first user attaches to the default org, which may use env credentials.
+    # its admin), so integrations/credentials are isolated per tenant. On a
+    # fresh PostgreSQL database this row must be created before the user because
+    # the FK is enforced (SQLite tests historically hid that bootstrapping bug).
     if organization_id is None:
-        if is_first_user:
-            organization_id = 1
-        else:
+        org = db.query(Organization).filter(Organization.id == 1).first() if is_first_user else None
+        if org is None:
             org = Organization(
                 name=f"{full_name}",
                 business_type="financial_management",
@@ -334,7 +335,7 @@ def _create_self_registered_user(
             )
             db.add(org)
             db.flush()
-            organization_id = org.id
+        organization_id = org.id
 
     if (
         selected_plan or annual_revenue or annual_report_requested is not None
@@ -698,12 +699,16 @@ async def super_admin_sync_client(
             connector, conn_id, resolved = get_connector_for_org(db, org_id, source)
             engine = SyncEngine(db, connector, org_id, resolved, conn_id)
             run = await engine.run_full_sync(entity_types=types)
+            automation = await run_post_sync_tasks(
+                db, org_id, sources=[resolved], resume_onboarding=True
+            )
             results.append({
                 "source": resolved,
                 "sync_run_id": run.id,
                 "status": run.status.value if run.status else None,
                 "counts": run.counts,
                 "error_summary": run.error_summary,
+                "automation": automation,
             })
         except Exception as exc:  # noqa: BLE001 - surfaced to operator dashboard
             results.append({"source": source, "status": "error", "error": str(exc)})

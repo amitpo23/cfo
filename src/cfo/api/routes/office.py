@@ -20,6 +20,7 @@ from ..dependencies import get_current_org_id
 from ...models import SumitCompany
 from ...services import office_service, financial_synthesis
 from ...services.sync_engine import SyncEngine, get_connector_for_org
+from ...services.client_automation_service import run_post_sync_tasks
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -221,8 +222,12 @@ async def _run_sync(db, target_org_id: int, entity_types: Optional[str]) -> dict
         sync_run = await engine.run_full_sync(entity_types=types)
     finally:
         await connector.close()
+    automation = await run_post_sync_tasks(
+        db, target_org_id, sources=[source], resume_onboarding=True
+    )
     return {
         "sync_run_id": sync_run.id,
         "status": sync_run.status.value,
         "counts": sync_run.counts,
+        "automation": automation,
     }

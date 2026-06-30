@@ -15,7 +15,7 @@ from ...models import SyncRun, SyncStatus, IntegrationConnection
 from ...config import settings
 from ...services.sync_engine import SyncEngine, get_connector_for_org
 from ...services.credentials_vault import encrypt_credentials
-from ...services.alert_engine import AlertEngine
+from ...services.client_automation_service import run_post_sync_tasks
 
 router = APIRouter()
 
@@ -244,13 +244,13 @@ async def trigger_sync(
     finally:
         await connector.close()
 
-    # Run alert engine after sync
+    automation = None
     try:
-        alert_engine = AlertEngine(db, org_id)
-        alert_engine.evaluate_all()
+        automation = await run_post_sync_tasks(
+            db, org_id, sources=[source], resume_onboarding=True
+        )
     except Exception as e:
-        # Don't fail sync because of alert evaluation
-        pass
+        automation = {"error": str(e)}
 
     return {
         "id": sync_run.id,
@@ -259,6 +259,7 @@ async def trigger_sync(
         "finished_at": sync_run.finished_at.isoformat() if sync_run.finished_at else None,
         "counts": sync_run.counts,
         "error_summary": sync_run.error_summary,
+        "automation": automation,
     }
 
 

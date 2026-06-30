@@ -22,6 +22,7 @@ from ..models import (
     Organization, IntegrationConnection, IntegrationType, SumitCompany,
 )
 from .credentials_vault import encrypt_credentials, decrypt_credentials
+from .client_automation_service import enqueue_client_automation
 from .financial_synthesis import synthesize_organization
 
 
@@ -149,6 +150,12 @@ def register_client(
 
     db.commit()
     db.refresh(roster)
+    automation = enqueue_client_automation(
+        db,
+        office_organization_id=office_organization_id,
+        client_company_id=roster.company_id,
+        target_organization_id=client_org.id,
+    )
     return {
         "id": roster.id,
         "company_id": roster.company_id,
@@ -156,6 +163,7 @@ def register_client(
         "target_organization_id": roster.target_organization_id,
         "has_open_finance": bool(open_finance),
         "used_office_key": used_office_key,
+        "automation": automation,
     }
 
 
@@ -174,6 +182,7 @@ def list_clients(db, office_organization_id: int) -> list[dict[str, Any]]:
                 IntegrationConnection.status == "active",
             ).all()
         ] if r.target_organization_id else []
+        onboarding = _onboarding_summary(db, r.target_organization_id)
         out.append({
             "id": r.id,
             "company_id": r.company_id,
@@ -181,6 +190,8 @@ def list_clients(db, office_organization_id: int) -> list[dict[str, Any]]:
             "status": r.status,
             "target_organization_id": r.target_organization_id,
             "connections": sources,
+            "automation": (r.raw_data or {}).get("automation", {}),
+            "onboarding": onboarding,
             "last_synced_at": r.last_synced_at.isoformat() if r.last_synced_at else None,
         })
     return out
@@ -236,6 +247,34 @@ def get_client_org_ids(db, office_organization_id: int) -> list[int]:
         SumitCompany.status == "active",
     ).all()
     return [r.target_organization_id for r in rows if r.target_organization_id]
+
+
+def _onboarding_summary(db, org_id: Optional[int]) -> dict[str, Any]:
+    if not org_id:
+        return {"complete": False, "sources": {}}
+    from ..models import OnboardingTask
+
+    rows = db.query(OnboardingTask).filter(
+        OnboardingTask.organization_id == org_id,
+    ).all()
+    by_source: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item = by_source.setdefault(row.source, {
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "running": 0,
+            "pending": 0,
+        })
+        item["total"] += 1
+        if row.status in item:
+            item[row.status] += 1
+    for item in by_source.values():
+        item["complete"] = bool(item["total"]) and item["completed"] == item["total"]
+    return {
+        "complete": bool(by_source) and all(item["complete"] for item in by_source.values()),
+        "sources": by_source,
+    }
 
 
 # ---------------------------------------------------------------------- #

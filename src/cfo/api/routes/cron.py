@@ -15,6 +15,7 @@ from ...config import settings
 from ...database import get_db_session
 from ...models import IntegrationConnection, Organization
 from ...services.sync_engine import SyncEngine, get_connector_for_org
+from ...services.client_automation_service import run_post_sync_tasks
 from ...services.collection_service import CollectionService, dispatch_reminders
 from ...services.email_sender import send_email_smtp
 from ..dependencies import sumit_for_org
@@ -63,17 +64,9 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
                 "status": run.status.value if run.status else None,
                 "counts": run.counts,
             }
-            # SyncEngine ממלא Invoice/Bill (AR/AP). את טבלת Transaction
-            # (בסיס רווח-והפסד/תזרים/מאזן) ממלא DataSyncService — חייב לרוץ גם
-            # הוא אחרת הדוחות הכספיים לא יתעדכנו. רק עבור SUMIT.
-            if resolved == "sumit":
-                try:
-                    from ...services.data_sync_service import DataSyncService
-                    svc = DataSyncService(db, org_id)
-                    result["transactions"] = await svc.sync_all()
-                except Exception as exc:
-                    logger.warning("Transaction sync failed for org %s: %s", org_id, exc)
-                    result["transactions_error"] = str(exc)
+            result["automation"] = await run_post_sync_tasks(
+                db, org_id, sources=[resolved], resume_onboarding=True
+            )
             results.append(result)
         except Exception as exc:
             logger.error("Scheduled sync failed for org %s source %s: %s", org_id, source, exc)
@@ -83,13 +76,6 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
                 await connector.close()
             except Exception:
                 pass
-
-        # Refresh insights after each org sync; never fail the cron over it.
-        try:
-            from ...services.cfo_brain_service import CFOBrainService
-            CFOBrainService(db, org_id).run_analysis()
-        except Exception as exc:
-            logger.warning("Brain analysis failed for org %s: %s", org_id, exc)
 
     return {"synced": len(results), "results": results}
 

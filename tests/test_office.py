@@ -1,5 +1,8 @@
 """End-to-end tests for the accounting-office (multi-company) routes."""
 
+from cfo.database import SessionLocal
+from cfo.models import IntegrationConnection, OnboardingTask
+
 
 def test_office_routes_require_auth(client):
     assert client.get("/api/office/clients").status_code == 403
@@ -20,11 +23,31 @@ def test_register_client_provisions_isolated_tenant(client, owner):
     assert body["company_id"] == "844329067"
     # The client file gets its OWN tenant organization, not the office org.
     assert body["target_organization_id"] != office_org
+    assert body["automation"]["state"] == "queued"
+    assert body["automation"]["target_organization_id"] == body["target_organization_id"]
 
     # It shows up in the roster with its sumit connection.
     listing = client.get("/api/office/clients", headers=headers).json()["clients"]
     alpha = next(c for c in listing if c["company_id"] == "844329067")
     assert "sumit" in alpha["connections"]
+    assert alpha["automation"]["state"] == "queued"
+    assert alpha["onboarding"]["sources"]["sumit"]["pending"] >= 1
+
+    db = SessionLocal()
+    try:
+        org_id = body["target_organization_id"]
+        conn = db.query(IntegrationConnection).filter(
+            IntegrationConnection.organization_id == org_id,
+            IntegrationConnection.source == "sumit",
+            IntegrationConnection.status == "active",
+        ).first()
+        assert conn is not None
+        assert db.query(OnboardingTask).filter(
+            OnboardingTask.organization_id == org_id,
+            OnboardingTask.source == "sumit",
+        ).count() >= 1
+    finally:
+        db.close()
 
 
 def test_register_client_with_open_finance_creds(client, owner):
@@ -36,9 +59,11 @@ def test_register_client_with_open_finance_creds(client, owner):
     })
     assert resp.status_code == 200
     assert resp.json()["has_open_finance"] is True
+    assert set(resp.json()["automation"]["sources"]) == {"open_finance", "sumit"}
     listing = client.get("/api/office/clients", headers=owner["headers"]).json()["clients"]
     beta = next(c for c in listing if c["company_id"] == "111222333")
     assert "open_finance" in beta["connections"]
+    assert "open_finance" in beta["onboarding"]["sources"]
 
 
 def test_reregister_same_company_updates_in_place(client, owner):
