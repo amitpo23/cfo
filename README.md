@@ -23,6 +23,10 @@ https://cfo-2.vercel.app
   organizations and run post-sync tasks.
 - Local runtime: Docker Compose with Postgres, API, and frontend services.
 
+Database boundaries are documented in
+[`docs/DATABASE_MAP.md`](docs/DATABASE_MAP.md). Production data is not stored in
+the local SQLite file.
+
 ## Production Status
 
 The current production deployment has:
@@ -207,4 +211,3 @@ vercel inspect https://cfo-2.vercel.app
   user ID is configured.
 - The app stores separate tenant data by organization in the same production
   database; it does not create a separate physical database per customer.
-
