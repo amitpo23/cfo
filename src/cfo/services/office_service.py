@@ -124,6 +124,24 @@ def register_client(
         )
         db.add(client_org)
         db.flush()  # assign id
+    if not client_org:
+        client_org = Organization(
+            name=name,
+            business_type=business_type,
+            tax_id=tax_id,
+            integration_type=IntegrationType.SUMIT,
+            is_active=True,
+        )
+        db.add(client_org)
+        db.flush()
+    else:
+        client_org.name = name
+        if business_type is not None:
+            client_org.business_type = business_type
+        if tax_id is not None:
+            client_org.tax_id = tax_id
+        client_org.integration_type = IntegrationType.SUMIT
+        client_org.is_active = True
 
     # SUMIT credentials — scoped to the client tenant, encrypted.
     _upsert_integration(

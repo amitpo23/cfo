@@ -92,15 +92,31 @@ def test_register_client_with_open_finance_creds(client, owner):
 
 
 def test_reregister_same_company_updates_in_place(client, owner):
-    for name in ("שם ראשון", "שם מעודכן"):
+    payloads = (
+        {"name": "שם ראשון", "business_type": "old", "tax_id": "111"},
+        {"name": "שם מעודכן", "business_type": "company", "tax_id": "222"},
+    )
+    first_org_id = None
+    for payload in payloads:
         r = client.post("/api/office/clients", headers=owner["headers"], json={
-            "name": name, "company_id": "999888777", "api_key": "k",
+            **payload, "company_id": "999888777", "api_key": "k",
         })
         assert r.status_code == 200
+        first_org_id = first_org_id or r.json()["target_organization_id"]
+        assert r.json()["target_organization_id"] == first_org_id
     listing = client.get("/api/office/clients", headers=owner["headers"]).json()["clients"]
     matches = [c for c in listing if c["company_id"] == "999888777"]
     assert len(matches) == 1  # not duplicated
     assert matches[0]["name"] == "שם מעודכן"
+
+    db = SessionLocal()
+    try:
+        org = db.query(Organization).get(first_org_id)
+        assert org.name == "שם מעודכן"
+        assert org.business_type == "company"
+        assert org.tax_id == "222"
+    finally:
+        db.close()
 
 
 def test_register_without_key_requires_office_default(client, owner):
