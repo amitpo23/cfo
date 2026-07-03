@@ -180,4 +180,15 @@ not a new regression.
   `last_run_failures`, other checks still execute. New test proves isolation. Note: a
   tests/test_alert_engine.py file already existed (2 tests) — plan's "no tests exist"
   claim was stale; extended it rather than creating a new file. Full suite 461 passed.
-7.3/7.4/7.5/7.7/7.8/7.9/7.10 not started yet.
+7.5 Duplicate expense detection: DONE (commit ed07568). New `duplicate_expense` check
+  in document_anomalies.py: same vendor+amount within 3 days, or same bill_number.
+  Restructured detect_document_anomalies (had an early-return on zero invoices that
+  would have skipped the new bill-only check entirely). 7 anomaly tests pass. Full
+  suite 464 passed.
+7.8 Bank sync idempotency: verified ALREADY SATISFIED, no code change needed. Both
+  ingestion paths checked: sync_engine.py upserts by (org,external_id,source) against
+  a real DB unique index; BankStatementService (CSV/manual import) already has a
+  content-match duplicate check (date+amount+description) — zero prior test coverage
+  though. Added regression test proving double-import creates 0 extra rows (commit
+  c2a6348) instead of a redundant is_provisional column. Full suite 465 passed.
+7.3/7.4/7.7/7.9/7.10 not started yet.
