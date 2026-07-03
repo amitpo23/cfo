@@ -24,10 +24,9 @@ def main() -> int:
                 k, _, v = line.partition("=")
                 os.environ.setdefault(k.strip(), v.strip().strip('"'))
 
-    if not os.environ.get("DATABASE_URL"):
-        print("DATABASE_URL לא מוגדר", file=sys.stderr)
-        return 2
-
+    # No explicit fallback needed here: cfo.config.Settings.database_url
+    # already defaults to the local sqlite db when DATABASE_URL isn't set —
+    # that's what makes "no --env-file" mean "check the local db".
     from cfo.database import engine
     from cfo.services.schema_sync import compute_missing
 
