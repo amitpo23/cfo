@@ -687,3 +687,51 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 2: continued gap-mapping per the
   across the codebase -- this session has now found two instances
   (Account/Transaction, AdvancedAIService) via targeted grep, not an
   exhaustive search.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 3: ran the suggested random.*
+  sweep across all of src/cfo/services/ -- confirmed clean (only the
+  AdvancedAIService docstring comment matches now, no live random.* calls
+  remain anywhere). Investigated kpi_service.py's hardcoded
+  comparison_to_budget (500000/400000 fixed targets) and
+  comparison_to_previous (8.5%/5.2%/12.3% fixed percentages) in
+  get_executive_summary -- traced the underlying data source
+  (_get_financial_data -> FinancialReportsService.generate_profit_loss)
+  and confirmed this is the SAME already-documented, already-deferred
+  Account/Transaction subsystem (a more direct dependency than the
+  balance_snapshot-mediated one already listed for kpi_service in the
+  Task #7 audit). Per the explicit instruction to avoid re-treading that
+  ground, did NOT touch kpi_service.py this iteration -- "fixing" the
+  hardcoded comparison values with real math over the same frozen/garbage
+  data would just be a second instance of the "plausible-but-wrong is
+  worse than obviously-wrong" mistake already avoided once this session.
+  Noted in PRODUCT_AUDIT_AND_ROADMAP.md's existing Account/Transaction
+  section for whoever eventually makes the repair/retire call.
+
+  Pivoted to a different, safe area per the wakeup prompt's alternative
+  suggestion: alert_engine.py had only 3 tests covering 1 of its 6 checks
+  (_check_overdue_invoices; the other 2 existing tests cover
+  evaluate_all's general resilience, not individual check logic). Added
+  12 new tests covering the other 5 checks (bills_due_soon,
+  large_transactions, stale_collection_cases, low_cash, spend_spike),
+  each with a fires-correctly case and (where meaningful) a
+  does-not-fire case. Confirmed _check_low_cash reads Account.balance
+  (the cached field kept live by the modern SyncEngine, NOT the broken
+  Account/Transaction-derived path) before trusting it as testable real
+  logic -- correctly distinct from the already-documented issue.
+  Writing the stale-collection-case test surfaced a REAL bug:
+  _check_stale_collection_cases compared a naive last_activity_at
+  (case.created_at round-tripped through SQLite's DateTime(timezone=True),
+  which doesn't actually preserve tz-awareness) against a tz-aware
+  cutoff, raising TypeError -- silently caught and logged by the
+  per-check isolation wrapper, meaning this check would just stop firing
+  with zero visible error. Fixed: normalize a naive last_activity_at to
+  UTC before comparing. Also had to fix two of my own test-authoring bugs
+  along the way (a day-count vs calendar-month date-boundary sensitivity
+  in the spend_spike tests) -- both caught by the tests themselves
+  failing for the wrong reason, not by inspection.
+  545 passed (up from 534), qa_gate PASSED, deployed to prod, 16/16
+  smoke. NOTE: one inaccuracy in commit b364b5a's message -- it claims
+  "fixed the alert_engine.py file's own import list" which did not
+  happen (only the tz-fix was made to that file); the import-list change
+  was in the test file, not the service file. Recorded here since commit
+  history isn't being amended for a message-only inaccuracy.
