@@ -36,6 +36,14 @@ class ChatConfirmationError(ValueError):
     nothing pending / already executed)."""
 
 
+class AIChatNotConfiguredError(ValueError):
+    """Raised when ANTHROPIC_API_KEY isn't set. Subclasses ValueError so an
+    app-level FastAPI handler (see cfo.api) maps it to a clean HTTP 400,
+    same pattern as SumitNotConfiguredError — otherwise the raw anthropic
+    SDK raises a bare TypeError deep in header-building that leaks as an
+    unhandled 500."""
+
+
 class AIChatService:
     def __init__(self, db: Session, organization_id: int, user_id: int):
         self.db = db
@@ -60,6 +68,10 @@ class AIChatService:
 
     def _make_client(self):
         import anthropic
+        if not settings.anthropic_api_key:
+            raise AIChatNotConfiguredError(
+                "עוזר ה-AI לא הוגדר: ANTHROPIC_API_KEY חסר בהגדרות המערכת"
+            )
         return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     async def send_message(self, session_id: str, text: str) -> dict[str, Any]:

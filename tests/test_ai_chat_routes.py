@@ -70,3 +70,17 @@ def test_chat_history_is_org_isolated(monkeypatch, client, fresh_org):
 
     hist_b = client.get("/api/ai/chat/shared", headers=iso_b["headers"])
     assert hist_b.json()["messages"] == []
+
+
+def test_missing_anthropic_key_returns_clean_400_not_500(monkeypatch, client, fresh_org):
+    """Found via live manual testing: without ANTHROPIC_API_KEY configured,
+    the raw anthropic SDK raises TypeError deep inside _build_headers,
+    which was leaking as an unhandled 500."""
+    from cfo import config as config_module
+    monkeypatch.setattr(config_module.settings, "anthropic_api_key", None)
+
+    iso = fresh_org()
+    r = client.post("/api/ai/chat", headers=iso["headers"],
+                     json={"session_id": "s1", "message": "היי"})
+    assert r.status_code == 400
+    assert "לא הוגדר" in r.json()["detail"] or "not configured" in r.json()["detail"].lower()

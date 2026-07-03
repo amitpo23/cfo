@@ -18,6 +18,7 @@ from ..config import settings
 from ..database import init_db
 from ..integrations.sumit_integration import SumitAPIError
 from ..services.data_sync_service import SumitNotConfiguredError
+from ..services.ai_chat_service import AIChatNotConfiguredError
 
 
 @asynccontextmanager
@@ -74,6 +75,16 @@ async def sumit_not_configured_handler(_request, exc: SumitNotConfiguredError):
     org. Some /api/sync/sumit/* routes call DataSyncService directly (no
     Depends(get_sumit_integration)), so without this handler the bare
     ValueError subclass would fall through as a raw 500."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(AIChatNotConfiguredError)
+async def ai_chat_not_configured_handler(_request, exc: AIChatNotConfiguredError):
+    """Without this, a missing ANTHROPIC_API_KEY raises a bare TypeError
+    deep inside the anthropic SDK's header-building — an unhandled 500."""
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"detail": str(exc)},
