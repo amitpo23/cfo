@@ -232,3 +232,20 @@ not a new regression.
 9/10 upgrades' backend done (7.1,7.2,7.3-backend,7.4,7.5,7.6,7.7,7.8,7.10).
   Remaining: 7.3's AR-dashboard tab + 7.9's DocumentIssueWizard.tsx — both need
   npm build + tsc + manual preview verification, same batch of work.
+
+DEPLOY (Wave 2, backend-only slice): user explicitly asked to deploy the
+  backend-complete state now rather than let it accumulate further, given 13
+  unreleased commits including 2 new migrations (deduction_percent,
+  collection_cases). Sequence: full suite green (485) -> `vercel --prod --yes`
+  (built + aliased to cfo-2.vercel.app) -> logged in as smoke-test admin ->
+  POST /api/admin/db/migrate -> {"action":"upgraded","current_revision":
+  "e4d8b1f6a2c9","schema_sync":{"tables":[],"columns":{}}} (no drift) ->
+  prod_smoke.py 14/14 -> spot-checked GET /api/collections/cases -> 200. All 9
+  backend upgrades + the new collections routes are now live in production.
+  Local dev environment fixed for frontend verification: cfo.db had schema
+  drift (mirroring the prod issue) blocking uvicorn startup; recreated fresh
+  via init_db()+alembic stamp head, confirmed the vite dev server (port 3000)
+  proxies to it correctly and is drivable via claude-in-chrome (screenshot/
+  scroll/read_page all verified against the real RezefLanding page). This is
+  now the verification path for 7.3's AR tab + 7.9's DocumentIssueWizard,
+  since Vercel preview deploys remain protection-blocked.
