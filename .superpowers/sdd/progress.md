@@ -219,4 +219,16 @@ not a new regression.
   distinct our-code warning locations remain (verified via full-suite grep); ~2150
   remaining warning instances are 100% third-party library internals. 469 passed
   throughout, no naive/aware comparison broke.
-7.3/7.9 not started. 8/10 upgrades done (7.1,7.2,7.4,7.5,7.6,7.7,7.8,7.10).
+7.3 Collection workflow: BACKEND DONE (commit 308f47d). New CollectionCase model
+  (migration e4d8b1f6a2c9) + collection_case_service.py (open_cases_for_overdue
+  idempotent, log_attempt only advances status on real signal, set_status,
+  list_cases) + /api/collections/* routes, full org isolation verified. Confirmed
+  NOT redundant with existing CollectionReminder/collection_service.py (that's
+  automated SMS/email dispatch; this is human-collector case tracking).
+  Connected to alert_engine: new _check_stale_collection_cases (broken promise or
+  no activity in 7 days), reuses the _run_check isolation wrapper from 7.6.
+  19 new tests, full suite 485 passed. Frontend UI tab NOT done — deferred with 7.9.
+7.9 Document issue wizard (frontend): not started.
+9/10 upgrades' backend done (7.1,7.2,7.3-backend,7.4,7.5,7.6,7.7,7.8,7.10).
+  Remaining: 7.3's AR-dashboard tab + 7.9's DocumentIssueWizard.tsx — both need
+  npm build + tsc + manual preview verification, same batch of work.
