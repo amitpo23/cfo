@@ -100,3 +100,20 @@ Base before Task 4.2: 1983f1e
 Task 4.2: implemented (commits 1983f1e..03043ac = 997ba6b fix + 03043ac test; 456 passed)
   REVIEW INCOMPLETE — reviewer died on monthly spend limit. RESUME: re-dispatch task reviewer on package .superpowers/sdd/review-1983f1e..03043ac.diff (risks: gate airtight for non-org-1? vault flow untouched? tests exercise real path?).
 SESSION END (user: "סיים", spend limit hit). NEXT: review 4.2 -> Tasks 5 (prod_smoke) -> 6 (SUMIT write-back) -> 7 (Neon drift) -> 8 (deploy+readiness). Briefs ready: .superpowers/sdd/task-{5,6,7,8}-brief.md.
+
+# === Handoff plan resumed (docs/superpowers/plans/2026-07-03-epic1-handoff.md) ===
+Step 1 (Task 4.2 deterministic verification, waived LLM review): verified —
+  test_upstream_error_handling.py 6/6 passed; `organization_id == 1` gate
+  present in both data_sync_service.py:60 and sync_engine.py:617;
+  SumitNotConfiguredError 400 handler registered in api/__init__.py:59-60.
+  Task 4.2: verified deterministically (tests+grep), review waived by user cost decision.
+Base before Task 5: 03043ac
+Task 5: complete (commit 03043ac..7c5db41) — scripts/prod_smoke.py + tests/test_prod_smoke.py,
+  local TDD only. Full suite 457 passed. NOT yet run live against production —
+  SMOKE_EMAIL/SMOKE_PASSWORD absent from .env.local, needs user-supplied creds (handoff step 2).
+NOTE: session that authored the 3 planning docs + Task 5 commit (Fable 5, session 4d63fec8)
+  crashed on an API error (advisor_tool_result/tool_use_id mismatch, 400) right after the
+  commit and did not continue. No further commits since 7c5db41 (18:02). Resuming that
+  session would replay the corrupted turn; continue with a fresh session instead.
+NEXT: get SMOKE_EMAIL/SMOKE_PASSWORD from user -> run prod_smoke live (handoff step 2) ->
+  Task 6 (SUMIT write-back live) -> Task 7 (Neon drift) -> Task 8 (deploy+readiness).
