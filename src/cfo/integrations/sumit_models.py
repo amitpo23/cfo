@@ -67,6 +67,20 @@ class DocumentItem(BaseModel):
     item_id: Optional[str] = None
 
 
+class DocumentPayment(BaseModel):
+    """A single payment recorded against a document (SUMIT
+    Accounting_Typed_DocumentPayment). Only cash/cheque are modeled here —
+    card payments go through the separate charge_customer() flow."""
+    method: Literal["cash", "cheque"]
+    amount: Decimal
+    # Cheque-only details (SUMIT Accounting_Typed_Payment_Cheque)
+    bank_number: Optional[int] = None
+    branch_number: Optional[int] = None
+    account_number: Optional[str] = None
+    cheque_number: Optional[str] = None
+    due_date: Optional[date] = None
+
+
 class DocumentRequest(BaseModel):
     """Create document request"""
     customer_id: str
@@ -77,6 +91,10 @@ class DocumentRequest(BaseModel):
     notes: Optional[str] = None
     currency: Optional[str] = "ILS"
     language: Optional[str] = "he"
+    payments: Optional[List[DocumentPayment]] = None
+    # Links this document to the one it credits/relates to (SUMIT
+    # OriginalDocumentID) — e.g. a credit note crediting an invoice.
+    original_document_id: Optional[str] = None
 
 
 class DocumentResponse(BaseModel):
@@ -140,6 +158,18 @@ class DebtReportRequest(BaseModel):
     customer_id: Optional[str] = None
     as_of_date: Optional[date] = None
     include_paid: bool = False
+
+
+class ScheduledDocumentResult(BaseModel):
+    """Result of cloning an existing document into its next scheduled
+    occurrence (POST /scheduleddocuments/documents/createfromdocument/).
+    SUMIT does not accept raw document details + a future date here — only
+    an existing DocumentID — so this is a clone, not a date-driven schedule."""
+    scheduled_document_id: str
+    # Annotated via date_type — a field literally named "date" shadows the
+    # datetime.date import in this class body (see DocumentResponse above).
+    date: Optional[date_type] = None
+    total: Decimal
 
 
 # ==================== Payment Models ====================

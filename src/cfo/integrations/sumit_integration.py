@@ -26,6 +26,7 @@ from .sumit_models import (
     # Document models
     DocumentRequest, DocumentResponse, SendDocumentRequest,
     DocumentListRequest, ExpenseRequest, DebtReportRequest,
+    DocumentPayment, ScheduledDocumentResult,
     # Payment models
     ChargeRequest, PaymentResponse, PaymentMethodResponse,
     # Transaction models
@@ -518,6 +519,25 @@ class SumitIntegration(BaseIntegration):
             "Description": description,
         }]
 
+    @staticmethod
+    def _document_payment_payload(payment: DocumentPayment) -> Dict[str, Any]:
+        """Build one entry of a document-create request's "Payments" array
+        (SUMIT Accounting_Typed_DocumentPayment) — cash or cheque only."""
+        entry: Dict[str, Any] = {"Amount": float(payment.amount)}
+        if payment.method == "cash":
+            entry["Type"] = "Cash"
+            entry["Details_Cash"] = {}
+        elif payment.method == "cheque":
+            entry["Type"] = "Cheque"
+            entry["Details_Cheque"] = {
+                "BankNumber": payment.bank_number,
+                "BranchNumber": payment.branch_number,
+                "AccountNumber": payment.account_number,
+                "ChequeNumber": payment.cheque_number,
+                "DueDate": payment.due_date.isoformat() if payment.due_date else None,
+            }
+        return entry
+
     # ==================== Base Integration Methods ====================
 
     async def test_connection(self) -> bool:
@@ -743,6 +763,14 @@ class SumitIntegration(BaseIntegration):
         if document.notes:
             details["Description"] = document.notes
 
+        payload_extra: Dict[str, Any] = {}
+        if document.original_document_id:
+            payload_extra["OriginalDocumentID"] = self._to_int(document.original_document_id)
+        if document.payments:
+            payload_extra["Payments"] = [
+                self._document_payment_payload(p) for p in document.payments
+            ]
+
         items: List[Dict[str, Any]] = []
         total = Decimal("0")
         for item in document.items:
@@ -772,6 +800,7 @@ class SumitIntegration(BaseIntegration):
             "Details": details,
             "Items": items,
             "VATIncluded": True,
+            **payload_extra,
         }
 
         data = await self._post("/accounting/documents/create/", payload)
@@ -2443,23 +2472,34 @@ class SumitIntegration(BaseIntegration):
             "tracking codes."
         )
 
-    async def create_scheduled_document(
+    async def create_document_from_existing(
         self,
-        document: DocumentRequest,
-        schedule_date: date
-    ) -> Dict[str, Any]:
+        document_id: str,
+    ) -> List[ScheduledDocumentResult]:
         """
-        NOT SUPPORTED as specified: SUMIT's
-        /scheduleddocuments/documents/createfromdocument/ schedules future
-        documents from an EXISTING document (DocumentID), not from raw
-        document details and a date.
+        Clone an existing document into its next scheduled occurrence
+        (POST /scheduleddocuments/documents/createfromdocument/).
+
+        This is the real shape of SUMIT's "scheduled documents" capability —
+        verified against the live OpenAPI spec (api.sumit.co.il/swagger/v1/
+        swagger.json). There is no endpoint that schedules a *future* document
+        from raw details + a date; this one only clones an EXISTING
+        DocumentID, and returns the resulting document(s) (id/date/total —
+        SUMIT does not return the rest of the document fields here).
         """
-        raise Exception(
-            "SUMIT API does not expose scheduling a document from raw details; "
-            "/scheduleddocuments/documents/createfromdocument/ requires an "
-            "existing DocumentID. Create the document with create_document() "
-            "first, then schedule from it."
+        data = await self._post(
+            "/scheduleddocuments/documents/createfromdocument/",
+            {"DocumentID": self._to_int(document_id)},
         )
+        docs = data.get("ScheduledDocuments") or []
+        return [
+            ScheduledDocumentResult(
+                scheduled_document_id=str(doc.get("ScheduledDocumentID")),
+                date=self._parse_date(doc.get("Date")),
+                total=Decimal(str(doc.get("Total", 0))),
+            )
+            for doc in docs
+        ]
 
     async def list_stock(self) -> List[StockItemResponse]:
         """
