@@ -687,6 +687,11 @@ class Expense(Base):
     filing_error = Column(Text, nullable=True)
     classifier_feedback = Column(JSON, nullable=True)  # learning feedback: [{"timestamp": "...", "old_category": "...", "new_category": "...", "supplier": "...", "feedback_text": "..."}]
     raw_data = Column(JSON, nullable=True)
+    # % of this expense recognized as tax-deductible (e.g. partial vehicle/phone/home
+    # office use). NULL = fully recognized (unchanged historical behavior) — never a
+    # fabricated default; real Israeli deduction rules need per-case inputs (odometer
+    # readings, use-value tables) this system doesn't have, so nothing auto-computes it.
+    deduction_percent = Column(Numeric(precision=5, scale=2), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

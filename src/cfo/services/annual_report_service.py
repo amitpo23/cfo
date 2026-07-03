@@ -60,10 +60,34 @@ def _progressive_annual_tax(income: float) -> float:
     return round(tax, 2)
 
 
+def _non_deductible_expenses_addback(db, organization_id: int, year: int) -> float:
+    """Sum the disallowed portion of expenses tagged with a partial
+    deduction_percent (e.g. vehicle/phone/home-office). The full amount is
+    already booked as an expense in the ledger (real cash outflow); only
+    `deduction_percent`% of it is tax-recognized, so the rest is added back
+    to taxable income. NULL deduction_percent (the default) contributes
+    nothing — fully recognized, unchanged from prior behavior.
+    """
+    from ..models import Expense
+
+    rows = db.query(Expense).filter(
+        Expense.organization_id == organization_id,
+        Expense.deduction_percent.isnot(None),
+        Expense.expense_date >= date(year, 1, 1),
+        Expense.expense_date <= date(year, 12, 31),
+    ).all()
+    addback = sum(
+        float(r.amount or 0) * (1 - float(r.deduction_percent) / 100)
+        for r in rows
+    )
+    return round(addback, 2)
+
+
 def form_1301(db, organization_id: int, year: int, *, credit_points: float = 2.25) -> dict[str, Any]:
     """דוח שנתי ליחיד (1301) — טיוטה. Business income taxed by annual brackets."""
     pl = _annual_pl(db, organization_id, year)
-    business_income = max(0.0, pl["net_profit"])
+    addback = _non_deductible_expenses_addback(db, organization_id, year)
+    business_income = max(0.0, round(pl["net_profit"] + addback, 2))
     gross_tax = _progressive_annual_tax(business_income)
     credit = round(credit_points * CREDIT_POINT_ANNUAL, 2)
     net_tax = max(0.0, round(gross_tax - credit, 2))
@@ -74,6 +98,7 @@ def form_1301(db, organization_id: int, year: int, *, credit_points: float = 2.2
         "fields": {
             "business_revenue": pl["revenue"],
             "business_expenses": pl["expenses"],
+            "non_deductible_expenses_addback": addback,
             "business_income": business_income,           # שדה הכנסה מעסק
             "gross_income_tax": gross_tax,
             "credit_points": credit_points,
@@ -85,6 +110,8 @@ def form_1301(db, organization_id: int, year: int, *, credit_points: float = 2.2
         "notes": [
             "הכנסה מעסק בלבד; הכנסות נוספות (שכר, שכ\"ד, רווחי הון) אינן כלולות.",
             "מדרגות ונקודות זיכוי לאימות מול רשות המסים לשנת הדיווח.",
+            "החלק הלא-מוכר בהוצאות עם deduction_percent חלקי (רכב/טלפון/משרד-בית) "
+            "נוסף בחזרה להכנסה החייבת — לאימות מול רו\"ח לפי תקנות הניכוי הרלוונטיות.",
         ],
     }
 
