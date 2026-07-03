@@ -283,3 +283,62 @@ DEPLOY (Wave 2, backend-only slice): user explicitly asked to deploy the
   NOW COMPLETE (backend deployed to prod; this frontend slice not yet
   deployed — next deploy should bundle it with whatever Step 8/9 work
   follows, per the user's "deploy now, then continue" pattern).
+
+STEP 8 (SUMIT API gaps 8.1-8.6): DONE with major scope correction. Audited
+  against the real OpenAPI spec (api.sumit.co.il/swagger/v1/swagger.json,
+  pulled directly — WebFetch's own summarization silently dropped schema
+  fields, so fetch-and-grep-locally is the reliable method here) instead of
+  guessing field names. Most of the plan's 8.1-8.5 wording assumed SUMIT
+  capabilities that don't exist; user approved creating live test artifacts
+  in prod if needed for this audit (not exercised — everything below is
+  TDD against mocks, matching advisor guidance not to add more live-write
+  residue like doc 1001/customer 2095660683 until genuinely needed).
+  8.1 (future documents): create_scheduled_document(document, schedule_date)
+    was already an honest stub (raised with a clear message) — replaced with
+    create_document_from_existing(document_id), the real endpoint shape
+    (clones an existing DocumentID; there is no date-driven scheduling
+    endpoint at all). Wired into DocumentIssuanceService.
+    create_scheduled_occurrence() + new POST /financial/documents/{id}/
+    schedule-next. Commits d8aa70a, f6ac68a.
+  8.2 (checks/cash): built exactly as specified — DocumentRequest.payments
+    (DocumentPayment: cash/cheque) adds SUMIT's real "Payments" array to
+    document creation, field names taken directly from
+    Accounting_Typed_Payment_Cheque (BankNumber/BranchNumber/AccountNumber/
+    ChequeNumber/DueDate). Wired through the service and
+    POST /financial/documents. Commits d8aa70a, f6ac68a.
+  8.3 (mandates + returns): NO create-mandate endpoint exists anywhere in
+    the 84-path spec — recurring items are created some other way (SUMIT's
+    own UI), not via API. list/cancel/update of an EXISTING
+    RecurringCustomerItemID were already fully wired (/api/payments/
+    recurring/*, payment_request_service.py) before this audit — nothing
+    to build for that half. Found and fixed a real bug while auditing:
+    POST /api/payments/recurring/{id}/charge routed to charge_recurring(),
+    a documented Not-Supported Stub that always raises a bare Exception
+    (not SumitAPIError) — uncaught, would leak a raw 500 in prod. Removed
+    the route (kept the stub method). Commit 1662d6b.
+  8.4 (refunds/credits): reshaped by the audit — there is NO refund/reversal
+    endpoint anywhere in the API. But OriginalDocumentID on document-create
+    is SUMIT's own documented mechanism for "keeping a relationship between
+    an original and a created document (such as credits for debit
+    invoices)" — a linked credit note IS the refund primitive SUMIT
+    exposes. Built DocumentRequest.original_document_id +
+    DocumentIssuanceService.create_document(original_invoice_id=...):
+    org-scoped lookup, passes external_id as OriginalDocumentID, reduces
+    the original invoice's local balance (floors at 0, PAID when fully
+    offset else PARTIALLY_PAID). Commits d8aa70a, f6ac68a.
+  8.5 (chargeback alerts): documented as a real gap, NOT built. No
+    chargeback-specific endpoint or webhook trigger type exists (triggers
+    are generic CRM-entity CreateOrUpdate/Create/Update/Archive/Delete,
+    nothing payment-specific). The only signal, Payment.Status, is
+    undocumented free text — any detection would be a heuristic guess with
+    no real chargeback data to validate it against. Per advisor guidance,
+    building speculative code here was explicitly deprioritized in favor
+    of Step 9.
+  8.6: already correctly deferred to Epic 5 per the plan's own text — no
+    action needed.
+  Full findings + exact field names documented in SUMIT_API_REFERENCE.md's
+  new "Wave 2 Step 8 additions" section. 12 new tests across 3 files
+  (test_sumit_document_api_gaps.py, test_document_issuance_step8.py,
+  test_payments_recurring_routes.py), all mocked, zero live SUMIT writes.
+  499 passed. NOT yet deployed — bundling with Step 9 per the user's
+  established "build a coherent batch, deploy together" pattern.
