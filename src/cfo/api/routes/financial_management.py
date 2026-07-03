@@ -393,7 +393,7 @@ async def get_cost_breakdown(
 
 @router.get("/costs/profitability")
 async def analyze_profitability(
-    by: str = Query('customer', regex='^(customer|product|segment)$'),
+    by: str = Query('customer', pattern='^(customer|product|segment)$'),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):
@@ -465,7 +465,7 @@ async def generate_vat_report(
 
 @router.get("/tax/advance")
 async def calculate_tax_advance(
-    period: str = Query(..., regex='^[0-9]{4}-[0-9]{2}$'),
+    period: str = Query(..., pattern='^[0-9]{4}-[0-9]{2}$'),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):
@@ -479,7 +479,7 @@ async def calculate_tax_advance(
 
 @router.get("/tax/withholding")
 async def generate_withholding_report(
-    period: str = Query(..., regex='^[0-9]{4}-[0-9]{2}$'),
+    period: str = Query(..., pattern='^[0-9]{4}-[0-9]{2}$'),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):

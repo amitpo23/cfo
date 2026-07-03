@@ -25,7 +25,7 @@ def test_org_collection_defaults(fresh_org):
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
-        org = db.query(Organization).get(org_id)
+        org = db.get(Organization, org_id)
         assert org.collection_reminders_enabled is False
         assert org.collection_sms_sender is None
     finally:

@@ -1,6 +1,8 @@
 """
 FastAPI application initialization
 """
+from contextlib import asynccontextmanager
+
 import httpx
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,12 +19,22 @@ from ..database import init_db
 from ..integrations.sumit_integration import SumitAPIError
 from ..services.data_sync_service import SumitNotConfiguredError
 
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Initialize database tables on startup."""
+    if settings.auto_create_db:
+        init_db()
+    yield
+
+
 app = FastAPI(
     title=settings.app_name,
     description="CFO Financial Management System with SUMIT API Integration",
     version="2.0.0",
     docs_url="/api/docs",
-    redoc_url="/api/redoc"
+    redoc_url="/api/redoc",
+    lifespan=_lifespan,
 )
 
 
@@ -206,13 +218,6 @@ app.include_router(
 
 # Cron jobs authenticate with CRON_SECRET, not user tokens
 app.include_router(cron.router, prefix="/api", tags=["Scheduled Jobs"])
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database tables on startup."""
-    if settings.auto_create_db:
-        init_db()
 
 
 @app.get("/")

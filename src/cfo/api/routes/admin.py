@@ -484,8 +484,7 @@ async def google_login(
     if user:
         if not user.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is disabled")
-        from datetime import datetime
-        user.last_login = datetime.utcnow()
+        user.last_login = datetime.now(timezone.utc)
         db.commit()
         db.refresh(user)
         return _token_for_user(user)
@@ -528,8 +527,7 @@ async def login(
         )
     
     # Update last login
-    from datetime import datetime
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now(timezone.utc)
     db.commit()
     
     # Log login

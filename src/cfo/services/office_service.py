@@ -113,7 +113,7 @@ def register_client(
     )
 
     if existing and existing.target_organization_id:
-        client_org = db.query(Organization).get(existing.target_organization_id)
+        client_org = db.get(Organization, existing.target_organization_id)
     else:
         client_org = Organization(
             name=name,

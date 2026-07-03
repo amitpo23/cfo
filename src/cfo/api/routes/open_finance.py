@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
@@ -373,7 +373,7 @@ async def set_insight_status(
         raise HTTPException(404, "Insight not found")
     row.status = status
     if status == "resolved":
-        row.resolved_at = datetime.utcnow()
+        row.resolved_at = datetime.now(timezone.utc)
     db.commit()
     return {"id": insight_id, "status": status}
 
@@ -834,7 +834,7 @@ async def webhook(
             err = event.get("connectionError")
             if isinstance(err, dict) and err.get("message"):
                 row.last_error = err["message"]
-            row.last_refresh_at = datetime.utcnow()
+            row.last_refresh_at = datetime.now(timezone.utc)
             db.commit()
 
     # --- Payment Status Change: {paymentId, paymentStatus, userId, orgId, ...}

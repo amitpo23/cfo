@@ -135,7 +135,7 @@ class SyncEngine:
 
         # Update last_synced_at on connection
         if self.connection_id:
-            conn = self.db.query(IntegrationConnection).get(self.connection_id)
+            conn = self.db.get(IntegrationConnection, self.connection_id)
             if conn:
                 conn.last_synced_at = datetime.now(timezone.utc)
 
@@ -589,7 +589,7 @@ def get_connector_for_org(
     """
     from ..models import Organization
 
-    org = db.query(Organization).get(organization_id)
+    org = db.get(Organization, organization_id)
     if not org:
         raise ValueError(f"Organization {organization_id} not found")
 

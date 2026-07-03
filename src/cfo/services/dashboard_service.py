@@ -257,7 +257,7 @@ class DashboardService:
             # Get contact name
             contact_name = None
             if inv.contact_id:
-                contact = self.db.query(Contact).get(inv.contact_id)
+                contact = self.db.get(Contact, inv.contact_id)
                 if contact:
                     contact_name = contact.name
 
@@ -349,7 +349,7 @@ class DashboardService:
         for bill in bills:
             vendor_name = None
             if bill.vendor_id:
-                vendor = self.db.query(Contact).get(bill.vendor_id)
+                vendor = self.db.get(Contact, bill.vendor_id)
                 if vendor:
                     vendor_name = vendor.name
 

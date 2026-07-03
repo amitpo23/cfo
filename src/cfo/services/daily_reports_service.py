@@ -194,7 +194,7 @@ def supplier_breakdown(db, organization_id: int, year: int, month: int) -> dict[
             continue
         name = "ספק"
         if bill.vendor_id:
-            c = db.query(Contact).get(bill.vendor_id)
+            c = db.get(Contact, bill.vendor_id)
             if c:
                 name = c.name or name
         totals[name] = totals.get(name, 0.0) + _f(bill.total)

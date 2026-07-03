@@ -121,9 +121,9 @@ def set_opening_balances(
     db: Session = Depends(get_db_session),
 ):
     """Set opening balances. Body: {as_of: 'YYYY-MM-DD', balances: [{account, debit, credit}]}."""
-    from datetime import datetime
+    from datetime import datetime, timezone
     as_of_raw = payload.get("as_of")
-    as_of = datetime.fromisoformat(as_of_raw).date() if as_of_raw else datetime.utcnow().date()
+    as_of = datetime.fromisoformat(as_of_raw).date() if as_of_raw else datetime.now(timezone.utc).date()
     return ledger_service.set_opening_balances(db, org_id, as_of, payload.get("balances", []))
 
 

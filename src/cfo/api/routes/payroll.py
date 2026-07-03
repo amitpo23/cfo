@@ -4,7 +4,7 @@ Organization-scoped. Salary math is deterministic (services/payroll_service.py).
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -74,7 +74,7 @@ async def update_employee(employee_id: int, body: EmployeeRequest, org_id: int =
         setattr(emp, field, getattr(body, field))
     if body.start_date:
         emp.start_date = date.fromisoformat(body.start_date)
-    emp.updated_at = datetime.utcnow()
+    emp.updated_at = datetime.now(timezone.utc)
     db.commit()
     return _emp_dict(emp)
 

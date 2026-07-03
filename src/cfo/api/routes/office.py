@@ -9,6 +9,7 @@ Accounting-office routes (ניהול משרד) + cross-source synthesis.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -60,7 +61,7 @@ async def set_office_settings(
     return office_service.set_office_credentials(
         db, org_id,
         sumit_api_key=body.sumit_api_key,
-        open_finance=body.open_finance.dict() if body.open_finance else None,
+        open_finance=body.open_finance.model_dump() if body.open_finance else None,
     )
 
 
@@ -87,7 +88,7 @@ async def register_client(
             sumit_api_key=body.api_key,
             business_type=body.business_type,
             tax_id=body.tax_id,
-            open_finance=body.open_finance.dict() if body.open_finance else None,
+            open_finance=body.open_finance.model_dump() if body.open_finance else None,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -147,7 +148,7 @@ async def sync_client(
 ):
     client = _client_or_404(db, org_id, client_id)
     result = await _run_sync(db, client.target_organization_id, entity_types)
-    client.last_synced_at = __import__("datetime").datetime.utcnow()
+    client.last_synced_at = datetime.now(timezone.utc)
     db.commit()
     return {"company_id": client.company_id, **result}
 
@@ -168,7 +169,7 @@ async def sync_all_clients(
             continue
         try:
             res = await _run_sync(db, client.target_organization_id, entity_types)
-            client.last_synced_at = __import__("datetime").datetime.utcnow()
+            client.last_synced_at = datetime.now(timezone.utc)
             results.append({"company_id": client.company_id, "ok": True, **res})
         except HTTPException as exc:
             results.append({"company_id": client.company_id, "ok": False, "error": exc.detail})

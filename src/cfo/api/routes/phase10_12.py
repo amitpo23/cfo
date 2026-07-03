@@ -105,7 +105,7 @@ async def forecast_cash_flow(
 
 @router.get("/forecast/budget-vs-actual")
 async def budget_vs_actual(
-    period: str = Query("monthly", regex="^(monthly|quarterly|yearly)$"),
+    period: str = Query("monthly", pattern="^(monthly|quarterly|yearly)$"),
     year: int = 2026,
     month: Optional[int] = None,
     db: Session = Depends(get_db),
@@ -193,7 +193,7 @@ async def tax_report_1214(
 @router.get("/audit/export")
 async def export_for_auditor(
     year: int = 2026,
-    format: str = Query("json", regex="^(json|csv)$"),
+    format: str = Query("json", pattern="^(json|csv)$"),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):

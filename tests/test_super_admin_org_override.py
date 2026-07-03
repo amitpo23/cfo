@@ -8,7 +8,7 @@ org, must reach writes/sync (not just reads), and must NEVER apply to a
 non-super user — that would be a cross-tenant financial-data leak.
 """
 import pytest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from cfo.database import SessionLocal
 from cfo.models import (
@@ -189,7 +189,7 @@ def test_super_admin_control_includes_command_center_queues(client, fresh_org, s
             organization_id=org_id,
             source="sumit",
             status=SyncStatus.COMPLETED,
-            finished_at=datetime.utcnow() - timedelta(hours=30),
+            finished_at=datetime.now(timezone.utc) - timedelta(hours=30),
         ))
         db.commit()
     finally:

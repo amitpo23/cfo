@@ -111,7 +111,7 @@ def test_reregister_same_company_updates_in_place(client, owner):
 
     db = SessionLocal()
     try:
-        org = db.query(Organization).get(first_org_id)
+        org = db.get(Organization, first_org_id)
         assert org.name == "שם מעודכן"
         assert org.business_type == "company"
         assert org.tax_id == "222"
