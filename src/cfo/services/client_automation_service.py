@@ -265,15 +265,15 @@ async def run_post_sync_tasks(
         "sources": sorted(set(sources or active_sources(db, organization_id))),
     }
 
-    if "sumit" in result["sources"]:
-        try:
-            from .data_sync_service import DataSyncService
-
-            result["transactions"] = await DataSyncService(db, organization_id).sync_all()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Transaction sync failed for org %s: %s", organization_id, exc)
-            db.rollback()
-            result["transactions_error"] = str(exc)
+    # DataSyncService.sync_all() (the legacy Account/Transaction ledger) is
+    # NOT called here on purpose. It compares SUMIT's numeric document_type
+    # against string literals, which is always False, so every document was
+    # silently written as a zero-amount EXPENSE transaction with a garbage
+    # "<code>: Unknown" description -- confirmed live in prod (127 such rows
+    # for one real org). financial_reports_service's /reports endpoints read
+    # from that same table and are unreliable until a repair/retire decision
+    # is made; see docs/PRODUCT_AUDIT_AND_ROADMAP.md. Existing rows are left
+    # untouched -- this only stops new ones from being created.
 
     try:
         from . import financial_synthesis
