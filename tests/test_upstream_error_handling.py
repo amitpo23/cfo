@@ -64,6 +64,32 @@ def test_data_sync_service_env_fallback_blocked_for_non_default_org(fresh_org, m
     assert raised is not None, "expected SumitNotConfiguredError, env creds leaked to another org"
 
 
+def test_get_connector_for_org_raises_sumit_not_configured_error(fresh_org, monkeypatch):
+    """sync_engine.get_connector_for_org היה מרים ValueError גולמי כשאין מפתח
+    SUMIT. כמה קוראים (למשל inventory_service, document_issuance_service)
+    מעבירים את השגיאה הלאה בלי except ValueError מקומי, ומסתמכים על כך
+    שהחריגה תגיע ל-handler ברמת האפליקציה (SumitNotConfiguredError) ולא
+    תתפוצץ ל-500 גולמי במקום שקורא לה בלי type-specific catch."""
+    import cfo.config as config_module
+    from cfo.database import SessionLocal
+    from cfo.services.data_sync_service import SumitNotConfiguredError
+    from cfo.services.sync_engine import get_connector_for_org
+
+    monkeypatch.setattr(config_module.settings, "sumit_api_key", None)
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        raised = None
+        try:
+            get_connector_for_org(db, org_id, "sumit")
+        except SumitNotConfiguredError as e:
+            raised = e
+        assert raised is not None, "expected SumitNotConfiguredError, got a different/no exception"
+    finally:
+        db.close()
+
+
 def test_data_sync_service_env_fallback_still_works_for_default_org(owner, monkeypatch):
     """אין רגרסיה: ארגון ברירת המחדל (org 1) עדיין יכול ליפול חזרה למפתח ה-env,
     בדיוק כמו ב-get_sumit_integration/get_connector_for_org."""
@@ -84,8 +110,11 @@ def test_data_sync_service_env_fallback_still_works_for_default_org(owner, monke
             db.close()
 
     integration = asyncio.run(_run())
-    assert integration is not None
-    assert integration.api_key == "fake-env-key-for-default-org"
+    try:
+        assert integration is not None
+        assert integration.api_key == "fake-env-key-for-default-org"
+    finally:
+        asyncio.run(integration.client.aclose())
 
 
 def test_post_binary_upstream_4xx_raises_sumit_api_error():
