@@ -21,3 +21,7 @@ def test_smoke_runs_against_local_app(client, owner):
     assert login["ok"], "login מקומי חייב להצליח — owner קיים מה-conftest"
     # אף תוצאה לא מתפוצצת בלי סטטוס; כשלים מדווחים, לא נזרקים
     assert all(isinstance(r["status"], int) for r in results)
+    # נתיבים אמיתיים (לא 404) — תפס בעבר "financial/reports/profit-loss" ו-"ap/aging" שגויים
+    by_path = {r["path"]: r for r in results}
+    assert by_path["/api/reports/profit-loss"]["status"] != 404
+    assert by_path["/api/daily-reports/ap-aging"]["status"] != 404

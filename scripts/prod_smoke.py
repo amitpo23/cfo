@@ -14,11 +14,11 @@ import httpx
 CRITICAL_PATHS = [
     ("/api/health", "בריאות בסיסית"),
     ("/api/dashboard/executive", "דשבורד מנהלים"),
-    ("/api/financial/reports/profit-loss", "רווח והפסד"),
+    ("/api/reports/profit-loss", "רווח והפסד"),
     ("/api/ledger/balance-sheet", "מאזן"),
     ("/api/ledger/trial-balance", "מאזן בוחן"),
     ("/api/ar/aging", "גיול לקוחות"),
-    ("/api/ap/aging", "גיול ספקים"),
+    ("/api/daily-reports/ap-aging", "גיול ספקים"),
     ("/api/daily-reports/vat", "דוח מעמ"),
     ("/api/engine/status", "סטטוס מנוע"),
     ("/api/business/menu", "תפריט יכולות"),
