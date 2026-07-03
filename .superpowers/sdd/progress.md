@@ -735,3 +735,27 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 3: ran the suggested random.*
   happen (only the tz-fix was made to that file); the import-list change
   was in the test file, not the service file. Recorded here since commit
   history isn't being amended for a message-only inaccuracy.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 4: followed up on the previous
+  iteration's "scan for other silently-swallowed-exception patterns"
+  suggestion. cfo_brain_service.py's run_analysis() calls 9 _*_insights()
+  generators directly with NO isolation between them (unlike alert_
+  engine.evaluate_all(), which already isolates each check via
+  _run_check) -- a single generator's exception aborts the entire
+  analysis. Since run_post_sync_tasks (client_automation_service.py)
+  wraps the WHOLE run_analysis() call in a try/except that just logs and
+  continues, this is worse than the alert_engine case: one broken
+  generator would silently zero out EVERY insight for an org on every
+  subsequent sync, invisibly, org-wide.
+  Fix (TDD): RED test monkeypatches _cashflow_insights to raise, confirms
+  the current code aborts run_analysis() entirely (no insights at all,
+  not even from unrelated generators) -- then added _run_generator(),
+  a direct copy of AlertEngine._run_check's isolation pattern, wrapping
+  all 9 generator calls + a self.last_run_failures list (mirroring
+  AlertEngine's own attribute name/shape exactly, for consistency).
+  GREEN: the other 8 generators' insights still come through when one
+  fails. 546 passed, qa_gate PASSED, deployed to prod, 16/16 smoke.
+  Test coverage for cfo_brain_service.py's individual insight generators
+  (8 of 9 still only exercised indirectly via run_analysis, same gap as
+  alert_engine had before iteration 3) remains a candidate for a future
+  iteration -- not pursued now given time already spent this session.
