@@ -71,3 +71,32 @@ T1 (SDD): complete (commit bf47e02..12d7b0c) — implementer 34c5e81 + fix wave 
   NOTE: branch HEAD advanced to efc1662 (frontend T2) by concurrent actor during this run.
 FINAL REVIEW (opus): Ready to merge — BOLA/IDOR+escalation fully closed on POST/PATCH/DELETE; passwords bcrypt+not exposed; guards intact; FE omits super_admin.
   Minor (follow-up, non-blocking): (1) no AuditLog on user mutations; (2) PATCH ignores email field; (3) super-admin POST with bad org_id -> 500 on Postgres; (4) 404-before-403 user enumeration.
+
+# === EPIC 1: יציבות ותשתית ===
+Plan: docs/superpowers/plans/2026-07-03-epic1-stability.md
+Spec: docs/superpowers/specs/2026-07-03-epic1-stability-design.md
+Decisions: audit-first; prod access approved (additive only); SUMIT write-back via quote+cancel
+Base before Task 1: fb36504
+Task 1: complete (commits fb36504..c1441d9, review clean)
+  Minor (final review): report arithmetic narrative inconsistent (cosmetic); BudgetService constructed inside loop (trivial).
+Base before Task 2: c1441d9
+Task 2: complete (commits c1441d9..5ffce21, review clean)
+  Minor (final review): DROP COLUMN test needs SQLite>=3.35 (plan-mandated); env-file open without context manager + single-quote strip; no FileNotFoundError handling.
+  FINDING: local cfo.db has drift too (collection_reminders table + 2 org columns missing).
+Base before Task 3: 5ffce21
+Task 3: complete (commits 5ffce21..cdd69c6 = c9c1036 impl + cdd69c6 fix; re-review APPROVED)
+  Fixed Important: NOT-NULL guard now keys only on server_default (CreateColumn never emits python default); alembic conflict except narrowed to DatabaseError + tested.
+  Minor (final review): Postgres path unverified locally — Tasks 7/8 verify live vs Neon; fallback test pins OperationalError only; " NOT NULL" substring replace hack (pre-existing).
+Base before Task 4: cdd69c6
+Task 4: complete (commits cdd69c6..1cff52a, review APPROVED)
+  Audit: 231 GET routes — 167 OK, 35 env-gated (clean 400), 4 real-bug routes (one root cause -> Task 4.1), 25 artifacts. Doc: docs/audits/2026-07-03-route-audit.md.
+  Spawned Task 4.1: /api/sync/sumit/* uncaught ValueError from DataSyncService._get_sumit (data_sync_service.py:53) -> raw 500. Fix at route/domain-exception layer (service used by CLI too — no HTTPException in service).
+  Minor (final review): sumit_integration.py:275 _post_binary raise_for_status uncaught -> 503 instead of accurate 4xx (include in 4.1).
+Base before Task 4.1: 1cff52a
+Task 4.1: complete (commits 1cff52a..1983f1e, review APPROVED)
+  SumitNotConfiguredError(ValueError) + 400 handler; _post_binary -> SumitAPIError. 453 passed.
+  Spawned Task 4.2: (a) _get_sumit env fallback ungated (any org gets env creds — cross-tenant leak; gate to org_id==1 like dependencies.py:298); (b) sync_engine.py:625 bare ValueError same family.
+Base before Task 4.2: 1983f1e
+Task 4.2: implemented (commits 1983f1e..03043ac = 997ba6b fix + 03043ac test; 456 passed)
+  REVIEW INCOMPLETE — reviewer died on monthly spend limit. RESUME: re-dispatch task reviewer on package .superpowers/sdd/review-1983f1e..03043ac.diff (risks: gate airtight for non-org-1? vault flow untouched? tests exercise real path?).
+SESSION END (user: "סיים", spend limit hit). NEXT: review 4.2 -> Tasks 5 (prod_smoke) -> 6 (SUMIT write-back) -> 7 (Neon drift) -> 8 (deploy+readiness). Briefs ready: .superpowers/sdd/task-{5,6,7,8}-brief.md.
