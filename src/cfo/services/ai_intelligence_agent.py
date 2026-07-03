@@ -5,6 +5,7 @@ Retrieval-Augmented Generation for financial insights
 from datetime import datetime, timedelta, date, timezone
 from typing import Dict, List, Optional, Any
 from decimal import Decimal
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from enum import Enum
 
@@ -119,9 +120,15 @@ class AIIntelligenceAgent:
         Calculate overall financial health score (0-100)
         """
         scores = {}
+        unavailable_components = []
 
-        # 1. Liquidity score (0-25)
+        # 1. Liquidity score (0-25) — None means we couldn't measure it (no bank
+        # balance / no expense history), not that liquidity is bad; scored 0 so
+        # the aggregate stays honest-conservative rather than silently omitted.
         liquidity_score = self._calculate_liquidity_score()
+        if liquidity_score is None:
+            unavailable_components.append("liquidity")
+            liquidity_score = 0.0
         scores["liquidity"] = liquidity_score
 
         # 2. Revenue trend score (0-25)
@@ -141,6 +148,7 @@ class AIIntelligenceAgent:
         return {
             "overall_score": overall_score,
             "component_scores": scores,
+            "unavailable_components": unavailable_components,
             "health_status": self._get_health_status(overall_score),
             "areas_of_concern": self._identify_areas_of_concern(scores),
             "recommendations": self._get_improvement_recommendations(scores),
@@ -270,10 +278,29 @@ class AIIntelligenceAgent:
 
     # ==================== Scoring Methods ====================
 
-    def _calculate_liquidity_score(self) -> float:
-        """Calculate liquidity score (0-25)"""
-        # Would analyze cash position, AR/AP ratio, etc.
-        return 20.0
+    def _calculate_liquidity_score(self) -> Optional[float]:
+        """Calculate liquidity score (0-25) from real cash-to-burn runway.
+
+        None when there's no bank balance or no expense history to compute a
+        burn rate — we don't fabricate a constant when we can't measure this.
+        3+ months of runway scores the full 25.
+        """
+        from ..models import Account, AccountType
+
+        cash_balance = self.db.query(func.sum(Account.balance)).filter(
+            Account.organization_id == self.org_id,
+            Account.account_type == AccountType.BANK,
+        ).scalar()
+        if not cash_balance or cash_balance <= 0:
+            return None
+
+        trends = self.expense_service.analyze_spending_trends(days=90)
+        monthly_burn = trends.get("monthly_average") or 0
+        if not monthly_burn:
+            return None
+
+        runway_months = float(cash_balance) / monthly_burn
+        return min(25.0, (runway_months / 3.0) * 25.0)
 
     def _calculate_revenue_score(self) -> float:
         """Calculate revenue score (0-25)"""
