@@ -391,3 +391,59 @@ STEP 9 (AI chatbot 9.1-9.4): DONE, one item (9.5 live test) blocked on the
     nothing). Verified live in the browser against the local dev backend.
   20 new tests across tools/service/routes. 517 passed. tsc --noEmit +
   npm run build both clean. NOT yet deployed.
+
+STEP 10 (qa_gate.py): DONE, commit e392e30. Consolidated pre-deploy QA gate
+  script (scripts/qa_gate.py) running all 7 plan sections except #7 (manual
+  E2E, not automatable): full suite, route audit, local+remote schema
+  drift, frontend tsc+build, colscan, tenancy-focused subset.
+  Two real bugs found while wiring it up (not hypothetical):
+  - Route audit's own exit code is unconditionally 1 whenever ANY route
+    returns outside {200,401,403,404,422} — including the 39 already-
+    documented, verified-correct env-gated 400s (SumitNotConfiguredError
+    etc). Trusting the raw exit code would make qa_gate permanently red.
+    Fixed by having qa_gate parse the script's own printed summary line
+    and compare the failure count against a documented
+    ROUTE_AUDIT_BASELINE_FAILURES=39 constant — the actual criterion is
+    "zero NEW undocumented failures", not "exit code 0".
+  - schema_drift_check.py required DATABASE_URL to be explicitly set even
+    though cfo.config.Settings.database_url already defaults to the local
+    sqlite db — so the documented "just run it locally" usage failed with
+    exit 2. Fixed by removing the redundant guard.
+  9 new tests (test_qa_gate.py, injectable fake-subprocess runner) + 1
+  (test_schema_drift_check_script.py, real subprocess against the actual
+  script). 527 passed. Real end-to-end qa_gate run (not just its mocked
+  tests) passed all 6 automated sections against the actual repo.
+
+STEP 11 (final deploy, Wave 2 backend+frontend since the earlier
+  backend-only slice): `vercel --prod --yes` -> built + aliased to
+  cfo-2.vercel.app -> logged in as smoke-test admin -> POST
+  /api/admin/db/migrate -> {"action":"upgraded","current_revision":
+  "3a8a9532010b","schema_sync":{"tables":[],"columns":{}}} (only the new
+  ai_chat_messages migration needed applying; deduction_percent +
+  collection_cases were already live from the earlier backend-only
+  deploy) -> schema_drift_check.py --env-file against Neon: clean, no
+  drift -> prod_smoke.py 14/14 -> spot-checked GET /api/ai/chat/{session}
+  -> 200 {"messages":[]} and GET /api/collections/cases -> 200
+  {"cases":[]} live in prod -> confirmed POST /api/ai/chat still returns
+  a clean 400 ("ANTHROPIC_API_KEY חסר") rather than a 500, live against
+  prod, since the key still isn't configured in Vercel as of this deploy.
+  IMPORTANT — this deploy does NOT close out Wave 2. Per advisor review
+  before deploying: the entire AI-chat tool-use loop (messages.create,
+  tool_result round-trips, loop termination, the model's tool-call args
+  actually matching the executor's kwargs) has ONLY ever been exercised
+  against mocks — never against a real Claude response. That is 9.5, and
+  it remains genuinely open, not a formality. Also: Vercel env vars only
+  take effect on a NEW deploy, so even once the user adds
+  ANTHROPIC_API_KEY, a redeploy is required before 9.5 is testable — the
+  key alone won't activate anything on the deployment made here. Browser-
+  verification of the two existing pages this batch touched (AR dashboard
+  tab switch, DocumentManager's new result screen) against live prod
+  (not just local dev) was dispatched as a follow-up check; see the next
+  ledger entry for its outcome once it returns.
+  Remaining before Wave 2 can be marked complete: user adds
+  ANTHROPIC_API_KEY to Vercel production -> redeploy -> live 9.5 test
+  (one read-only tool call first to verify loop mechanics, then one
+  write-with-confirmation call) -> update PRODUCTION_READINESS.md +
+  SUMIT_MODULE_COVERAGE.md -> final Hebrew status report to the user.
+  Task #1 (SUMIT doc 1001 / customer 2095660683 stuck-open live-test
+  artifacts) also remains open and untouched this session.
