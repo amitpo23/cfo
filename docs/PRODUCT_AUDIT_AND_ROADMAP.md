@@ -24,11 +24,11 @@
 | # | יכולת | סטטוס | מה עובד | פער עיקרי | חומרה |
 |---|-------|-------|---------|-----------|-------|
 | 1 | **מי חייב לנו (AR)** | 🟢 real | backend אמיתי: גיול 0-30/31-60/61-90/91-120/120+, credit-score, תזכורות, תחזית גבייה. **אומת live: `/ar/aging` שטוח, total 155,320, 11 חשבוניות — הדשבורד תקין** | ערכים hardcoded ב-`ar_service` (DSO, credit_limit, last_payment) שמאחורי ה-endpoint ה-nested `/api/financial/ar/aging` בלבד; קיימים **שני** endpoints ל-AR aging (שטוח ב-cfo_dashboard, nested ב-financial_management) — שקול לאחד | P2 |
-| 2 | **מה אנחנו חייבים (AP)** | 🟡 partial | backend אמיתי: Bills מסונכרנים מ-SUMIT, גיול ספקים, לוח תשלומים — נבדק ע"י טסטים חיים | route `/ap` מרנדר **קומפוננטה שגויה** (`CFOARDashboard`) → מציג נתוני AR; שדות discount/early-payment מאופסים hardcoded; אין טסט ל-ap-aging | P1 |
+| 2 | **מה אנחנו חייבים (AP)** | 🟢 real | ~~route `/ap` מרנדר קומפוננטה שגויה~~ **תוקן**: `/ap` → `CFOAPDashboard` ייעודי (אומת ב-App.tsx, 2026-07-03) | שדות discount/early-payment עדיין hardcoded ב-`ap_service` — לא נבדק מחדש הפעם | P2 |
 | 3 | **רווח/הפסד מצטבר חודשי+יומי** | 🟢 derived | `daily_reports_service`: P&L מצטבר יומי, גיול, פירוק ספקים — מבוסס מסמכי SUMIT אמיתיים; דשבורד מחווט | הוצאות מתבססות על `Expense` (manual/SUMIT-filed), אין `fetch_expenses` ייעודי מ-SUMIT | P2 |
-| 4 | **תזרים מזומנים + תחזית** | 🟡 partial | `/dashboard/cashflow` אמיתי; forecasting (exp-smoothing/regression/ensemble) + תרחישים | **`AgreementCashFlow` ב-memory בלבד — אין טבלאות** (נתונים נעלמים ב-restart); `CashFlowDashboard` לא ב-nav; aging-stubs מאפסים | **P0** + P1 |
-| 5 | **הנהלת חשבונות כפולה (יומן/כרטסת/מאזן בוחן)** | 🟢 real | `ledger_service`: יומן מאוזן, מאזן-בוחן, כרטסת, source_ref לכל פקודה; אינווריאנט Σdebit==Σcredit נבדק; דשבורד מחווט | אין יתרות פתיחה (carry-forward); `fetch_journal_entries` ריק (נגזר, by design) | P1 |
-| 6 | **מאזן + דוחות פיננסיים** | 🟡 partial | `financial_reports_service`: מאזן, P&L, תזרים, השוואת שנים; דשבורד מחווט | `generate_balance_sheet` **חסר `derived:true`+disclaimer** (בניגוד ל-ledger); תחזית תזרים משתמשת ב-`random.uniform` | P1/P2 |
+| 4 | **תזרים מזומנים + תחזית** | 🟢 real | ~~AgreementCashFlow ב-memory בלבד~~ **תוקן**: `CashflowAgreement`/`CashflowEntry` טבלאות persist אחרי כל מוטציה (`agreement_cashflow_service.py`); ~~CashFlowDashboard לא ב-nav~~ **תוקן**: מנותב תחת `/cashflow-detail` + פריט nav | aging-stubs מאפסים — לא נבדק מחדש הפעם | P1 |
+| 5 | **הנהלת חשבונות כפולה (יומן/כרטסת/מאזן בוחן)** | 🟢 real | `ledger_service`: יומן מאוזן, מאזן-בוחן, כרטסת, source_ref לכל פקודה; אינווריאנט Σdebit==Σcredit נבדק; דשבורד מחווט. ~~אין יתרות פתיחה~~ **תוקן**: `set_opening_balances`/`get_opening_balances` + `/api/ledger/opening-balances` | `fetch_journal_entries` ריק (נגזר, by design — לא באג) | — |
+| 6 | **מאזן + דוחות פיננסיים** | 🔴 **ממצא חדש — ראה "מערכת חשבונאות כפולה" למטה** | `/api/ledger/balance-sheet` (נגזר מ-Invoice/Bill אמיתיים, מאומת חי) תקין | `/api/reports/balance-sheet` + `/api/reports/profit-loss` (`financial_reports_service`, דשבורד `/reports`) בנויים על טבלאות `Account`/`Transaction` **נפרדות לגמרי** שמאוכלסות ע"י קוד שבור/נטוש (`data_sync_service.py`) — ראה ממצא מפורט | **P0** |
 | 7 | **שליחה לבנקים (מס"ב/דוחות)** | 🟢 real | `masav_service`: קובץ מס"ב 128-תווים; `bank_report_service`; דשבורד מחווט | דורש הגדרת מוסד-שולח (Masav settings); אין ולידציית פרטי-בנק ספק; אין טסטים ל-bank_report | P1/P2 |
 | 8 | **קליטת בנק + התאמות (Open Finance)** | 🟡 partial | client ~84 מתודות; `bank_reconciliation` (התאמת תנועות→מסמכים, חלון ±7 ימים, token-overlap); insights; דשבורד מחווט | **`OPEN_FINANCE_USER_ID` חסר** (חוסם חי); אין UI הגדרת credentials פר-org; תווית "provisional" לא מוצגת; אין שכבת trust/idempotency | **P0** + P1 |
 | 9 | **הוצאות/רכש/OCR** | 🟢 real | `expense_ocr_pipeline` (getpdf→ראייה LLM→אימות ח.פ→סיווג→תיוק); `expense_filing`; `inventory`; `DocumentManager` | סיווג בלבד — **אין מנגנוני ניכוי** (רכב/בית/טלפון %) לפי פקודת מס הכנסה; אין זיהוי כפילויות מסמכים | P1 |
@@ -40,19 +40,43 @@
 
 ---
 
-## באג data-integrity שאומת ידנית — VAT split בנתיב החי (P1, לא נסגר!)
-סוכן הדיאגנוסטיקה הכריז ש"VAT split נסגר" — אבל **בדק את הקובץ הלא-נכון**. אימות ידני:
-- הנתיב החי הוא `SumitConnector` (`sync_engine.get_connector_for_org` → `sumit_connector.py:620`).
-- `sumit_connector.fetch_invoices` (שורות 222-223) ו-`fetch_bills`:
-  ```python
-  tax = Decimal(str(getattr(doc, "vat_amount", 0) or 0))
-  subtotal = Decimal(str(getattr(doc, "subtotal", None) or (total - tax)))
-  ```
-  **אין fallback של `split_inclusive`.** אם מסמך SUMIT מגיע בלי `vat_amount` → `tax=0`, `subtotal=total`.
-- ה-fallback קיים רק ב-`sumit_integration.py:337` — **נתיב שאינו בשימוש** ע"י ה-sync.
-- הזיכרון `accounting-engine-buildout` תיעד את התסמין אמפירית: "VAT לא מפוצל במסמכים המסונכרנים → פלט VAT=0".
-- **השפעה:** שורת מע"מ ביומן/כרטסת, דוח מע"מ, ו-P&L עלולים להתאפס בשקט.
-- **תיקון מוצע:** להעביר את `split_inclusive(total, issue_date)` כ-fallback ל-`sumit_connector.fetch_invoices/fetch_bills` כשחסר `vat_amount`, זהה ל-`sumit_integration`. **P1**.
+## באג data-integrity שאומת ידנית — VAT split בנתיב החי — **תוקן ✅ (2026-07-03, commit 23353ca)**
+> נשאר כאן כתיעוד-היסטורי; אומת מחדש 2026-07-03 שהתיקון חי בקוד. אל תשכפל את החקירה.
+
+הבאג המקורי: `sumit_connector.py` (כיום ב-`src/cfo/services/sumit_connector.py` — הקובץ עבר מיקום) לא נפל-back ל-`split_inclusive` כש-SUMIT לא שולח `vat_amount`, מה שיצר `tax=0` בשקט. **מאומת תוקן**: פונקציה ייעודית `_derive_subtotal_tax(doc, total)` (שורה 25) כיום מפעילה `split_inclusive(total, doc_day)` בדיוק כשחסר `vat_amount`, ומשמשת גם ב-`fetch_invoices` וגם ב-`fetch_bills`. אין פעולה נוספת נדרשת.
+
+---
+
+## ממצא חדש (2026-07-03) — שתי מערכות חשבונאות מקבילות, אחת נגזרת מקוד שבור/נטוש (P0)
+
+**התגלה תוך כדי חקירת ה-P1 הישן "`generate_balance_sheet` חסר `derived:true`+disclaimer"** — התברר להיות חמור בהרבה ממה שהניסוח ההוא רמז.
+
+### הראיה
+לאותו ארגון (org 1, חברת SUMIT 439924597, 21 חשבוניות אמיתיות ₪512,327 + 875 חשבונות ₪-942,428 מסונכרנים), שני endpoints שאמורים שניהם להציג "מאזן" מחזירים מספרים שאין ביניהם שום קשר:
+
+| | `/api/ledger/balance-sheet` (נגזר מ-Invoice/Bill, `/ledger` ב-nav) | `/api/reports/balance-sheet` (`financial_reports_service`, `/reports` ב-nav) |
+|---|---|---|
+| total_assets | **-503,734.34** | **-24,634.68** |
+| ספקים (AP) | **-942,428.02** — תואם בדיוק את סכום ה-875 חשבונות בפרוד | (לא מופיע — total_liabilities=0) |
+| `/api/reports/profit-loss` (טווח רחב) | — | revenue=372,658.74, expenses=1,510,916.05 — **לא תואם שום סכום אמיתי** |
+
+### שורש הבעיה — לא "חסר disclaimer", אלא נתיב-קוד נטוש ושבור
+1. `/api/reports/*` (balance-sheet, profit-loss) נקראים מ-`FinancialReportsService`, שקורא מטבלאות `Account`/`Transaction` — **טבלאות נפרדות לגמרי** מ-`Invoice`/`Bill` שמזינות את `/ledger` ואת `/dashboard/pnl` האמיתי.
+2. טבלאות אלה מאוכלסות (בכל sync אמיתי!) ע"י `DataSyncService.sync_all()` (`data_sync_service.py:129`), שמופעל אוטומטית מתוך `run_post_sync_tasks` — שמופעל מ-4 נתיבים חיים אמיתיים: `cfo_sync.py` (ה-sync הראשי), `office.py`, `cron.py`, `admin.py`.
+3. **הבאג בפועל**: `is_income = doc.document_type in ['invoice', 'receipt', 'tax_invoice']` — משווה קוד-מסמך **מספרי** של SUMIT (לדוגמה `15`) מול רשימת **strings** → תמיד `False`. תוצאה נבדקה ישירות בפרוד: **כל** שורה ב-`transactions` עבור org 1 (127 שורות) יצאה `transaction_type='EXPENSE'`, `amount=0.00`, `description='15: Unknown'` — לא נתוני-בנק אמיתיים, לא seed/demo, אלא תוצר-לוואי ישיר של קוד שהתנתק מהמוסכמה המספרית של SUMIT (אותה מוסכמה שתוקנה השבוע במקומות אחרים: "SUMIT doc-type 15→16").
+4. אישוש: כל ה-5 ה"ארגונים" בפרוד מציגים בדיוק אותם 5 חשבונות-שלד `source='sumit'` ביתרה 0.00 (Bank Account/AR/AP/Revenue/Expenses) — לא נתון עסקי אמיתי, אלא תוצר של אתחול/onboarding.
+5. `DataSyncDashboard.tsx` — הממשק המקורי שהיה אמור לשמש להפעלה ידנית של `DataSyncService` — **אינו מנותב** ב-`App.tsx` (dead component). אף משתמש אמיתי לא בוחר להריץ את הנתיב הזה במודע; הוא רץ **רק** כתוצר-לוואי אוטומטי, בלי ידיעת המשתמש.
+6. **טווח השפעה רחב יותר ממה שנבדק כאן**: מלבד `financial_reports_service.py`, גם `ai_analytics_service.py`, `ap_service.py`, `ar_service.py`, `bank_statement_service.py`, `budget_service.py`, `cost_analysis_service.py`, `fees_service.py`, `forecasting_service.py`, `kpi_service.py`, `tax_service.py` מייבאים את `Account`/`Transaction` — **לא נבדק בסבב הזה** אם ומה כל אחד מהם קורא מהם בפועל בנתיב החי; זו נקודת-המשך המחייבת לפני כל תיקון.
+
+### למה זה לא תוקן במקום — צריך החלטת מוצר, לא רק תיקון-קוד
+- תיקון ה-type-comparison לבד **לא מספיק** — יהפוך "נתונים ברור-שגויים" (אפסים, "Unknown") ל"נתונים סבירים-אבל-שגויים" משתי מערכות שעדיין לא יתאמו זו לזו. זה מסוכן יותר, לא פחות.
+- הפתרון הנקי (retire את `/reports`'s balance-sheet/P&L + `DataSyncService`, או מחיקת השורות הקיימות) הוא פעולה הרסנית על נתוני-פרוד קיימים → כלל-העצירה (א) של ה-goal-directive. **לא בוצע ולא יבוצע ללא אישור.**
+- האם המערכת המקבילה (`Account`/`Transaction`) הייתה כוונה מוצרית נפרדת (view על בסיס-מזומן, למשל) או קוד-שרד נטוש — שאלת-כוונה שלא ניתן להכריע מהקוד לבד.
+
+### המלצה
+1. **קצר-טווח, לא-הרסני**: הפסק את הפעלת `DataSyncService.sync_all()` מתוך `run_post_sync_tasks` (מונע יצירת שורות-זבל נוספות; לא נוגע בנתונים קיימים) — **מותנה** באימות שאף אחד מ-10 השירותים ברשימה בסעיף 6 לא תלוי בקריאה הזו בפועל (לא בוצע עדיין).
+2. **ארוך-טווח**: להחליט retire מול repair מול "זו כוונה מוצרית" עבור `/reports`, ואם retire — מחיקת השורות הקיימות טעונה אישור מפורש (הרסני).
+3. עד להחלטה: `/reports`'s balance-sheet/P&L **אינם אמינים** ואסור להשתמש בהם לדיווח אמיתי — `/ledger` ו-`/dashboard/pnl` הם מקור-האמת הנכון כרגע.
 
 ---
 

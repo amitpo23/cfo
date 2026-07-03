@@ -457,3 +457,55 @@ STEP 11 (final deploy, Wave 2 backend+frontend since the earlier
   SUMIT_MODULE_COVERAGE.md -> final Hebrew status report to the user.
   Task #1 (SUMIT doc 1001 / customer 2095660683 stuck-open live-test
   artifacts) also remains open and untouched this session.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 1 (gap-mapping): Wave 1+2 are green
+  in prod (per the goal directive's own gate: no improvement loop before
+  they're green), so entered the loop per docs/superpowers/plans/
+  2026-07-03-rezef-goal-directive.md. Scanned docs/PRODUCT_AUDIT_AND_
+  ROADMAP.md (dated 2026-06-19, from a 20-agent read-only audit) against
+  current code — found it materially stale. Confirmed FIXED (already, not
+  by me this iteration): VAT-split fallback (commit 23353ca, this
+  morning), `/ap` route now renders CFOAPDashboard (was CFOARDashboard),
+  AgreementCashFlow now persists to CashflowAgreement/CashflowEntry
+  tables, CashFlowDashboard now routed+in nav at /cashflow-detail, ledger
+  opening-balances now implemented. Updated the roadmap doc to match
+  reality (all with file/line evidence) rather than trust stale flags —
+  this is exactly the "multi-agent audit reliability" lesson from memory
+  product-audit-2026-06 in the other direction: this time verifying
+  against live code/DB instead of trusting a document.
+  NEW FINDING (P0, evidence-backed, NOT fixed, NOT autonomous — surfaced
+  to user): investigated the roadmap's old P1 "balance_sheet missing
+  derived:true+disclaimer" and found it understates the problem badly.
+  `/api/reports/balance-sheet` + `/api/reports/profit-loss`
+  (financial_reports_service, dashboard `/reports`) read Account/
+  Transaction tables that are ENTIRELY DISCONNECTED from the real
+  SUMIT-synced Invoice/Bill data that /ledger and /dashboard/pnl
+  correctly use. Measured live in prod for org 1 (21 real invoices
+  ₪512,327 + 875 real bills -₪942,428): /api/ledger/balance-sheet's AP
+  line = -942,428.02 (exact match to real bills sum, correct); /api/
+  reports/balance-sheet total_assets = -24,634.68 (built from just 6
+  Account rows / 127 Transaction rows that are NOT real bank data — every
+  sampled row is transaction_type=EXPENSE, amount=0.00, description=
+  "15: Unknown"). Root cause: data_sync_service.py:129 `is_income = doc.
+  document_type in ['invoice','receipt','tax_invoice']` compares SUMIT's
+  NUMERIC document_type code against string literals -> always False ->
+  every doc miscategorized as a $0 expense with a garbage description.
+  This runs on EVERY real sync via run_post_sync_tasks (called from
+  cfo_sync.py, office.py, cron.py, admin.py) -- not a one-time artifact,
+  actively generating garbage rows in prod right now.
+  Did NOT fix the type-comparison bug: per advisor consultation, fixing
+  it alone would convert obviously-wrong data (zeros, "Unknown") into
+  plausibly-wrong data from a system that still wouldn't reconcile with
+  /ledger -- more dangerous, not less. Did NOT purge/retire anything:
+  that's destructive to existing prod rows -> stop-rule (א) in the goal
+  directive, and whether this Account/Transaction system is abandoned
+  cruft or an intended separate cash-basis view is a product-intent
+  question code can't answer. ALSO found (not investigated further this
+  iteration, flagged for next pass): 10 other services (ai_analytics_
+  service, ap_service, ar_service, bank_statement_service, budget_
+  service, cost_analysis_service, fees_service, forecasting_service,
+  kpi_service, tax_service) import Account/Transaction too -- unknown how
+  many actually depend on this broken data path in their live routes.
+  Full evidence + recommendation written into PRODUCT_AUDIT_AND_ROADMAP.md
+  under "ממצא חדש — שתי מערכות חשבונאות מקבילות". Reported to user for a
+  repair/retire/keep-as-cash-view decision before any further action here.
