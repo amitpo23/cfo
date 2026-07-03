@@ -542,3 +542,52 @@ USER DECISION + FIX (2026-07-03): user chose "עצור והשבת מקור הז�
   services that import Account/Transaction were not audited for real
   dependency this iteration. Task #6 in TaskCreate tracks the still-open
   repair/retire decision for /reports itself.
+
+BROWSER VERIFICATION (live prod, real logged-in user): a background fork
+  logged in as the real user (Amit Porat, not the smoke-test admin) and
+  checked /ar and /documents on cfo-2.vercel.app. /ar: aging tab shows
+  real data (245,527 severely overdue); collection-cases tab switches
+  cleanly to an empty-state ("אין תיקי גבייה") with working filters and
+  the "פתח תיקים" button -- no crash. /documents: real document list
+  (credit notes, delivery notes, real amounts/dates) renders; "Create New
+  Document" modal opens correctly (type/customer/email/items/SUMIT
+  checkbox/total) -- closed without submitting (no real SUMIT writes).
+  Console: zero app-level errors on either page (only unrelated MetaMask
+  extension warnings). Both of this batch's frontend changes (7.3's
+  collection-cases tab, 7.9's document-issuance result screen) are
+  confirmed clean against real production data, not just local dev.
+
+TASK #7 (audit: do other services really depend on the broken Account/
+  Transaction tables?): audited all 10 services identified earlier via
+  precise identifier-usage grep (not just import lines). Result: the
+  blast radius is WIDER than the /reports finding alone --
+  REAL, active queries against Account/Transaction (not dead imports):
+  - ai_analytics_service.py: Transaction grouped by category (90-day
+    expense-concentration insight, feeds generate_insights/AI insights).
+  - ai_intelligence_agent.py: Account.balance sum for cash_balance.
+  - balance_snapshot.py: Account.balance sum -- called from BOTH
+    bank_report_service.py AND kpi_service.py (so kpi_service is an
+    indirect dependent despite not querying the tables itself).
+  - budget_service.py: Transaction date-range filter for budget-vs-actual.
+  - cost_analysis_service.py: Transaction grouped by category (EXPENSE).
+  - fees_service.py: Transaction amount sum.
+  - forecasting_service.py: Transaction grouped by category (cash-flow
+    forecast input).
+  - tax_service.py: _get_annual_profit_estimate() -> already refactored
+    away from directly querying Transaction (good, has an explicit
+    comment about why), but now calls FinancialReportsService.
+    generate_profit_loss() instead -- which STILL internally reads the
+    same broken Account/Transaction tables. Feeds calculate_tax_advance()
+    (מקדמות מס), reachable via a real route (financial_management.py ->
+    registered in api/__init__.py) but NOT called from any frontend
+    component currently -- no live UI surfaces this number today, so real
+    user exposure is currently zero, but the number would be wrong if
+    anyone did call the endpoint.
+  Import-only, NOT actually querying the tables (effectively dead
+  imports): ap_service.py, ar_service.py, kpi_service.py (directly --
+  though it does depend transitively via balance_snapshot, above).
+  NOT fixed this iteration -- this is a large-blast-radius architecture
+  question (8-9 features quietly built on the same frozen, mostly-garbage
+  dataset), exactly the kind of thing that needs a dedicated repair/retire
+  decision rather than a piecemeal fix. Documented for the user; Task #7
+  updated with the fuller picture.

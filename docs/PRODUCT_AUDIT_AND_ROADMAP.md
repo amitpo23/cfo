@@ -66,17 +66,20 @@
 3. **הבאג בפועל**: `is_income = doc.document_type in ['invoice', 'receipt', 'tax_invoice']` — משווה קוד-מסמך **מספרי** של SUMIT (לדוגמה `15`) מול רשימת **strings** → תמיד `False`. תוצאה נבדקה ישירות בפרוד: **כל** שורה ב-`transactions` עבור org 1 (127 שורות) יצאה `transaction_type='EXPENSE'`, `amount=0.00`, `description='15: Unknown'` — לא נתוני-בנק אמיתיים, לא seed/demo, אלא תוצר-לוואי ישיר של קוד שהתנתק מהמוסכמה המספרית של SUMIT (אותה מוסכמה שתוקנה השבוע במקומות אחרים: "SUMIT doc-type 15→16").
 4. אישוש: כל ה-5 ה"ארגונים" בפרוד מציגים בדיוק אותם 5 חשבונות-שלד `source='sumit'` ביתרה 0.00 (Bank Account/AR/AP/Revenue/Expenses) — לא נתון עסקי אמיתי, אלא תוצר של אתחול/onboarding.
 5. `DataSyncDashboard.tsx` — הממשק המקורי שהיה אמור לשמש להפעלה ידנית של `DataSyncService` — **אינו מנותב** ב-`App.tsx` (dead component). אף משתמש אמיתי לא בוחר להריץ את הנתיב הזה במודע; הוא רץ **רק** כתוצר-לוואי אוטומטי, בלי ידיעת המשתמש.
-6. **טווח השפעה רחב יותר ממה שנבדק כאן**: מלבד `financial_reports_service.py`, גם `ai_analytics_service.py`, `ap_service.py`, `ar_service.py`, `bank_statement_service.py`, `budget_service.py`, `cost_analysis_service.py`, `fees_service.py`, `forecasting_service.py`, `kpi_service.py`, `tax_service.py` מייבאים את `Account`/`Transaction` — **לא נבדק בסבב הזה** אם ומה כל אחד מהם קורא מהם בפועל בנתיב החי; זו נקודת-המשך המחייבת לפני כל תיקון.
+6. **טווח השפעה — נבדק במלואו (2026-07-03), רחב יותר ממה שנחשד תחילה**. גריפ מדויק לפי שימוש-בפועל (לא רק import) על כל 10 השירותים:
+   - **תלות אמיתית, בנתיב חי**: `ai_analytics_service.py` (Transaction לפי קטגוריה — תובנת "ריכוז הוצאות" ל-90 יום, מזין AI insights); `ai_intelligence_agent.py` (סכום `Account.balance` ל-cash_balance); `balance_snapshot.py` (סכום `Account.balance` — נקרא גם מ-`bank_report_service.py` וגם מ-`kpi_service.py`, כך ש-KPI dashboard תלוי בעקיפין!); `budget_service.py` (Transaction לפי טווח-תאריכים, תקציב-מול-בפועל); `cost_analysis_service.py` (Transaction לפי קטגוריה, הוצאות); `fees_service.py` (סכום Transaction); `forecasting_service.py` (Transaction לפי קטגוריה — קלט לתחזית תזרים); `tax_service.py._get_annual_profit_estimate` — תוקן כבר פעם אחת (הערה מפורשת בקוד!) לא לקרוא ישירות מ-Transaction, אבל **עדיין** קורא מ-`FinancialReportsService.generate_profit_loss` שבעצמו עדיין קורא מאותן טבלאות שבורות — מזין `calculate_tax_advance` (מקדמות מס), route חי (`financial_management.py`) אך **ללא UI שקורא לו כרגע** (חשיפה אפסית היום, אבל התוצאה תהיה שגויה אם ייקרא).
+   - **import מת בפועל** (לא שואלים את הטבלאות בפועל): `ap_service.py`, `ar_service.py`, `kpi_service.py` (ישירות — אך תלוי בעקיפין דרך `balance_snapshot`, ראה למעלה).
+   - **מסקנה**: 8-9 יכולות (לא רק שני endpoints) בנויות בשקט על אותו dataset קפוא/שגוי. זה מחזק את הצורך בהחלטת repair/retire — לא מצדיק תיקון פרטני של כל שירות בנפרד.
 
 ### למה זה לא תוקן במקום — צריך החלטת מוצר, לא רק תיקון-קוד
 - תיקון ה-type-comparison לבד **לא מספיק** — יהפוך "נתונים ברור-שגויים" (אפסים, "Unknown") ל"נתונים סבירים-אבל-שגויים" משתי מערכות שעדיין לא יתאמו זו לזו. זה מסוכן יותר, לא פחות.
 - הפתרון הנקי (retire את `/reports`'s balance-sheet/P&L + `DataSyncService`, או מחיקת השורות הקיימות) הוא פעולה הרסנית על נתוני-פרוד קיימים → כלל-העצירה (א) של ה-goal-directive. **לא בוצע ולא יבוצע ללא אישור.**
 - האם המערכת המקבילה (`Account`/`Transaction`) הייתה כוונה מוצרית נפרדת (view על בסיס-מזומן, למשל) או קוד-שרד נטוש — שאלת-כוונה שלא ניתן להכריע מהקוד לבד.
 
-### המלצה
-1. **קצר-טווח, לא-הרסני**: הפסק את הפעלת `DataSyncService.sync_all()` מתוך `run_post_sync_tasks` (מונע יצירת שורות-זבל נוספות; לא נוגע בנתונים קיימים) — **מותנה** באימות שאף אחד מ-10 השירותים ברשימה בסעיף 6 לא תלוי בקריאה הזו בפועל (לא בוצע עדיין).
-2. **ארוך-טווח**: להחליט retire מול repair מול "זו כוונה מוצרית" עבור `/reports`, ואם retire — מחיקת השורות הקיימות טעונה אישור מפורש (הרסני).
-3. עד להחלטה: `/reports`'s balance-sheet/P&L **אינם אמינים** ואסור להשתמש בהם לדיווח אמיתי — `/ledger` ו-`/dashboard/pnl` הם מקור-האמת הנכון כרגע.
+### המלצה — עודכן אחרי החלטת המשתמש (2026-07-03)
+1. **קצר-טווח, לא-הרסני — בוצע ✅**: `run_post_sync_tasks` כבר לא קורא ל-`DataSyncService.sync_all()` (commit 2a052d1, פרוס בפרוד, מאומת חי: sync אמיתי לא הוסיף שורות חדשות ל-`transactions`). מונע החמרה נוספת; לא נוגע בנתונים קיימים.
+2. **ארוך-טווח — עדיין פתוח (Task #7)**: להחליט retire מול repair מול "זו כוונה מוצרית" — עכשיו כשידוע שההשפעה משתרעת על 8-9 יכולות (כולל KPI dashboard, AI insights, תקציב, תחזית תזרים, ניתוח עלויות, מקדמות מס), לא רק `/reports`. אם retire — מחיקת השורות הקיימות טעונה אישור מפורש (הרסני).
+3. עד להחלטה: `/reports`'s balance-sheet/P&L, וכל 8-9 היכולות שברשימה בסעיף 6, **אינם אמינים** ואסור להשתמש בהם לדיווח אמיתי — `/ledger` ו-`/dashboard/pnl` הם מקור-האמת הנכון כרגע.
 
 ---
 
