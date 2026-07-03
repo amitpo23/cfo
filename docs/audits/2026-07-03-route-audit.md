@@ -229,3 +229,31 @@ walk-in; `get_document_details` לא `get_document`).
 python scripts/schema_drift_check.py --env-file <scratchpad>/.env.prod
 OK — אין drift: הסכמה החיה תואמת את המודלים
 ```
+
+### Task 8: preview smoke blocked by Vercel Deployment Protection
+
+`vercel deploy` produced `https://cfo-2-ic99cg82c-guyofiror.vercel.app`. Running
+`prod_smoke.py` against it returned Vercel's own protection/login HTML for
+every path (`x-matched-path: login`, `content-type: text/html`) instead of
+reaching the FastAPI app — this project's preview deployments require Vercel
+account auth (Deployment Protection), and no
+`VERCEL_AUTOMATION_BYPASS_SECRET` is configured. Production
+(`cfo-2.vercel.app`) is confirmed NOT protected (today's earlier live smoke
+got real JSON). Local suite is green (457 passed) as the pre-prod gate;
+proceeding to `vercel deploy --prod` and using the real post-deploy smoke
+against the public prod URL as the actual verification gate.
+
+### Task 8: דיפלוי הושלם — 14/14 ירוק
+
+`vercel deploy` (preview, protected — לא נבדק ישירות) → `vercel deploy --prod`
+→ aliased ל-`cfo-2.vercel.app` → `POST /api/admin/db/migrate`: `{"action":"upgraded",...}`,
+אין drift → `prod_smoke.py` חי:
+
+ריצה ראשונה: 13/14 (422 על `/api/daily-reports/vat` — הנתיב דורש `year`/`month`
+חובה, ה-smoke script לא סיפק אותם). תוקן: `CRITICAL_PATHS` בונה את הנתיב עם
+`date.today()`. ריצה שנייה: **14/14 תקינים**. כל 8 ה-403 הקודמים (לפני הדיפלוי)
+נעלמו — מאשר שהיו תוצאה של פרוד תקוע 3 ימים אחורה, לא באג.
+
+`schema_drift_check.py` אחרי הדיפלוי: OK, אין drift. Suite מלא: 457 passed.
+
+**גל 1 (אפיק יציבות) הושלם ונפרס בהצלחה.**

@@ -7,8 +7,11 @@
 """
 import os
 import sys
+from datetime import date
 
 import httpx
+
+_today = date.today()
 
 # נתיבים קריטיים: (path, note). env_gated=נכשל בחן אם האינטגרציה לא מוגדרת.
 CRITICAL_PATHS = [
@@ -19,7 +22,7 @@ CRITICAL_PATHS = [
     ("/api/ledger/trial-balance", "מאזן בוחן"),
     ("/api/ar/aging", "גיול לקוחות"),
     ("/api/daily-reports/ap-aging", "גיול ספקים"),
-    ("/api/daily-reports/vat", "דוח מעמ"),
+    (f"/api/daily-reports/vat?year={_today.year}&month={_today.month}", "דוח מעמ"),
     ("/api/engine/status", "סטטוס מנוע"),
     ("/api/business/menu", "תפריט יכולות"),
     ("/api/office/clients", "תיקי משרד"),

@@ -25,3 +25,6 @@ def test_smoke_runs_against_local_app(client, owner):
     by_path = {r["path"]: r for r in results}
     assert by_path["/api/reports/profit-loss"]["status"] != 404
     assert by_path["/api/daily-reports/ap-aging"]["status"] != 404
+    # /vat דורש year+month חובה — נכשל 422 בלי אותם; ודא שהסקריפט מספק אותם
+    vat_result = next(r for r in results if r["path"].startswith("/api/daily-reports/vat"))
+    assert vat_result["status"] != 422

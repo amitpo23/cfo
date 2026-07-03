@@ -25,11 +25,17 @@ reconciliation, categories, and office/client management.
   quotes may need a different cancel/delete path than invoices; document
   1001 still open in SUMIT pending manual cancellation and investigation
   (tracked as a follow-up task).
-- Schema drift check against Neon production (2026-07-03): OK, no drift.
-- Live prod_smoke against `cfo-2.vercel.app` (2026-07-03, pre-deploy): 4/14
-  paths OK; 10 failures diagnosed as production being 3 days stale (missing
-  the SUPER_ADMIN-defaults-to-org-1 fallback from today's commit 23353ca),
-  expected to clear once this branch is deployed.
+- Schema drift check against Neon production (2026-07-03): OK, no drift
+  (checked both before and after the Epic 1 stability deploy below).
+- **Epic 1 (stability) deployed to production 2026-07-03.** Sequence: full
+  suite green (457) -> `vercel deploy` (preview) -> preview smoke blocked by
+  Vercel Deployment Protection (no automation bypass secret configured; not
+  a code defect — see route-audit doc) -> `vercel deploy --prod` (aliased to
+  `cfo-2.vercel.app`) -> `POST /api/admin/db/migrate` (`upgraded`, no pending
+  columns/tables) -> live `prod_smoke.py`: **14/14 OK**. First live run was
+  13/14 (one 422 on `/api/daily-reports/vat`, a required-query-param gap in
+  the smoke script itself, fixed in the same iteration) — confirms the
+  earlier 403s were purely due to the 3-day-stale deploy, now resolved.
 
 ## Required Production Environment Variables
 

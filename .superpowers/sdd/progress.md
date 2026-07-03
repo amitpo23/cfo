@@ -139,6 +139,20 @@ Task 6 (SUMIT write-back live): commit <pending, see below>. Created scripts/ver
   PDF download, cancellation path unverified/broken for this document type.
 Task 7 (Neon drift check): `python scripts/schema_drift_check.py --env-file <scratchpad>/.env.prod`
   -> "OK — אין drift: הסכמה החיה תואמת את המודלים". Clean, no action needed.
-NEXT: Task 8 (deploy: suite green -> vercel deploy preview -> smoke preview -> vercel
-  deploy --prod -> migrate -> smoke prod -> drift check) -> update PRODUCTION_READINESS.md
-  -> commit+push -> close Wave 1.
+Task 8 (deploy): `vercel deploy` (preview) -> preview smoke blocked by Vercel Deployment
+  Protection (no bypass secret; confirmed prod itself is unprotected) -> `vercel deploy --prod`
+  (aliased cfo-2.vercel.app) -> `POST /api/admin/db/migrate` (upgraded, no pending changes)
+  -> live smoke: first run 13/14 (422 on /daily-reports/vat, missing required year/month
+  query params — smoke-script bug, fixed by building the path with date.today()) -> second
+  run **14/14 OK**. All 8 earlier 403s gone, confirming they were caused by the 3-day-stale
+  deploy, not a real bug. Post-deploy: schema_drift_check OK, full suite 457 passed.
+  Commits: 61e0e65 (already pushed) covers profit-loss/ap-aging path fix; vat query-param
+  fix + doc updates in the commit right after this entry.
+
+=== WAVE 1 (EPIC 1 STABILITY) COMPLETE — deployed to production 2026-07-03 ===
+All 6 handoff steps done: Task 4.2 verified, Task 5 (prod_smoke) built+fixed, Task 6
+(SUMIT write-back) partially verified (create+PDF confirmed live; cancel blocked — open
+item, see memory rezef-completion-epics + TaskCreate #1), Task 7 (Neon drift) clean,
+Task 8 (deploy) done with 14/14 smoke green. NEXT: Wave 2 per
+docs/superpowers/plans/2026-07-03-epic1-handoff.md steps 7-11 (10 upgrades, SUMIT API
+gaps 8.1-8.6, AI chatbot 9.1-9.5, qa_gate.py, final deploy) — tracked in TaskCreate #4.
