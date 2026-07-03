@@ -11,9 +11,12 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from ..integrations.sumit_models import DocumentItem, DocumentRequest, SendDocumentRequest
+from ..integrations.sumit_models import DocumentItem, DocumentPayment, DocumentRequest, SendDocumentRequest
 from ..models import Invoice, InvoiceStatus
 from .sync_engine import get_connector_for_org
+
+# SUMIT floors amounts to cents; treat balances at or below this as fully offset.
+_ZERO_BALANCE_EPSILON = Decimal("0.01")
 
 
 ISSUABLE_DOCUMENT_TYPES = {
@@ -69,10 +72,20 @@ class DocumentIssuanceService:
         send_to_sumit: bool = True,
         send_email: bool = False,
         recipient_email: Optional[str] = None,
+        original_invoice_id: Optional[int] = None,
+        payments: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         document_type = document_type.strip().lower()
         if document_type not in ISSUABLE_DOCUMENT_TYPES:
             raise ValueError(f"סוג מסמך לא נתמך: {document_type}")
+
+        original_invoice: Optional[Invoice] = None
+        if original_invoice_id is not None:
+            # 8.4 — SUMIT has no refund/reversal endpoint; a document linked
+            # via OriginalDocumentID (e.g. a credit note) is the only refund
+            # primitive it exposes. Org-scoped lookup — never credit a row
+            # from another organization just because the id matches.
+            original_invoice = self._get_invoice(original_invoice_id)
 
         issue = issue_date or date.today()
         due = due_date or issue + timedelta(days=30)
@@ -142,6 +155,8 @@ class DocumentIssuanceService:
                 due_date=due,
                 notes=notes,
                 currency=currency,
+                original_document_id=original_invoice.external_id if original_invoice else None,
+                payments=[self._document_payment(p) for p in payments] if payments else None,
             )
             client = await connector._get_client()
             async with client:
@@ -164,9 +179,21 @@ class DocumentIssuanceService:
                         )
                     )
 
+        if original_invoice is not None:
+            invoice.raw_data = {**(invoice.raw_data or {}), "credited_invoice_id": original_invoice.id}
+            new_balance = (original_invoice.balance or Decimal("0")) - total
+            original_invoice.balance = new_balance if new_balance > 0 else Decimal("0")
+            original_invoice.status = (
+                InvoiceStatus.PAID if original_invoice.balance <= _ZERO_BALANCE_EPSILON
+                else InvoiceStatus.PARTIALLY_PAID
+            )
+            raw = dict(original_invoice.raw_data or {})
+            raw.setdefault("credit_notes", []).append(invoice.id)
+            original_invoice.raw_data = raw
+
         self.db.commit()
         self.db.refresh(invoice)
-        return {
+        result = {
             "id": invoice.id,
             "organization_id": invoice.organization_id,
             "document_type": document_type,
@@ -184,6 +211,52 @@ class DocumentIssuanceService:
             "sumit": sumit_response,
             "sent": sent_response,
         }
+        if original_invoice is not None:
+            result["credited_invoice_id"] = original_invoice.id
+        return result
+
+    async def create_scheduled_occurrence(self, invoice_id: int) -> list[dict[str, Any]]:
+        """8.1 — clone an already-issued document into its next scheduled
+        occurrence. SUMIT's API only clones an existing DocumentID (no
+        date-driven scheduling exists) — see create_document_from_existing()."""
+        source = self._get_invoice(invoice_id)
+        if not source.external_id:
+            raise ValueError("המסמך עדיין לא הופק ב-SUMIT")
+        connector, _conn_id, source_type = get_connector_for_org(
+            self.db, self.organization_id, preferred_source="sumit"
+        )
+        if source_type != "sumit" or not hasattr(connector, "_get_client"):
+            raise ValueError("SUMIT אינו מחובר עבור ארגון זה")
+
+        client = await connector._get_client()
+        async with client:
+            clones = await client.create_document_from_existing(source.external_id)
+
+        created: list[dict[str, Any]] = []
+        for clone in clones:
+            invoice = Invoice(
+                organization_id=self.organization_id,
+                contact_id=source.contact_id,
+                source="sumit",
+                external_id=clone.scheduled_document_id,
+                issue_date=clone.date or date.today(),
+                due_date=source.due_date,
+                status=InvoiceStatus.DRAFT,
+                currency=source.currency,
+                subtotal=clone.total,
+                tax=Decimal("0"),
+                total=clone.total,
+                balance=clone.total,
+                line_items=source.line_items,
+                notes=source.notes,
+                raw_data={**(source.raw_data or {}), "cloned_from_invoice_id": source.id},
+            )
+            self.db.add(invoice)
+            self.db.flush()
+            created.append(self._serialize(invoice))
+
+        self.db.commit()
+        return created
 
     async def send_document(
         self,
@@ -239,6 +312,18 @@ class DocumentIssuanceService:
         self.db.commit()
         self.db.refresh(invoice)
         return {"document": self._serialize(invoice), "sumit": response}
+
+    @staticmethod
+    def _document_payment(payment: dict[str, Any]) -> DocumentPayment:
+        return DocumentPayment(
+            method=payment["method"],
+            amount=Decimal(str(payment["amount"])),
+            bank_number=payment.get("bank_number"),
+            branch_number=payment.get("branch_number"),
+            account_number=payment.get("account_number"),
+            cheque_number=payment.get("cheque_number"),
+            due_date=date.fromisoformat(payment["due_date"]) if payment.get("due_date") else None,
+        )
 
     def _line_item(self, item: dict[str, Any]) -> dict[str, Any]:
         quantity = Decimal(str(item.get("quantity", 1)))

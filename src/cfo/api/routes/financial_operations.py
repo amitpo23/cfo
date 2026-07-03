@@ -203,6 +203,18 @@ DOCUMENT_TYPE_LABELS = {
 }
 
 
+class DocumentPaymentRequest(BaseModel):
+    """תקבול צ'ק/מזומן הנרשם על המסמך בעת ההפקה (לא כרטיס אשראי — זה זורם
+    דרך charge_customer בנפרד)."""
+    method: str = Field(..., description="'cash' או 'cheque'")
+    amount: float = Field(..., gt=0)
+    bank_number: Optional[int] = None
+    branch_number: Optional[int] = None
+    account_number: Optional[str] = None
+    cheque_number: Optional[str] = None
+    due_date: Optional[str] = None
+
+
 class CreateDocumentRequest(BaseModel):
     """הוצאת מסמך מכל סוג (חשבונית/הצעת מחיר/הזמנה/תעודת משלוח/זיכוי וכו')."""
     document_type: str = Field(..., description="סוג מסמך (ראה /financial/documents/types)")
@@ -216,6 +228,13 @@ class CreateDocumentRequest(BaseModel):
     notes: Optional[str] = None
     send_to_sumit: bool = Field(default=True, description="הפקה ב-SUMIT")
     send_email: bool = Field(default=False, description="שליחת המסמך במייל ללקoח")
+    original_invoice_id: Optional[int] = Field(
+        default=None,
+        description="מסמך זיכוי בלבד: מזהה המסמך המקורי המזוכה. מקטין את יתרתו.",
+    )
+    payments: Optional[List[DocumentPaymentRequest]] = Field(
+        default=None, description="תקבולי צ'ק/מזומן להצמדה למסמך (invoice_receipt/receipt)",
+    )
 
 
 class SendExistingDocumentRequest(BaseModel):
@@ -277,7 +296,25 @@ async def create_document(
             notes=request.notes,
             send_to_sumit=request.send_to_sumit,
             send_email=request.send_email,
+            original_invoice_id=request.original_invoice_id,
+            payments=[p.model_dump() for p in request.payments] if request.payments else None,
         )}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/documents/{document_id}/schedule-next")
+async def schedule_next_occurrence(
+    document_id: int,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """שכפול מסמך קיים שהופק ב-SUMIT להתרחשות המתוזמנת הבאה שלו.
+    זהו היקף היכולת האמיתי של /scheduleddocuments/documents/createfromdocument/
+    ב-SUMIT — שכפול לפי DocumentID קיים, לא תזמון לפי תאריך מותאם אישית."""
+    service = DocumentIssuanceService(db, organization_id=org_id)
+    try:
+        return {"status": "success", "data": await service.create_scheduled_occurrence(document_id)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
