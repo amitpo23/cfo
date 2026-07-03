@@ -2,11 +2,14 @@
 Alert engine: evaluates rules and creates alerts.
 Runs after each sync or on-demand.
 """
+import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from ..models import (
     Alert,
@@ -28,9 +31,22 @@ class AlertEngine:
     def __init__(self, db: Session, organization_id: int):
         self.db = db
         self.org_id = organization_id
+        self.last_run_failures: list = []
+
+    def _run_check(self, check_name: str, fn, *args) -> list:
+        """Run one check in isolation — a failure here must not abort the
+        others or crash the whole evaluation. Logged and counted, not swallowed."""
+        try:
+            return fn(*args)
+        except Exception as exc:
+            logger.exception("Alert check %s failed for org %s", check_name, self.org_id)
+            self.last_run_failures.append({"check": check_name, "error": str(exc)})
+            return []
 
     def evaluate_all(self) -> list:
         """Run all active alert rules. Returns list of newly created alerts."""
+        self.last_run_failures = []
+
         rules = self.db.query(AlertRule).filter(
             AlertRule.organization_id == self.org_id,
             AlertRule.is_active == True,
@@ -39,15 +55,15 @@ class AlertEngine:
         new_alerts = []
 
         # Also run built-in rules even if no AlertRule records exist
-        new_alerts.extend(self._check_overdue_invoices())
-        new_alerts.extend(self._check_bills_due_soon())
-        new_alerts.extend(self._check_large_transactions())
+        new_alerts.extend(self._run_check("_check_overdue_invoices", self._check_overdue_invoices))
+        new_alerts.extend(self._run_check("_check_bills_due_soon", self._check_bills_due_soon))
+        new_alerts.extend(self._run_check("_check_large_transactions", self._check_large_transactions))
 
         for rule in rules:
             if rule.rule_type == "low_cash_threshold":
-                new_alerts.extend(self._check_low_cash(rule.config))
+                new_alerts.extend(self._run_check("_check_low_cash", self._check_low_cash, rule.config))
             elif rule.rule_type == "spend_spike":
-                new_alerts.extend(self._check_spend_spike(rule.config))
+                new_alerts.extend(self._run_check("_check_spend_spike", self._check_spend_spike, rule.config))
 
         self.db.commit()
         return new_alerts

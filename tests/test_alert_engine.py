@@ -46,3 +46,45 @@ def test_no_data_does_not_raise(fresh_org):
         assert isinstance(result, list), "Expected evaluate_all() to return a list"
     finally:
         db.close()
+
+
+def test_one_check_failing_does_not_abort_the_others(fresh_org, monkeypatch):
+    """A single check raising must not crash evaluate_all() nor block the other
+    checks — it must be caught, logged, and counted, while other checks still run.
+
+    Current (RED): no try/except anywhere in evaluate_all(); one check's
+    exception propagates and aborts the whole run, silently dropping every
+    other check's alerts too.
+    """
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        today = date.today()
+        db.add(Invoice(
+            organization_id=org_id,
+            invoice_number="INV-OD2",
+            due_date=today - timedelta(days=45),
+            status=InvoiceStatus.SENT,
+            balance=Decimal("1000"),
+            total=Decimal("1000"),
+        ))
+        db.commit()
+
+        engine = AlertEngine(db, org_id)
+        monkeypatch.setattr(
+            engine, "_check_bills_due_soon",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("simulated failure")),
+        )
+
+        alerts = engine.evaluate_all()
+
+        # The overdue-invoice check still ran and produced its alert.
+        alert_types = [a.alert_type for a in alerts]
+        assert "overdue_invoice" in alert_types
+
+        # The failure was caught, logged, and counted — not silently swallowed.
+        assert len(engine.last_run_failures) == 1
+        assert engine.last_run_failures[0]["check"] == "_check_bills_due_soon"
+        assert "simulated failure" in engine.last_run_failures[0]["error"]
+    finally:
+        db.close()
