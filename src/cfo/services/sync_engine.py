@@ -622,7 +622,8 @@ def get_connector_for_org(
         api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
         company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
         if not api_key:
-            raise ValueError("SUMIT API key not configured")
+            from .data_sync_service import SumitNotConfiguredError
+            raise SumitNotConfiguredError("SUMIT API key not configured")
         connector = SumitConnector(api_key=api_key, company_id=company_id)
         return connector, conn.id if conn else None, source
 

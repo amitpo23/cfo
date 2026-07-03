@@ -33,6 +33,61 @@ def test_sync_route_without_sumit_configured_returns_400_not_500(client, fresh_o
     assert "sumit" in resp.json()["detail"].lower()
 
 
+def test_data_sync_service_env_fallback_blocked_for_non_default_org(fresh_org, monkeypatch):
+    """DataSyncService._get_sumit היה נופל חזרה למפתח ה-env של הארגון ברירת
+    המחדל (org 1) עבור כל ארגון חסר-קרדנציאלס — דליפת קרדנציאלס בין דיירים.
+    עם שער env_allowed = organization_id == 1 (כמו ב-get_sumit_integration
+    וב-get_connector_for_org), ארגון אחר חייב SumitNotConfiguredError גם אם
+    יש מפתח env מוגדר."""
+    import cfo.config as config_module
+    from cfo.database import SessionLocal
+    from cfo.services.data_sync_service import DataSyncService, SumitNotConfiguredError
+
+    monkeypatch.setattr(config_module.settings, "sumit_api_key", "fake-env-key-should-not-leak")
+
+    org_id = fresh_org()["org_id"]
+
+    async def _run():
+        db = SessionLocal()
+        try:
+            service = DataSyncService(db, organization_id=org_id)
+            await service._get_sumit()
+        finally:
+            db.close()
+
+    try:
+        asyncio.run(_run())
+        raised = None
+    except SumitNotConfiguredError as e:
+        raised = e
+
+    assert raised is not None, "expected SumitNotConfiguredError, env creds leaked to another org"
+
+
+def test_data_sync_service_env_fallback_still_works_for_default_org(owner, monkeypatch):
+    """אין רגרסיה: ארגון ברירת המחדל (org 1) עדיין יכול ליפול חזרה למפתח ה-env,
+    בדיוק כמו ב-get_sumit_integration/get_connector_for_org."""
+    import cfo.config as config_module
+    from cfo.database import SessionLocal
+    from cfo.services.data_sync_service import DataSyncService
+
+    monkeypatch.setattr(config_module.settings, "sumit_api_key", "fake-env-key-for-default-org")
+
+    org_id = owner["user"]["organization_id"]
+
+    async def _run():
+        db = SessionLocal()
+        try:
+            service = DataSyncService(db, organization_id=org_id)
+            return await service._get_sumit()
+        finally:
+            db.close()
+
+    integration = asyncio.run(_run())
+    assert integration is not None
+    assert integration.api_key == "fake-env-key-for-default-org"
+
+
 def test_post_binary_upstream_4xx_raises_sumit_api_error():
     """_post_binary (הורדת PDF) חייב לעטוף 4xx/5xx כ-SumitAPIError, בדיוק כמו
     _make_request — אחרת יוצא httpx.HTTPStatusError לא-מטופל בשכבת ה-service."""
