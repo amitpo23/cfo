@@ -36,6 +36,30 @@ reconciliation, categories, and office/client management.
   13/14 (one 422 on `/api/daily-reports/vat`, a required-query-param gap in
   the smoke script itself, fixed in the same iteration) — confirms the
   earlier 403s were purely due to the 3-day-stale deploy, now resolved.
+- **Wave 2 (Epic 1 completion sprint) deployed to production 2026-07-03.**
+  Adds: real COGS/liquidity/payroll calculations, alert isolation, expense
+  `deduction_percent`, collection-case worklist (backend + AR dashboard tab),
+  document-issuance SUMIT API gaps (scheduled-document cloning, cash/cheque
+  payment forwarding, credit-note linking via `OriginalDocumentID`), an
+  AI chat assistant with a server-enforced write-confirmation gate, and
+  `scripts/qa_gate.py` as a consolidated pre-deploy gate. Sequence: full
+  suite green (527) -> real end-to-end `qa_gate.py` run, all 6 automated
+  sections PASS -> `vercel --prod --yes` (aliased to `cfo-2.vercel.app`) ->
+  `POST /api/admin/db/migrate` -> `{"action":"upgraded","current_revision":
+  "3a8a9532010b","schema_sync":{"tables":[],"columns":{}}}` (only the new
+  `ai_chat_messages` migration needed applying) -> `schema_drift_check.py`
+  against Neon: clean -> `prod_smoke.py` **14/14** -> spot-checked
+  `GET /api/ai/chat/{session_id}` (200, empty history) and
+  `GET /api/collections/cases` (200, empty list) live -> confirmed
+  `POST /api/ai/chat` returns a clean 400 (not a 500) while
+  `ANTHROPIC_API_KEY` is unset.
+  **Not yet complete**: the AI chat tool-use loop has only ever been
+  exercised against mocked Anthropic responses — never a real model call.
+  This requires the user to add `ANTHROPIC_API_KEY` to Vercel production
+  (Vercel env vars only take effect on a new deploy, so a redeploy is
+  required after adding it) followed by one live read-only chat query and
+  one live write-with-confirmation chat action before Wave 2 can be
+  considered fully verified.
 
 ## Required Production Environment Variables
 
@@ -57,6 +81,7 @@ SUMIT_COMPANY_ID=...
 APP_URL=https://cfo-2.vercel.app
 GOOGLE_CLIENT_ID=...
 VITE_GOOGLE_CLIENT_ID=...
+ANTHROPIC_API_KEY=...   # required for the AI chat assistant (/api/ai/chat); without it the route returns a clean 400
 ```
 
 ## Deployment Checklist

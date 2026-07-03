@@ -6,9 +6,9 @@ This is the internal coverage map for Rezef's SUMIT-facing capabilities. The pub
 
 Rezef can cover a large part of the SUMIT module list through existing API surfaces, but not every visible SUMIT product module is a one-to-one API feature in this codebase.
 
-- **Ready:** customers, income documents, expenses, debt reports, payments, payment methods, recurring payments, CRM entities/folders/views, SMS/mailing lists, stock, users/permissions, companies, double-entry dashboards and annual-report preparation.
-- **Partial:** payment pages, wallet activation, refunds/chargebacks alerts, Masav mandates/returns, checks/cash, future documents, custom dashboards/views builder, triggers, outgoing email/domain settings, file storage quotas.
-- **Blocked / adapter needed:** BlueSnap, PayPal, Bit-specific adapters, arbitrary CRM list HTML export, charging an existing recurring item by ID, card-terminal transaction listing by date range using `/creditguy/billing/load/`.
+- **Ready:** customers, income documents, expenses, debt reports, payments, payment methods, recurring payments, CRM entities/folders/views, SMS/mailing lists, stock, users/permissions, companies, double-entry dashboards, annual-report preparation, cash/cheque payment recording on document issuance, credit-note linking to an original invoice (`OriginalDocumentID`), and cloning an existing document into a new scheduled occurrence.
+- **Partial:** payment pages, wallet activation, refunds/chargebacks alerts, Masav mandates/returns, custom dashboards/views builder, triggers, outgoing email/domain settings, file storage quotas. "Future documents" is now Ready only in the clone-an-existing-document sense (`/scheduleddocuments/documents/createfromdocument/`) — there is still no date-driven "schedule from raw line-item details" primitive in SUMIT's API.
+- **Blocked / adapter needed:** BlueSnap, PayPal, Bit-specific adapters, arbitrary CRM list HTML export, charging an existing recurring item by ID, creating a new recurring-billing mandate from scratch (SUMIT's `/billing/recurring/*` only operates on an existing `RecurringCustomerItemID`; no create-mandate endpoint exists), card-terminal transaction listing by date range using `/creditguy/billing/load/`.
 
 ## Payment Readiness
 
