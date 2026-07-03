@@ -137,6 +137,16 @@ Task 6 (SUMIT write-back live): commit <pending, see below>. Created scripts/ver
   manual cancel in SUMIT UI; investigate whether quotes need a different cancel/delete
   endpoint than invoices. Task 6 NOT fully closed — write-back chain verified up through
   PDF download, cancellation path unverified/broken for this document type.
+  Investigated further (Wave 2, ground-truth swagger spec now available): the full
+  84-path spec has exactly ONE document-cancel endpoint
+  (/accounting/documents/cancel/, same one already used) and NO document-delete
+  endpoint at all — the "isn't allowed" rejection is a genuine SUMIT business rule
+  for this document type (quote), not an implementation bug; nothing to fix in our
+  code. A generic /crm/data/deleteentity/ (EntityID-only) exists that might apply
+  to the leftover test customer, but its semantics against a live SUMIT account are
+  unverified and it's a destructive, hard-to-reverse call against a real third-party
+  system — deliberately NOT attempted autonomously. Manual cleanup via the SUMIT
+  web UI remains the correct, safe path; still open.
 Task 7 (Neon drift check): `python scripts/schema_drift_check.py --env-file <scratchpad>/.env.prod`
   -> "OK — אין drift: הסכמה החיה תואמת את המודלים". Clean, no action needed.
 Task 8 (deploy): `vercel deploy` (preview) -> preview smoke blocked by Vercel Deployment
