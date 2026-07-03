@@ -225,19 +225,27 @@ class AnalyticsReportingService:
         }
 
     def _prorated_budget(self, start_date: date, end_date: date) -> tuple[float, Dict[str, float]]:
-        """תקציב התקופה: תקציב חודשי אמיתי מ-BudgetService מחולק יחסית למספר הימים."""
-        period_days = (end_date - start_date).days + 1
-        days_in_month = calendar.monthrange(start_date.year, start_date.month)[1]
-        factor = period_days / days_in_month if days_in_month else 0
+        """תקציב התקופה: תקציב חודשי אמיתי מ-BudgetService, משוקלל פר-יום.
 
-        summary = BudgetService(self.db, self.org_id).get_budget_vs_actual(
-            start_date.year, start_date.month
-        )
-        by_category = {
-            (c.category_name or str(c.category_id)): c.budget_amount * factor
-            for c in summary.categories
-        }
-        return summary.total_budget * factor, by_category
+        תקופה שחוצה חודשים (למשל שבוע 29/6–5/7) נצברת מכל חודש לפי חלקו היחסי.
+        """
+        total = 0.0
+        by_category: Dict[str, float] = {}
+        seg_start = start_date
+        while seg_start <= end_date:
+            days_in_month = calendar.monthrange(seg_start.year, seg_start.month)[1]
+            month_end = seg_start.replace(day=days_in_month)
+            seg_end = min(end_date, month_end)
+            factor = ((seg_end - seg_start).days + 1) / days_in_month
+            summary = BudgetService(self.db, self.org_id).get_budget_vs_actual(
+                seg_start.year, seg_start.month
+            )
+            total += summary.total_budget * factor
+            for c in summary.categories:
+                key = c.category_name or str(c.category_id)
+                by_category[key] = by_category.get(key, 0.0) + c.budget_amount * factor
+            seg_start = seg_end + timedelta(days=1)
+        return total, by_category
 
     def _period_expenses_by_category(self, start_date: date, end_date: date) -> Dict[str, float]:
         """ביצוע הוצאות בפועל בתקופה, מקובץ לפי קטגוריה."""
