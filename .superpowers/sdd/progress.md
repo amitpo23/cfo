@@ -342,3 +342,52 @@ STEP 8 (SUMIT API gaps 8.1-8.6): DONE with major scope correction. Audited
   test_payments_recurring_routes.py), all mocked, zero live SUMIT writes.
   499 passed. NOT yet deployed — bundling with Step 9 per the user's
   established "build a coherent batch, deploy together" pattern.
+
+STEP 9 (AI chatbot 9.1-9.4): DONE, one item (9.5 live test) blocked on the
+  user adding ANTHROPIC_API_KEY to Vercel (asked via AskUserQuestion; user
+  chose to add it themselves — not yet visible in `vercel env ls
+  production` as of this entry, so still pending on their side).
+  Audited first (per the established pattern this whole wave): ai_intelligence_
+  agent.py doesn't actually use Anthropic despite its name (pure heuristic
+  analysis); the real Anthropic usage is vision_extractor.py (OCR pipeline),
+  confirming settings.anthropic_api_key already exists and anthropic==0.40.0
+  is the pinned SDK. Verified the SDK's actual tool-use shapes
+  (messages.create params, ToolParam/ToolUseBlock/ToolResultBlockParam
+  fields) directly against the installed package rather than assuming.
+  9.1 ai_chat_tools.py: ChatTool wrappers over DashboardService,
+    collection_case_service, DocumentIssuanceService. category="read"|
+    "write" per tool; org_id injected by the caller, never a model param.
+  9.2 ai_chat_service.py + POST /api/ai/chat, POST /api/ai/chat/confirm,
+    GET /api/ai/chat/{session_id}. ai_chat_messages table (migration
+    3a8a9532010b).
+  9.3 Confirmation gate: a write tool (issue_document,
+    log_collection_attempt) is NEVER executed as a direct result of the
+    model's call, on ANY turn — the loop halts and persists a
+    pending_action on the assistant's ChatMessage row; only a separate
+    confirm_action(message_id) executes it, re-reading tool/input from
+    that DB row (never client-supplied), guarded by an `executed` flag.
+    Verified the gate is load-bearing, not passing by construction: disabled
+    the write-halt and confirmed 4 of 6 tests fail. The discriminating test
+    checks turn 2 (an unrelated later message), not just turn 1 — the
+    invariant a prompt-only "don't write on turn 1" rule would miss.
+  9.4 ChatAssistant.tsx: new /ai-chat page + sidebar entry. Pending actions
+    render as an explicit confirm-required card.
+  SECURITY: an automated push review on commit a5b5406 correctly caught an
+    IDOR I introduced — confirm_action and the history routes scoped
+    ChatMessage queries by organization_id only, not user_id. Since
+    ChatMessage.id is a small sequential integer, any user in the SAME org
+    could read another user's session (session_id isn't a secret) or,
+    worse, confirm+execute another user's pending write. Fixed immediately
+    (commit bdaa322) by adding user_id to every query; 2 regression tests
+    reproduce both holes pre-fix and pass now. This is the same class of
+    bug as the org-scoping issues fixed earlier in the project — same
+    principle, one level finer-grained (per-user, not just per-org).
+  Also found + fixed via live manual testing (not just mocks): missing
+    ANTHROPIC_API_KEY caused a bare TypeError deep in the anthropic SDK to
+    leak as an unhandled 500; added AIChatNotConfiguredError + an app-level
+    handler (same pattern as SumitNotConfiguredError) mapping it to a clean
+    400, plus a frontend error banner (neither mutation had an onError
+    handler before this — a failed request left the user staring at
+    nothing). Verified live in the browser against the local dev backend.
+  20 new tests across tools/service/routes. 517 passed. tsc --noEmit +
+  npm run build both clean. NOT yet deployed.
