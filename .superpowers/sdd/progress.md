@@ -191,4 +191,10 @@ not a new regression.
   content-match duplicate check (date+amount+description) — zero prior test coverage
   though. Added regression test proving double-import creates 0 extra rows (commit
   c2a6348) instead of a redundant is_provisional column. Full suite 465 passed.
-7.3/7.4/7.7/7.9/7.10 not started yet.
+7.4 Payroll->journal: DONE (commit 9d239ee). run_payroll posts a balanced derived
+  entry per payslip (5100 gross expense / 2300 deductions liability / 2110 net
+  liability) via new ledger_service.add_payroll_entry (reuses add_manual_entry's
+  line-normalization, not duplicated). Upserts by external_id
+  payroll:{org}:{emp}:{year-month} so re-running a period updates, not duplicates.
+  Wired into build_journal via new _payroll_entries. Full suite 467 passed.
+7.3/7.7/7.9/7.10 not started yet. 6/10 upgrades done (7.1,7.2,7.4,7.5,7.6,7.8).
