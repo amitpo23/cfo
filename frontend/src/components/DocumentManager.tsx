@@ -215,6 +215,16 @@ const DOCUMENT_TYPES: { value: string; label: string }[] = [
   { value: 'credit_note', label: 'חשבונית זיכוי' },
 ];
 
+interface CreatedDocumentResult {
+  id: number;
+  document_label?: string;
+  document_number?: string | null;
+  external_id?: string | null;
+  total?: number;
+  status?: string | null;
+  sumit?: { pdf_url?: string | null } | null;
+}
+
 const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [items, setItems] = useState<DocumentItem[]>([
     { description: '', quantity: 1, price: 0 },
@@ -223,11 +233,12 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [sendToSumit, setSendToSumit] = useState(true);
+  const [result, setResult] = useState<CreatedDocumentResult | null>(null);
 
   const queryClient = useQueryClient();
   const createMutation = useMutation({
     mutationFn: () =>
-      apiService.post('/financial/documents', {
+      apiService.post<{ data: CreatedDocumentResult }>('/financial/documents', {
         document_type: documentType,
         customer_id: customerName,
         customer_name: customerName,
@@ -244,10 +255,9 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
             discount: 0,
           })),
       }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['documents'] });
-      alert('המסמך הופק בהצלחה');
-      onClose();
+      setResult(res.data);
     },
     onError: (err: unknown) => {
       const msg =
@@ -256,6 +266,53 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
       alert(msg);
     },
   });
+
+  const downloadResultPdf = async () => {
+    if (!result?.external_id) return;
+    const blob = await apiService.downloadDocumentPdf(result.external_id);
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${result.document_number || result.external_id}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
+
+  if (result) {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div className="bg-white rounded-lg max-w-md w-full p-6 text-center">
+          <h2 className="text-2xl font-bold text-gray-800 mb-2">המסמך הופק בהצלחה</h2>
+          <p className="text-gray-600 mb-1">{result.document_label}</p>
+          {result.document_number && (
+            <p className="text-lg font-semibold text-gray-900 mb-1">#{result.document_number}</p>
+          )}
+          <p className="text-2xl font-bold text-primary-600 mb-6">₪{Number(result.total ?? 0).toFixed(2)}</p>
+          <div className="flex justify-center gap-3">
+            {(result.sumit?.pdf_url || result.external_id) && (
+              <button
+                onClick={() =>
+                  result.sumit?.pdf_url ? window.open(result.sumit.pdf_url, '_blank') : downloadResultPdf()
+                }
+                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
+              >
+                <Download size={18} />
+                הורד PDF
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+            >
+              סגור
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const canSubmit =
     customerName.trim().length > 0 &&
