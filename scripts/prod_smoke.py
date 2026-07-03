@@ -28,6 +28,8 @@ CRITICAL_PATHS = [
     ("/api/office/clients", "תיקי משרד"),
     ("/api/admin/organizations", "ארגונים (אדמין)"),
     ("/api/admin/control/clients", "מרכז שליטה סופר-אדמין"),
+    ("/api/ai/chat/smoke-check-session", "היסטוריית עוזר AI"),
+    ("/api/collections/cases", "תיקי גבייה"),
 ]
 
 SKIP_STATUSES = {400, 503}  # env-gated: אינטגרציה לא מוגדרת = דיווח כן, לא כשל

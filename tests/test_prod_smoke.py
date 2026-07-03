@@ -28,3 +28,9 @@ def test_smoke_runs_against_local_app(client, owner):
     # /vat דורש year+month חובה — נכשל 422 בלי אותם; ודא שהסקריפט מספק אותם
     vat_result = next(r for r in results if r["path"].startswith("/api/daily-reports/vat"))
     assert vat_result["status"] != 422
+    # Wave 2 additions (AI chat history, collection cases) — must be in the
+    # permanent critical-path list, not just manually curl-checked once.
+    assert any(r["path"].startswith("/api/ai/chat/") for r in results)
+    assert by_path["/api/collections/cases"]["status"] != 404
+    ai_chat_result = next(r for r in results if r["path"].startswith("/api/ai/chat/"))
+    assert ai_chat_result["status"] != 404

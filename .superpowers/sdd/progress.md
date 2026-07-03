@@ -591,3 +591,24 @@ TASK #7 (audit: do other services really depend on the broken Account/
   dataset), exactly the kind of thing that needs a dedicated repair/retire
   decision rather than a piecemeal fix. Documented for the user; Task #7
   updated with the fuller picture.
+
+RE-VERIFICATION + prod_smoke hardening: a context-compaction gap caused a
+  redundant re-run of the Step 11 deploy sequence (vercel --prod, db/migrate,
+  schema_drift_check --env-file, prod_smoke.py, browser checks of /ar,
+  /documents, /ai-chat) — all confirmed identical to what's already recorded
+  above (revision 3a8a9532010b, clean drift, ANTHROPIC_API_KEY still absent).
+  One genuinely new gap closed: prod_smoke.py's CRITICAL_PATHS never actually
+  included /api/ai/chat/{session_id} or /api/collections/cases despite the
+  ledger saying they were "spot-checked live" — that was a one-off curl, not
+  a standing regression check. Added both via TDD (RED test in
+  test_prod_smoke.py asserting their presence, confirmed it failed against
+  the old CRITICAL_PATHS list, then added the two routes, GREEN). Re-ran live:
+  16/16. Full suite still 528 passed.
+  Also confirmed live in the browser: /ai-chat itself (not just /ar and
+  /documents) loads cleanly in prod and sending a real message renders the
+  exact clean Hebrew "ANTHROPIC_API_KEY חסר" banner, not a crash — this
+  specific check hadn't been recorded before.
+  Status unchanged from the entry above: Wave 2 remains open pending the
+  user adding ANTHROPIC_API_KEY + a redeploy + a live 9.5 test. Task #1
+  (SUMIT doc 1001 / customer 2095660683) and Task #7's wider Account/
+  Transaction blast-radius question also remain open.
