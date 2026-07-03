@@ -509,3 +509,36 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 1 (gap-mapping): Wave 1+2 are green
   Full evidence + recommendation written into PRODUCT_AUDIT_AND_ROADMAP.md
   under "ממצא חדש — שתי מערכות חשבונאות מקבילות". Reported to user for a
   repair/retire/keep-as-cash-view decision before any further action here.
+
+USER DECISION + FIX (2026-07-03): user chose "עצור והשבת מקור הזבל, לא
+  לגעת בנתונים קיימים" (stop the garbage source, leave existing data
+  alone) out of 4 options (repair the comparison bug / retire+redirect
+  /reports / stop the hook only / investigate the other 10 services
+  first). Implemented via TDD: RED test
+  (test_client_automation_service.py) monkeypatches DataSyncService.
+  sync_all to raise if called, confirmed it WAS called (RED, matching the
+  real prod behavior) -> removed the "sumit" -> DataSyncService.sync_all()
+  block from run_post_sync_tasks (client_automation_service.py) entirely,
+  replaced with a comment explaining why -> GREEN. Verified no other code
+  reads result["transactions"]/["transactions_error"] from this function
+  (the one other "transactions" hit, cfo_brain_service.py:639, is an
+  unrelated generic evidence-dict key). 528 passed (517->528, +1 real
+  regression test net of the +10 from earlier this session). Full
+  qa_gate.py PASSED end-to-end. Deployed to prod (no migration needed --
+  no schema change) -> prod_smoke.py 14/14 -> **live-verified the fix
+  itself**: recorded transactions row count per org before
+  (org1=127,2=23,3=23,4=23,5=23) -> triggered a REAL POST /api/sync/run
+  for org 1 via X-Active-Org-Id super-admin override -> sync completed
+  successfully (id 474, 5 accounts updated, 10 invoices skipped-as-
+  unchanged) -> re-checked row counts: **unchanged (org1 still 127)** --
+  confirms the auto-hook no longer fires and no new garbage rows are
+  created, while the real sync itself still works fine.
+  NOT done (explicitly out of scope per the user's chosen option and the
+  advisor's repeated caution against scope creep): the existing 127+23*4
+  garbage rows are untouched; /api/reports/balance-sheet and
+  /api/reports/profit-loss are still unreliable (still read the same
+  Account/Transaction tables, now frozen rather than growing) --
+  documented in PRODUCT_AUDIT_AND_ROADMAP.md as still-open; the 10 other
+  services that import Account/Transaction were not audited for real
+  dependency this iteration. Task #6 in TaskCreate tracks the still-open
+  repair/retire decision for /reports itself.
