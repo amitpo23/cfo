@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..dependencies import get_db, get_current_user
+from ..dependencies import get_db, get_current_user, get_current_org_id
 from ...services.data_sync_service import DataSyncService
 from ...services.bank_statement_service import BankStatementService, BankFormat
 
@@ -29,15 +29,14 @@ class SyncRequest(BaseModel):
 async def sync_documents(
     request: SyncRequest,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     סנכרון מסמכים מ-SUMIT
     Sync documents from SUMIT API
     """
-    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
-    
+
     try:
         result = await service.sync_documents(
             from_date=request.from_date,
@@ -52,15 +51,14 @@ async def sync_documents(
 async def sync_payments(
     request: SyncRequest,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     סנכרון תשלומים מ-SUMIT
     Sync payments from SUMIT API
     """
-    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
-    
+
     try:
         result = await service.sync_payments(
             from_date=request.from_date,
@@ -75,15 +73,14 @@ async def sync_payments(
 async def sync_billing(
     request: SyncRequest,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     סנכרון עסקאות סליקה מ-SUMIT
     Sync billing/credit card transactions from SUMIT API
     """
-    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
-    
+
     try:
         result = await service.sync_billing_transactions(
             from_date=request.from_date,
@@ -97,15 +94,14 @@ async def sync_billing(
 @router.get("/sumit/debts")
 async def get_debts(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     שליפת דוח חובות מ-SUMIT
     Get debt report from SUMIT API
     """
-    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
-    
+
     try:
         result = await service.sync_debt_report()
         return result
@@ -116,15 +112,14 @@ async def get_debts(
 @router.get("/sumit/income-items")
 async def get_income_items(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     שליפת פריטי הכנסה מ-SUMIT
     Get income items from SUMIT API
     """
-    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
-    
+
     try:
         result = await service.sync_income_items()
         return result
@@ -136,15 +131,14 @@ async def get_income_items(
 async def get_vat_rate(
     for_date: Optional[date] = None,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     שליפת שיעור מע"מ מ-SUMIT
     Get current VAT rate from SUMIT API
     """
-    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
-    
+
     try:
         rate = await service.get_vat_rate(for_date)
         return {"vat_rate": rate, "date": for_date or date.today()}
@@ -157,15 +151,14 @@ async def get_exchange_rate(
     from_currency: str = "USD",
     to_currency: str = "ILS",
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     שליפת שער חליפין מ-SUMIT
     Get exchange rate from SUMIT API
     """
-    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
-    
+
     try:
         rate = await service.get_exchange_rate(from_currency, to_currency)
         return {
@@ -182,13 +175,12 @@ async def get_exchange_rate(
 async def sync_all_data(
     request: SyncRequest,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     סנכרון מלא של כל הנתונים מ-SUMIT
     Full sync of all data from SUMIT API
     """
-    org_id = (current_user.organization_id or 1)
     service = DataSyncService(db, org_id)
     
     try:
@@ -210,12 +202,12 @@ async def import_bank_statement(
     auto_categorize: bool = Form(default=True),
     create_transactions: bool = Form(default=True),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     ייבוא דף בנק
     Import bank statement (CSV/Excel)
-    
+
     Supported formats:
     - leumi (בנק לאומי)
     - hapoalim (בנק הפועלים)
@@ -227,7 +219,6 @@ async def import_bank_statement(
     - generic (גנרי)
     - auto (זיהוי אוטומטי)
     """
-    org_id = (current_user.organization_id or 1)
     service = BankStatementService(db, org_id)
     
     # זיהוי סוג הקובץ
@@ -261,13 +252,12 @@ async def parse_bank_statement(
     file: UploadFile = File(...),
     bank_format: str = Form(default="auto"),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     ניתוח דף בנק ללא שמירה
     Parse bank statement without saving (preview mode)
     """
-    org_id = (current_user.organization_id or 1)
     service = BankStatementService(db, org_id)
     
     filename = file.filename.lower() if file.filename else ''
@@ -299,13 +289,12 @@ async def get_spending_patterns(
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     ניתוח דפוסי הוצאות
     Analyze spending patterns from imported bank transactions
     """
-    org_id = (current_user.organization_id or 1)
     service = BankStatementService(db, org_id)
     
     result = service.get_spending_patterns(from_date, to_date)
@@ -315,13 +304,12 @@ async def get_spending_patterns(
 @router.get("/bank/recurring")
 async def get_recurring_transactions(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     זיהוי עסקאות חוזרות
     Detect recurring transactions from bank statements
     """
-    org_id = (current_user.organization_id or 1)
     service = BankStatementService(db, org_id)
     
     result = service.detect_recurring_transactions()

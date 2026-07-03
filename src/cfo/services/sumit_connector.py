@@ -223,7 +223,8 @@ class SumitConnector(AccountingConnector):
           offset that never advances.
         """
         from ..integrations.sumit_models import DocumentListRequest
-        from_date = updated_since.date() if updated_since else date(2015, 1, 1)
+        from datetime import timedelta
+        from_date = updated_since.date() if updated_since else date.today() - timedelta(days=365)
         all_docs, seen, offset = [], set(), 0
         for _ in range(max_pages):
             page = await client.list_documents(DocumentListRequest(
@@ -297,11 +298,10 @@ class SumitConnector(AccountingConnector):
         try:
             client = await self._get_client()
             async with client:
-                # SUMIT numeric DocumentType code 15 = ExpenseInvoice (supplier/expense
-                # documents). The name "ExpenseInvoice" returns nothing; the numeric code
-                # is the reliable filter for purchase/expense documents.
+                # SUMIT numeric DocumentType code 16 = ExpenseInvoice (finalized supplier
+                # invoices). Code 15 = ExpenseReceipt (pending scan drafts) — wrong type.
                 # Paginated + full-history fetch (see _list_documents_all).
-                documents = await self._list_documents_all(client, "15", updated_since)
+                documents = await self._list_documents_all(client, "16", updated_since)
 
                 bills = []
                 for doc in documents:

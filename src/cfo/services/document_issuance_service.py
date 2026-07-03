@@ -151,7 +151,7 @@ class DocumentIssuanceService:
                 invoice.invoice_number = response.document_number
                 invoice.allocation_number = response.allocation_number
                 invoice.source = "sumit"
-                invoice.status = InvoiceStatus.SENT if send_email else InvoiceStatus.SENT
+                invoice.status = InvoiceStatus.SENT if send_email else InvoiceStatus.DRAFT
                 invoice.raw_data = {
                     **(invoice.raw_data or {}),
                     "sumit": sumit_response,

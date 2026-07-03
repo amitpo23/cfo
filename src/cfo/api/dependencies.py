@@ -205,6 +205,8 @@ async def get_current_org_id(
         return active
 
     if current_user.organization_id is None:
+        if current_user.role == UserRole.SUPER_ADMIN:
+            return 1  # SUPER_ADMIN without explicit header defaults to org 1
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is not scoped to an organization",

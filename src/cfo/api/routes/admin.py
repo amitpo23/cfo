@@ -108,7 +108,11 @@ async def _assert_registration_allowed(
 
     if checkout_session_id:
         if checkout_session_id.startswith("mock_") and getenv("VERCEL_ENV") != "production":
-            return
+            # Preview/dev: mock checkout satisfies payment. Skip VERCEL registration gate;
+            # still enforce registration_secret if one is explicitly configured.
+            if not settings.registration_secret:
+                return
+            # fall through to registration_secret check below
         if settings.stripe_secret_key and checkout_session_id.startswith("cs_"):
             import httpx
 
