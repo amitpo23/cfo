@@ -759,3 +759,27 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 4: followed up on the previous
   (8 of 9 still only exercised indirectly via run_analysis, same gap as
   alert_engine had before iteration 3) remains a candidate for a future
   iteration -- not pursued now given time already spent this session.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 5: closed the coverage gap flagged
+  at the end of iteration 4. Traced each of the 8 remaining insight
+  generators' real data source before writing anything (avoided assuming
+  they're all entangled with the already-documented Account/Transaction
+  issue just because two of them are): reconciliation, collections,
+  cashflow, payables, and large-unreconciled-bank all read Invoice/Bill/
+  BankTransaction/Account.balance -- real, separate tables, unaffected.
+  Only profitability and budget read the legacy Transaction table;
+  tested those by seeding Transaction directly, which validates the
+  insight decision logic in isolation from the separate "does the real
+  sync path populate Transaction correctly" question (already documented,
+  not re-opened). Added 14 tests (fires + does-not-fire pairs where
+  meaningful). One naming gotcha handled correctly on the first pass:
+  _large_unreconciled_bank_insights shares insight_type="reconciliation"
+  with _reconciliation_insights but has a distinct fingerprint
+  ("reconciliation:large_unmatched_bank_movements") -- checked by
+  fingerprint, not type, to isolate it.
+  All 18 passed on the first real run -- unlike alert_engine's equivalent
+  exercise, no new bug surfaced this time. That's a legitimate outcome:
+  these 8 generators' logic checks out as correct. 560 passed (full
+  suite), qa_gate PASSED. Test-only change (no service code touched) --
+  not deployed, since there's no runtime behavior difference to verify
+  live; the already-deployed iteration-4 build is unaffected.
