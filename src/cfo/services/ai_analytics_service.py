@@ -128,6 +128,12 @@ class AIRecommendation:
     is_illustrative: bool = True
 
 
+class AIAnalyticsNotConfiguredError(ValueError):
+    """Raised instead of fabricating a plausible-looking answer when there's
+    no real data/model to back it (missing OpenAI key, no real context, or
+    no real historical-metric source for predictions)."""
+
+
 class AdvancedAIService:
     """
     שירות ניתוח AI מתקדם
@@ -392,70 +398,14 @@ class AdvancedAIService:
         """
         חיזוי מדד פיננסי
         Predict Financial Metric
+
+        אין כרגע מקור נתונים היסטורי אמיתי למדדים (לא נשמרים snapshots לאורך
+        זמן) — הגרסה הקודמת מילאה את הפער ב-random.randint/random.uniform,
+        שנראה כמו תחזית מחושבת אך היה רעש טהור. עדיף להודות שאין תחזית אמיתית
+        מאשר להציג מספר מומצא. ראה AIAnalyticsNotConfiguredError.
         """
-        # נתונים היסטוריים
-        historical = self._get_metric_history(metric, months=24)
-        current_value = historical[-1]['value'] if historical else 0
-        
-        # חישוב מגמה
-        if len(historical) >= 3:
-            recent_avg = sum(h['value'] for h in historical[-3:]) / 3
-            older_avg = sum(h['value'] for h in historical[-6:-3]) / 3 if len(historical) >= 6 else recent_avg
-            trend_pct = ((recent_avg - older_avg) / older_avg * 100) if older_avg else 0
-        else:
-            trend_pct = 0
-        
-        # חיזוי פשוט (בפרודקשן - ML מתקדם)
-        monthly_growth = trend_pct / 100 / 3  # צמיחה חודשית
-        predicted_value = current_value * (1 + monthly_growth) ** horizon_months
-        
-        # טווח ביטחון
-        uncertainty = 0.15 * horizon_months / 6  # אי-ודאות גדלה עם הזמן
-        lower = predicted_value * (1 - uncertainty)
-        upper = predicted_value * (1 + uncertainty)
-        
-        # גורמים משפיעים
-        factors = [
-            {'factor': 'מגמה היסטורית', 'impact': trend_pct, 'confidence': 0.8},
-            {'factor': 'עונתיות', 'impact': self._get_seasonality_factor(metric), 'confidence': 0.6},
-            {'factor': 'מצב השוק', 'impact': 2.0, 'confidence': 0.4}
-        ]
-        
-        # תרחישים
-        scenarios = [
-            {
-                'name': 'אופטימי',
-                'value': upper * 1.1,
-                'probability': 0.2,
-                'assumptions': 'צמיחה מואצת, שוק חזק'
-            },
-            {
-                'name': 'צפוי',
-                'value': predicted_value,
-                'probability': 0.6,
-                'assumptions': 'המשך מגמות קיימות'
-            },
-            {
-                'name': 'פסימי',
-                'value': lower * 0.9,
-                'probability': 0.2,
-                'assumptions': 'האטה, אתגרים בשוק'
-            }
-        ]
-        
-        trend = 'up' if trend_pct > 2 else 'down' if trend_pct < -2 else 'stable'
-        
-        return PredictiveAnalysis(
-            analysis_date=date.today().isoformat(),
-            metric=metric,
-            current_value=current_value,
-            predicted_value=predicted_value,
-            prediction_date=(date.today() + timedelta(days=30 * horizon_months)).isoformat(),
-            confidence_interval=(lower, upper),
-            confidence_level=0.85 - 0.05 * horizon_months / 6,
-            trend=trend,
-            factors=factors,
-            scenarios=scenarios
+        raise AIAnalyticsNotConfiguredError(
+            "חיזוי מדדים דורש היסטוריית נתונים אמיתית שעדיין לא קיימת במערכת"
         )
     
     def get_ai_recommendations(
@@ -566,22 +516,31 @@ class AdvancedAIService:
         """
         ניתוח AI עם GPT
         AI Analysis with GPT
+
+        לעולם לא נופל חזרה לנתונים מומצאים: בלי מפתח OpenAI מוגדר, או בלי
+        context אמיתי שהועבר מפורשות (ולא מבוסס _prepare_financial_context
+        הקשיח שהיה כאן קודם — revenue_mtd/expenses_mtd/וכו' זהים לכל ארגון),
+        מעלה AIAnalyticsNotConfiguredError במקום תשובה שנשמעת אמיתית אך
+        אינה. מראה את אותה משמעת שהוקמה השבוע עבור צ'אט ה-Anthropic
+        (AIChatNotConfiguredError) — חוסר-הגדרה מדווח בכנות, לא מוסתר.
         """
         if not self.openai_available:
-            return self._get_fallback_analysis(question)
-        
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=settings.openai_api_key)
-            
-            # הכנת קונטקסט
-            financial_context = context or self._prepare_financial_context()
-            
-            prompt = f"""
+            raise AIAnalyticsNotConfiguredError(
+                "ניתוח AI לא הוגדר: OPENAI_API_KEY חסר בהגדרות המערכת"
+            )
+        if not context:
+            raise AIAnalyticsNotConfiguredError(
+                "ניתוח AI דורש נתונים פיננסיים אמיתיים של הארגון; לא סופקו"
+            )
+
+        from openai import OpenAI
+        client = OpenAI(api_key=settings.openai_api_key)
+
+        prompt = f"""
 אתה יועץ פיננסי מומחה למערכות ניהול כספים בישראל.
 
 נתונים פיננסיים:
-{json.dumps(financial_context, ensure_ascii=False, indent=2)}
+{json.dumps(context, ensure_ascii=False, indent=2)}
 
 שאלה: {question}
 
@@ -590,18 +549,15 @@ class AdvancedAIService:
 2. המלצות מעשיות
 3. סיכונים שיש לקחת בחשבון
 """
-            
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=1000
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            return f"שגיאה בניתוח AI: {str(e)}\n\n{self._get_fallback_analysis(question)}"
+
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=1000
+        )
+
+        return response.choices[0].message.content
     
     def _detect_amount_anomalies(self, transactions: List[Dict]) -> List[Anomaly]:
         """זיהוי סכומים חריגים"""
@@ -892,48 +848,3 @@ class AdvancedAIService:
             'description': t.description or '',
         } for t in rows]
     
-    def _get_metric_history(self, metric: str, months: int) -> List[Dict]:
-        """היסטוריית מדד"""
-        import random
-        history = []
-        base = 100000
-        
-        for i in range(months):
-            month = date.today() - timedelta(days=30 * (months - i - 1))
-            # מגמה עולה עם תנודות
-            value = base * (1 + 0.02 * i) + random.randint(-10000, 10000)
-            history.append({
-                'month': month.strftime('%Y-%m'),
-                'value': value
-            })
-        
-        return history
-    
-    def _get_seasonality_factor(self, metric: str) -> float:
-        """גורם עונתיות"""
-        import random
-        return random.uniform(-5, 10)
-    
-    def _prepare_financial_context(self) -> Dict:
-        """הכנת קונטקסט פיננסי"""
-        return {
-            'revenue_mtd': 450000,
-            'expenses_mtd': 380000,
-            'cash_balance': 125000,
-            'receivables': 85000,
-            'payables': 62000,
-            'top_expense_categories': ['שכר', 'שיווק', 'שכירות']
-        }
-    
-    def _get_fallback_analysis(self, question: str) -> str:
-        """ניתוח חלופי ללא OpenAI"""
-        return f"""
-ניתוח לשאלה: {question}
-
-מבוסס על הנתונים הזמינים:
-• מצב תזרים: יציב עם מגמת שיפור
-• רמת סיכון: בינונית
-• המלצה: להמשיך לעקוב אחר מדדים מרכזיים
-
-לניתוח מעמיק יותר, אנא הגדר מפתח OpenAI API בהגדרות.
-"""

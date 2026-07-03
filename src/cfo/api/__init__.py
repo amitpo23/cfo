@@ -19,6 +19,7 @@ from ..database import init_db
 from ..integrations.sumit_integration import SumitAPIError
 from ..services.data_sync_service import SumitNotConfiguredError
 from ..services.ai_chat_service import AIChatNotConfiguredError
+from ..services.ai_analytics_service import AIAnalyticsNotConfiguredError
 
 
 @asynccontextmanager
@@ -85,6 +86,18 @@ async def sumit_not_configured_handler(_request, exc: SumitNotConfiguredError):
 async def ai_chat_not_configured_handler(_request, exc: AIChatNotConfiguredError):
     """Without this, a missing ANTHROPIC_API_KEY raises a bare TypeError
     deep inside the anthropic SDK's header-building — an unhandled 500."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(AIAnalyticsNotConfiguredError)
+async def ai_analytics_not_configured_handler(_request, exc: AIAnalyticsNotConfiguredError):
+    """AdvancedAIService raises this instead of fabricating a plausible-
+    looking answer (no OpenAI key, no real context, no real prediction
+    data source) — map it to a clean 400 like every other *NotConfigured
+    error in this app."""
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"detail": str(exc)},

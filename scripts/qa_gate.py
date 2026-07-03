@@ -23,11 +23,15 @@ RunFn = Callable[[list], "subprocess.CompletedProcess"]
 # — including 400, which in this codebase is the correct, intentional
 # response for "integration not configured" (SumitNotConfiguredError,
 # AIChatNotConfiguredError, etc.), not a bug. docs/audits/2026-07-03-route-
-# audit.md investigated all 39 of these individually and confirmed they're
-# expected env-gated 400s. The real qa_gate criterion (per the Step 10 plan)
-# is "zero NEW undocumented failures", not "script exit code == 0" — so we
-# compare the reported count against this documented baseline instead.
-ROUTE_AUDIT_BASELINE_FAILURES = 39
+# audit.md investigated 39 of these individually and confirmed they're
+# expected env-gated 400s; a 40th was added deliberately (2026-07-04):
+# /api/financial/ai/predict/{metric} used to return 200 with fabricated
+# random-noise data when unconfigured — now raises AIAnalyticsNotConfiguredError
+# for a clean 400 instead, trading a silently-wrong 200 for an honest failure.
+# The real qa_gate criterion (per the Step 10 plan) is "zero NEW undocumented
+# failures", not "script exit code == 0" — so we compare the reported count
+# against this documented baseline instead.
+ROUTE_AUDIT_BASELINE_FAILURES = 40
 
 
 def _default_run(cmd: list, cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
