@@ -162,6 +162,24 @@ class DashboardService:
 
         return max(bill_expenses, tx_expenses)
 
+    def _get_month_direct_cost(self, start: date, end: date) -> Optional[float]:
+        """Real COGS: sum of expense Transactions classified into a direct-cost
+        category (same DIRECT_CATEGORIES as CostAnalysisService — not duplicated).
+        None when nothing is classified — we don't have enough data to separate
+        cost-of-sales from operating expenses, so we don't fabricate a number.
+        """
+        from .cost_analysis_service import CostAnalysisService
+
+        total = self.db.query(func.sum(Transaction.amount)).filter(
+            Transaction.organization_id == self.org_id,
+            Transaction.transaction_type == TransactionType.EXPENSE,
+            func.lower(Transaction.category).in_(CostAnalysisService.DIRECT_CATEGORIES),
+            Transaction.transaction_date >= datetime.combine(start, datetime.min.time()),
+            Transaction.transaction_date <= datetime.combine(end, datetime.max.time()),
+        ).scalar()
+
+        return float(total) if total else None
+
     # ===== Runway =====
 
     def _get_average_monthly_burn(self, months: int = 3) -> float:
@@ -377,9 +395,10 @@ class DashboardService:
 
             revenue = float(self._get_month_revenue(month_start, month_end))
             expenses = float(self._get_month_expenses(month_start, month_end))
-            cogs = None  # Cannot separate cost-of-sales without additional data
-            gross_profit = None  # Not computable without COGS
-            opex = expenses  # All expenses treated as operating when COGS unknown
+            cogs = self._get_month_direct_cost(month_start, month_end)
+            cogs_available = cogs is not None
+            gross_profit = revenue - cogs if cogs_available else None
+            opex = expenses - cogs if cogs_available else expenses
             net_profit = revenue - expenses
 
             # Category breakdown from transactions
@@ -389,7 +408,7 @@ class DashboardService:
                 "month": month_start.strftime("%Y-%m"),
                 "revenue": revenue,
                 "cogs": cogs,
-                "cogs_available": False,
+                "cogs_available": cogs_available,
                 "gross_profit": gross_profit,
                 "opex": opex,
                 "net_profit": net_profit,
