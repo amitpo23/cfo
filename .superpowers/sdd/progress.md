@@ -156,3 +156,28 @@ item, see memory rezef-completion-epics + TaskCreate #1), Task 7 (Neon drift) cl
 Task 8 (deploy) done with 14/14 smoke green. NEXT: Wave 2 per
 docs/superpowers/plans/2026-07-03-epic1-handoff.md steps 7-11 (10 upgrades, SUMIT API
 gaps 8.1-8.6, AI chatbot 9.1-9.5, qa_gate.py, final deploy) — tracked in TaskCreate #4.
+User approved starting Wave 2. Correctness-first spot-check before piling on features:
+live VAT report re-checked against prod (org 1, months 4-6/2026) — input_vat non-zero
+(earlier VAT=0 fix from memory `accounting-engine-buildout` still holds), output_vat=0
+matches known "no synced sales this period" state (memory `sumit-may2026-vat-state`),
+not a new regression.
+
+=== WAVE 2 — step 7 (10 upgrades) in progress ===
+7.1 COGS: DONE (commit f0fab9a). dashboard_service.get_pnl now computes real COGS from
+  Transaction rows classified via CostAnalysisService.DIRECT_CATEGORIES (reused, not
+  duplicated); honest None+cogs_available=False unchanged when nothing is classified.
+  Full suite 458 passed.
+7.2 AI honest fallback: the plan's original target (ai_intelligence_agent.py ~line 262)
+  was ALREADY fixed in an earlier session (T1.3, see memory completion-sprint-2026-06) —
+  verified, not duplicated. Found the real remaining fabricated-number instance in the
+  same subsystem: `_calculate_liquidity_score` always returned hardcoded 20.0. DONE
+  (commit 5e0657d): now computes real cash-to-burn runway from bank Account balances vs.
+  expense trend; honest 0+unavailable_components flag when no bank/expense data exists
+  (health-score aggregate stays summable for existing consumers). Full suite 460 passed.
+7.6 Alert engine resilience: DONE (commit 3ffa7e1). evaluate_all() had zero exception
+  handling — one check raising crashed the whole run, silently dropping every other
+  check's alerts too. Added `_run_check()` wrapper: logs + records failures in
+  `last_run_failures`, other checks still execute. New test proves isolation. Note: a
+  tests/test_alert_engine.py file already existed (2 tests) — plan's "no tests exist"
+  claim was stale; extended it rather than creating a new file. Full suite 461 passed.
+7.3/7.4/7.5/7.7/7.8/7.9/7.10 not started yet.
