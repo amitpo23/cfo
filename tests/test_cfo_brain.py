@@ -69,3 +69,31 @@ def test_connection_insights_generated_on_fresh_org(fresh_org):
         assert len(insights) >= 1, "list_insights() should be non-empty after run_analysis"
     finally:
         db.close()
+
+
+def test_one_insight_generator_failing_does_not_abort_the_others(fresh_org, monkeypatch):
+    """Unlike AlertEngine.evaluate_all() (which isolates each check via
+    _run_check), run_analysis() calls each _*_insights() generator directly
+    with no isolation — one exception anywhere currently aborts the entire
+    analysis, silently dropping every other insight too (client_automation_
+    service.run_post_sync_tasks wraps the whole run_analysis() call in a
+    try/except that just logs and continues, so this failure mode is
+    invisible in production). This must not be the case: a single generator
+    failing should be caught, logged, and not block the others."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        brain = CFOBrainService(db, org_id)
+        monkeypatch.setattr(
+            brain, "_cashflow_insights",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("simulated failure")),
+        )
+
+        result = brain.run_analysis(create_tasks=False)
+
+        # Connection insights (a different generator) still ran and produced output.
+        assert result["insights_generated"] >= 1, (
+            "A failing _cashflow_insights must not silently zero out every other insight"
+        )
+    finally:
+        db.close()

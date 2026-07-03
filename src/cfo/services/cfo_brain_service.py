@@ -4,6 +4,7 @@ CFO Brain service.
 Persists internal financial memory, generates actionable insights, and creates
 tasks from SUMIT, bank/Open Finance, budget, and reconciliation data.
 """
+import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
@@ -24,6 +25,8 @@ from ..models import (
     TransactionType,
 )
 from .financial_control_service import FinancialControlService
+
+logger = logging.getLogger(__name__)
 
 
 class CFOBrainService:
@@ -68,24 +71,42 @@ class CFOBrainService:
         self.db = db
         self.organization_id = organization_id
         self.control = FinancialControlService(db, organization_id)
+        self.last_run_failures: list = []
+
+    def _run_generator(self, name: str, fn, *args) -> list:
+        """Run one insight generator in isolation — mirrors AlertEngine._run_check.
+        A single generator raising must not abort the others nor the whole
+        analysis; the caller (run_post_sync_tasks) already wraps the entire
+        run_analysis() call in a try/except that just logs and continues, so
+        without this, one bad generator would silently zero out every insight
+        for the org on that sync, with no visible error anywhere."""
+        try:
+            return fn(*args)
+        except Exception as exc:
+            logger.exception(
+                "CFO brain insight generator %s failed for org %s", name, self.organization_id
+            )
+            self.last_run_failures.append({"generator": name, "error": str(exc)})
+            return []
 
     def run_analysis(self, create_tasks: bool = True) -> dict:
         """Run a full analysis pass and persist memory + insights."""
+        self.last_run_failures: list = []
         overview = self.control.get_control_overview()
         insights = []
 
         self._remember("control.overview", "metric", overview, source="financial_control")
         self._remember_connections()
 
-        insights.extend(self._connection_insights())
-        insights.extend(self._reconciliation_insights(overview))
-        insights.extend(self._collections_insights(overview))
-        insights.extend(self._cashflow_insights(overview))
-        insights.extend(self._payables_insights(overview))
-        insights.extend(self._profitability_insights(overview))
-        insights.extend(self._month_close_insights(overview))
-        insights.extend(self._budget_insights())
-        insights.extend(self._large_unreconciled_bank_insights())
+        insights.extend(self._run_generator("_connection_insights", self._connection_insights))
+        insights.extend(self._run_generator("_reconciliation_insights", self._reconciliation_insights, overview))
+        insights.extend(self._run_generator("_collections_insights", self._collections_insights, overview))
+        insights.extend(self._run_generator("_cashflow_insights", self._cashflow_insights, overview))
+        insights.extend(self._run_generator("_payables_insights", self._payables_insights, overview))
+        insights.extend(self._run_generator("_profitability_insights", self._profitability_insights, overview))
+        insights.extend(self._run_generator("_month_close_insights", self._month_close_insights, overview))
+        insights.extend(self._run_generator("_budget_insights", self._budget_insights))
+        insights.extend(self._run_generator("_large_unreconciled_bank_insights", self._large_unreconciled_bank_insights))
 
         persisted = [self._upsert_insight(item) for item in insights]
         tasks_created = 0
