@@ -62,3 +62,31 @@ def test_apply_additive_closes_the_gap(tmp_path):
     with engine.connect() as conn:
         names = [r[0] for r in conn.execute(sa.text("SELECT name FROM organizations"))]
     assert "שרידות-נתונים" in names
+
+
+def test_apply_additive_adds_notnull_python_default_column_as_nullable(tmp_path):
+    """עמודת NOT NULL עם default צד-Python בלבד (בלי server_default) — כמו
+    organizations.collection_reminders_enabled (nullable=False, default=False).
+    SQLAlchemy's CreateColumn DDL compiler never emits a Python-side default=
+    as a DDL DEFAULT clause — רק server_default מגיע ל-DDL. לכן חייבים להוסיף
+    אותה כ-nullable, אחרת ADD COLUMN NOT NULL בלי DEFAULT נכשל על טבלה מאוכלסת.
+    """
+    engine = _fresh_engine(tmp_path)
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        # מכניסים שורה בזמן שהעמודה עדיין קיימת (כדי לספק ערך מפורש ל-NOT NULL)
+        conn.execute(sa.text(
+            "INSERT INTO organizations (name, collection_reminders_enabled) "
+            "VALUES ('שורד-בלי-server-default', 0)"
+        ))
+        # מדמים drift: מסירים עמודת NOT NULL עם Python-side default בלבד
+        conn.execute(sa.text(
+            "ALTER TABLE organizations DROP COLUMN collection_reminders_enabled"
+        ))
+
+    apply_additive(engine)  # לפני התיקון: OperationalError (NOT NULL בלי DEFAULT)
+
+    assert compute_missing(engine) == {"tables": [], "columns": {}}
+    with engine.connect() as conn:
+        names = [r[0] for r in conn.execute(sa.text("SELECT name FROM organizations"))]
+    assert "שורד-בלי-server-default" in names

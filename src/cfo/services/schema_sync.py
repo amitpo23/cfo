@@ -54,8 +54,11 @@ def apply_additive(engine: Engine) -> Dict:
                 col = table.columns[col_name]
                 ddl_col = CreateColumn(col).compile(dialect=engine.dialect)
                 stmt = f'ALTER TABLE {table_name} ADD COLUMN {ddl_col}'
-                if col.nullable is False and col.default is None and col.server_default is None:
-                    # עמודת NOT NULL בלי default תיכשל על טבלה מאוכלסת —
+                if col.nullable is False and col.server_default is None:
+                    # SQLAlchemy's CreateColumn DDL compiler never emits a Python-side
+                    # default= as a DDL DEFAULT clause — only server_default reaches
+                    # DDL. לכן כל עמודת NOT NULL בלי server_default (גם אם יש לה
+                    # default צד-Python) תיכשל על טבלה מאוכלסת אם תישאר NOT NULL —
                     # מוסיפים כ-nullable; אכיפת NOT NULL נשארת למיגרציית alembic מסודרת.
                     stmt = stmt.replace(" NOT NULL", "")
                 conn.execute(sa_text(stmt))

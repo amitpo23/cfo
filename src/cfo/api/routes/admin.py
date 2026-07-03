@@ -567,6 +567,7 @@ async def run_db_migrations(current_user: User = Depends(require_admin)):
     """
     from pathlib import Path
 
+    import sqlalchemy
     from alembic import command as alembic_command
     from alembic.config import Config as AlembicConfig
     from sqlalchemy import inspect as sa_inspect
@@ -589,7 +590,7 @@ async def run_db_migrations(current_user: User = Depends(require_admin)):
         else:
             alembic_command.upgrade(cfg, "head")
             action = "upgraded"
-    except Exception as exc:  # create_all↔alembic: "already exists" וכדומה
+    except sqlalchemy.exc.DatabaseError as exc:  # create_all↔alembic: "already exists" וכדומה
         if "already exists" not in str(exc).lower():
             raise
         alembic_command.stamp(cfg, "head")
