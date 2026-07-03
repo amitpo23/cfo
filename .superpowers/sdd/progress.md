@@ -208,4 +208,15 @@ not a new regression.
   byte-identical to prior behavior via dedicated test. Full suite 469 passed.
   NOTE: fixed an alembic revision-id collision (accidentally reused an existing hex id
   from add_contact_bank_fields.py) before this landed — caught by full suite, not by CI.
-7.3/7.9/7.10 not started. 7/10 upgrades done (7.1,7.2,7.4,7.5,7.6,7.7,7.8).
+7.10 Warnings cleanup: DONE (commit a799c83). Real distinct-location count was 24 (18
+  DeprecationWarning + 6 LegacyAPIWarning) in our own code, NOT the plan's claimed
+  ~2,285 (that figure was the total repeated-firing count across all tests, not
+  distinct bugs). Fixed: datetime.utcnow()->now(timezone.utc) at all real call sites
+  (Column-level defaults in models.py, ~55 sites, deliberately NOT touched — bigger,
+  separate, higher-risk pass); @app.on_event->lifespan; Query regex->pattern
+  (pydantic v2); .query(Model).get()->db.get(Model,id) (sqlalchemy 2.0); BaseModel
+  .dict()->.model_dump(); declarative_base import moved to sqlalchemy.orm. Zero
+  distinct our-code warning locations remain (verified via full-suite grep); ~2150
+  remaining warning instances are 100% third-party library internals. 469 passed
+  throughout, no naive/aware comparison broke.
+7.3/7.9 not started. 8/10 upgrades done (7.1,7.2,7.4,7.5,7.6,7.7,7.8,7.10).
