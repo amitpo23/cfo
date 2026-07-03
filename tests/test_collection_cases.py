@@ -245,6 +245,26 @@ def test_alert_engine_does_not_flag_paid_case(fresh_org):
         db.close()
 
 
+def test_list_cases_route_enriches_with_contact_name(client, fresh_org):
+    """The UI needs a human-readable contact name (and a way to reach them) —
+    a bare contact_id is not usable in a collections worklist."""
+    iso = fresh_org()
+    org_id, headers = iso["org_id"], iso["headers"]
+    db = SessionLocal()
+    try:
+        _overdue_invoice(db, org_id, days_overdue=45, total="2500")
+    finally:
+        db.close()
+
+    client.post("/api/collections/open", headers=headers)
+    r = client.get("/api/collections/cases", headers=headers)
+    assert r.status_code == 200
+    case = r.json()["cases"][0]
+    assert case["contact_name"] == "לקוח חייב"
+    assert case["contact_phone"] == "0501234567"
+    assert case["total_balance"] == 2500.0
+
+
 def test_route_lifecycle(client, fresh_org):
     iso = fresh_org()
     org_id, headers = iso["org_id"], iso["headers"]
