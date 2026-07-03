@@ -272,7 +272,13 @@ class SumitIntegration(BaseIntegration):
         """
         data = self._with_credentials(payload or {})
         response = await self.client.post(endpoint, json=data)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            self._log_error(e, f"HTTP error on {endpoint}")
+            raise SumitAPIError(
+                f"SUMIT API error {e.response.status_code}: {e.response.text}"
+            )
         content_type = response.headers.get("content-type", "")
         if "application/json" in content_type:
             # An error envelope came back instead of the binary payload.

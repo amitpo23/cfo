@@ -19,6 +19,16 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 
+class SumitNotConfiguredError(ValueError):
+    """Raised when no SUMIT credentials are available for an organization.
+
+    Subclasses ValueError so any existing `except ValueError` handling around
+    DataSyncService (CLI, client_automation_service) keeps working unchanged.
+    An app-level FastAPI handler (see cfo.api) maps this to a clean HTTP 400
+    instead of letting it fall through as a raw 500.
+    """
+
+
 class DataSyncService:
     """
     שירות סנכרון נתונים מ-SUMIT API למסד הנתונים המקומי
@@ -50,7 +60,7 @@ class DataSyncService:
             company_id = settings.sumit_company_id
 
         if not api_key:
-            raise ValueError("SUMIT API key not configured")
+            raise SumitNotConfiguredError("SUMIT API key not configured for this organization")
 
         return SumitIntegration(api_key=api_key, company_id=company_id)
 

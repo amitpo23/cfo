@@ -15,6 +15,7 @@ from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
 from ..integrations.sumit_integration import SumitAPIError
+from ..services.data_sync_service import SumitNotConfiguredError
 
 app = FastAPI(
     title=settings.app_name,
@@ -52,6 +53,18 @@ async def sumit_api_error_handler(_request, exc: SumitAPIError):
             "source": "sumit",
             "code": "external_integration_error",
         },
+    )
+
+
+@app.exception_handler(SumitNotConfiguredError)
+async def sumit_not_configured_handler(_request, exc: SumitNotConfiguredError):
+    """DataSyncService raises this when no SUMIT credentials exist for the
+    org. Some /api/sync/sumit/* routes call DataSyncService directly (no
+    Depends(get_sumit_integration)), so without this handler the bare
+    ValueError subclass would fall through as a raw 500."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc)},
     )
 
 # Include existing routers
