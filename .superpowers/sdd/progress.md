@@ -249,3 +249,37 @@ DEPLOY (Wave 2, backend-only slice): user explicitly asked to deploy the
   scroll/read_page all verified against the real RezefLanding page). This is
   now the verification path for 7.3's AR tab + 7.9's DocumentIssueWizard,
   since Vercel preview deploys remain protection-blocked.
+
+7.3 (frontend) + 7.9: DONE (commit ee6c265). CFOARDashboard gained a tab
+  switch (aging / collection cases); new CollectionCasesTab.tsx drives
+  open-cases / list / log-attempt against the existing /api/collections/*
+  routes (also enriched those routes at the route layer with contact
+  name/phone/email + summed balance, commit 0c27068 — the service's
+  case_to_dict only carried contact_id, not usable in a worklist UI).
+  7.9's actual gap turned out to be much smaller than the plan assumed:
+  DocumentManager.tsx's CreateDocumentModal already had full type/customer/
+  line-item entry (a real DocumentIssueWizard already existed) — the only
+  missing piece was that onSuccess just alert()'d and discarded the
+  response. Replaced with a result screen showing document number/total/
+  status + a PDF download button. Did NOT build a new wizard component or
+  touch CustomerDashboard.tsx (that page is a disconnected stub — customers
+  query hard-returns [] with a comment saying the list endpoint doesn't
+  exist; wiring document-issuance into it would mean building a whole real
+  customer-list feature, out of scope for this item).
+  Verified end-to-end locally via claude-in-chrome: seeded an overdue
+  invoice+contact, opened a case, logged a "promised" attempt with a
+  promise date, watched status/attempts/promise-date update live in the
+  UI. One accidental alert() (my own new code, the "open cases" success
+  message) blocked the automated tab via a native dialog — fixed by
+  replacing it with an inline transient banner instead of chasing the
+  dialog. DocumentManager's SUMIT create-flow itself was NOT exercised
+  live (no SUMIT credentials in the local dev org) — verified by
+  tsc --noEmit + npm run build (both clean) + code review only; flagging
+  this honestly rather than claiming full verification.
+  tsc --noEmit clean, npm run build clean. No frontend test runner exists
+  in this repo (no vitest/jest configured) and ESLint has no config file
+  either — both pre-existing gaps, not introduced or fixed here.
+  486 passed (backend, unchanged by frontend work). ALL 10 WAVE 2 UPGRADES
+  NOW COMPLETE (backend deployed to prod; this frontend slice not yet
+  deployed — next deploy should bundle it with whatever Step 8/9 work
+  follows, per the user's "deploy now, then continue" pattern).
