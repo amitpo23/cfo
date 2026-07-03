@@ -130,7 +130,7 @@ git push origin feat/sumit-ar-ap-documents-ocr
    ה-SUMIT שאומת ובוטל, מצב ה-drift, ומה האפיק הבא (אפיק 2: סופר-אדמין
    ופר-לקוח UI; אפיק 3: Open Finance — דורש consent של המשתמש).
 
-## הגדרת סיום (חובה לוודא הכל)
+## הגדרת סיום — גל 1 (אפיק יציבות)
 
 - [ ] suite מלא ירוק (457+)
 - [ ] Task 4.2 מאומת דטרמיניסטית ורשום ב-ledger
@@ -138,3 +138,160 @@ git push origin feat/sumit-ar-ap-documents-ocr
 - [ ] SUMIT write-back אומת חי (נוצר→PDF→בוטל→אומת) ותועד
 - [ ] drift מול Neon = OK אחרי migrate
 - [ ] PRODUCTION_READINESS.md מעודכן, הכל committed + pushed
+
+---
+
+# גל 2 — שדרוגים, השלמות SUMIT, צ'אטבוט AI, QA ודיפלוי סופי
+
+> **סדר מחייב:** גל 1 (שלבים 0–6) נפרס קודם. רק אחרי production ירוק
+> מתחילים גל 2. כל פריט בגל 2 = מחזור TDD מלא + commit נפרד. אחרי כל
+> 2–3 פריטים: suite מלא. בסוף הגל: שלב 11 (QA מקיף + דיפלוי).
+
+## שלב 7 — עשרה שדרוגים (בסדר הזה; כל אחד commit נפרד)
+
+**7.1 COGS אמיתי בדשבורד.** `src/cfo/services/dashboard_service.py` (~שורה
+380): מוחלף המקדם המזויף `expenses * 0.3` בחישוב אמיתי מקטגוריות עלות־ישירה
+(אותה סיווג DIRECT_CATEGORIES שכבר קיים ב-cost_analysis_service — עשה בו
+שימוש חוזר, אל תשכפל). אם אין נתון — החזר null+דגל `"cogs_derived": false`,
+לא מספר מומצא. טסט: ארגון עם Transactions מסווגות → COGS מדויק; ארגון ריק → null.
+
+**7.2 הסרת fallback מזויף ב-AI intelligence.** `src/cfo/services/ai_intelligence_agent.py`
+(~שורה 262): fallback שממציא נתונים → החזרת `{"available": false, "reason": ...}`
+כנה. טסט: כשאין נתונים אין מספרים מומצאים בתשובה.
+
+**7.3 Workflow גבייה מתמשך.** מודל `CollectionCase` חדש (org_id, contact_id,
+invoice_ids JSON, status: open/promised/paid/escalated, attempts JSON —
+תאריך/ערוץ/תוצאה, promise_date) + migration additive. שירות
+`collection_service.py`: פתיחת case אוטומטית לחשבונית שעברה סף ימים,
+רישום נסיון, קידום סטטוס. routes `/api/collections/*` (GET list, POST attempt,
+POST status) + חיבור ל-alert_engine. UI: לשונית בדשבורד AR. טסטים: מחזור חיים
+מלא + בידוד org.
+
+**7.4 שכר→יומן.** `payroll_service`: אחרי חישוב תלוש — יצירת פקודת יומן
+(ברוטו הוצאה, ניכויים התחייבויות, נטו לתשלום) דרך ledger_service, מסומנת
+derived. טסט: תלוש → פקודה מאוזנת Σחובה=Σזכות.
+
+**7.5 זיהוי כפילויות מסמכים.** ב-`document_anomalies` (engine): זיהוי
+duplicate — אותו ספק+סכום+תאריך±3 ימים או אותו מספר-מסמך. חיבור לדשבורד
+Engine הקיים. טסט: שתי הוצאות זהות → anomaly.
+
+**7.6 Alert engine — שגיאות לא נבלעות + טסטים.** `alert_engine`: החלפת
+try/except האילם ברישום שגיאה ל-log + מונה כשלים בתשובה. טסטים ראשונים
+ל-alert_engine (אין כיום): התרעה נוצרת על תנאי אמת, כשל handler לא מפיל
+את השאר.
+
+**7.7 מנגנוני ניכוי בהוצאות.** בהתבסס על שלושת מחשבוני הניכוי הקיימים
+(רכב/בית/טלפון ב-calculators): שדה `deduction_percent` ב-Expense (migration
+additive) + החלה אוטומטית לפי קטגוריה ב-expense_filing_service, ושיקוף
+בדוח מע"מ/1301 (רק החלק המוכר). טסט: הוצאת רכב → החלק המוכר בלבד נספר.
+
+**7.8 Idempotency לסנכרון בנק.** `BankTransaction`: עמודת `is_provisional`
+(migration additive) + מפתח ייחודי לוגי (org, provider_tx_id) עם upsert —
+סנכרון כפול לא יוצר כפילויות. טסט: אותו feed פעמיים → אותה ספירה.
+
+**7.9 מסכי הנפקה לכל סוגי המסמכים.** frontend: `DocumentIssueWizard.tsx` —
+בחירת סוג (10 הסוגים מ-`/api/financial/documents/types`), לקוח, שורות, ותצוגת
+תוצאה עם PDF. חיבור ל-DocumentManager ולדשבורד לקוח. `npm run build` + `tsc`
+נקיים. בדיקה ידנית מול preview לפני production.
+
+**7.10 ניקוי אזהרות (pristine output).** החלפת כל `datetime.utcnow()` ב-
+`datetime.now(timezone.utc)` בקוד שלנו (src/ + tests/ — כ-2,285 אזהרות כיום),
+ותיקון ה-LegacyAPIWarning של Query.get→Session.get ב-tests/test_office.py.
+יעד: `python -m pytest tests/ -q 2>&1 | grep -c Warning` יורד דרמטית; אפס
+שינוי התנהגות (utcnow נאיבי → aware; ודא שאין השוואות naive/aware שנשברות —
+הרץ suite מלא).
+
+## שלב 8 — השלמות יכולות SUMIT API
+
+מקור אמת: `docs/SUMIT_API_REFERENCE.md` + `SUMIT_MODULE_COVERAGE.md`
+(רשימת ה-Partial). לכל יכולת: מתודה ב-`sumit_integration.py` → route →
+טסט (mock של SUMIT) → רישום ב-SUMIT_MODULE_COVERAGE.md כ-Ready.
+
+**8.1 מסמכים עתידיים** (future documents) — יצירה/רשימה/ביטול של מסמכים
+מתוזמנים. **8.2 צ'קים ומזומן** — רישום תקבול צ'ק/מזומן כאמצעי תשלום במסמך.
+**8.3 הרשאות מס"ב (mandates) והחזרות** — יצירת mandate, סטטוס, טיפול
+בהחזרות. **8.4 זיכויים/החזרים (refunds)** — יצירת זיכוי כספי מול עסקת סליקה
+קיימת. **8.5 התרעות chargebacks** — משיכת התרעות והצגתן ב-alerts.
+
+**8.6 פער שאינו API (לתעד, לא לממש כאן):** קליטת מנות יומן, תיוק טיוטות
+סרוקות, שידור PCN874 — אין API ב-SUMIT; נדרש סקריפט דפדפן (תקדים:
+`scripts/sumit_daily_file_expenses.js`). פתח סעיף "אוטומציית דפדפן — אפיק 5"
+במסמך הכיסוי עם שלושת אלה, ודווח למשתמש שזה ממתין לאפיק 5.
+
+לכל route חדש: org-scoped, שגיאות כנות (400/503 — התשתית מגל 1), ובדיקת
+בידוד בין ארגונים.
+
+## שלב 9 — צ'אטבוט AI של רצף (אפיק 4 — מוקדם לפי בקשת המשתמש)
+
+**ארכיטקטורה:** backend tool-use loop מול Anthropic API. הקונפיג כבר קיים:
+`settings.anthropic_api_key` (config.py:91). מודל ברירת מחדל: הוסף
+`ai_chat_model: str = "claude-sonnet-5"` לקונפיג (override ב-env). לפני
+המימוש אמת את זמינות המודל מול התיעוד הרשמי של Anthropic.
+
+**9.1 שכבת כלים** — `src/cfo/services/ai_chat_tools.py`: רישום כלים שכל
+אחד עוטף שירות קיים (לעולם לא SQL גולמי), org-scoped מה-JWT:
+- קריאה: `get_profit_loss`, `get_cashflow`, `get_ar_aging`, `get_ap_aging`,
+  `get_ledger_card` (כרטסת לפי contact), `get_vat_position`,
+  `list_invoices` (עם פילטרים), `get_engine_status`, `search_contacts`.
+- פעולה (דורשות אישור — ראה 9.3): `run_sync`, `issue_document`,
+  `send_report` (מייל דוח קיים).
+- סופר-אדמין בלבד (בדיקת role קשיחה): `register_client`, `list_clients`,
+  `get_office_rollup`, `sync_all_clients`.
+
+**9.2 שירות + route** — `src/cfo/services/ai_chat_service.py`: לולאת
+tool-use (קריאה ל-API, ביצוע כלי, החזרת תוצאה, עד תשובה סופית; תקרת 10
+סיבובים). route `POST /api/ai/chat` (הודעה+היסטוריה) — org מה-JWT, הכלים
+מסוננים לפי role. שמירת שיחות בטבלת `ai_chat_messages` (org_id, user_id,
+role, content, tool_calls JSON, created_at) + migration additive.
+
+**9.3 בטיחות פעולות:** כלי-פעולה מחזירים תחילה
+`{"confirmation_required": true, "summary": "..."}`; הביצוע רק כשההודעה
+הבאה מאשרת (ה-frontend מציג כפתור אישור). לעולם אין ביצוע פעולה כותבת
+בסיבוב הראשון.
+
+**9.4 Frontend** — `ChatAssistant.tsx`: פאנל צף (כפתור בפינה בכל המסכים)
++ route `/assistant`. עברית, RTL, סטרימינג לא נדרש בגרסה ראשונה. הצגת
+"הבוט מציע לבצע: X — אשר/בטל" לפעולות.
+
+**9.5 טסטים (חובה):** unit לכל כלי (org isolation: משתמש org A לא מקבל
+נתוני org B); route עם LLM ממוקפח (monkeypatch של קריאת ה-API — אין קריאות
+אמיתיות ב-CI); non-admin שמנסה כלי office → נחסם; פעולה כותבת בלי אישור →
+לא מבוצעת. בדיקה חיה אחת ידנית אחרי deploy עם ANTHROPIC_API_KEY אמיתי
+(אם חסר ב-env — שאל את המשתמש).
+
+## שלב 10 — חבילת QA מקיפה (שער לפני הדיפלוי הסופי)
+
+צור `scripts/qa_gate.py` שמריץ ומדווח PASS/FAIL מרוכז:
+1. `python -m pytest tests/ -q` — אפס כשלים.
+2. `python scripts/audit_routes.py` — אפס כשלים לא-מתועדים חדשים (השווה
+   מול docs/audits/2026-07-03-route-audit.md; כל route חדש חייב סטטוס תקין).
+3. `python scripts/schema_drift_check.py` מול SQLite מקומי ומול Neon.
+4. Frontend: `cd frontend && npx tsc --noEmit && npm run build` — אפס שגיאות.
+5. `python scripts/colscan.py` אם קיים (סורק עמודות-רפאים) — אפס ממצאים חדשים.
+6. בידוד דיירים: הרץ ממוקד `python -m pytest tests/ -q -k "isolation or org_scope or tenancy"`.
+7. E2E ידני מול preview (רשימת סימון, לתעד במסמך האודיט): login → org switch
+   → sync → P&L → מאזן → כרטסת → הנפקת מסמך (טיוטה/ביטול) → צ'אטבוט שאלה
+   אחת + פעולה אחת עם אישור.
+כשל בכל סעיף → תיקון לפני המשך. אין דיפלוי עם QA אדום.
+
+## שלב 11 — דיפלוי סופי ודיווח
+
+1. suite + qa_gate ירוקים → `vercel deploy` → smoke מול preview →
+   `vercel deploy --prod` → `POST /api/admin/db/migrate` (המיגרציות החדשות:
+   CollectionCase, deduction_percent, is_provisional, ai_chat_messages) →
+   `python scripts/prod_smoke.py` (הוסף ל-CRITICAL_PATHS את `/api/ai/chat`
+   בבדיקת אימות-בלבד ואת `/api/collections`) → `schema_drift_check` מול Neon = OK.
+2. עדכן PRODUCTION_READINESS.md + SUMIT_MODULE_COVERAGE.md + ledger
+   (`WAVE 2 COMPLETE`), commit + push.
+3. דיווח סיכום למשתמש בעברית: מה נוסף, תוצאות QA, קישור לפרוד, מה נותר
+   לאפיקים 2/3/5 (סופר-אדמין UI מלא; Open Finance consent — פעולת משתמש;
+   אוטומציית דפדפן SUMIT).
+
+## הגדרת סיום — גל 2
+
+- [ ] 10 השדרוגים בוצעו ב-TDD, כל אחד commit נפרד
+- [ ] יכולות SUMIT 8.1–8.5 ממומשות + מתועדות; 8.6 מתועד כאפיק 5
+- [ ] צ'אטבוט AI חי בפרוד: שאילתות + פעולות-עם-אישור + בידוד org נבדק
+- [ ] qa_gate.py קיים וירוק על כל 7 הסעיפים
+- [ ] production נפרס, migrate הורץ, smoke+drift ירוקים
+- [ ] כל התיעוד מעודכן, הכל pushed
