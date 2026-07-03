@@ -264,3 +264,56 @@ def test_confirm_action_rejects_message_without_pending_action(fresh_org):
         assert raised is not None
     finally:
         db.close()
+
+
+def test_confirm_action_rejects_a_different_users_pending_action(monkeypatch, fresh_org):
+    """IDOR check: user 999 in the SAME org must not be able to confirm
+    (and execute) a write that user 1 proposed. message_id is a small
+    sequential integer — trivially guessable — so org-scoping alone is
+    not enough; ownership must be checked too."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "issue_document", {
+                    "document_type": "invoice", "customer_id": "123",
+                    "customer_name": "לקוח", "items": [{"description": "x", "unit_price": 1}],
+                })],
+            ),
+        ])
+        owner_service = AIChatService(db, org_id, user_id=1)
+        pending = asyncio.run(owner_service.send_message("s1", "תפיק חשבונית"))
+
+        attacker_service = AIChatService(db, org_id, user_id=999)
+        try:
+            asyncio.run(attacker_service.confirm_action(pending["message_id"]))
+            raised = None
+        except ChatConfirmationError as exc:
+            raised = exc
+        assert raised is not None, "a different user in the same org executed someone else's pending action"
+        assert db.query(Invoice).filter(Invoice.organization_id == org_id).count() == 0
+    finally:
+        db.close()
+
+
+def test_chat_history_is_scoped_to_the_requesting_user(fresh_org):
+    """A user's chat session must not be readable by another user in the
+    same org just by knowing/guessing the session_id."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(ChatMessage(
+            organization_id=org_id, user_id=1, session_id="shared-guess",
+            role="user", content="מידע פרטי",
+        ))
+        db.commit()
+
+        owner_service = AIChatService(db, org_id, user_id=1)
+        other_service = AIChatService(db, org_id, user_id=2)
+
+        assert len(owner_service._history("shared-guess")) == 1
+        assert len(other_service._history("shared-guess")) == 0
+    finally:
+        db.close()

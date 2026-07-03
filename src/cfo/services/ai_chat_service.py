@@ -43,10 +43,15 @@ class AIChatService:
         self.user_id = user_id
 
     def _history(self, session_id: str) -> list[ChatMessage]:
+        # Scoped to (org, user) — a chat session is a private conversation,
+        # not shared team data. Without the user_id check, any authenticated
+        # user in the same org could read another user's session just by
+        # knowing/guessing its session_id.
         return (
             self.db.query(ChatMessage)
             .filter(
                 ChatMessage.organization_id == self.organization_id,
+                ChatMessage.user_id == self.user_id,
                 ChatMessage.session_id == session_id,
             )
             .order_by(ChatMessage.id.asc())
@@ -153,9 +158,14 @@ class AIChatService:
         }
 
     async def confirm_action(self, message_id: int) -> dict[str, Any]:
+        # Scoped to (org, user) — message_id is a small sequential integer,
+        # trivially guessable, so org-scoping alone isn't enough: without
+        # the user_id check here, any other user in the same org could
+        # confirm (and execute) a write that someone else's chat proposed.
         msg = self.db.query(ChatMessage).filter(
             ChatMessage.id == message_id,
             ChatMessage.organization_id == self.organization_id,
+            ChatMessage.user_id == self.user_id,
         ).first()
         if msg is None:
             raise ChatConfirmationError(f"הודעה {message_id} לא נמצאה")

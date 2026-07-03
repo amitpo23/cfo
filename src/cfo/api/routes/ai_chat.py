@@ -50,11 +50,18 @@ async def confirm_chat_action(
 async def get_chat_history(
     session_id: str,
     org_id: int = Depends(get_current_org_id),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db_session),
 ):
+    # user_id scoped too — a chat session is a private conversation, not
+    # shared team data; session_id alone (client-generated) isn't a secret.
     rows = (
         db.query(ChatMessage)
-        .filter(ChatMessage.organization_id == org_id, ChatMessage.session_id == session_id)
+        .filter(
+            ChatMessage.organization_id == org_id,
+            ChatMessage.user_id == user.id,
+            ChatMessage.session_id == session_id,
+        )
         .order_by(ChatMessage.id.asc())
         .all()
     )
