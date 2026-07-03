@@ -208,6 +208,13 @@ class AlertEngine:
                     (datetime.fromisoformat(a["date"]) for a in attempts if a.get("date")),
                     default=case.created_at,
                 )
+                # SQLite doesn't preserve tz-awareness on DateTime(timezone=True)
+                # columns across a round-trip -- a naive created_at here would
+                # otherwise raise TypeError against the aware `cutoff` below and
+                # get silently swallowed by _run_check, disabling this whole
+                # check with no visible error.
+                if last_activity_at is not None and last_activity_at.tzinfo is None:
+                    last_activity_at = last_activity_at.replace(tzinfo=timezone.utc)
                 if last_activity_at is not None and last_activity_at < cutoff:
                     reason = f"אין ניסיון גבייה ב-{stale_days} הימים האחרונים"
 
