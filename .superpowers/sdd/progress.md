@@ -197,4 +197,15 @@ not a new regression.
   line-normalization, not duplicated). Upserts by external_id
   payroll:{org}:{emp}:{year-month} so re-running a period updates, not duplicates.
   Wired into build_journal via new _payroll_entries. Full suite 467 passed.
-7.3/7.7/7.9/7.10 not started yet. 6/10 upgrades done (7.1,7.2,7.4,7.5,7.6,7.8).
+7.7 Expense deduction_percent: DONE (commit 6ebee85). Consulted israeli-expense-categorizer
+  skill before implementing — real deduction rules (vehicle higher-of, phone 50%-or-1380
+  floor) need per-case inputs (odometer, use-value tables) this system doesn't have, so
+  did NOT auto-compute a category->percent default (would risk a wrong real tax filing).
+  Instead: nullable Expense.deduction_percent (migration 7c2e9a4f1d63), honored ONLY in
+  form_1301 as a taxable-income add-back for the disallowed portion — deliberately NOT
+  applied to the VAT report (VAT recovery uses different rates entirely, e.g. vehicle
+  running-cost VAT's separate 2/3-vs-1/4 split). NULL = 100% recognized, verified
+  byte-identical to prior behavior via dedicated test. Full suite 469 passed.
+  NOTE: fixed an alembic revision-id collision (accidentally reused an existing hex id
+  from add_contact_bank_fields.py) before this landed — caught by full suite, not by CI.
+7.3/7.9/7.10 not started. 7/10 upgrades done (7.1,7.2,7.4,7.5,7.6,7.7,7.8).
