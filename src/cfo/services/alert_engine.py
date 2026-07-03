@@ -58,6 +58,7 @@ class AlertEngine:
         new_alerts.extend(self._run_check("_check_overdue_invoices", self._check_overdue_invoices))
         new_alerts.extend(self._run_check("_check_bills_due_soon", self._check_bills_due_soon))
         new_alerts.extend(self._run_check("_check_large_transactions", self._check_large_transactions))
+        new_alerts.extend(self._run_check("_check_stale_collection_cases", self._check_stale_collection_cases))
 
         for rule in rules:
             if rule.rule_type == "low_cash_threshold":
@@ -178,6 +179,59 @@ class AlertEngine:
                 entity_id=tx.id,
                 title=f"Large {tx.transaction_type.value}: {tx.amount}",
                 message=tx.description,
+            )
+            self.db.add(alert)
+            alerts.append(alert)
+
+        return alerts
+
+    def _check_stale_collection_cases(self, stale_days: int = 7) -> list:
+        """Flag open/promised collection cases that need human follow-up:
+        a broken promise (promise_date passed, still not paid), or no attempt
+        logged in `stale_days` — a case going cold."""
+        from .collection_case_service import list_cases
+
+        today = date.today()
+        cutoff = datetime.now(timezone.utc) - timedelta(days=stale_days)
+        alerts = []
+
+        for case in list_cases(self.db, self.org_id):
+            if case.status not in ("open", "promised"):
+                continue
+
+            reason = None
+            if case.status == "promised" and case.promise_date and case.promise_date < today:
+                reason = f"הבטחת תשלום מ-{case.promise_date} עברה ולא סומן כשולם"
+            else:
+                attempts = case.attempts or []
+                last_activity_at = max(
+                    (datetime.fromisoformat(a["date"]) for a in attempts if a.get("date")),
+                    default=case.created_at,
+                )
+                if last_activity_at is not None and last_activity_at < cutoff:
+                    reason = f"אין ניסיון גבייה ב-{stale_days} הימים האחרונים"
+
+            if reason is None:
+                continue
+
+            existing = self.db.query(Alert).filter(
+                Alert.organization_id == self.org_id,
+                Alert.alert_type == "stale_collection_case",
+                Alert.entity_type == "collection_case",
+                Alert.entity_id == case.id,
+                Alert.status == AlertStatus.ACTIVE,
+            ).first()
+            if existing:
+                continue
+
+            alert = Alert(
+                organization_id=self.org_id,
+                alert_type="stale_collection_case",
+                severity=AlertSeverity.WARNING,
+                entity_type="collection_case",
+                entity_id=case.id,
+                title=f"מקרה גבייה #{case.id} דורש מעקב",
+                message=reason,
             )
             self.db.add(alert)
             alerts.append(alert)

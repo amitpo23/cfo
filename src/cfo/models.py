@@ -634,6 +634,29 @@ class CollectionReminder(Base):
     )
 
 
+class CollectionCase(Base):
+    """מקרה גבייה ידני — מעקב אחר לקוח שלא שילם (נפרד מהתזכורות האוטומטיות ב-
+    CollectionReminder): ניסיונות (שיחה/מייל וכו') שנרשמים ידנית ע"י המשתמש, עם
+    התקדמות סטטוס open -> promised -> paid, או escalated."""
+    __tablename__ = "collection_cases"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
+    invoice_ids = Column(JSON, nullable=True)   # [invoice_id, ...]
+    status = Column(String(20), default="open")  # open | promised | paid | escalated
+    attempts = Column(JSON, nullable=True)       # [{"date": iso, "channel", "outcome", "notes"}]
+    promise_date = Column(Date, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_collcase_org_contact", "organization_id", "contact_id"),
+        Index("ix_collcase_org_status", "organization_id", "status"),
+    )
+
+
 class InventoryItem(Base):
     """Inventory / stock item — מלאי"""
     __tablename__ = "inventory_items"
