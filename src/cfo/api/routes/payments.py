@@ -149,17 +149,6 @@ async def cancel_recurring(
         return await sumit.cancel_recurring(recurring_id)
 
 
-@router.post("/recurring/{recurring_id}/charge", response_model=PaymentResponse)
-async def charge_recurring(
-    recurring_id: str,
-    sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
-):
-    """Manually charge recurring payment"""
-    async with sumit:
-        return await sumit.charge_recurring(recurring_id)
-
-
 @router.put("/recurring/{recurring_id}", response_model=RecurringPaymentResponse)
 async def update_recurring(
     recurring_id: str,
