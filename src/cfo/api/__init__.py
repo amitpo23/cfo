@@ -1,7 +1,8 @@
 """
 FastAPI application initialization
 """
-from fastapi import Depends, FastAPI, status
+import httpx
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from .routes import (
@@ -22,6 +23,15 @@ app = FastAPI(
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
+
+
+@app.exception_handler(httpx.HTTPError)
+async def upstream_error_handler(request: Request, exc: httpx.HTTPError):
+    """כשל תקשורת מול שירות חיצוני (SUMIT/Open Finance) — 503 כן, לא 500."""
+    return JSONResponse(
+        status_code=503,
+        content={"detail": f"upstream integration unavailable: {type(exc).__name__}"},
+    )
 
 # CORS middleware
 app.add_middleware(
