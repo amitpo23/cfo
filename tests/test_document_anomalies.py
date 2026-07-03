@@ -83,6 +83,82 @@ def test_anomalies_route_requires_auth(client):
     assert client.get("/api/engine/anomalies").status_code == 403
 
 
+def test_detects_duplicate_expense_same_vendor_amount_close_dates(fresh_org):
+    """Wave 2 item 7.5: same vendor+amount within 3 days = likely duplicate filing."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        vendor = Contact(organization_id=org_id, source="anom-test", name="ספק בדיקה",
+                         contact_type=ContactType.VENDOR, tax_id="333")
+        db.add(vendor); db.commit()
+        db.add(Bill(organization_id=org_id, external_id="DUP-1", source="anom-test",
+                    bill_number="D1", issue_date=date(2026, 3, 1),
+                    status=BillStatus.RECEIVED, vendor_id=vendor.id, total=5000))
+        db.add(Bill(organization_id=org_id, external_id="DUP-2", source="anom-test",
+                    bill_number="D2", issue_date=date(2026, 3, 3),
+                    status=BillStatus.RECEIVED, vendor_id=vendor.id, total=5000))
+        db.commit()
+
+        findings = document_anomalies.detect_document_anomalies(db, org_id)
+        dups = [f for f in findings if f["type"] == "duplicate_expense"]
+        assert len(dups) == 1
+    finally:
+        db.close()
+
+
+def test_no_duplicate_flagged_for_different_vendor_or_far_dates(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        v1 = Contact(organization_id=org_id, source="anom-test", name="ספק א", contact_type=ContactType.VENDOR, tax_id="1")
+        v2 = Contact(organization_id=org_id, source="anom-test", name="ספק ב", contact_type=ContactType.VENDOR, tax_id="2")
+        db.add_all([v1, v2]); db.commit()
+        # Same amount, different vendor -> not a duplicate.
+        db.add(Bill(organization_id=org_id, external_id="X1", source="anom-test",
+                    bill_number="X1", issue_date=date(2026, 3, 1),
+                    status=BillStatus.RECEIVED, vendor_id=v1.id, total=5000))
+        db.add(Bill(organization_id=org_id, external_id="X2", source="anom-test",
+                    bill_number="X2", issue_date=date(2026, 3, 1),
+                    status=BillStatus.RECEIVED, vendor_id=v2.id, total=5000))
+        # Same vendor+amount, but 30 days apart -> not a duplicate.
+        db.add(Bill(organization_id=org_id, external_id="X3", source="anom-test",
+                    bill_number="X3", issue_date=date(2026, 1, 1),
+                    status=BillStatus.RECEIVED, vendor_id=v1.id, total=7000))
+        db.add(Bill(organization_id=org_id, external_id="X4", source="anom-test",
+                    bill_number="X4", issue_date=date(2026, 2, 1),
+                    status=BillStatus.RECEIVED, vendor_id=v1.id, total=7000))
+        db.commit()
+
+        findings = document_anomalies.detect_document_anomalies(db, org_id)
+        dups = [f for f in findings if f["type"] == "duplicate_expense"]
+        assert dups == []
+    finally:
+        db.close()
+
+
+def test_detects_duplicate_expense_same_bill_number(fresh_org):
+    """Same bill_number reused across two Bill rows = duplicate, regardless of date/vendor."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        vendor = Contact(organization_id=org_id, source="anom-test", name="ספק ג",
+                         contact_type=ContactType.VENDOR, tax_id="4")
+        db.add(vendor); db.commit()
+        db.add(Bill(organization_id=org_id, external_id="BN-1", source="anom-test",
+                    bill_number="SAME-NUM", issue_date=date(2026, 1, 1),
+                    status=BillStatus.RECEIVED, vendor_id=vendor.id, total=1000))
+        db.add(Bill(organization_id=org_id, external_id="BN-2", source="anom-test",
+                    bill_number="SAME-NUM", issue_date=date(2026, 6, 1),
+                    status=BillStatus.RECEIVED, vendor_id=vendor.id, total=9999))
+        db.commit()
+
+        findings = document_anomalies.detect_document_anomalies(db, org_id)
+        dups = [f for f in findings if f["type"] == "duplicate_expense"]
+        assert len(dups) == 1
+    finally:
+        db.close()
+
+
 def test_persist_anomalies_creates_insights(fresh_org):
     from cfo.models import CfoInsight
     org_id = fresh_org()["org_id"]
