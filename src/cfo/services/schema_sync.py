@@ -6,6 +6,7 @@ POST /api/admin/db/migrate (תיקון). additive בלבד: לעולם לא מו
 from typing import Dict, List
 
 from sqlalchemy import inspect
+from sqlalchemy import text as sa_text
 from sqlalchemy.engine import Engine
 
 from ..database import Base
@@ -32,4 +33,31 @@ def compute_missing(engine: Engine) -> Dict:
 
 
 def apply_additive(engine: Engine) -> Dict:
-    raise NotImplementedError  # Task 3
+    """משלים את הסכמה החיה למודלים — additive בלבד (יצירת טבלאות/עמודות חסרות).
+
+    לעולם לא מוחק ולא משנה עמודות קיימות. בטוח להרצה חוזרת (idempotent).
+    """
+    from sqlalchemy.schema import CreateColumn
+
+    missing = compute_missing(engine)
+
+    if missing["tables"]:
+        Base.metadata.create_all(
+            engine,
+            tables=[Base.metadata.tables[t] for t in missing["tables"]],
+        )
+
+    for table_name, col_names in missing["columns"].items():
+        table = Base.metadata.tables[table_name]
+        with engine.begin() as conn:
+            for col_name in col_names:
+                col = table.columns[col_name]
+                ddl_col = CreateColumn(col).compile(dialect=engine.dialect)
+                stmt = f'ALTER TABLE {table_name} ADD COLUMN {ddl_col}'
+                if col.nullable is False and col.default is None and col.server_default is None:
+                    # עמודת NOT NULL בלי default תיכשל על טבלה מאוכלסת —
+                    # מוסיפים כ-nullable; אכיפת NOT NULL נשארת למיגרציית alembic מסודרת.
+                    stmt = stmt.replace(" NOT NULL", "")
+                conn.execute(sa_text(stmt))
+
+    return missing

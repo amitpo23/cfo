@@ -577,21 +577,31 @@ async def run_db_migrations(current_user: User = Depends(require_admin)):
     cfg = AlembicConfig(str(root / "alembic.ini"))
     cfg.set_main_option("script_location", str(root / "alembic"))
 
+    from ...services.schema_sync import apply_additive
+
     inspector = sa_inspect(engine)
     tables = inspector.get_table_names()
-    if "users" in tables and "alembic_version" not in tables:
-        # Pre-Alembic database: schema already matches the baseline.
+    try:
+        if "users" in tables and "alembic_version" not in tables:
+            # Pre-Alembic database: schema already matches the baseline.
+            alembic_command.stamp(cfg, "head")
+            action = "stamped"
+        else:
+            alembic_command.upgrade(cfg, "head")
+            action = "upgraded"
+    except Exception as exc:  # create_all↔alembic: "already exists" וכדומה
+        if "already exists" not in str(exc).lower():
+            raise
         alembic_command.stamp(cfg, "head")
-        action = "stamped"
-    else:
-        alembic_command.upgrade(cfg, "head")
-        action = "upgraded"
+        action = f"stamped_after_conflict ({type(exc).__name__})"
+
+    schema_sync_report = apply_additive(engine)
 
     with engine.connect() as conn:
         from sqlalchemy import text
         revision = conn.execute(text("select version_num from alembic_version")).scalar()
 
-    return {"action": action, "current_revision": revision}
+    return {"action": action, "current_revision": revision, "schema_sync": schema_sync_report}
 
 
 @router.get("/auth/me", response_model=UserResponse, tags=["Auth"])
