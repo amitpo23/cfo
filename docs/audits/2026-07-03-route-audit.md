@@ -185,3 +185,47 @@ transport — `httpx.ConnectError`, `httpx.ConnectTimeout`, `httpx.ReadTimeout`
 | Handler 503 גלובלי ל-httpx.HTTPError | — | מומש + TDD |
 
 **סה"כ routes שנבדקו:** 231 GET routes.
+
+---
+
+## עדכון 2026-07-03 (המשך אחה"צ) — Task 5-7: prod_smoke + SUMIT write-back + drift
+
+### Task 5: prod_smoke.py — נתיבים שגויים שתוקנו
+
+ריצה חיה ראשונה מול `cfo-2.vercel.app` חשפה שני 404 על נתיבים שגויים
+ב-`CRITICAL_PATHS`:
+- `/api/financial/reports/profit-loss` (לא קיים) → תוקן ל-`/api/reports/profit-loss`.
+- `/api/ap/aging` (לא קיים) → תוקן ל-`/api/daily-reports/ap-aging`.
+
+תוקן ב-commit `61e0e65` + נוספה בדיקת רגרסיה ל-`tests/test_prod_smoke.py`.
+
+**שאר 8 הכשלים (403 "User is not scoped to an organization") אינם באג:**
+production לא נפרס 3 ימים, ולכן ה-fallback SUPER_ADMIN→org 1
+(commit `23353ca`, היום) עדיין לא חי. צפוי להיפתר עם דיפלוי Task 8.
+
+### Task 6: אימות SUMIT write-back חי — הצליח חלקית
+
+`scripts/verify_sumit_writeback.py` נכתב מול החתימות האמיתיות
+(`DocumentItem.price` לא `unit_price`; `customer_id` כטקסט חופשי ללקוח
+walk-in; `get_document_details` לא `get_document`).
+
+ריצה חיה:
+```
+1) יוצר הצעת מחיר סמלית...
+   נוצר מסמך: 2095660684 (מספר 1001)
+2) מוריד PDF...
+   PDF: 83034 bytes
+3) מבטל את המסמך...
+   SumitAPIError: SUMIT API error: Cancelling this document isn't allowed
+```
+
+**מסמך 1001 (ID 2095660684) נשאר פתוח ב-SUMIT** — נדרש ביטול/מחיקה ידנית
+ע"י המשתמש + בדיקה אם הצעות מחיר דורשות endpoint/פעולה שונה מחשבוניות
+לביטול. עוקב: TaskCreate #1, memory `rezef-completion-epics`.
+
+### Task 7: Neon schema drift — נקי
+
+```
+python scripts/schema_drift_check.py --env-file <scratchpad>/.env.prod
+OK — אין drift: הסכמה החיה תואמת את המודלים
+```

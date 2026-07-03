@@ -117,3 +117,28 @@ NOTE: session that authored the 3 planning docs + Task 5 commit (Fable 5, sessio
   session would replay the corrupted turn; continue with a fresh session instead.
 NEXT: get SMOKE_EMAIL/SMOKE_PASSWORD from user -> run prod_smoke live (handoff step 2) ->
   Task 6 (SUMIT write-back live) -> Task 7 (Neon drift) -> Task 8 (deploy+readiness).
+
+Step 2 (live prod_smoke): no known admin creds; user approved creating a dedicated
+  smoke-test@rezef.internal SUPER_ADMIN user directly in prod DB (script in scratchpad,
+  password stored in scratchpad .env.prod only, never committed). First live run:
+  4/14 OK, 8 FAIL (403 "not scoped to org") + 2 FAIL (404). Diagnosed: the 403s are NOT
+  a bug — production (cfo-2.vercel.app) hasn't been deployed in 3 days, so the
+  SUPER_ADMIN-defaults-to-org-1 fallback (commit 23353ca, today) isn't live yet; expected
+  to clear after Task 8 deploy. The 404s WERE real smoke-script bugs (wrong paths):
+  fixed in commit 61e0e65 (profit-loss, ap-aging) + regression assertion added. 457 passed.
+Task 6 (SUMIT write-back live): commit <pending, see below>. Created scripts/verify_sumit_writeback.py
+  with corrected real signatures (DocumentItem.price not unit_price; customer_id as
+  free-text name for walk-in customer; get_document_details not get_document). Live run:
+  create OK (doc id 2095660684, number 1001, quote, customer "בדיקת מערכת רצף — למחיקה",
+  ₪1) -> PDF OK (83034 bytes) -> **cancel_document FAILED**: "Cancelling this document
+  isn't allowed". Per handoff stop-rule (create succeeded + cancel failed = stop, report
+  doc id to user) — reported. User: don't block, log as follow-up task + memory, continue.
+  OPEN ITEM (tracked in TaskCreate #1 + memory rezef-completion-epics): document 1001 needs
+  manual cancel in SUMIT UI; investigate whether quotes need a different cancel/delete
+  endpoint than invoices. Task 6 NOT fully closed — write-back chain verified up through
+  PDF download, cancellation path unverified/broken for this document type.
+Task 7 (Neon drift check): `python scripts/schema_drift_check.py --env-file <scratchpad>/.env.prod`
+  -> "OK — אין drift: הסכמה החיה תואמת את המודלים". Clean, no action needed.
+NEXT: Task 8 (deploy: suite green -> vercel deploy preview -> smoke preview -> vercel
+  deploy --prod -> migrate -> smoke prod -> drift check) -> update PRODUCTION_READINESS.md
+  -> commit+push -> close Wave 1.

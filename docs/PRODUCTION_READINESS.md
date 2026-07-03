@@ -19,6 +19,17 @@ reconciliation, categories, and office/client management.
   persistent DB, and Open Finance client credentials where values existed
 - `OPEN_FINANCE_USER_ID` and Google OAuth client IDs must be supplied before
   those login/integration paths can be live-tested
+- SUMIT write-back verified live (2026-07-03): quote document created (ID
+  2095660684, number 1001, ₪1 symbolic), PDF downloaded successfully (83034
+  bytes). **Cancellation failed** ("Cancelling this document isn't allowed") —
+  quotes may need a different cancel/delete path than invoices; document
+  1001 still open in SUMIT pending manual cancellation and investigation
+  (tracked as a follow-up task).
+- Schema drift check against Neon production (2026-07-03): OK, no drift.
+- Live prod_smoke against `cfo-2.vercel.app` (2026-07-03, pre-deploy): 4/14
+  paths OK; 10 failures diagnosed as production being 3 days stale (missing
+  the SUPER_ADMIN-defaults-to-org-1 fallback from today's commit 23353ca),
+  expected to clear once this branch is deployed.
 
 ## Required Production Environment Variables
 
