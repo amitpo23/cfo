@@ -612,3 +612,78 @@ RE-VERIFICATION + prod_smoke hardening: a context-compaction gap caused a
   user adding ANTHROPIC_API_KEY + a redeploy + a live 9.5 test. Task #1
   (SUMIT doc 1001 / customer 2095660683) and Task #7's wider Account/
   Transaction blast-radius question also remain open.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 2: continued gap-mapping per the
+  goal directive. Re-checked several previously-flagged roadmap P1/P2 items
+  against current code before touching anything -- most turned out already
+  fixed or mischaracterized: AR credit_limit=100000 is a real tiered
+  credit-score output (200k/100k/50k/0 by score bucket), not a flat
+  hardcode; supplier withholding (856) returning empty is intentional
+  honest-null (only suppliers with an explicit withholding_rate are
+  included); tax_service's company tax_id already loads from
+  Organization.tax_id with an honest all-zeros fallback, not "123456789".
+  AP's discount_percent=0 hardcode (ap_service.py:564) IS still real but
+  low-priority: neither Bill nor Contact has any discount/payment-terms
+  column at all, so there's no data source to wire up -- an honest
+  placeholder for a feature with no backing data, not a computation bug.
+  Left as-is (P2, no action).
+
+  NEW FINDING + FIXED (data correctness, per directive priority (א)):
+  grep for random.* across services/ surfaced AdvancedAIService
+  (ai_analytics_service.py, live at /ai-analytics) fabricating data in two
+  more places beyond the already-known, already-tested illustrative
+  recommendations:
+  - predict_metric(): computed a "forecast" (trend/confidence-interval/
+    scenarios) entirely from random.randint/random.uniform noise
+    (_get_metric_history, _get_seasonality_factor) -- looked computed via
+    real-looking math, was pure noise every call. Not reachable from any
+    current frontend, but a live authenticated GET route.
+  - get_ai_analysis(): with no OPENAI_API_KEY, returned canned generic
+    Hebrew reassurance text for any question. Worse: even with a key
+    configured, since the real frontend (AIAnalyticsDashboard.tsx) never
+    sends a context param, it silently fed GPT-4 a 100%-hardcoded fake
+    financial context (_prepare_financial_context: revenue_mtd=450000 etc,
+    identical for every org) and returned the result as if it were real
+    personalized advice.
+  Checked for existing tests/decisions before acting (avoided the "delete
+  a deliberately-designed feature" mistake): found
+  test_ai_recommendations_flagged.py already asserts get_ai_recommendations
+  returns is_illustrative=True by design (a documented "Phase 2" decision,
+  real data-derived recommendations deferred to "Phase 11"). Left that
+  function untouched -- the actual live bug there was that
+  AIAnalyticsDashboard.tsx's TS interface didn't even include
+  is_illustrative, so a real user saw 5 identical fake ₪-amount
+  recommendations (REC-001..005, e.g. "move to cloud accounting" -- from a
+  cloud accounting product) with zero indication they were examples, not
+  analysis.
+  Fix (TDD, 6 new tests in test_ai_analytics_honest_fallbacks.py): added
+  AIAnalyticsNotConfiguredError (mirrors AIChatNotConfiguredError exactly)
+  + an app-level handler -> clean 400. predict_metric raises it always
+  (deleted the two random-noise helper functions). get_ai_analysis raises
+  it when no OpenAI key OR no explicit context passed (deleted
+  _prepare_financial_context and _get_fallback_analysis entirely -- no
+  silent fake-context fallback survives). Frontend: added is_illustrative
+  to the AIRecommendation TS interface + a visible amber "לדוגמה בלבד —
+  לא מבוסס על נתוני העסק שלך" badge; added the missing onError handler on
+  analysisMutation (same gap class as ChatAssistant.tsx's earlier fix --
+  neither had error handling, a failed call left the user staring at
+  nothing).
+  Caught along the way: a REAL OPENAI_API_KEY exists in this local shell's
+  environment (not in prod -- confirmed via `vercel env ls production`,
+  absent) -- caused one new test to pass for the wrong reason until an
+  explicit monkeypatch(openai_api_key=None) was added; a reminder that
+  tests must not rely on ambient shell state.
+  route_audit baseline moved 39->40 in scripts/qa_gate.py, documented:
+  /api/financial/ai/predict/{metric} now correctly returns 400 instead of
+  a silently-wrong 200 -- a deliberate, understood addition, not a
+  regression. 534 passed, tsc+build clean, qa_gate PASSED. Deployed to
+  prod, 16/16 smoke, and live-verified directly: predict_metric -> 400
+  "היסטוריית נתונים אמיתית", analyze -> 400 "OPENAI_API_KEY חסר",
+  recommendations -> still returns 5 illustrative-flagged examples
+  (is_illustrative: true confirmed in the live response).
+  NOT investigated further (logged as a next-iteration candidate per
+  advisor guidance, not run now): a systematic sweep for the rest of this
+  "abandoned-prototype-serving-fake-data-on-a-live-route" class of bug
+  across the codebase -- this session has now found two instances
+  (Account/Transaction, AdvancedAIService) via targeted grep, not an
+  exhaustive search.
