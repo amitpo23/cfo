@@ -657,6 +657,28 @@ class CollectionCase(Base):
     )
 
 
+class ChatMessage(Base):
+    """הודעה בשיחת הצ'אטבוט (AI, שלב 9). role='assistant' רשומות שהציעו פעולת
+    כתיבה (issue_document וכו') נושאות pending_action — הכלי לא בוצע, רק
+    הוצע; ה-executed הופך True רק דרך אישור מפורש (ai_chat_service.confirm_action),
+    שקורא בדיוק את tool/input שנשמרו כאן, לא נתון שהגיע מהלקוח."""
+    __tablename__ = "ai_chat_messages"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    session_id = Column(String(64), nullable=False)
+    role = Column(String(20), nullable=False)  # user | assistant
+    content = Column(Text, nullable=False)
+    pending_action = Column(JSON, nullable=True)  # {"tool": str, "input": dict, "description": str}
+    executed = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_aichat_org_session", "organization_id", "session_id"),
+    )
+
+
 class InventoryItem(Base):
     """Inventory / stock item — מלאי"""
     __tablename__ = "inventory_items"

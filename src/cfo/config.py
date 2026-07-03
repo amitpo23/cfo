@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     # Vision model used to read receipt scans. Claude reads PDFs natively.
     ocr_vision_model: str = "claude-opus-4-8"
     ocr_vision_model_openai: str = "gpt-4o"
+    # AI chat assistant (Wave 2 Step 9) — same anthropic_api_key as OCR above.
+    ai_chat_model: str = "claude-sonnet-5"
     # Companies-registry (רשם החברות) lookup over data.gov.il CKAN.
     companies_registry_resource_id: str = "f004176c-b85f-4542-8901-7b3176f9a054"
     companies_registry_base_url: str = "https://data.gov.il/api/3/action/datastore_search"
