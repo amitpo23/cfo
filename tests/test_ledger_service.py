@@ -191,6 +191,53 @@ def test_contact_card_vendor_running_balance(fresh_org):
         db.close()
 
 
+def test_contact_card_finds_payment_with_unresolved_contact_id(fresh_org):
+    """A Payment synced with contact_id=NULL (contact_external_id didn't
+    resolve) but a valid invoice_id/bill_id link must still be picked up
+    via that link -- otherwise the card understates how much is actually
+    settled, overstating the outstanding balance."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        customer = Contact(organization_id=org_id, contact_type=ContactType.CUSTOMER,
+                           name="לקוח לא-משוייך")
+        vendor = Contact(organization_id=org_id, contact_type=ContactType.VENDOR,
+                         name="ספק לא-משוייך")
+        db.add_all([customer, vendor])
+        db.flush()
+        inv = Invoice(organization_id=org_id, contact_id=customer.id,
+                     invoice_number="UNLINKED-INV-1", issue_date=date(2026, 5, 1),
+                     status=InvoiceStatus.SENT, subtotal=1000, tax=180, total=1180,
+                     paid_amount=0, balance=0)
+        bill = Bill(organization_id=org_id, vendor_id=vendor.id,
+                    bill_number="UNLINKED-BILL-1", issue_date=date(2026, 5, 3),
+                    status=BillStatus.RECEIVED, subtotal=500, tax=90, total=590,
+                    paid_amount=0, balance=0)
+        db.add_all([inv, bill])
+        db.commit()
+        # contact_id intentionally omitted -- simulates an unresolved sync.
+        db.add(Payment(organization_id=org_id, contact_id=None, invoice_id=inv.id,
+                      payment_date=date(2026, 5, 15), amount=1180))
+        db.add(Payment(organization_id=org_id, contact_id=None, bill_id=bill.id,
+                      payment_date=date(2026, 5, 20), amount=590))
+        db.commit()
+        customer_id, vendor_id = customer.id, vendor.id
+    finally:
+        db.close()
+
+    db = SessionLocal()
+    try:
+        customer_card = ledger_service.contact_card(db, org_id, customer_id)
+        vendor_card = ledger_service.contact_card(db, org_id, vendor_id)
+    finally:
+        db.close()
+
+    assert len(customer_card["movements"]) == 2, customer_card["movements"]
+    assert customer_card["closing_balance"] == 0.0
+    assert len(vendor_card["movements"]) == 2, vendor_card["movements"]
+    assert vendor_card["closing_balance"] == 0.0
+
+
 def test_contact_card_returns_none_for_other_org_contact(fresh_org):
     org_a = fresh_org()["org_id"]
     org_b = fresh_org()["org_id"]

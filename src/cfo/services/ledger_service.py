@@ -498,6 +498,7 @@ def contact_card(db, organization_id: int, contact_id: int, *,
     על החשבון הזה": חשבונית/חשבון ספק מגדילים את היתרה (סכום פתוח), תשלום
     מקטין אותה — ללא תלות אם מדובר בלקוח (הם חייבים לנו) או ספק (אנחנו חייבים).
     """
+    from sqlalchemy import or_
     from ..models import Contact, Invoice, Bill, Payment
 
     contact = db.query(Contact).filter(
@@ -506,10 +507,17 @@ def contact_card(db, organization_id: int, contact_id: int, *,
     if not contact:
         return None
 
-    raw_movements = []
-    for inv in db.query(Invoice).filter(
+    invoices = db.query(Invoice).filter(
         Invoice.contact_id == contact_id, Invoice.organization_id == organization_id
-    ).all():
+    ).all()
+    bills = db.query(Bill).filter(
+        Bill.vendor_id == contact_id, Bill.organization_id == organization_id
+    ).all()
+    invoice_ids = [inv.id for inv in invoices]
+    bill_ids = [bill.id for bill in bills]
+
+    raw_movements = []
+    for inv in invoices:
         d = inv.issue_date or inv.due_date
         if not _in_period(d, start, end):
             continue
@@ -518,9 +526,7 @@ def contact_card(db, organization_id: int, contact_id: int, *,
             "description": "חשבונית", "amount": round(_f(inv.total), 2),
         }))
 
-    for bill in db.query(Bill).filter(
-        Bill.vendor_id == contact_id, Bill.organization_id == organization_id
-    ).all():
+    for bill in bills:
         d = bill.issue_date or bill.due_date
         if not _in_period(d, start, end):
             continue
@@ -529,9 +535,18 @@ def contact_card(db, organization_id: int, contact_id: int, *,
             "description": "חשבון ספק", "amount": round(_f(bill.total), 2),
         }))
 
-    for pay in db.query(Payment).filter(
-        Payment.contact_id == contact_id, Payment.organization_id == organization_id
-    ).all():
+    # Payment.contact_id is often NULL when sync couldn't resolve
+    # contact_external_id — fall back to the linked invoice/bill (which we
+    # already know belongs to this contact) so a real settlement isn't
+    # silently invisible to the card, overstating the outstanding balance.
+    payment_query = db.query(Payment).filter(Payment.organization_id == organization_id).filter(
+        or_(
+            Payment.contact_id == contact_id,
+            Payment.invoice_id.in_(invoice_ids),
+            Payment.bill_id.in_(bill_ids),
+        )
+    )
+    for pay in payment_query.all():
         d = pay.payment_date
         if not _in_period(d, start, end):
             continue
