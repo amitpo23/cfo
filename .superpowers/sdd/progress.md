@@ -902,3 +902,34 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 9: investigated the PCN874 VAT
   research + what's needed to finish properly (poppler + careful
   transcription, or a more machine-readable spec source) in
   PRODUCT_AUDIT_AND_ROADMAP.md. No code changed -- nothing to deploy.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 10: rather than leave PCN874
+  deferred indefinitely, installed poppler (`brew install poppler`) to
+  properly unblock the PDF-reading path flagged as the blocker last
+  iteration, then re-attempted the research. The two vendor PDFs
+  (rivhit.co.il, h-erp.co.il) turned out to be user-guides for their own
+  software UI, not the byte-level spec -- confirmed by actually reading
+  them page-by-page after the poppler fix, not just assuming. Followed a
+  citation trail from the h-erp guide to a real gov.il URL
+  (tax-vat-online-invoice-reporting), which itself 403'd via WebFetch,
+  but a targeted site:gov.il search surfaced the actual official Tax
+  Authority PDF for "מבנה אחיד" (Service_Pages_Income_tax_horaot-131.pdf,
+  Computerized Audit Department, v1.31/2009) -- read successfully with
+  real, precise field tables (field number/type/length/start-end column
+  for every field in every record type).
+  IMPORTANT CORRECTION discovered in the process: "PCN874" and "מבנה
+  אחיד" are NOT the same specification, despite the roadmap doc's own
+  wording treating them as one ("PCN874 (מבנה אחיד)"). מבנה אחיד is a
+  separate, broader general-ledger/audit-trail export (produced on
+  demand during a tax audit; record types A100/Z900/C100/D110/D120/
+  B100/B110/M100) -- not the periodic online VAT summary file PCN874
+  actually is. Corrected this in PRODUCT_AUDIT_AND_ROADMAP.md before
+  anyone builds the wrong one thinking it satisfies both requirements.
+  The real מבנה-אחיד spec is now verified and its source URL documented
+  for a future implementer (not committed to the repo -- *.pdf is
+  git-ignored project-wide, deliberately not overridden). PCN874's own
+  specific byte-spec is STILL not located in a machine-readable source
+  -- both remain correctly unimplemented, neither guessed at. This
+  closes out the PCN874 investigation thread for this session: real
+  research invested, a genuine and useful correction made, two distinct
+  well-scoped future features identified, nothing rushed.
