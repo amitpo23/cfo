@@ -1692,3 +1692,37 @@ thread it through `reconcile_organization()`, the `/reconcile` route
 response, and a frontend badge. Confirmed this is a real multi-file task
 (4+ files), not a quick addition -- correctly left for a dedicated pass
 rather than rushed under today's time pressure.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): kpi_service fabricated comparisons — closes a previously-flagged item
+
+Followed up on a specific item flagged in this session's own memory (from
+before the mid-session compaction): `kpi_service.py`'s
+`get_executive_summary()` hardcoded `comparison_to_budget` (budget
+500000/400000 against every org's real actuals) and
+`comparison_to_previous` (revenue/expenses/profit change fixed at
+8.5%/5.2%/12.3%, every single call). Confirmed live exposure level first:
+reachable via `GET /api/financial/kpis/executive-summary`, which
+KPIDashboard.tsx DOES fetch into React state (`execSummary`) but doesn't
+currently render these specific sub-fields -- same "fetched but not
+displayed" category as this session's other fabrication fixes.
+
+**Critical check before touching it**: considered replacing the fake
+numbers with "real" computed values (`BudgetService.get_budget_vs_actual`
+for budget, `_get_financial_data`'s already-computed revenue_growth/
+profit_growth for period comparison) -- but verified both ultimately query
+the generic `Transaction` table, the exact same frozen/broken pipeline
+behind this session's own documented P0 finding (two parallel accounting
+systems). Computing "real" numbers over that pipeline would have converted
+an obviously-fake constant into a plausible-but-still-unreliable one --
+precisely the mistake this project already avoided once with
+`data_sync_service.py`, and exactly what my own prior analysis (before
+today's compaction) had already flagged and correctly declined to do.
+
+Fixed with honest-null instead, matching the existing
+`gross_profit_estimate`/`gross_profit_available` convention: both fields
+now return `{available: false, reason: "..."}` with sub-fields set to
+None. New test, 617 passed (+1), qa_gate PASSED, deployed, 16/16 smoke,
+live-verified the real response now shows honest nulls with a clear
+Hebrew reason instead of the old fake constants.
+
+Commit: b8581bd.
