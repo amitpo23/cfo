@@ -1243,3 +1243,41 @@ can now link their own Upay account through Rezef's own API/UI once a
 frontend control is added (not built this iteration -- backend-only pass).
 
 Commit: 31d0ee6.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): /settings was a fully-decorative mockup
+
+Found while looking for the next well-scoped, safe fix: the entire
+`/settings` page (App.tsx's inline SettingsPage component) had ZERO real
+backend calls anywhere -- "Save API Settings" had no onClick, notification
+toggles read hardcoded `checked` booleans from a local literal array, and
+"System Information" always showed "API Status: Connected" / "Last Sync:
+2 min ago" / "Version 1.0.0" no matter what. Not a partial gap like the
+other findings this session -- 100% decorative, on a page a real user would
+naturally visit to connect their SUMIT account.
+
+Investigated rather than rebuilt from scratch: `/sync` (CFOSyncDashboard)
+already has a complete, working SUMIT/Open Finance credentials UI (real
+React Query mutations against already-existing `/integration/*` routes).
+Rewrote `/settings` to: (1) show real connection status from the same
+`/integration/status` endpoint `/sync` already uses, with a link there
+instead of a broken duplicate form; (2) load/save real company name+tax_id
+via the already-existing `GET`/`PATCH /admin/organizations/{id}`; (3)
+honestly say "not yet available" for notification preferences (no backing
+model exists anywhere) instead of decorative always-on/off toggles.
+Extracted into its own `SettingsPage.tsx` (was a 145-line inline block),
+matching how other substantial pages are already organized.
+
+No backend changes needed -- pure frontend wiring onto already-tested
+routes. tsc + build clean. Browser-verified TWICE before calling this done
+(per the "test UI changes in a browser" rule): first against a local dev
+server (real load/edit/save/success-message/cache-invalidation cycle,
+reverted the test edit after), then against real production
+(cfo-2.vercel.app, logged in as the actual user) -- confirmed real org
+name/tax-id, and critically: SUMIT correctly shows "מחובר" (connected,
+green) while Open Finance correctly shows "לא מוגדר" (not configured,
+amber) for this real org -- proof the fix shows genuinely differentiated,
+accurate state, something the old hardcoded "Connected" could never do.
+No backend deploy step needed beyond the standard frontend bundle;
+16/16 smoke still green.
+
+Commit: 23c8552.
