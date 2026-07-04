@@ -93,14 +93,14 @@
 ## P1 — נכונות וחיווט (ה-backend אמיתי, ה-UI/נתון לא משקף אותו)
 > אלה ההכי גבוהי-מינוף: "לדעת מי חייב/איפה אנחנו עומדים" נשבר כי ה-UI מציג אפסים מעל backend תקין.
 1. ~~**AR schema mismatch**~~ — **בוטל אחרי אימות-ריצה:** `/ar/aging` (cfo_dashboard, שטוח) נקרא נכון ע"י `CFOARDashboard` המקורי. הבלבול היה מול `/api/financial/ar/aging` (endpoint שונה עם prefix). אין באג כאן.
-2. **AP route שגוי** — `App.tsx:314` `/ap`→`CFOARDashboard` (קורא `/ar/aging`). צריך `APDashboard` ייעודי מול `/daily-reports/ap-aging` או `/financial/ap/*`. → תכנית TDD.
-3. **VAT split fallback** ב-`sumit_connector` (ראה למעלה).
-4. **`CashFlowDashboard` לא ב-nav** — קומפוננטה מוכנה, לא מחווטת. → תכנית TDD.
-5. **balance_sheet חסר `derived:true`+disclaimer** — חוסר-עקביות מול ledger; סיכון רגולטורי (מצג כ"רשמי"). → תכנית TDD.
-6. **AR ערכים hardcoded** — DSO `35+(i%5)*3`, credit_limit `100000`, last_payment_date `None`, email `{id}@example.com`. (יכולת 1)
+2. ~~**AP route שגוי**~~ — **בוטל אחרי אימות 2026-07-04**: `App.tsx:347` `/ap`→`CFOAPDashboard` ייעודי (לא `CFOARDashboard`). כבר תוקן.
+3. ~~**VAT split fallback**~~ — **תוקן ✅ (ר' סעיף למעלה, commit 23353ca)**: `_derive_subtotal_tax` כבר מפעיל `split_inclusive` נכון.
+4. ~~**`CashFlowDashboard` לא ב-nav**~~ — **בוטל אחרי אימות 2026-07-04**: מנותב תחת `/cashflow-detail` (`App.tsx:345`) + פריט nav קיים.
+5. ~~**balance_sheet חסר `derived:true`+disclaimer**~~ — **בוטל אחרי אימות 2026-07-04**: `ledger_service.balance_sheet()` (שורות 603-604) כבר מחזיר `"derived": True, "disclaimer": ...` בתשובה.
+6. ~~**AR ערכים hardcoded**~~ — **בוטל אחרי אימות 2026-07-04** (ר' יכולת 1 בגריד למעלה): DSO/credit_limit/last_payment כולם מחושבים בפועל מ-Payment/Invoice אמיתיים, לא קבועים מזויפים.
 7. ~~**AP discount fields hardcoded 0** + פרטי-בנק dummy ב-bank-reconciliation~~ — **AP discount**: בוטל אחרי אימות — אין מקור-נתון אמיתי לתנאי-הנחת-ספק בשום מקום במערכת (honest-null מכוון, לא באג). **bank-reconciliation dummy**: **תוקן 2026-07-04** — `ap_service.run_bank_reconciliation()` היה מחזיר `bank_name='בנק לאומי'`+`account_number='12-345-67890'` קבועים בכל דוח; הוסר ל-`Optional[str]=None` (אין מקור אמיתי בקלט הפונקציה). ה-route היחיד שקורא לזה כבר החריג את שני השדות מהתשובה — אפס חשיפה חיה, אבל מוקש לכל קורא עתידי. (יכולת 2)
-8. **ניכוי ספקים (856) מחזיר ריק** + ח.פ hardcoded ב-`TaxComplianceService`. (יכולת 11)
-9. **יתרות פתיחה ביומן/מאזן** — carry-forward מתקופות קודמות. (יכולת 5)
+8. ~~**ניכוי ספקים (856) מחזיר ריק** + ח.פ hardcoded ב-`TaxComplianceService`~~ — **בוטל אחרי אימות** (ר' יכולת 11 בגריד למעלה): honest-null מכוון (רק ספקים עם `withholding_rate` מפורש נכללים), ו-ח.פ כבר נטען מ-`Organization.tax_id` עם fallback כנה.
+9. ~~**יתרות פתיחה ביומן/מאזן**~~ — **בוטל אחרי אימות** (ר' יכולת 5 בגריד למעלה): `set_opening_balances`/`get_opening_balances` + `/api/ledger/opening-balances` קיימים ועובדים (5/5 טסטים ירוקים, אומת 2026-07-04).
 10. ~~**`date_trunc` על SQLite**~~ — **בוטל אחרי אימות 2026-07-04**: `_monthly_totals()` (`forecasting_service.py:688`) כבר עושה אגרגציה ב-Python (לא SQL `date_trunc` בכלל), עם docstring מפורש שמסביר למה. תוקן בסבב קודם, לא תועד כסגור. אין `date_trunc` בקוד כלל (`grep` מלא, אפס תוצאות); טסטי forecasting עוברים (9/9).
 11. **`ComplianceAuditService` (`compliance_audit.py`) — שירות-שלד מזויף לגמרי** (נמצא 2026-07-04). חשוף חי ב-6 routes אמיתיים (`/api/audit/log-change`, `/api/audit/trail`, `/api/tax/report-1301`, `/api/tax/report-1214`, `/api/audit/export`, `/api/audit/compliance-checklist`) — כל מתודה מחזירה נתון קבוע/ריק; `compliance_checklist()` תמיד מחזיר "100% תואם, מוכן-לייצוא-ביקורת" ללא קשר למצב בפועל. **אפס חשיפה חיה כרגע** (נבדק ב-grep — אין קורא frontend לאף אחד מ-6 ה-routes). תיקון אמיתי דורש 6 יכולות נפרדות, חלקן כפולות ל-`annual_report_service.py`'s (1301/1214 טיוטה אמיתית כבר קיימת שם) — היקף גדול מדי לתיקון בודד; דורש החלטה: לבנות-מחדש בכנות מול לפרק/למחוק את ה-routes המתים. (יכולת 3 — הנהלת חשבונות כפולה, בהרחבה לביקורת/ייצוא)
 
