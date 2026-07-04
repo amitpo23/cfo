@@ -1432,3 +1432,42 @@ concepts (SumitCompany-roster-scoped vs. Organization-table-scoped) --
 none require a user decision to attempt, all reasonable next steps.
 
 Commit: e0d12b1.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): Epic 2 create-login action
+
+Closed the last Epic 2 client-onboarding gap: client registration created
+an org + integration but never a User, so a newly onboarded client had no
+way to sign in. `POST /api/admin/users` already existed with extensive
+test coverage (13+ tests) but had no working UI path from the live
+AdminClientsDashboard.
+
+Added a "צור משתמש" action: name/email + an auto-generated 16-char random
+password (crypto.getRandomValues -- never something typed/guessed by me),
+calling the existing route with role=admin. Success screen shows the
+credentials once with a copy button (the backend hashes and never returns
+the plaintext again).
+
+Chose NOT to test-create a real user on a real production client's org --
+unlike the earlier org-edit modal's true no-op round-trip (same values
+back), a create-user action has no equivalent safe/reversible verification
+path once it's live-tested against a real org. Instead: found (not a bug,
+just a missing local super-admin test account) that local dev's admin-
+clients table was empty because the local dev user is ADMIN, not
+SUPER_ADMIN -- temporarily promoted it via a direct, local-only DB update,
+ran the FULL create-user flow through the actual UI against a real local
+org ("Demo Organization"), confirmed via DB query the user landed with the
+right org_id/role/is_active, confirmed the copy-to-clipboard button works,
+then deleted the test user and reverted the role promotion. Deployed to
+prod, 16/16 smoke, and did a lighter live check there (opened the modal on
+a real client, confirmed correct pre-fill/rendering, clicked Cancel --
+never submitted against real production data).
+
+This closes all three of last iteration's identified quick-win Epic 2
+gaps (drill-in redirect, org-edit, create-login). What remains from that
+research: fixing/removing the orphaned, buggy AdminDashboard.tsx (dead
+code, zero live exposure, doing this next), and reconciling the two
+parallel "office" concepts (SumitCompany-roster-scoped vs.
+Organization-table-scoped) -- the latter is a genuine architectural/product
+question, not attempted.
+
+Commit: cb112c3.
