@@ -933,3 +933,25 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 10: rather than leave PCN874
   closes out the PCN874 investigation thread for this session: real
   research invested, a genuine and useful correction made, two distinct
   well-scoped future features identified, nothing rushed.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 11: considered implementing
+  מבנה-אחיד now that a real verified spec exists (from iteration 10) --
+  deliberately did NOT: 8 record types mapping our real Invoice/Bill/
+  Payment/Account/InventoryItem data correctly is a large, dedicated-
+  session-worthy feature, not something to rush in a continuation turn.
+  Left it as a well-documented future project, matching how Account/
+  Transaction's repair/retire decision was correctly left open earlier.
+  Picked a smaller roadmap item instead: "ריבית חוק מוסר תשלומים"
+  (late-payment interest per Israel's Payment Ethics Law for Suppliers).
+  Checked the roadmap's own claimed rate ("Prime+2%") against real legal
+  research before implementing anything -- found a likely discrepancy:
+  the law (via the Interest and Linkage Adjudication Law it references)
+  appears to specify Prime+6.5%, not Prime+2%. This is a real, material
+  difference for a calculation that directly determines what a real
+  business charges a real customer -- NOT implemented, since building
+  either number without confidence would risk a genuine legal/financial
+  error dressed up as a working feature (the same "plausible-but-wrong is
+  worse than honestly-incomplete" principle applied to the AI-analytics
+  and PCN874 findings earlier this session). Documented the discrepancy
+  and the real law citation (nevo.co.il) for whoever verifies and
+  implements this properly. No code changed -- nothing to deploy.
