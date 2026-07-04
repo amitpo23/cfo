@@ -74,6 +74,21 @@ async def get_vehicle_profile(
     return {"status": "success", "data": _profile_to_dict(profile)}
 
 
+@router.delete("/vehicle-profile")
+async def delete_vehicle_profile(
+    tax_year: int,
+    vehicle_label: Optional[str] = None,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    service = ExpenseDeductionProfileService(db, organization_id=org_id)
+    try:
+        service.delete_vehicle_profile(tax_year, vehicle_label)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "success"}
+
+
 class ComputeRequest(BaseModel):
     expense_id: Optional[int] = None
 
@@ -138,6 +153,19 @@ async def get_home_office_profile(
         "office_sqm": float(profile.office_sqm),
         "total_home_sqm": float(profile.total_home_sqm),
     }}
+
+
+@router.delete("/home-office-profile")
+async def delete_home_office_profile(
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    service = ExpenseDeductionProfileService(db, organization_id=org_id)
+    try:
+        service.delete_home_office_profile()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "success"}
 
 
 @router.post("/home-office-profile/compute")

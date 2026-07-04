@@ -70,6 +70,13 @@ class ExpenseDeductionProfileService:
             odometer_end=profile.odometer_end,
         )
 
+    def delete_vehicle_profile(self, tax_year: int, vehicle_label: Optional[str] = None) -> None:
+        profile = self.get_vehicle_profile(tax_year, vehicle_label)
+        if not profile:
+            raise ValueError(f"no vehicle deduction profile for tax_year={tax_year}, vehicle_label={vehicle_label!r}")
+        self.db.delete(profile)
+        self.db.commit()
+
     # ---------- Home office profile ----------
 
     def upsert_home_office_profile(self, office_sqm, total_home_sqm) -> HomeOfficeProfile:
@@ -100,6 +107,13 @@ class ExpenseDeductionProfileService:
         if not profile:
             raise ValueError("no home-office profile configured for this organization")
         return calculate_home_office_percent(profile.office_sqm, profile.total_home_sqm)
+
+    def delete_home_office_profile(self) -> None:
+        profile = self.get_home_office_profile()
+        if not profile:
+            raise ValueError("no home-office profile configured for this organization")
+        self.db.delete(profile)
+        self.db.commit()
 
     def compute_internet_deduction(self, business_use_fraction: Optional[float] = None) -> Decimal:
         if business_use_fraction is not None:

@@ -102,6 +102,39 @@ def test_vehicle_profile_is_org_isolated(client, acc, other_acc):
     assert r.status_code == 404
 
 
+def test_vehicle_profile_delete(client, acc):
+    client.post("/api/expenses/deduction/vehicle-profile", json={
+        "tax_year": 2026, "vehicle_label": None,
+        "running_costs_annual": 10000, "use_value_monthly": 250,
+        "odometer_start": 0, "odometer_end": 12000,
+    }, headers=acc["headers"])
+
+    r = client.delete("/api/expenses/deduction/vehicle-profile?tax_year=2026", headers=acc["headers"])
+    assert r.status_code == 200, r.text
+
+    r2 = client.get("/api/expenses/deduction/vehicle-profile?tax_year=2026", headers=acc["headers"])
+    assert r2.status_code == 404
+
+
+def test_vehicle_profile_delete_404_when_missing(client, acc):
+    r = client.delete("/api/expenses/deduction/vehicle-profile?tax_year=2099", headers=acc["headers"])
+    assert r.status_code == 404
+
+
+def test_vehicle_profile_delete_is_org_isolated(client, acc, other_acc):
+    client.post("/api/expenses/deduction/vehicle-profile", json={
+        "tax_year": 2026, "vehicle_label": None,
+        "running_costs_annual": 10000, "use_value_monthly": 250,
+        "odometer_start": 0, "odometer_end": 12000,
+    }, headers=acc["headers"])
+
+    r = client.delete("/api/expenses/deduction/vehicle-profile?tax_year=2026", headers=other_acc["headers"])
+    assert r.status_code == 404
+
+    r2 = client.get("/api/expenses/deduction/vehicle-profile?tax_year=2026", headers=acc["headers"])
+    assert r2.status_code == 200
+
+
 # ==================== Home office profile ====================
 
 def test_home_office_profile_upsert_and_compute(client, acc):
@@ -118,6 +151,35 @@ def test_home_office_profile_upsert_and_compute(client, acc):
 def test_home_office_profile_compute_400_when_missing(client, acc):
     r = client.post("/api/expenses/deduction/home-office-profile/compute", json={}, headers=acc["headers"])
     assert r.status_code == 400
+
+
+def test_home_office_profile_delete(client, acc):
+    client.post("/api/expenses/deduction/home-office-profile", json={
+        "office_sqm": 12, "total_home_sqm": 80,
+    }, headers=acc["headers"])
+
+    r = client.delete("/api/expenses/deduction/home-office-profile", headers=acc["headers"])
+    assert r.status_code == 200, r.text
+
+    r2 = client.get("/api/expenses/deduction/home-office-profile", headers=acc["headers"])
+    assert r2.status_code == 404
+
+
+def test_home_office_profile_delete_404_when_missing(client, acc):
+    r = client.delete("/api/expenses/deduction/home-office-profile", headers=acc["headers"])
+    assert r.status_code == 404
+
+
+def test_home_office_profile_delete_is_org_isolated(client, acc, other_acc):
+    client.post("/api/expenses/deduction/home-office-profile", json={
+        "office_sqm": 12, "total_home_sqm": 80,
+    }, headers=acc["headers"])
+
+    r = client.delete("/api/expenses/deduction/home-office-profile", headers=other_acc["headers"])
+    assert r.status_code == 404
+
+    r2 = client.get("/api/expenses/deduction/home-office-profile", headers=acc["headers"])
+    assert r2.status_code == 200
 
 
 def test_internet_deduction_defaults_to_home_office_ratio(client, acc):
