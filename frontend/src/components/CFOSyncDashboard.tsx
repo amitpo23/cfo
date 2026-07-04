@@ -55,6 +55,28 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
     queryFn: () => apiService.get('/integration/status'),
   });
 
+  const { data: upayStatus } = useQuery<{ connected: boolean }>({
+    queryKey: ['upay-status'],
+    queryFn: () => apiService.get('/payments/upay/status'),
+    enabled: !!integrationStatus?.configured?.sumit,
+  });
+
+  const [upayEmail, setUpayEmail] = React.useState('');
+  const [upayPassword, setUpayPassword] = React.useState('');
+
+  const upaySetupMutation = useMutation({
+    mutationFn: () =>
+      apiService.post('/payments/upay/setup', {
+        email: upayEmail,
+        password: upayPassword,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['upay-status'] });
+      setUpayEmail('');
+      setUpayPassword('');
+    },
+  });
+
   const [sumitKey, setSumitKey] = React.useState('');
   const [sumitCompany, setSumitCompany] = React.useState('');
   const [ofClientId, setOfClientId] = React.useState('');
@@ -326,6 +348,53 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
           </div>
         </FinanceCard>
       </div>
+
+      {/* Upay wallet activation — required before payment links can return a real URL */}
+      {integrationStatus?.configured?.sumit && (
+        <div className="grid grid-cols-1 gap-6">
+          <FinanceCard darkMode={darkMode}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">חשבון Upay (סליקת אשראי)</h2>
+              {configuredBadge(upayStatus?.connected)}
+            </div>
+            <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              קישור חשבון Upay קיים לחברת ה-SUMIT שלכם — נדרש כדי ש"קישור תשלום"
+              בעמוד גיול הלקוחות יחזיר עמוד תשלום אמיתי. הסיסמה מועברת ל-SUMIT
+              בלבד ואינה נשמרת ברצף.
+            </p>
+            <div className="space-y-3 max-w-md">
+              <input
+                type="email"
+                value={upayEmail}
+                onChange={(e) => setUpayEmail(e.target.value)}
+                placeholder="אימייל חשבון Upay"
+                className={inputClass}
+              />
+              <input
+                type="password"
+                value={upayPassword}
+                onChange={(e) => setUpayPassword(e.target.value)}
+                placeholder="סיסמת חשבון Upay"
+                className={inputClass}
+              />
+              <button
+                type="button"
+                onClick={() => upaySetupMutation.mutate()}
+                disabled={!upayEmail || !upayPassword || upaySetupMutation.isPending}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium disabled:opacity-50"
+              >
+                {upaySetupMutation.isPending ? 'מקשר...' : 'קשר חשבון Upay'}
+              </button>
+              {upaySetupMutation.isSuccess && (
+                <p className="text-sm text-green-600">החשבון קושר בהצלחה.</p>
+              )}
+              {upaySetupMutation.isError && (
+                <p className="text-sm text-red-600">הקישור נכשל. בדקו את הפרטים ונסו שוב.</p>
+              )}
+            </div>
+          </FinanceCard>
+        </div>
+      )}
 
       {/* Sync Runs */}
       <FinanceCard darkMode={darkMode} title="היסטוריית סנכרון" subtitle="כל ריצה מתועדת עם מקור, סוג, משך ותוצאות" icon={Clock}>
