@@ -50,10 +50,14 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
   const { data: integrationStatus } = useQuery<{
     configured: Record<string, boolean>;
     connections: Record<string, string>;
+    last_sync_errors?: Record<string, string>;
   }>({
     queryKey: ['integration-status'],
     queryFn: () => apiService.get('/integration/status'),
   });
+
+  const sumitSyncError = integrationStatus?.last_sync_errors?.sumit;
+  const sumitHealthy = Boolean(integrationStatus?.configured?.sumit) && !sumitSyncError;
 
   const { data: upayStatus } = useQuery<{ connected: boolean }>({
     queryKey: ['upay-status'],
@@ -152,7 +156,7 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
       description="מרכז הפעלה שמוודא שהמערכת מקבלת נתונים, מריצה סנכרונים, בודקת חיבורים ושומרת היסטוריית ריצות לכל ארגון בנפרד."
       icon={Database}
       metrics={[
-        { label: 'הנהלת חשבונות', value: integrationStatus?.configured?.sumit ? 'מחובר' : 'לא מוגדר', tone: integrationStatus?.configured?.sumit ? 'emerald' : 'amber' },
+        { label: 'הנהלת חשבונות', value: sumitHealthy ? 'מחובר' : (sumitSyncError ? 'שגיאת חיבור' : 'לא מוגדר'), tone: sumitHealthy ? 'emerald' : (sumitSyncError ? 'rose' : 'amber') },
         { label: 'נתוני בנק', value: integrationStatus?.configured?.open_finance ? 'מחובר' : 'לא מוגדר', tone: integrationStatus?.configured?.open_finance ? 'emerald' : 'amber' },
         { label: 'ריצות אחרונות', value: String(runs?.length || 0), tone: 'blue' },
         { label: 'מצב אבטחה', value: integrationStatus?.configured?.security ? 'תקין' : 'לבדיקה', tone: integrationStatus?.configured?.security ? 'emerald' : 'rose' },
@@ -174,9 +178,9 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
           darkMode={darkMode}
           icon={Database}
           label="מסמכים"
-          value={integrationStatus?.configured?.sumit ? 'מוכן' : 'דורש הגדרה'}
-          detail="חשבוניות, קבלות, ספקים ותשלומים"
-          tone={integrationStatus?.configured?.sumit ? 'emerald' : 'amber'}
+          value={sumitHealthy ? 'מוכן' : (sumitSyncError ? 'שגיאת חיבור' : 'דורש הגדרה')}
+          detail={sumitSyncError ? sumitSyncError : "חשבוניות, קבלות, ספקים ותשלומים"}
+          tone={sumitHealthy ? 'emerald' : (sumitSyncError ? 'rose' : 'amber')}
         />
         <MetricCard
           darkMode={darkMode}
@@ -198,9 +202,9 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
           darkMode={darkMode}
           icon={AlertTriangle}
           label="שגיאות"
-          value={String((runs || []).filter((run) => run.status === 'failed').length)}
-          detail="ריצות שנכשלו בתצוגה האחרונה"
-          tone={(runs || []).some((run) => run.status === 'failed') ? 'rose' : 'emerald'}
+          value={String((runs || []).filter((run) => run.status === 'failed' || run.status === 'partial').length)}
+          detail="ריצות שנכשלו או הושלמו חלקית בתצוגה האחרונה"
+          tone={(runs || []).some((run) => run.status === 'failed' || run.status === 'partial') ? 'rose' : 'emerald'}
         />
       </div>
 

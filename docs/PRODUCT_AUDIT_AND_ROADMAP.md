@@ -86,7 +86,7 @@
 ---
 
 ## P0 — חוסמי production
-1. **`AgreementCashFlow` ללא persistence** — Agreement/Milestone/CashFlowEntry ב-dict בזיכרון; נעלמים ב-restart. צריך טבלאות + migration. (יכולת 4)
+1. ~~**`AgreementCashFlow` ללא persistence**~~ — **בוטל אחרי אימות 2026-07-04**: `CashflowAgreement`/`CashflowEntry` (`models.py:968,991`) הן טבלאות DB אמיתיות; `agreement_cashflow_service.py` מחזיק dataclasses בזיכרון כ-working-state אבל כותב חזרה ל-DB אחרי כל מוטציה (ר' `_persist()`/הערת קוד מפורשת בשורה 202-225). התאמה עם הגריד למעלה (יכולת 4) — הרשומה כאן הייתה stale.
 2. **Open Finance לא חי** — `OPEN_FINANCE_USER_ID` חסר ב-prod; 16 routes מחזירים 400. חוסם את כל זרימת הבנק החיה. (env + UI consent, יכולת 8)
 3. **אימות יצירת-תנועה ב-SUMIT** — `SumitConnector` כרגע מנרמל וסופר בלבד; אין verification של write-backs (יצירת חשבונית/קבלה חזרה ל-SUMIT). (יכולת מנוע-סנכרון)
 4. **חוסמי env/deploy** — `DATABASE_URL` (Supabase), Google OAuth, סודות נפרדים. (ראה `PRODUCTION_READINESS.md`)
