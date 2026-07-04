@@ -1981,3 +1981,25 @@ enough that the user can pick repair/retire/hybrid without re-investigating),
 and consider a small, safe, additive guard on the live `/api/sync/sumit/full`
 writer path (e.g. a clear deprecation response) so the freeze doesn't
 depend on incidental non-use.
+
+## FIXED: closed the live unguarded-writer risk from the P0 dossier (2026-07-04)
+
+Acted on the fork's most concrete, immediately-actionable finding before
+writing the full dossier doc: `DataSyncService.sync_documents`/
+`sync_payments`/`sync_billing_transactions`/`sync_all` — and their routes
+(`POST /api/sync/sumit/documents|payments|billing|full`) — were fully live
+and callable, writing VAT-inclusive `Transaction` rows into the frozen
+pipeline, with the freeze holding only because nothing currently calls
+them (their one UI trigger, `DataSyncDashboard.tsx`, is itself orphaned).
+
+Added `LegacySyncRetiredError` (mirrors the existing `SumitNotConfiguredError`
+pattern exactly): each of the four methods now raises immediately instead
+of running, with a matching app-level exception handler → clean 400
+pointing at the real path (`SyncEngine` via `POST /api/office/clients/{id}/
+sync`). Read-only sync routes (vat-rate, exchange-rate, debts, income-items)
+untouched. 6 new tests, 626 total pass, qa_gate PASSED, deployed,
+16/16 smoke, live-verified: `POST /api/sync/sumit/full` on production now
+returns a clean 400 with the retirement message instead of silently
+writing.
+
+Commit: 85fb09c.
