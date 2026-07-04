@@ -17,7 +17,7 @@ from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
 from ..integrations.sumit_integration import SumitAPIError
-from ..services.data_sync_service import SumitNotConfiguredError
+from ..services.data_sync_service import SumitNotConfiguredError, LegacySyncRetiredError
 from ..services.ai_chat_service import AIChatNotConfiguredError
 from ..services.ai_analytics_service import AIAnalyticsNotConfiguredError
 
@@ -76,6 +76,18 @@ async def sumit_not_configured_handler(_request, exc: SumitNotConfiguredError):
     org. Some /api/sync/sumit/* routes call DataSyncService directly (no
     Depends(get_sumit_integration)), so without this handler the bare
     ValueError subclass would fall through as a raw 500."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(LegacySyncRetiredError)
+async def legacy_sync_retired_handler(_request, exc: LegacySyncRetiredError):
+    """DataSyncService.sync_documents/sync_payments/sync_billing_transactions/
+    sync_all raise this — they write to the frozen Account/Transaction pipeline
+    (P0 finding). Without this handler the bare ValueError subclass would fall
+    through as a raw 500 instead of a clean 400 pointing at SyncEngine."""
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"detail": str(exc)},
