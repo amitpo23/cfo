@@ -1576,3 +1576,67 @@ problems (the project's own memory flags this as a known risk --
 deploy needed.
 
 Commits: b9e5677, b3f83a3.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): Open Finance consent-boundary verification (goal-directive #7)
+
+Dispatched a research fork to verify goal-directive finish-line criterion
+#7 concretely rather than trust memory's "mostly done" claim (matching
+today's established discipline of re-verifying "already done" assertions
+against actual code, since several turned out stale). Findings:
+- Activation screen (BankInsightsDashboard.tsx, `/bank-insights`,
+  `connectBank()`) and backend route (`POST /api/open-finance/connections`
+  -> `OpenFinanceClient.create_connection()`, a real v2 API call) are both
+  genuinely real -- not stubs, correctly wired.
+- **Real gap #1 (fixed)**: the empty-state was a single terse line with no
+  explanation of what "connect bank" does, which bank, or any privacy
+  assurance. Criterion #7 explicitly requires "הוראות למשתמש" -- this
+  didn't meet it.
+- **Real gap #2 (fixed)**: zero test coverage for `create_connection`
+  specifically (only 403/auth checks existed, unlike insights/reconcile
+  which have real flow tests).
+- **Clarified, not fixed**: `OPEN_FINANCE_USER_ID` is genuinely missing in
+  Vercel, but per `OPEN_FINANCE_API_GUIDE.md` it's a self-chosen
+  identifier (not issued by the bank) -- closer to a config value than a
+  credential, contradicting how project memory framed this as a pure
+  consent-level gate. Still didn't add it myself: it's a production env-
+  var change outside my remit without explicit permission, and it's
+  unconfirmed whether Open Finance requires pre-registering that value on
+  their side first. Flagged clearly for the user instead of guessing.
+
+Fixed: replaced the one-line empty state with a clear 3-step Hebrew
+explanation (secure OF window -> log into your own bank, not through us
+-> approve read-only access -> come back and generate insights) plus a
+privacy note and multi-bank note. Added 2 backend tests with a mocked
+`OpenFinanceClient.create_connection` (connect_url handling, BankConnection
+persistence, org isolation) -- both passed immediately, confirming the
+route itself needed no fix, just coverage. 614 passed (+2), qa_gate
+PASSED, deployed, 16/16 smoke, browser-verified the new instructions
+panel renders correctly both locally and on real production.
+
+Commit: d5cda94.
+
+---
+
+## Consolidated note: today's roadmap-doc hygiene + new findings, for whoever reads this next
+
+Beyond the 5 continuation-plan items and the Wave 2 work already recorded,
+today's loop iterations also: fixed a real fabricated-data bug in
+`revenue_analytics.py` and another in `ap_service.py` (both same class as
+each other -- hardcoded values presented as real, both currently
+zero-live-exposure but real landmines); found and documented (not fixed,
+too large in scope) `ComplianceAuditService` as an entirely fake stub
+service across 6 live routes; closed all of Epic 2's safe-to-attempt
+scope (drill-in redirect, org-edit modal, create-login action, removed an
+orphaned buggy component); fixed a real contact_card data-correctness gap
+(unresolved-payment matching); synced 9 of 10 stale P1 items in
+PRODUCT_AUDIT_AND_ROADMAP.md with actual current state; and verified +
+improved Open Finance's consent-boundary readiness (goal-directive #7).
+
+**Still standing, unchanged**: `ANTHROPIC_API_KEY` absent (re-checked
+every iteration today, still absent); the Account/Transaction P0
+architecture decision; SUMIT artifact cleanup approval (doc 1001 + customer
+2095660683); מבנה אחיד/PCN874/interest-rate legal questions; live
+SUMIT-UI data-compatibility verification (blocked on a login I shouldn't
+perform myself); `OPEN_FINANCE_USER_ID` (clarified today: likely
+self-choosable, but still a production env-var change requiring explicit
+permission, not something to guess at).
