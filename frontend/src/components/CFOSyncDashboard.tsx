@@ -275,6 +275,18 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
             <h2 className="text-lg font-semibold">Open Finance Credentials</h2>
             {configuredBadge(integrationStatus?.configured?.open_finance)}
           </div>
+          <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+            שלושת השדות מתקבלים ישירות מ-Open Finance במהלך תהליך ה-onboarding
+            העסקי מולם (לא דרך רצף) — פנו אליהם להשלמת ההתקשרות וקבלת הפרטים.
+            עיינו ב-<a
+              href="https://docs.open-finance.ai/reference"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              התיעוד הרשמי שלהם
+            </a> למידע נוסף.
+          </p>
           <div className="space-y-3">
             <input
               type="text"
