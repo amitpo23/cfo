@@ -193,7 +193,10 @@ class RevenueAnalyticsService:
         # הזדמנויות לפי קטגוריה/אזור הושמטו: הסכמה אינה כוללת קטגוריית חשבונית
         # או שדות גאוגרפיים (ראו analyze_revenue_by_category/region). לא ממציאים נתון.
 
-        # Growing customers — מבוסס על נתון אמיתי (revenue לפי לקוח)
+        # Growing customers — מבוסס על נתון אמיתי (revenue לפי לקוח).
+        # אין נתון-מגמה אמיתי (revenue של תקופה קודמת) כדי לחשב אחוז-צמיחה אמיתי,
+        # ולכן אין שדה "estimated_growth"/"growth_potential" מומצא — רק שדות
+        # שנשלפו בפועל מהשאילתה.
         customers = self.analyze_revenue_by_customer(days=days, limit=50)
         for cust in customers:
             if cust["invoice_count"] >= 4 and cust["percentage_of_total_revenue"] < 15:
@@ -202,16 +205,15 @@ class RevenueAnalyticsService:
                     "customer_id": cust["customer_id"],
                     "customer_name": cust["customer_name"],
                     "current_revenue": cust["total_revenue"],
-                    "growth_potential": "high",
+                    "invoice_count": cust["invoice_count"],
                     "recommendation": f"Develop strategic relationship with {cust['customer_name']}",
-                    "estimated_growth": cust["total_revenue"] * 0.3,
                 })
 
         # הזדמנויות לפי אזור הושמטו — אין שדות גאוגרפיים בסכמה.
 
         return sorted(
             opportunities,
-            key=lambda x: x.get("estimated_growth", 0),
+            key=lambda x: x.get("current_revenue", 0),
             reverse=True
         )
 
