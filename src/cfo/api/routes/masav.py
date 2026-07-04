@@ -17,6 +17,8 @@ from ...services.masav_service import (
     MasavPayment,
     MasavValidationError,
     build_masav_file,
+    is_valid_bank_code,
+    is_valid_israeli_id,
     summarize,
 )
 
@@ -91,6 +93,20 @@ def _gather(db: Session, org_id: int, bill_ids: Optional[List[int]]):
                 "bill": name,
                 "vendor": vendor.name,
                 "reason": "חסרים פרטי בנק: " + ", ".join(missing),
+            })
+            continue
+        if not is_valid_bank_code(bank_code):
+            skipped.append({
+                "bill": name,
+                "vendor": vendor.name,
+                "reason": f"קוד בנק ({bank_code}) אינו ברשימת חברי מס\"ב — יש לבדוק מול הספק",
+            })
+            continue
+        if not is_valid_israeli_id(beneficiary_id):
+            skipped.append({
+                "bill": name,
+                "vendor": vendor.name,
+                "reason": f"מספר זיהוי ({beneficiary_id}) נכשל בביקורת הספרה — יש לבדוק מול הספק",
             })
             continue
         payments.append(MasavPayment(

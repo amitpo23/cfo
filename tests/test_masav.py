@@ -15,6 +15,8 @@ from cfo.services.masav_service import (
     build_records,
     build_masav_file,
     summarize,
+    is_valid_israeli_id,
+    is_valid_bank_code,
     RECORD_LENGTH,
 )
 
@@ -197,3 +199,42 @@ def test_summary():
     assert s["payment_count"] == 2
     assert s["total_amount"] == 150.25
     assert s["institutions"] == 1
+
+
+# ---------- ולידציית ת.ז/ח.פ (ביקורת ספרה) ----------
+
+def test_is_valid_israeli_id_checkdigit_accepts_valid():
+    # דוגמה מאומתת חיצונית: 78962134 + ספרת ביקורת 9
+    assert is_valid_israeli_id("789621349") is True
+    # ח.פ אמיתי מ-DB פרודקשן (משתמש באותו אלגוריתם)
+    assert is_valid_israeli_id("511402547") is True
+    assert is_valid_israeli_id("123456782") is True
+
+
+def test_is_valid_israeli_id_checkdigit_rejects_invalid():
+    assert is_valid_israeli_id("789621340") is False  # ספרת ביקורת שגויה
+    assert is_valid_israeli_id("123456789") is False
+    assert is_valid_israeli_id("") is False
+    assert is_valid_israeli_id("12345") is False        # קצר מדי
+    assert is_valid_israeli_id("12345678901") is False  # ארוך מדי
+    assert is_valid_israeli_id("abcdefghi") is False    # לא ספרות
+
+
+# ---------- ולידציית קוד בנק (מול רשימת חברי מס"ב) ----------
+
+def test_is_valid_bank_code_accepts_known_codes():
+    # לאומי, הפועלים, דיסקונט, מזרחי-טפחות — קודים ידועים ויציבים
+    assert is_valid_bank_code("10") is True
+    assert is_valid_bank_code("12") is True
+    assert is_valid_bank_code("11") is True
+    assert is_valid_bank_code("20") is True
+    assert is_valid_bank_code("04") is True   # בנק יהב — נדרש איפוס אפסים
+    assert is_valid_bank_code("4") is True    # קלט לא-מרופד גם מתקבל
+
+
+def test_is_valid_bank_code_rejects_unknown_code():
+    assert is_valid_bank_code("00") is False
+    assert is_valid_bank_code("77") is False   # לא בשימוש ברשימת חברי מס"ב
+    assert is_valid_bank_code("") is False
+    assert is_valid_bank_code("abc") is False
+    assert is_valid_bank_code("123") is False  # 3 ספרות — עדיין לא בתוקף (המעבר טרם נכנס לתוקף)
