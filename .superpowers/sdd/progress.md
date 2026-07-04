@@ -1836,3 +1836,52 @@ period per the already-documented May-2026 VAT state) instead of the old
 fake 15000.
 
 Commit: 0c66f07.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): broad re-sweep across all 82 service files + one more dead-code deletion
+
+After the tax-calendar fix, re-ran the same fabricated-literal grep across
+ALL `src/cfo/services/*.py` (82 files) plus a Hebrew placeholder-language
+sweep (`TODO|FIXME|לצורך הדגמה|נתון דמה|זמנית|placeholder|דמה`) and a
+`dummy|fake_data|mock_data|hardcoded|stub` sweep across all of `src/cfo/`.
+Findings:
+- `kpi_service.py`'s `'target'`/`'benchmark'` values (lines 116-311) are
+  legitimate static industry-benchmark definitions applied to real
+  computed KPIs (e.g. "target gross margin 40%, benchmark 35%") — not a
+  bug, same category as the exponential-smoothing alpha=0.3 constant
+  flagged as legitimate earlier this session.
+- `ml_models.py`'s "placeholder" comment (line 468) is a legitimate
+  autoregressive-feature-bootstrap technique (temp value overwritten by
+  the real prediction one line later), and `_fallback_predict`'s
+  mean/std fallback is an honestly-labeled simple statistical model
+  (`model_name='Fallback (Mean)'`), not fabricated business data.
+- `report_builder_service.py`/`cost_analysis_service.py`'s `'budget'`/
+  `'target'` dict entries are all real attribute reads
+  (`cost.budget`, `k.target`, `c.budget_amount`) — legitimate.
+- Every other of the 82 service files came back clean on this pattern —
+  this specific class of bug (hardcoded literal financial figures
+  presented as computed report data) appears to be exhausted for now
+  after 3 real fixes found and fixed this session (ap_service,
+  kpi_service, tax_service) plus 2 dead-code removals (ai_analytics_service,
+  budget_service).
+- Found `src/cfo/integrations/mock_integration.py`: a `MockAccountingIntegration`
+  class explicitly self-documented as "for testing and demo purposes,"
+  generating fake accounts/transactions via `random.randint`/
+  `random.uniform`. Confirmed via grep across `src/`, `tests/`,
+  `frontend/src/` — zero references anywhere, not even exported from
+  `integrations/__init__.py`. Genuinely dead, no live risk, but same
+  fabricated-data shape as the other dead code removed this session.
+  Deleted the whole file (192 lines).
+- Documented (not fixed — P2, deferred) one more real finding:
+  `tax_service.py`'s `get_tax_planning_suggestions()` returns 5 generic
+  tax-planning tips with a fixed `potential_savings` figure per tip
+  (5000/8000/12000/20000/3000 ₪) identical for every org regardless of
+  actual payroll/expense size. Zero frontend exposure. Lower severity
+  than the P1 fixes above (this is advisory content, not a computed
+  report number) and a proper fix needs 5 separate real per-suggestion
+  calculations — logged in `PRODUCT_AUDIT_AND_ROADMAP.md` P1 item #12
+  rather than rushed.
+
+620 tests pass (unchanged — pure dead-code removal), qa_gate PASSED,
+deployed, 16/16 smoke.
+
+Commit: 3c9d799.
