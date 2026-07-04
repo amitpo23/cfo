@@ -1385,3 +1385,50 @@ removing the buggy AdminDashboard.tsx, reconciling the two parallel
 steps, none require a user decision to attempt.
 
 Commits: 12e5947 (revenue_analytics fix), 06a198f (admin open→engine).
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): Epic 2 org-edit modal
+
+User gave explicit authorization to keep the loop running unattended
+("תשלים אותה ותמשיך בינתיים אני אשלים מה שצריך במוצאי שבת" -- continue,
+I'll handle the pending-user items myself after Shabbat). Re-checked
+ANTHROPIC_API_KEY: still absent, as expected.
+
+Picked up the next Epic 2 item identified by last iteration's research:
+`PATCH /api/admin/organizations/{id}` (name/tax_id/is_active) already
+worked correctly but had zero test coverage and zero working UI path (the
+one component that called it, AdminDashboard.tsx, is unrouted/orphaned and
+has a real edit-vs-create mutation bug -- not touched this pass).
+
+Added backend test coverage FIRST since none existed for code about to get
+a new UI surface built on it: 3 tests in test_super_admin_org_override.py
+(name/tax_id edit persists via follow-up GET; is_active toggle; cross-org
+edit correctly 403s for a non-super admin of a different org). All 3
+passed immediately -- the route itself needed no fix, just verification.
+
+Built the edit modal in AdminClientsDashboard.tsx (the live, routed
+dashboard): name + tax_id inputs + an active-org checkbox, calling the
+same now-tested PATCH route, matching the file's existing plain-useState
+pattern (no react-query in this file) and the modal styling already used
+in DocumentManager.tsx. Also split `AdminClient.tax_id` out as its own
+field -- it was previously being silently folded into a combined
+`company_id` display string (SUMIT company id vs. real tax id were
+indistinguishable), which would have made the edit form impossible to
+pre-fill correctly with the real value.
+
+610 passed, qa_gate PASSED, deployed, 16/16 smoke. Browser-verified live
+against real production data (not local dev, which has an empty admin
+table): opened the edit modal on a real client and confirmed it correctly
+pre-filled the actual name ("עמית פורת"), real tax_id ("043374883"), and
+active checkbox from the live database -- then saved WITHOUT changing any
+field (a deliberate no-op round-trip, to verify the save path renders
+success/reloads correctly without risking any real data change), and
+confirmed via a follow-up GET that the org's name/tax_id/is_active are
+byte-for-byte unchanged.
+
+Epic 2 remaining pieces (per last iteration's research, still open):
+login-provisioning action for new clients, fixing or removing the
+orphaned/buggy AdminDashboard.tsx, reconciling the two parallel "office"
+concepts (SumitCompany-roster-scoped vs. Organization-table-scoped) --
+none require a user decision to attempt, all reasonable next steps.
+
+Commit: e0d12b1.
