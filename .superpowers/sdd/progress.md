@@ -1059,3 +1059,40 @@ CONTINUATION PLAN — item 2 (deduction_percent write path, DONE):
   mapping is more scope than this fix needed; kept bounded to the write
   path itself. 3 new tests, 579 passed, qa_gate PASSED, deployed, 16/16
   smoke.
+
+## CONTINUATION PLAN — item 3 (Masav bank-code + ID check-digit validation, DONE)
+
+`masav.py`'s `_gather()` previously accepted any non-empty digit string as a
+vendor's bank code or beneficiary tax_id/ID -- a typo'd bank code or mistyped
+ח.פ/ת.ז would pass silently into a real Masav bank-payment file. Added two
+pure validators to `masav_service.py`:
+- `is_valid_israeli_id()` -- standard 9-digit Luhn-style check-digit
+  algorithm, verified against an independently-sourced worked example
+  (78962134 -> check digit 9) before writing any test/implementation code.
+- `is_valid_bank_code()` -- checked against `MASAV_PARTICIPANT_BANK_CODES`,
+  a 43-code allowlist scraped fresh from masav.co.il/participants-list
+  (2026-07-04) and verified complete (unique-code count matches the page's
+  total "קוד בנק:" label count, no pagination/truncation).
+
+Researched (via a dedicated fork, not assumed) whether Bank of Israel's
+2-to-3-digit bank-code expansion made a 2-digit allowlist stale: confirmed
+high-confidence that the expansion (announced 13.1.26) does NOT take effect
+until real use starts ~January 2027 -- a 2-digit allowlist is correct today.
+A separate BOI initiative (21.4.2025 notice) deallocates unused 2-digit
+codes ~21.4.2026, already in effect; today's fresh scrape already reflects
+this. Documented the forward-looking revisit-in-2027 note in code comments
+and in memory (masav-file-format.md).
+
+Both validators wired into `_gather()`'s existing skip-list mechanism (bad
+bank code / bad ID check-digit -> clear Hebrew skip reason, not a crash or
+silent inclusion). RED tests first: `tests/test_masav.py` (+4: 2 for each
+validator, using verified fixture values) and `tests/test_financial_real_data.py`
+(+2 integration tests seeding a real Contact+Bill with a bad bank code /
+bad ID and asserting it's skipped, not filed). 6 new tests, 579 -> 585
+passed, qa_gate PASSED. Deployed (`vercel --prod --yes`), 16/16 smoke.
+Live-verified `/api/masav/preview` against real org 1/2 data post-deploy
+(no crash, correct empty result) -- no open AP bills currently exist in
+either org, so the new skip-paths have no live data to exercise right now;
+correctness of the skip logic itself is covered by the DB-integration tests.
+
+Commit: d0f6e05.
