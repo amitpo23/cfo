@@ -1792,3 +1792,47 @@ Continuing the loop: next up is another pass of the same systematic
 fabricated-data grep sweep across any `src/cfo/services/*.py` files not
 yet explicitly checked this session, since it has found 3 real bugs in a
 row this session alone.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): tax calendar fabricated amounts + a hidden 6081-item route bug
+
+Same grep sweep found `tax_service.py`'s `get_tax_calendar()` hardcoding
+`estimated_amount` at 15000/8000/25000 for every VAT/tax-advance/
+withholding-102 deadline, live via `GET /api/financial/tax/calendar`
+(zero frontend consumers, but reachable). Unlike `kpi_service.py` earlier
+this session, real computation here was safe to wire in:
+`generate_vat_report`/`calculate_tax_advance`/`generate_withholding_report`
+already read the fixed ledger-based pipeline (Invoice/Bill/Expense/
+Payslip, per their own docstrings referencing "פאזה 1"), not the frozen
+Transaction table behind the P0 finding. Replaced the three constants with
+real calls to those methods.
+
+While tracing the route, found a much worse latent bug in the same code
+path: `GET /api/financial/tax/calendar` passed its `year` query param
+(e.g. 2026) *positionally* into `get_tax_calendar(months_ahead=3)` —
+verified locally this generates 2027 loop iterations (6081 items) on
+every single call. Harmless only because the old branch just built cheap
+dicts; wiring in real per-period DB calls (3 methods × 2027 periods) would
+have made this route hang/timeout in production the moment the fabricated-
+data fix above landed. Fixed the route to pass an actual `months_ahead`
+query param (default 3, matching the service's own default) instead of
+misusing `year`.
+
+Also swept `budget_service.py` with the same grep pattern and found
+`_get_default_budget()` (hardcoded 500000/200000/.../20000 per category)
+with zero callers anywhere — `_load_budgets()` was already fixed in an
+earlier pass (before this session) to return honest empty dicts instead
+of falling back to it, but its docstring still claimed the old fallback
+("ריק -> ברירת מחדל"). Deleted the dead method, corrected the docstring.
+
+3 new tests (`tests/test_tax_calendar_real.py`): real VAT amount from
+seeded Invoice+Expense (36000-18000=18000, not the old 15000), real
+withholding amount from a seeded Payslip (3550, not the old 25000), and a
+bounded-response-size regression test (<20 items, catching the
+year-as-months_ahead bug directly). 620 tests pass (+3), qa_gate PASSED.
+Deployed, 16/16 smoke. Live-verified directly against production: the
+route now returns 9 items (not 6081) and the current-period VAT item
+shows `estimated_amount: 0` (real — this org has no VAT'd invoices this
+period per the already-documented May-2026 VAT state) instead of the old
+fake 15000.
+
+Commit: 0c66f07.
