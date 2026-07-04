@@ -148,6 +148,49 @@ def test_update_expense_amount_and_category(client, acc):
     assert data["total"] == 250  # total עודכן (אין מע"מ)
 
 
+def test_update_expense_sets_deduction_percent(client, acc):
+    """Expense.deduction_percent existed already (annual_report_service
+    honors it for 1301) but was never reachable via any API/UI path --
+    ExpenseUpdateRequest didn't even include the field. Root-cause fix."""
+    r = client.post("/api/expenses", json={
+        "supplier_name": "ספק ניכוי", "amount": 1000,
+        "expense_date": date.today().isoformat(),
+    }, headers=acc["headers"])
+    eid = r.json()["data"]["id"]
+
+    u = client.patch(f"/api/expenses/{eid}", json={"deduction_percent": 45}, headers=acc["headers"])
+    assert u.status_code == 200, u.text
+    assert u.json()["data"]["deduction_percent"] == 45
+
+
+def test_update_expense_rejects_out_of_range_deduction_percent(client, acc):
+    r = client.post("/api/expenses", json={
+        "supplier_name": "ספק ניכוי 2", "amount": 1000,
+        "expense_date": date.today().isoformat(),
+    }, headers=acc["headers"])
+    eid = r.json()["data"]["id"]
+
+    # Pydantic Field(ge=0, le=100) validation -> FastAPI's standard 422.
+    u = client.patch(f"/api/expenses/{eid}", json={"deduction_percent": 150}, headers=acc["headers"])
+    assert u.status_code == 422, u.text
+
+    u2 = client.patch(f"/api/expenses/{eid}", json={"deduction_percent": -5}, headers=acc["headers"])
+    assert u2.status_code == 422, u2.text
+
+
+def test_update_expense_deduction_percent_omitted_stays_null(client, acc):
+    """Regression: not passing deduction_percent must not reset it."""
+    r = client.post("/api/expenses", json={
+        "supplier_name": "ספק ללא ניכוי", "amount": 500,
+        "expense_date": date.today().isoformat(),
+    }, headers=acc["headers"])
+    eid = r.json()["data"]["id"]
+
+    u = client.patch(f"/api/expenses/{eid}", json={"amount": 600}, headers=acc["headers"])
+    assert u.status_code == 200, u.text
+    assert u.json()["data"]["deduction_percent"] is None
+
+
 def test_pcn874_readiness(client, acc):
     """דוח מוכנות PCN874 — מסמן הוצאות מתויקות ללא ח.פ/מע"מ."""
     from datetime import date

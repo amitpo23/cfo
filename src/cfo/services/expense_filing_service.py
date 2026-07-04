@@ -77,6 +77,8 @@ class ExpenseFilingService:
             exp.amount = Decimal(str(data["amount"]))
         if data.get("vat_amount") is not None:
             exp.vat_amount = Decimal(str(data["vat_amount"]))
+        if data.get("deduction_percent") is not None:
+            exp.deduction_percent = Decimal(str(data["deduction_percent"]))
         # שמירת total עקבי אם לא סופק מפורשות
         if data.get("total") is not None:
             exp.total = Decimal(str(data["total"]))
@@ -420,4 +422,5 @@ class ExpenseFilingService:
             "sumit_expense_id": e.sumit_expense_id,
             "filing_error": e.filing_error,
             "source": e.source,
+            "deduction_percent": float(e.deduction_percent) if e.deduction_percent is not None else None,
         }

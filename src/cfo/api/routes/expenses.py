@@ -6,7 +6,7 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..dependencies import get_db, get_current_org_id
@@ -58,6 +58,7 @@ class ExpenseUpdateRequest(BaseModel):
     category: Optional[str] = None
     description: Optional[str] = None
     invoice_number: Optional[str] = None
+    deduction_percent: Optional[float] = Field(default=None, ge=0, le=100)
 
 
 @router.patch("/{expense_id}")
@@ -67,7 +68,7 @@ async def update_expense(
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):
-    """עדכון/אישור הוצאה (סכום, פריט, ספק) לפני תיוק."""
+    """עדכון/אישור הוצאה (סכום, פריט, ספק, אחוז ניכוי) לפני תיוק."""
     service = ExpenseFilingService(db, organization_id=org_id)
     try:
         return {"status": "success", "data": service.update_expense(expense_id, request.model_dump(exclude_none=True))}
