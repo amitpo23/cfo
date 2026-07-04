@@ -1471,3 +1471,27 @@ Organization-table-scoped) -- the latter is a genuine architectural/product
 question, not attempted.
 
 Commit: cb112c3.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): Epic 2 dead-code cleanup, effectively closes Epic 2's safe scope
+
+Deleted the orphaned `AdminDashboard.tsx` (777 lines) after confirming
+zero references anywhere in the frontend. It duplicated
+AdminClientsDashboard's scope but had two real bugs that would have
+surfaced the moment anyone wired it up: an "edit organization" modal whose
+submit handler called the CREATE mutation instead of PATCH (editing would
+have silently created a duplicate org), and a delete action calling a
+genuine hard `DELETE /organizations/{id}` (not a soft-deactivate) --
+destructive, likely to hit FK errors on any org with real data. Rather
+than fix a dead component's bugs, removed it entirely so it can never be
+accidentally wired up in its broken state. tsc+build clean, 610 passed,
+qa_gate PASSED, deployed, 16/16 smoke.
+
+**This closes every Epic 2 item from last iteration's research that didn't
+require a product decision**: drill-in redirect (done), org-edit modal
+(done), create-login action (done), dead buggy code removed (done). What
+remains -- reconciling the two parallel "office" concepts
+(SumitCompany-roster-scoped vs. Organization-table-scoped) -- is a genuine
+architectural/product question, not attempted; noted for whoever makes
+that call.
+
+Commit: 8cee228.
