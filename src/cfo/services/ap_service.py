@@ -102,8 +102,6 @@ class BankReconciliationItem:
 class BankReconciliationReport:
     """דוח התאמת בנק"""
     reconciliation_date: str
-    bank_name: str
-    account_number: str
     bank_balance: float
     book_balance: float
     difference: float
@@ -112,6 +110,10 @@ class BankReconciliationReport:
     unmatched_book_items: List[BankReconciliationItem]
     reconciled_percentage: float
     adjustments_needed: List[Dict]
+    # אין מקור אמיתי לשם הבנק/מספר החשבון בקלט הפונקציה (bank_statement מכיל
+    # רק תאריך/תיאור/סכום) — לכן None, לא ניחוש שנראה אמיתי.
+    bank_name: Optional[str] = None
+    account_number: Optional[str] = None
 
 
 @dataclass
@@ -414,8 +416,6 @@ class AccountsPayableService:
         
         return BankReconciliationReport(
             reconciliation_date=date.today().isoformat(),
-            bank_name='בנק לאומי',
-            account_number='12-345-67890',
             bank_balance=bank_balance,
             book_balance=book_balance,
             difference=bank_balance - book_balance,
