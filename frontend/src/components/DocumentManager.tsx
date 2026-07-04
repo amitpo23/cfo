@@ -225,6 +225,12 @@ interface CreatedDocumentResult {
   sumit?: { pdf_url?: string | null } | null;
 }
 
+interface ContactSuggestion {
+  id: number;
+  name: string;
+  email?: string | null;
+}
+
 const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [items, setItems] = useState<DocumentItem[]>([
     { description: '', quantity: 1, price: 0 },
@@ -234,6 +240,21 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
   const [customerEmail, setCustomerEmail] = useState('');
   const [sendToSumit, setSendToSumit] = useState(true);
   const [result, setResult] = useState<CreatedDocumentResult | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Autocomplete against existing contacts -- picking a real match avoids
+  // creating a near-duplicate customer in SUMIT on a slightly different
+  // spelling (the server also resolves-or-creates by exact name, but
+  // showing suggestions helps the user pick the right existing one).
+  const { data: contactSuggestions } = useQuery({
+    queryKey: ['contacts-search', customerName],
+    queryFn: () =>
+      apiService.get<{ data: ContactSuggestion[] }>(
+        `/contacts?query=${encodeURIComponent(customerName)}`
+      ),
+    enabled: customerName.trim().length >= 2 && showSuggestions,
+    select: (res) => res.data,
+  });
 
   const queryClient = useQueryClient();
   const createMutation = useMutation({
@@ -357,7 +378,7 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
                 ))}
               </select>
             </div>
-            <div>
+            <div className="relative">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 לקוח / ספק
               </label>
@@ -365,9 +386,33 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
                 type="text"
                 placeholder="שם הלקוח/ספק"
                 value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
+                onChange={(e) => {
+                  setCustomerName(e.target.value);
+                  setShowSuggestions(true);
+                }}
+                onFocus={() => setShowSuggestions(true)}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                autoComplete="off"
               />
+              {showSuggestions && !!contactSuggestions?.length && (
+                <ul className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                  {contactSuggestions.map((c) => (
+                    <li
+                      key={c.id}
+                      className="px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm"
+                      onMouseDown={() => {
+                        setCustomerName(c.name);
+                        if (c.email) setCustomerEmail(c.email);
+                        setShowSuggestions(false);
+                      }}
+                    >
+                      {c.name}
+                      {c.email && <span className="text-gray-400"> · {c.email}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">

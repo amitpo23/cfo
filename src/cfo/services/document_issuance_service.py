@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..integrations.sumit_models import ChargeRequest, DocumentItem, DocumentPayment, DocumentRequest, SendDocumentRequest
 from ..models import Contact, Invoice, InvoiceStatus
+from .contact_service import resolve_or_create_contact
 from .sync_engine import get_connector_for_org
 
 # SUMIT floors amounts to cents; treat balances at or below this as fully offset.
@@ -103,9 +104,19 @@ class DocumentIssuanceService:
             for item in line_items
         ]
 
+        # Resolve-or-create the Contact by name instead of blindly sending
+        # SUMIT a free-text name as customer_id -- SUMIT's own by-name search
+        # ("SearchMode": "Automatic") can create a new customer record on any
+        # slightly different spelling. This is the fix for the likely root
+        # cause of a previously-tracked ghost-customer artifact.
+        contact = resolve_or_create_contact(
+            self.db, self.organization_id, name=customer_name, email=recipient_email,
+        )
+
         invoice = Invoice(
             organization_id=self.organization_id,
             source="rezef",
+            contact_id=contact.id,
             issue_date=issue,
             due_date=due,
             status=InvoiceStatus.DRAFT,
@@ -139,7 +150,7 @@ class DocumentIssuanceService:
                 raise ValueError("SUMIT אינו מחובר עבור ארגון זה")
 
             request = DocumentRequest(
-                customer_id=customer_id or customer_name,
+                customer_id=contact.external_id or contact.name,
                 document_type=document_type,
                 items=[
                     DocumentItem(
@@ -166,6 +177,11 @@ class DocumentIssuanceService:
                 invoice.invoice_number = response.document_number
                 invoice.allocation_number = response.allocation_number
                 invoice.source = "sumit"
+                # Persist SUMIT's own customer id onto the contact so the
+                # NEXT document for this name reuses it instead of asking
+                # SUMIT to search-or-create by name again.
+                if not contact.external_id and response.customer_id:
+                    contact.external_id = response.customer_id
                 invoice.status = InvoiceStatus.SENT if send_email else InvoiceStatus.DRAFT
                 invoice.raw_data = {
                     **(invoice.raw_data or {}),
