@@ -210,7 +210,7 @@ class SumitConnector(AccountingConnector):
                 return FetchResult(items=contacts, has_more=False)
         except Exception as e:
             logger.error("Failed to fetch customers from SUMIT: %s", e)
-            return FetchResult(items=[], has_more=False)
+            return FetchResult(items=[], has_more=False, error=str(e))
 
     async def fetch_vendors(
         self,
@@ -304,7 +304,7 @@ class SumitConnector(AccountingConnector):
                 return FetchResult(items=invoices, has_more=False)
         except Exception as e:
             logger.error("Failed to fetch invoices from SUMIT: %s", e)
-            return FetchResult(items=[], has_more=False)
+            return FetchResult(items=[], has_more=False, error=str(e))
 
     async def fetch_bills(
         self,
@@ -345,7 +345,7 @@ class SumitConnector(AccountingConnector):
                 return FetchResult(items=bills, has_more=False)
         except Exception as e:
             logger.error("Failed to fetch bills from SUMIT: %s", e)
-            return FetchResult(items=[], has_more=False)
+            return FetchResult(items=[], has_more=False, error=str(e))
 
     async def fetch_payments(
         self,
@@ -406,7 +406,7 @@ class SumitConnector(AccountingConnector):
                 return FetchResult(items=payments, has_more=False)
         except Exception as e:
             logger.error("Failed to fetch payments from SUMIT: %s", e)
-            return FetchResult(items=[], has_more=False)
+            return FetchResult(items=[], has_more=False, error=str(e))
 
     async def fetch_bank_transactions(
         self,
@@ -444,6 +444,11 @@ class SumitConnector(AccountingConnector):
 
                 return FetchResult(items=transactions, has_more=False)
         except Exception as e:
+            # load_billing_transactions() is permanently unsupported by the real
+            # SUMIT API (see its own docstring) -- this fails identically for
+            # every org regardless of credential validity, so it must not be
+            # treated as a credential/health signal (unlike the other fetch_*
+            # methods below, whose failures are genuinely org-specific).
             logger.error("Failed to fetch bank transactions from SUMIT: %s", e)
             return FetchResult(items=[], has_more=False)
 

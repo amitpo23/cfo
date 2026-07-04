@@ -247,6 +247,12 @@ class SyncEngine:
 
         while True:
             result: FetchResult = await fetch_method(cursor=cursor)
+            if result.error:
+                # The connector already logged the underlying exception; raising
+                # here routes it into run_full_sync's existing error aggregation
+                # (errors list / error_summary / SyncStatus.PARTIAL) instead of
+                # silently reporting 0 created/updated/skipped as if it succeeded.
+                raise RuntimeError(result.error)
 
             for item in result.items:
                 action = upsert_method(item)

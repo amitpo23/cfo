@@ -114,6 +114,7 @@ class FetchResult:
     has_more: bool = False
     next_cursor: Optional[str] = None
     total_count: Optional[int] = None
+    error: Optional[str] = None
 
 
 class AccountingConnector(ABC):

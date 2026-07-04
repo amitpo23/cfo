@@ -114,11 +114,28 @@ async def integration_status(
         else:
             missing["open_finance"] = ["organization_open_finance_credentials"]
 
+    # `connections.sumit` reflects configuration, not live health -- a connector
+    # can be "active" (credentials present) while every real API call fails
+    # (wrong CompanyID/APIKey). Surface the latest sync run's real error
+    # alongside it rather than overwriting connections.sumit, since several
+    # dashboards render connections.sumit truthily (checkmark vs. warning) and
+    # would misreport an "error" string as connected.
+    last_sync_errors = {}
+    latest_sumit_run = (
+        db.query(SyncRun)
+        .filter(SyncRun.organization_id == org_id, SyncRun.source == "sumit")
+        .order_by(SyncRun.id.desc())
+        .first()
+    )
+    if latest_sumit_run and latest_sumit_run.error_summary:
+        last_sync_errors["sumit"] = latest_sumit_run.error_summary
+
     return {
         "organization_id": org_id,
         "configured": configured,
         "missing": missing,
         "connections": connections,
+        "last_sync_errors": last_sync_errors,
         "notes": {
             "production_database": (
                 "Persistent database is configured."
