@@ -101,7 +101,7 @@ Transaction):
 | `CashFlowService` (4 endpoints) | לבסס מחדש על `Invoice`/`Bill`/`Payment`/`BankTransaction` |
 | `ForecastingService._monthly_totals` | אותו דבר — היסטוריית הכנסות/הוצאות מה-ledger במקום Transaction |
 | `AdvancedAIService.detect_anomalies` | להזין feed דמוי-transaction מ-`BankTransaction`+`Invoice`/`Bill`/`Expense` ממוזגים |
-| `generate_balance_sheet` | **הכי משמעותי** — צריך לוגיקת מאזן אמיתית מבוססת-ledger (מזומן/לקוחות/ספקים/מלאי מ-Invoice/Bill/Payment/Expense/BankTransaction), לא רק תיקון-שדה |
+| `generate_balance_sheet` | **תיקון חשוב (2026-07-04): הרבה יותר קטן ממה שנראה בהתחלה.** `ledger_service.balance_sheet()` (מאחורי `/api/ledger/balance-sheet`) **כבר קיים, אמיתי, ומאוזן-בבנייה** (Assets = Liabilities + Equity, `trial_balance`-based). "המעבר" כאן הוא לא לוגיקת-מאזן חדשה — הוא החלטת-מוצר: האם `/api/reports/balance-sheet` יהפוך ל-redirect/delegation ל-`ledger_service.balance_sheet()`, או שני ה-endpoints יישארו (ואז רק לתייג את הישן כ-derived/לא-אמין עד שיוחלט)? **לא לכתוב לוגיקת-מאזן מאפס — יהיה שכפול קוד עובד.** |
 | `generate_cash_flow_projection`'s `opening_balance` | לגזור "מצב-מזומן נוכחי" אמיתי מ-`BankTransaction`/`Payment` במקום `Account.balance` |
 
 **כל זה עבודה תוספתית (additive)** — שאילתות חדשות מול טבלאות שכבר
@@ -122,10 +122,11 @@ Transaction):
 
 1. **retire, לא repair** — ההיסטוריה של הקוד עצמו כבר בחרה בכיוון הזה;
    העבודה שנותרה היא להשלים 6 צרכנים, לא לפתוח דיון ארכיטקטוני חדש.
-2. סדר עדיפויות מוצע (מהכי-משפיע להכי-פחות): `generate_balance_sheet`
-   (מקור לפער-מספרים מבלבל שמשתמש אמיתי רואה) → `BudgetService` (יש
-   route חי מרונדר) → `CashFlowService`/`ForecastingService` (יש nav
-   items ייעודיים) → `detect_anomalies` (טאב אחד בדשבורד).
+2. סדר עדיפויות מוצע (מהכי-משפיע להכי-פחות, ומהכי-זול להכי-יקר):
+   `generate_balance_sheet` (הכי זול בפועל — כבר קיים ב-`ledger_service`,
+   רק החלטת redirect) → `BudgetService` (יש route חי מרונדר) →
+   `CashFlowService`/`ForecastingService` (יש nav items ייעודיים) →
+   `detect_anomalies` (טאב אחד בדשבורד).
 3. אחרי שכל 6 מועברים: מחיקת קוד-מת (הרשימה בסעיף 3) — אפס סיכון.
 4. **מחיקת שורות `Transaction`/`Account` הישנות בפרוד** — צעד נפרד,
    הרסני, דורש אישור מפורש. לא לבצע כחלק מ-1-3.
