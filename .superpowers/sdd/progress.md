@@ -1044,3 +1044,18 @@ CONTINUATION PLAN — item 1 (contact resolve-or-create, DONE): the user
   customer names -- a genuine data-quality bug in the sync pipeline, not
   in the document-issuance path just fixed. Logged here for whoever picks
   up the next gap-mapping pass; not investigated further this iteration.
+
+CONTINUATION PLAN — item 2 (deduction_percent write path, DONE):
+  ExpenseUpdateRequest gained deduction_percent: Optional[float] with
+  Pydantic Field(ge=0, le=100) (out-of-range -> standard 422, no manual
+  check needed); ExpenseFilingService.update_expense now converts and
+  saves it (Numeric(5,2) column, same Decimal(str(...)) pattern as
+  amount/vat_amount); _serialize now exposes it (was entirely absent
+  from the API response before -- a caller couldn't even read the
+  current value, let alone set it). Deliberately did NOT build the
+  plan's "apply_deduction_calculator" endpoint (reusing calculators.py's
+  vehicle/home/phone functions) -- those return row-list output for
+  direct UI display, not a clean percentage, and calculator_id -> kwargs
+  mapping is more scope than this fix needed; kept bounded to the write
+  path itself. 3 new tests, 579 passed, qa_gate PASSED, deployed, 16/16
+  smoke.
