@@ -2003,3 +2003,60 @@ returns a clean 400 with the retirement message instead of silently
 writing.
 
 Commit: 85fb09c.
+
+## WAVE 2 STEP 9.5 — first live test against a real ANTHROPIC_API_KEY (2026-07-04)
+
+User added `ANTHROPIC_API_KEY` to Vercel production and confirmed. Verified
+present (`vercel env ls production`), redeployed (env vars only take effect
+on a new deploy), 16/16 smoke green.
+
+**Per advisor guidance on how to test this safely**: a read-only chat
+message exercises the entire untested loop (`messages.create` → real
+model emits `tool_use` → executor runs it → `tool_result` round-trips →
+loop terminates) — that's the actual thing that had only ever been
+mocked. For the write-tool gate, the value is entirely in the *propose*
+step (pending_action created, NOT executed) — `confirm_action` itself has
+zero Claude-API dependency and is already covered by mocks, so executing
+it for real would only manufacture a throwaway SUMIT/payment artifact (the
+same "document 1001" cleanup problem this project already has) for no new
+coverage. Decided: read-only test, then write-propose-without-confirm,
+never call confirm_action for a synthetic test action.
+
+**Result**: the read-only test (`POST /api/ai/chat`, message "מה מצב
+גיול החובות?") returned a raw 500. Root cause (via `vercel logs`, full
+traceback): `anthropic.BadRequestError` — **the key is valid and
+correctly wired** (a real, well-formed request reached
+`api.anthropic.com` and got a structured API-level response), but *"Your
+credit balance is too low to access the Anthropic API."* This is a
+billing/credits gap on the Anthropic account itself, not a code bug — not
+something this agent can act on (billing/payment actions are out of
+scope).
+
+**But the code gap it exposed is real and in-scope**: this specific
+upstream failure mode was uncaught, leaking as an unhandled 500 instead
+of the honest, typed-error pattern already used everywhere else in this
+codebase (`SumitNotConfiguredError`, `AIChatNotConfiguredError`,
+`LegacySyncRetiredError`). Added `AIChatUpstreamError` — catches
+`anthropic.APIError` (the SDK's common base for rate-limit/auth/billing/
+5xx failures, not just this one) around `messages.create`, mapped via a
+new app-level handler to a clean 503. 1 new test
+(`test_anthropic_upstream_error_returns_clean_503_not_500`, monkeypatches
+a real `anthropic.BadRequestError` instance), 627 tests total, qa_gate
+PASSED, deployed, 16/16 smoke. **Live-reverified**: the same read-only
+chat message now returns a clean 503 with the exact billing-error detail
+instead of a raw 500.
+
+Commit: `272a804`.
+
+**9.5 status — be precise about what's proven and what isn't**: the
+read-only loop is confirmed WIRED CORRECTLY (reaches the real API,
+real errors surface cleanly) but has NOT yet been confirmed to WORK
+end-to-end (no successful `tool_use` → `tool_result` → final-answer
+round-trip has happened yet — that requires the Anthropic account to
+actually have credit). The write-propose gate was NOT tested this round
+either (blocked on the same credit issue — the model never got to
+respond). **9.5 is not closed.** Once the user adds credit to the
+Anthropic account (see handoff doc), the exact two tests from the plan
+still need to run: (1) one read-only question, verify a real answer
+comes back; (2) one write-triggering message, verify a pending_action is
+returned and NOT executed (do not call confirm_action).
