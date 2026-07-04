@@ -1096,3 +1096,30 @@ either org, so the new skip-paths have no live data to exercise right now;
 correctness of the skip logic itself is covered by the DB-integration tests.
 
 Commit: d0f6e05.
+
+## CONTINUATION PLAN — item 4 (contact_card / כרטסת, DONE)
+
+`ledger_service.general_ledger()` already gave a running balance per GL
+account (1100/2100/etc.), but there was no per-contact statement -- a way
+to see one customer's or vendor's own invoices/bills + payments chronologically
+with a running amount-owed balance (a "כרטסת" in Israeli bookkeeping terms).
+Added `ledger_service.contact_card(db, org_id, contact_id, start=, end=)`:
+merges Invoice (by contact_id), Bill (by vendor_id), Payment (by contact_id)
+sorted by date, treating invoice/bill as +total (increases balance owed) and
+payment as -amount (reduces it) -- direction-agnostic so the same function
+works for a customer (they owe us) or a vendor (we owe them). New route
+`GET /api/ledger/contact/{contact_id}/card`, 404 (not a leaking 200) for a
+contact belonging to another org.
+
+RED tests first (`tests/test_ledger_service.py`, using the `fresh_org`
+per-test-isolated fixture): 4 service-level (customer running balance,
+vendor running balance, cross-org returns None, ...) + 3 route-level
+(auth-required, 404 cross-org, 200 with correct data). 7 new tests, 591
+passed, qa_gate PASSED. Deployed (`vercel --prod --yes`), 16/16 smoke.
+Live-verified against a real org-1 contact (id 6, a synced "Unknown"-named
+customer from the earlier item-1 side-finding): real invoices/payments came
+back chronologically with a correct running balance (75000 -> 150000 ->
+75000 -> ... ), and requesting the same contact_id under org 2's token
+correctly returned 404.
+
+Commit: 776c63c.
