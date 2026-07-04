@@ -2290,3 +2290,66 @@ tests and adding 1 confirming the old route 404s while the real
 16/16 smoke.
 
 Commit: `8abb410`.
+
+## 2026-07-04 (continued, via fork) — real Israeli expense-deduction calculators
+
+User confirmed continuing the loop in parallel while they handle their own
+blockers separately. Picked up the open P1 roadmap item "מנגנוני ניכוי
+הוצאה" — `Expense.deduction_percent` already existed (NULL-by-default,
+deliberately never fabricated per its own docstring), but nothing had ever
+computed a real value for it.
+
+Built 5 pure calculators in `src/cfo/services/expense_deduction_service.py`,
+each requiring real numeric inputs and raising `ValueError` (never a
+fabricated fallback) when one is missing:
+- **Vehicle** (higher-of rule, תקנות מס הכנסה (ניכוי הוצאות רכב)
+  התשנ"ה-1995): MAX(running_costs_annual − use_value_monthly×12, 45% ×
+  running_costs_annual). Requires real odometer start/end (statutory
+  precondition) and a real שווי שימוש figure — never looked up or invented
+  here, must come from the Tax Authority's own published value.
+- **Mobile phone**: bill − min(115 ILS, 50% of bill) — not the commonly
+  misapplied flat 80%.
+- **Landline**: lower of 80% or (annual amount over 2,700 ILS), capped at
+  the 26,600 ILS annual ceiling.
+- **Home office**: office_sqm / total_home_sqm × 100.
+- **Internet**: same ratio as home office, or an explicit business-use
+  fraction.
+
+Since odometer readings and floor-area are facts about the vehicle/home
+(not any single receipt), added two new org-scoped tables —
+`vehicle_deduction_profiles`, `home_office_profiles` — via
+`src/cfo/services/expense_deduction_profile_service.py` and migration
+`269ee41013f8` (had to pick a fresh UUID-based revision id after the first
+attempt, `a1b2c3d4e5f6`, collided with an existing migration file — alembic
+caught it immediately via a cycle-detection error). New routes under
+`/api/expenses/deduction/*` (`expense_deduction.py`) let a user submit real
+profile data and either just see the computed percent or apply it directly
+to a real `Expense.deduction_percent` via the existing field.
+
+TDD: 19 calculator unit tests (worked examples: running_costs=10,000 +
+use_value_monthly=250 + odometer 10,000→25,000 ⇒ 70% deductible; mobile
+bill=180 ⇒ 90 deductible/50%; landline annual=10,000 ⇒ 7,300
+deductible/73%; home office 12/80 sqm ⇒ 15%) plus explicit missing-input
+refusal tests for every rule, then 12 route/org-isolation integration
+tests (a vehicle profile created for one org is invisible/404s for
+another). 665 tests passing overall (+31), qa_gate PASSED, no schema
+drift after migration, deployed, 16/16 smoke.
+
+Live-verified against production (org 1): created a real vehicle profile
+via `POST /api/expenses/deduction/vehicle-profile` with the worked-example
+numbers, computed via `POST /api/expenses/deduction/vehicle-profile/2026/
+compute` → `70.0` exactly as predicted; home-office profile (12/80 sqm) →
+`15.0`; mobile-phone compute (180) → `{deductible_amount: 90.0,
+deduction_percent: 50.0}`. All three match the unit-test assertions
+exactly. Note: this created one real `vehicle_label="live-verify-test"`
+row and one `home_office_profiles` row in org 1's production database —
+harmless test data (nothing auto-consumes these tables without an
+explicit compute call, and the home-office profile will be silently
+overwritten the moment the org owner enters their real sqm), but flagging
+it since no DELETE route exists yet to remove it cleanly.
+
+Out of scope (per directive, not touched): SUMIT sync/credentials,
+Account/Transaction, ComplianceAuditService (already removed above),
+PCN874/מבנה אחיד, the Payment Ethics Law interest rate.
+
+Commit: `a7d1643`.
