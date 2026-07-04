@@ -883,3 +883,22 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 8: two items per the wakeup
   documented official reference URL, not a new/guessed one). Pure
   frontend text change -- 566 passed (full suite unaffected), tsc+build
   clean, deployed, 16/16 smoke.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 9: investigated the PCN874 VAT
+  export gap (roadmap's own P1 item). Confirmed tax_service.
+  _format_shaam_file is a made-up pipe-delimited format, not the real
+  Israeli Tax Authority fixed-width standard. Researched via WebSearch +
+  WebFetch: real spec exists (S/T sale/purchase markers, 9-digit
+  reference-number field, whole-shekel rounding, per multiple third-party
+  accounting-vendor sources), but the exact byte-position field layout
+  lives only in PDFs this environment can't reliably extract (WebFetch
+  returned raw PDF binary/undecodable; the Read tool's PDF-to-image path
+  needs poppler, not installed). Deliberately did NOT guess at exact
+  field widths and ship a fixed-width-shaped-but-wrong file -- for a real
+  government tax submission, a plausible-looking-but-wrong format is
+  worse than the current obviously-not-official placeholder (nobody
+  would mistake pipe-delimited text for an official file and actually
+  submit it; a subtly-wrong fixed-width file might be). Documented the
+  research + what's needed to finish properly (poppler + careful
+  transcription, or a more machine-readable spec source) in
+  PRODUCT_AUDIT_AND_ROADMAP.md. No code changed -- nothing to deploy.
