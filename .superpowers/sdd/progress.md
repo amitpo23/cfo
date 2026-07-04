@@ -1281,3 +1281,46 @@ No backend deploy step needed beyond the standard frontend bundle;
 16/16 smoke still green.
 
 Commit: 23c8552.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): systematic mockup scan + Upay UI
+
+Re-checked ANTHROPIC_API_KEY: still absent. Per the user's suggestion after
+the /settings finding, systematically scanned all 40 routed frontend
+components for the same pattern (zero real backend calls) rather than
+assuming it was a one-off: grepped every component for
+`api.*\.(get|post|patch|put|delete)(<...>)?\(|useQuery|useMutation|fetch\(`.
+First pass had a regex bug (missed `api.get<Type>(...)` generic calls,
+producing false positives); corrected and re-ran. Result: only one
+component has zero real API calls -- `SumitCoverageDashboard` -- and it's
+an intentional, already-documented static engineering-coverage reference
+page (mirrors SUMIT_MODULE_COVERAGE.md, not business data), not a mockup.
+No second instance of the /settings problem exists.
+
+Built the natural follow-up to the Upay backend work from two iterations
+ago: added a third "Upay Wallet" card to CFOSyncDashboard (/sync), matching
+the exact SUMIT/Open Finance credentials card pattern already there (status
+badge from the same integration-status-style query, email/password inputs,
+mutation with success/error UI). Only renders once SUMIT itself is
+connected (Upay setup requires it). No frontend test infra exists in this
+repo (no test script/files in package.json) -- verified via tsc+build plus
+direct browser interaction instead, matching how the last iteration's UI
+change was validated.
+
+Browser-verified thoroughly: inserted a throwaway
+`IntegrationConnection(source=sumit, status=active)` row directly into the
+local dev SQLite DB (safe, local-only, removed immediately after) to
+exercise the conditional-render branch that's otherwise unreachable in dev
+(no fake credentials were entered anywhere -- this is a raw DB row, not a
+form submission) -- confirmed the card appears once SUMIT is connected and
+stays hidden when it isn't. Filled the form with placeholder values and
+submitted: confirmed the error path renders correctly too (this dev org
+has no real SUMIT key, so the backend correctly 400s and the UI shows the
+Hebrew failure message, not a crash). Deployed to prod
+(`vercel --prod --yes`), 16/16 smoke, and re-verified live against real
+production (logged in as the actual user, org 1, SUMIT genuinely
+"Configured") -- the Upay card renders correctly there too, honestly
+showing "Not configured" since Upay genuinely isn't linked yet. Did not
+submit real Upay credentials anywhere -- that remains the user's own
+action to take, now that there's finally a UI for it.
+
+Commit: 6be2647.
