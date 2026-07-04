@@ -1123,3 +1123,49 @@ back chronologically with a correct running balance (75000 -> 150000 ->
 correctly returned 404.
 
 Commit: 776c63c.
+
+## CONTINUATION PLAN — item 5 (chatbot tool completion, DONE — mocked verification only)
+
+`ai_chat_tools.py` had 6 tools wired up; the plan identified 7 more
+functions already built and tested at the service layer but never exposed
+to the chatbot. Added thin async wrappers (no new business logic) for:
+`search_contacts` (contact_service.search_contacts, item 1's own service),
+`get_ledger_card` (ledger_service.contact_card, item 4 just built),
+`get_vat_position` (financial_synthesis.compute_vat_position),
+`get_cashflow` (dashboard_service.get_cashflow_projection),
+`list_invoices` (document_issuance_service.list_documents),
+`get_engine_status` (engine_service.status) -- all read, auto-executed --
+and `create_payment_link` (document_issuance_service.create_payment_link)
+as a **write** tool, since it makes a real SUMIT-side call; it goes through
+the existing confirmation gate exactly like issue_document/log_collection_attempt.
+
+RED tests first: org-isolation/correctness test per new tool in
+`tests/test_ai_chat_tools.py` (+7), updated the write-tools lock-in test to
+include create_payment_link (a deliberate assertion change, not silently
+loosened), and extended `tests/test_ai_chat_service.py`'s confirmation-gate
+tests with 2 more covering create_payment_link specifically (never-auto-
+executed on the model's own tool call; confirm_action executes it exactly
+once). 9 new tests, 591 -> 600 passed, qa_gate PASSED. Deployed
+(`vercel --prod --yes`), 16/16 smoke.
+
+Re-checked `vercel env ls production | grep -i anthropic`: still absent.
+Live end-to-end verification of the actual tool-use loop (model calling
+these new tools mid-conversation) remains blocked on ANTHROPIC_API_KEY --
+this is the same standing blocker tracked since Wave 2, not new. What IS
+live-verifiable without the key -- the underlying service functions
+themselves -- were already exercised live via their own existing routes in
+this session (get_engine_status via /api/engine/status, get_vat_position
+via /api/daily-reports/vat, get_ledger_card via item 4's live check on
+contact 6, search_contacts via item 1's live check). Only the new
+chat-tool-registration glue itself is mock-only verified for now.
+
+Commit: 8bdd064.
+
+---
+
+**All 5 continuation-plan items (docs/superpowers/plans/2026-07-04-continuation-plan.md)
+are now complete.** No item required deferral to a side file for the Plan
+agent -- the one open design question going in (item 3's bank-code
+allowlist, given the 2-to-3-digit transition uncertainty) was resolved via
+a dedicated research fork rather than deferred, per the user's instruction
+to "complete whatever is clear, defer only what's genuinely stuck."
