@@ -542,6 +542,7 @@ class SyncEngine:
             currency=item.currency,
             raw_data=item.raw_data,
             payload_hash=payload_hash,
+            is_provisional=(self.source == "open_finance"),
         )
         self.db.add(bank_tx)
         return "created"

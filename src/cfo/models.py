@@ -765,6 +765,10 @@ class BankTransaction(Base):
     matched_entity_type = Column(String(50), nullable=True)  # invoice, bill, payment
     matched_entity_id = Column(Integer, nullable=True)
     is_reconciled = Column(Boolean, default=False)
+    # Open Finance data is provisional/unverified until the consent journey
+    # (OPEN_FINANCE_USER_ID + real bank consent) is fully live — see the
+    # principle documented in PRODUCT_AUDIT_AND_ROADMAP.md's preamble.
+    is_provisional = Column(Boolean, default=False)
     reconciliation_dispatch_status = Column(String(30), default="not_sent")
     reconciliation_dispatched_at = Column(DateTime, nullable=True)
     external_reconciliation_id = Column(String(255), nullable=True)
