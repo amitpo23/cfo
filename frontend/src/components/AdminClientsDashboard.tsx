@@ -4,9 +4,15 @@
  * office-wide totals. Backed by /api/office/admin/clients.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, Loader2, AlertCircle, Search, RefreshCw, ExternalLink, Clock3, ListChecks, Landmark, WalletCards, Pencil, X } from 'lucide-react';
+import { ShieldCheck, Loader2, AlertCircle, Search, RefreshCw, ExternalLink, Clock3, ListChecks, Landmark, WalletCards, Pencil, X, UserPlus, Copy, Check } from 'lucide-react';
 import api from '../services/api';
 import { ACTIVE_ORG_KEY } from './OrgSwitcher';
+
+function generatePassword(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(36).padStart(2, '0')).join('').slice(0, 16);
+}
 
 interface AdminClient {
   id: number;
@@ -105,6 +111,15 @@ export default function AdminClientsDashboard() {
   const [editIsActive, setEditIsActive] = useState(true);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+
+  const [creatingLoginFor, setCreatingLoginFor] = useState<AdminClient | null>(null);
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserFullName, setNewUserFullName] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [newUserSaving, setNewUserSaving] = useState(false);
+  const [newUserError, setNewUserError] = useState<string | null>(null);
+  const [createdUser, setCreatedUser] = useState<{ email: string; password: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -253,6 +268,48 @@ export default function AdminClientsDashboard() {
     } finally {
       setEditSaving(false);
     }
+  };
+
+  const openCreateLogin = (c: AdminClient) => {
+    setCreatingLoginFor(c);
+    setNewUserEmail('');
+    setNewUserFullName('');
+    setNewUserPassword(generatePassword());
+    setNewUserError(null);
+    setCreatedUser(null);
+    setCopied(false);
+  };
+
+  const closeCreateLogin = () => {
+    setCreatingLoginFor(null);
+    setNewUserError(null);
+    setCreatedUser(null);
+  };
+
+  const saveCreateLogin = async () => {
+    if (!creatingLoginFor?.organization_id) return;
+    setNewUserSaving(true);
+    setNewUserError(null);
+    try {
+      await api.post('/admin/users', {
+        email: newUserEmail,
+        password: newUserPassword,
+        full_name: newUserFullName,
+        organization_id: creatingLoginFor.organization_id,
+        role: 'admin',
+      });
+      setCreatedUser({ email: newUserEmail, password: newUserPassword });
+    } catch (e: any) {
+      setNewUserError(e?.response?.data?.detail || 'יצירת המשתמש נכשלה');
+    } finally {
+      setNewUserSaving(false);
+    }
+  };
+
+  const copyCredentials = () => {
+    if (!createdUser) return;
+    navigator.clipboard.writeText(`${createdUser.email} / ${createdUser.password}`);
+    setCopied(true);
   };
 
   if (loading) {
@@ -420,6 +477,12 @@ export default function AdminClientsDashboard() {
                     >
                       <Pencil className="w-3 h-3" /> ערוך
                     </button>
+                    <button
+                      onClick={() => openCreateLogin(c)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs hover:bg-slate-100"
+                    >
+                      <UserPlus className="w-3 h-3" /> צור משתמש
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -482,6 +545,99 @@ export default function AdminClientsDashboard() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {creatingLoginFor && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-md w-full p-6" dir="rtl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold">יצירת משתמש ל-{creatingLoginFor.name}</h2>
+              <button onClick={closeCreateLogin} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {createdUser ? (
+              <div className="space-y-3">
+                <div className="p-3 rounded-lg bg-emerald-50 text-emerald-800 text-sm">
+                  המשתמש נוצר בהצלחה. העתיקו את הפרטים עכשיו — הסיסמה לא תוצג שוב.
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm font-mono break-all">
+                  <div>{createdUser.email}</div>
+                  <div>{createdUser.password}</div>
+                </div>
+                <button
+                  onClick={copyCredentials}
+                  className="w-full flex items-center justify-center gap-2 border border-slate-200 rounded-lg px-4 py-2 text-sm hover:bg-slate-50"
+                >
+                  {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                  {copied ? 'הועתק' : 'העתק פרטי התחברות'}
+                </button>
+                <button
+                  onClick={closeCreateLogin}
+                  className="w-full bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm hover:bg-indigo-700"
+                >
+                  סגור
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-600 mb-1">שם מלא</label>
+                  <input
+                    type="text"
+                    value={newUserFullName}
+                    onChange={(e) => setNewUserFullName(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-600 mb-1">אימייל</label>
+                  <input
+                    type="email"
+                    value={newUserEmail}
+                    onChange={(e) => setNewUserEmail(e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-600 mb-1">סיסמה זמנית (נוצרה אוטומטית)</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newUserPassword}
+                      onChange={(e) => setNewUserPassword(e.target.value)}
+                      className="flex-1 border rounded-lg px-3 py-2 text-sm font-mono"
+                    />
+                    <button
+                      onClick={() => setNewUserPassword(generatePassword())}
+                      className="border border-slate-200 rounded-lg px-3 py-2 text-sm hover:bg-slate-50"
+                      title="ייצר סיסמה חדשה"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                {newUserError && <div className="p-2 rounded-lg bg-red-50 text-red-700 text-sm">{newUserError}</div>}
+                <div className="flex gap-2 pt-2">
+                  <button
+                    onClick={saveCreateLogin}
+                    disabled={!newUserEmail.trim() || !newUserFullName.trim() || newUserPassword.length < 8 || newUserSaving}
+                    className="flex-1 bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {newUserSaving ? 'יוצר...' : 'צור משתמש'}
+                  </button>
+                  <button
+                    onClick={closeCreateLogin}
+                    className="flex-1 border border-slate-200 rounded-lg px-4 py-2 text-sm hover:bg-slate-50"
+                  >
+                    ביטול
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
