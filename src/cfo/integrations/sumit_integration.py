@@ -2285,7 +2285,7 @@ class SumitIntegration(BaseIntegration):
         merchant terminal (requires bank account details), it does not open
         a payment session for an amount.
         """
-        raise Exception(
+        raise ValueError(
             "SUMIT API does not expose opening a Upay payment session for an "
             "amount; /billing/generalbilling/openupayterminal/ onboards a new "
             "Upay merchant terminal (requires BankCode/BranchCode/AccountNumber). "

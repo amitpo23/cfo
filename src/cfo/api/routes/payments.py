@@ -2,7 +2,9 @@
 Payments API routes
 Handles payments, recurring payments, credit card transactions, and billing
 """
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
@@ -15,7 +17,7 @@ from ...integrations.sumit_models import (
     BillingTransactionRequest, BillingTransaction,
     TokenizeCardRequest, TokenResponse
 )
-from ..dependencies import get_current_user, get_sumit_integration
+from ..dependencies import get_current_org_id, get_current_user, get_db, get_sumit_integration
 
 router = APIRouter()
 
@@ -268,4 +270,62 @@ async def open_upay_terminal(
 ):
     """Open Upay terminal for payment"""
     async with sumit:
-        return await sumit.open_upay_terminal(amount, description)
+        try:
+            return await sumit.open_upay_terminal(amount, description)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+
+class UpayCredentialsRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/upay/setup")
+async def setup_upay(
+    request: UpayCredentialsRequest,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+    sumit: SumitIntegration = Depends(get_sumit_integration),
+):
+    """קישור חשבון Upay קיים לחברת ה-SUMIT של הארגון.
+
+    הסיסמה מועברת ל-SUMIT בלבד ולא נשמרת אצלנו — SUMIT שומר את הקישור
+    בעצמו; אנו שומרים רק דגל 'מחובר' (IntegrationConnection, source=upay).
+    """
+    from ...models import IntegrationConnection
+
+    async with sumit:
+        try:
+            await sumit.setup_upay_credentials({
+                "EmailAddress": request.email, "Password": request.password,
+            })
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    conn = db.query(IntegrationConnection).filter(
+        IntegrationConnection.organization_id == org_id,
+        IntegrationConnection.source == "upay",
+    ).first()
+    if conn:
+        conn.status = "active"
+    else:
+        db.add(IntegrationConnection(organization_id=org_id, source="upay", status="active"))
+    db.commit()
+    return {"status": "success", "connected": True}
+
+
+@router.get("/upay/status")
+async def upay_status(
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """האם חשבון Upay מקושר לארגון זה."""
+    from ...models import IntegrationConnection
+
+    conn = db.query(IntegrationConnection).filter(
+        IntegrationConnection.organization_id == org_id,
+        IntegrationConnection.source == "upay",
+        IntegrationConnection.status == "active",
+    ).first()
+    return {"connected": conn is not None}
