@@ -73,6 +73,25 @@ def test_executive_summary_real_snapshot(client, seeded_books):
     assert snap["payables"] == 15000
 
 
+def test_executive_summary_has_no_fabricated_comparisons(client, seeded_books):
+    """comparison_to_budget/comparison_to_previous used to hardcode
+    budget=500000/400000 and revenue/expenses/profit_change=8.5/5.2/12.3
+    on every single call, regardless of any real budget or prior-period
+    data. Both are honest-null now, not a "plausible" number computed over
+    the frozen Account/Transaction pipeline (the same data source behind
+    the documented P0 finding) -- converting an obviously-fake number into
+    a plausible-but-still-unreliable one would be worse, not better."""
+    r = client.get("/api/financial/kpis/executive-summary", headers=seeded_books["headers"])
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+
+    assert data["comparison_to_budget"]["available"] is False
+    assert data["comparison_to_previous"]["available"] is False
+    # The old fabricated constants must not appear anywhere in the response.
+    assert "500000" not in str(data["comparison_to_budget"])
+    assert data["comparison_to_previous"]["revenue_change"] != 8.5
+
+
 def test_ai_risks_no_crash_real(client, seeded_books):
     r = client.get("/api/financial/ai/risks", headers=seeded_books["headers"])
     assert r.status_code == 200, r.text
