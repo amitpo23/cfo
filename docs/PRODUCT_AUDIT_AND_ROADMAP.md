@@ -88,7 +88,7 @@
 ## P0 — חוסמי production
 1. ~~**`AgreementCashFlow` ללא persistence**~~ — **בוטל אחרי אימות 2026-07-04**: `CashflowAgreement`/`CashflowEntry` (`models.py:968,991`) הן טבלאות DB אמיתיות; `agreement_cashflow_service.py` מחזיק dataclasses בזיכרון כ-working-state אבל כותב חזרה ל-DB אחרי כל מוטציה (ר' `_persist()`/הערת קוד מפורשת בשורה 202-225). התאמה עם הגריד למעלה (יכולת 4) — הרשומה כאן הייתה stale.
 2. **Open Finance לא חי** — `OPEN_FINANCE_USER_ID` חסר ב-prod; 16 routes מחזירים 400. חוסם את כל זרימת הבנק החיה. (env + UI consent, יכולת 8)
-3. **אימות יצירת-תנועה ב-SUMIT** — `SumitConnector` כרגע מנרמל וסופר בלבד; אין verification של write-backs (יצירת חשבונית/קבלה חזרה ל-SUMIT). (יכולת מנוע-סנכרון)
+3. ~~**אימות יצירת-תנועה ב-SUMIT**~~ — **בוטל אחרי אימות+טסט 2026-07-04**: הפער היה אמיתי מול `SumitConnector` (שאכן רק מנרמל/סופר, לא כותב), אבל נתיב-הכתיבה האמיתי הוא `DocumentIssuanceService.create_document()` (לא היה קיים/הושלם בזמן האודיט המקורי) — הוא כן שולח בקשת-יצירה אמיתית ל-SUMIT ותופס `document_id`/`document_number` אמיתיים מהתשובה לפני commit. **נבדק בפועל, לא רק נקרא**: כתבתי טסט (`test_create_document_sumit_failure_leaves_no_false_success_invoice`) שמדמה כשל-API אמיתי מ-SUMIT ומוודא ששום שורת-Invoice לא נשארת מקומית — עבר בהרצה ראשונה, כי `db.commit()` היחיד בשירות מגיע רק **אחרי** קריאת ה-SUMIT המוצלחת, ו-`get_db()` לא מבצע commit משלו, כך ש-SQLAlchemy מבטל (rollback) את הרשומה שנרשמה-ב-flush אם הסשן נסגר בלי commit. מנגנון אמיתי, לא הנחה. (יכולת מנוע-סנכרון)
 4. **חוסמי env/deploy** — `DATABASE_URL` (Supabase), Google OAuth, סודות נפרדים. (ראה `PRODUCTION_READINESS.md`)
 
 ## P1 — נכונות וחיווט (ה-backend אמיתי, ה-UI/נתון לא משקף אותו)

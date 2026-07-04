@@ -1,7 +1,10 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from cfo.database import SessionLocal
+from cfo.integrations.sumit_integration import SumitAPIError
 from cfo.integrations.sumit_models import DocumentResponse
 from cfo.models import Contact, ContactType, Invoice
 from cfo.services import document_issuance_service
@@ -33,6 +36,56 @@ def test_financial_document_create_persists_to_db(client, fresh_org):
         assert invoice is not None
         assert invoice.raw_data["document_type"] == "proforma"
         assert float(invoice.total) == 236
+    finally:
+        db.close()
+
+
+def test_create_document_sumit_failure_leaves_no_false_success_invoice(client, monkeypatch, fresh_org):
+    """P0 concern (docs/PRODUCT_AUDIT_AND_ROADMAP.md): does a genuine SUMIT
+    write-back failure ever leave a local Invoice row that looks like it
+    succeeded? The route's DB session (get_db) never calls db.commit()
+    itself -- only DocumentIssuanceService.create_document()'s own final
+    self.db.commit() does, and that line is never reached if the SUMIT
+    call raises. This test proves the flushed-but-uncommitted row is
+    rolled back on session close rather than silently persisting."""
+    org = fresh_org()
+
+    class FailingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def create_document(self, request):
+            raise SumitAPIError("SUMIT rejected the document: invalid customer")
+
+    class FakeConnector:
+        async def _get_client(self):
+            return FailingClient()
+
+    monkeypatch.setattr(
+        document_issuance_service, "get_connector_for_org",
+        lambda _db, _org, preferred_source=None: (FakeConnector(), 1, "sumit"),
+    )
+
+    resp = client.post("/api/financial/documents", headers=org["headers"], json={
+        "document_type": "invoice",
+        "customer_id": "לקוח שלא-קיים",
+        "customer_name": "לקוח שלא-קיים",
+        "send_to_sumit": True,
+        "items": [{"description": "שירות", "quantity": 1, "unit_price": 100, "vat_rate": 18}],
+    })
+    assert resp.status_code == 502, resp.text
+
+    db = SessionLocal()
+    try:
+        leaked = db.query(Invoice).filter(
+            Invoice.organization_id == org["org_id"],
+        ).all()
+        assert leaked == [], (
+            "a SUMIT write-back failure must never leave a local invoice row behind"
+        )
     finally:
         db.close()
 
