@@ -111,7 +111,7 @@
 | **workflow גבייה מתמשך** — לשמר `collection_status` כ-state, לעקוב אחר ניסיונות (תאריך/אמצעי/promise-to-pay), לחבר ל-alert_engine ו-DSO | AR | P1 | M |
 | **Open Finance provisional staging** — `is_provisional` ב-`BankTransaction`; OF→provisional; סינון ב-reconciliation; תווית UI | בנק | P1 | M |
 | **מנגנוני ניכוי הוצאה** — רכב (ק"מ), בית (% שכ"ד), טלפון/אינטרנט (%) לפי פקודת מס הכנסה | הוצאות | P1 | M |
-| **ייצוא מע"מ PCN874 (מבנה אחיד)** — fixed-width רשמי במקום pipe-delimited; דגל zero-rated/Eilat | מע"מ | P1 | M |
+| **ייצוא מע"מ PCN874 (מבנה אחיד)** — fixed-width רשמי במקום pipe-delimited; דגל zero-rated/Eilat. **נחקר 2026-07-04, לא מומש**: `tax_service._format_shaam_file` הנוכחי הוא pipe-delimited מומצא (`H|...`, `D|...`, `T|...`) — לא ליד הפורמט הרשמי. אישרתי דרך חיפוש שיש spec רשמי אמיתי (רשומות S/T למכירות/תשומות, 9 ספרות למספר אסמכתא, עיגול לשקלים שלמים) — אך המפרט המדויק (מיקומי-בית לכל שדה) נמצא רק בקבצי PDF (rivhit.co.il, h-erp.co.il) שלא ניתנים לחילוץ מדויק בכלים הזמינים (PDF image-render דורש poppler שלא מותקן; טקסט חלקי בלבד מהעמודים ה-HTML). **החלטה מכוונת: לא מימשתי ניחוש של מבנה fixed-width מדויק** — קובץ מס אמיתי עם היסט-בתים שגוי גרוע יותר מפורמט שאף אחד לא יטעה בו כרשמי. דורש: התקנת poppler + תעתוק זהיר עמוד-אחר-עמוד, או מקור מכני-קריא יותר של המפרט, לפני מימוש. | מע"מ | P1 | M |
 | **ריבית חוק מוסר תשלומים** — Pruta = Prime+2%, צבירה על חשבוניות באיחור | AR | P2 | M |
 | **מכתבי התראה עבריים + תביעות קטנות** — מעבר לתבניות email/SMS | AR | P2 | M |
 | **טופס 856 + ishur nikui** — `_get_supplier_withholding` מחזיר ריק כיום | מיסוי | P2 | M |
