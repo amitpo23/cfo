@@ -1672,3 +1672,23 @@ across the whole pipeline, meaningfully bigger than this bounded fix.
 Left as the clear next step for whoever continues this.
 
 Commit: 98e314c.
+
+## Follow-up note: is_provisional UI-surfacing scope, more precisely defined
+
+Checked exactly how big the "surface is_provisional in the reconciliation
+UI" follow-up (noted in the entry above) really is, before attempting it.
+`reconcile()`'s `unmatched_txns` is currently a bare list of transaction
+IDs (`list[int]`), consumed by: `financial_synthesis.py:112` (iterates
+assuming plain IDs), `tests/test_bank_reconciliation.py` (asserts exact
+`== [3]`/`== [1]` list-of-int equality), and
+`BankInsightsDashboard.tsx:30` (typed `number[]`). Changing this field's
+*shape* to `list[dict]` (to carry `is_provisional` per transaction) would
+break all three -- a real breaking change, not additive.
+
+The non-breaking path: add a NEW field (e.g. `unmatched_txn_details:
+list[dict]`) alongside the existing `unmatched_txns: list[int]`, populate
+it from `BankTxnLite.is_provisional` (needs adding to that dataclass too),
+thread it through `reconcile_organization()`, the `/reconcile` route
+response, and a frontend badge. Confirmed this is a real multi-file task
+(4+ files), not a quick addition -- correctly left for a dedicated pass
+rather than rushed under today's time pressure.
