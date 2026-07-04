@@ -119,6 +119,84 @@ def test_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
         db.close()
 
 
+def test_create_payment_link_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        inv = _seed_overdue_invoice(db, org_id, total="900")
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[
+                    _text_block("אצור קישור תשלום."),
+                    _tool_use_block("t1", "create_payment_link", {"invoice_id": inv.id}),
+                ],
+            ),
+        ])
+
+        service = AIChatService(db, org_id, user_id=1)
+        result = asyncio.run(service.send_message("s1", "תיצור קישור תשלום לחשבונית"))
+
+        assert result["pending_action"]["tool"] == "create_payment_link"
+        assert result["pending_action"]["input"]["invoice_id"] == inv.id
+
+        msg = db.query(ChatMessage).filter(ChatMessage.id == result["message_id"]).first()
+        assert msg.pending_action is not None
+        assert msg.executed is False
+    finally:
+        db.close()
+
+
+def test_confirm_action_executes_create_payment_link_exactly_once(monkeypatch, fresh_org):
+    from cfo.integrations.sumit_models import PaymentLinkResponse
+    from cfo.services import document_issuance_service
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        inv = _seed_overdue_invoice(db, org_id, total="900")
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "create_payment_link", {"invoice_id": inv.id})],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        first = asyncio.run(service.send_message("s1", "צור קישור תשלום"))
+        pending_id = first["message_id"]
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_a):
+                return False
+
+            async def create_payment_link(self, charge):
+                return PaymentLinkResponse(payment_url="https://pay.sumit.co.il/x")
+
+        class FakeConnector:
+            async def _get_client(self):
+                return FakeClient()
+
+        monkeypatch.setattr(
+            document_issuance_service, "get_connector_for_org",
+            lambda _db, _org, preferred_source=None: (FakeConnector(), 1, "sumit"),
+        )
+
+        confirmed = asyncio.run(service.confirm_action(pending_id))
+        assert confirmed["result"]["payment_url"] == "https://pay.sumit.co.il/x"
+
+        try:
+            asyncio.run(service.confirm_action(pending_id))
+            raised = None
+        except ChatConfirmationError as exc:
+            raised = exc
+        assert raised is not None
+    finally:
+        db.close()
+
+
 def test_write_tool_still_not_executed_on_later_unconfirmed_turn(monkeypatch, fresh_org):
     """The discriminating test: a write tool proposed on turn 1 must still
     not execute after an unrelated turn 2 with no confirmation."""

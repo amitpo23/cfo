@@ -75,6 +75,55 @@ async def _log_collection_attempt(
     return svc.case_to_dict(case)
 
 
+async def _search_contacts(db, org_id: int, *, query: str, contact_type: str | None = None, **_kwargs) -> dict:
+    from .contact_service import search_contacts
+    from ..models import ContactType
+    contacts = search_contacts(
+        db, org_id, query, contact_type=ContactType(contact_type) if contact_type else None,
+    )
+    return {"contacts": [
+        {
+            "id": c.id, "name": c.name,
+            "contact_type": getattr(c.contact_type, "value", c.contact_type),
+            "email": c.email, "phone": c.phone, "external_id": c.external_id,
+        }
+        for c in contacts
+    ]}
+
+
+async def _get_ledger_card(db, org_id: int, *, contact_id: int, **_kwargs) -> dict:
+    from .ledger_service import contact_card
+    card = contact_card(db, org_id, contact_id)
+    return card if card is not None else {"error": "איש קשר לא נמצא"}
+
+
+async def _get_vat_position(db, org_id: int, **_kwargs) -> dict:
+    from .financial_synthesis import compute_vat_position
+    return compute_vat_position(db, org_id)
+
+
+async def _get_cashflow(db, org_id: int, weeks: int = 12, **_kwargs) -> dict:
+    from .dashboard_service import DashboardService
+    return {"projection": DashboardService(db, org_id).get_cashflow_projection(weeks=weeks)}
+
+
+async def _list_invoices(db, org_id: int, status: str | None = None, limit: int = 20, **_kwargs) -> dict:
+    from .document_issuance_service import DocumentIssuanceService
+    service = DocumentIssuanceService(db, org_id)
+    return {"documents": service.list_documents(status=status, limit=limit)}
+
+
+async def _get_engine_status(db, org_id: int, **_kwargs) -> dict:
+    from . import engine_service
+    return engine_service.status(db, org_id)
+
+
+async def _create_payment_link(db, org_id: int, *, invoice_id: int, **_kwargs) -> dict:
+    from .document_issuance_service import DocumentIssuanceService
+    service = DocumentIssuanceService(db, org_id)
+    return await service.create_payment_link(invoice_id)
+
+
 TOOLS: dict[str, ChatTool] = {
     "get_ar_aging": ChatTool(
         name="get_ar_aging",
@@ -166,6 +215,82 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="write",
         fn=_log_collection_attempt,
+    ),
+    "search_contacts": ChatTool(
+        name="search_contacts",
+        description="חיפוש אנשי קשר (לקוחות/ספקים) לפי חלק משם.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "חלק משם איש הקשר"},
+                "contact_type": {"type": "string", "enum": ["customer", "vendor"]},
+            },
+            "required": ["query"],
+        },
+        category="read",
+        fn=_search_contacts,
+    ),
+    "get_ledger_card": ChatTool(
+        name="get_ledger_card",
+        description="כרטסת של לקוח/ספק ספציפי — חשבוניות/חשבונות ותשלומים כרונולוגית עם יתרה רצה.",
+        input_schema={
+            "type": "object",
+            "properties": {"contact_id": {"type": "integer", "description": "מזהה איש הקשר"}},
+            "required": ["contact_id"],
+        },
+        category="read",
+        fn=_get_ledger_card,
+    ),
+    "get_vat_position": ChatTool(
+        name="get_vat_position",
+        description="מצב מע\"מ נוכחי (עסקאות/תשומות/נטו לתשלום או להחזר), מבוסס על המסמכים בפועל.",
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_vat_position,
+    ),
+    "get_cashflow": ChatTool(
+        name="get_cashflow",
+        description="תחזית תזרים מזומנים שבועית קדימה.",
+        input_schema={
+            "type": "object",
+            "properties": {"weeks": {"type": "integer", "description": "מספר שבועות", "default": 12}},
+        },
+        category="read",
+        fn=_get_cashflow,
+    ),
+    "list_invoices": ChatTool(
+        name="list_invoices",
+        description="רשימת מסמכים שהופקו (חשבוניות וכו'), אופציונלית מסוננת לפי סטטוס.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "limit": {"type": "integer", "default": 20},
+            },
+        },
+        category="read",
+        fn=_list_invoices,
+    ),
+    "get_engine_status": ChatTool(
+        name="get_engine_status",
+        description="סטטוס מנוע ההנהלת-חשבונות הנגזר (כמות תנועות, האם מאוזן).",
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_engine_status,
+    ),
+    "create_payment_link": ChatTool(
+        name="create_payment_link",
+        description=(
+            "יצירת קישור תשלום מאובטח (עמוד תשלום מאוחסן ב-SUMIT) עבור היתרה הפתוחה "
+            "בחשבונית. פעולת כתיבה אמיתית מול SUMIT — דורשת אישור מפורש של המשתמש לפני ביצוע."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"invoice_id": {"type": "integer", "description": "מזהה החשבונית"}},
+            "required": ["invoice_id"],
+        },
+        category="write",
+        fn=_create_payment_link,
     ),
 }
 
