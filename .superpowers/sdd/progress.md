@@ -1885,3 +1885,99 @@ Findings:
 deployed, 16/16 smoke.
 
 Commit: 3c9d799.
+
+## EPIC 2 — office/admin-clients cross-link (2026-07-04)
+
+Per explicit user instruction, investigated the "two parallel office
+concepts" item from Epic 2 (create-login and the AdminDashboard.tsx
+deletion were already done earlier this session). Confirmed live: `/office`
+(`OfficeDashboard.tsx`, backed by `SumitCompany` rows) and `/admin-clients`
+(`AdminClientsDashboard.tsx`, backed by `GET /api/office/admin/clients`
+which itself joins `SumitCompany` + `Organization`) show the exact same
+5 real production clients, via two different data models, with zero
+cross-reference between the two full-screen dashboards.
+
+They are NOT true duplicates though: `SumitCompany` drives the live
+hourly-cron sync automation (`office.py`'s `sync_all_clients`,
+`account_scope: "sumit_office_..."`) and the "add new client file" flow,
+while `Organization` (via `AdminClientsDashboard.tsx`'s edit-profile/
+create-login actions added earlier this session) drives auth/profile.
+Merging the underlying models would be a real architecture decision, not
+a quick fix — did not attempt it. Instead added a small banner + link in
+each dashboard pointing to the other, so a user lands on either screen
+and immediately knows where to go for the other half of the workflow.
+Frontend tsc + build clean, qa_gate PASSED, deployed, live-verified via
+browser on both `/office` and `/admin-clients` (banners render correctly,
+link to the right route) — pure navigation, no data mutation.
+
+Commit: 69f8e17.
+
+## P0 ACCOUNT/TRANSACTION DECISION DOSSIER — research phase (2026-07-04)
+
+Per advisor guidance (ranked this above further mock/hardcode sweeps): the
+single highest-leverage thing left to produce before the user returns
+Motzei Shabbat is a precise, code-verified decision dossier for the P0
+"two parallel accounting systems" finding (`Account`/`Transaction` frozen
+vs. the real `Invoice`/`Bill`/`Expense`/`Payment` ledger), since every
+honest-null shipped this session (kpi_service, budget_service, tax_service
+tax-advance path) traces back to this same root cause, and it's the user's
+own documented #1 pending decision.
+
+Dispatched a read-only research fork to trace, file-by-file, exactly which
+services/routes still depend on live `Transaction`/`Account` data RIGHT
+NOW (not trusting the 2026-07-03 roadmap doc's claims at face value, same
+lesson as the P1-list staleness found earlier this session). Full findings
+(to be written up as a standalone decision document next):
+
+- `financial_reports_service.py`'s `generate_profit_loss()` is ALREADY
+  fully migrated to the ledger (Invoice/Bill/Expense via `_ledger_revenue_
+  items`/`_ledger_expense_items`, including manual/non-document journal
+  entries via `_manual_sums()`) — the roadmap doc's claim that `/reports`
+  profit-loss is built on frozen data is now STALE. Only a harmless dead
+  `Transaction` query remains (queried, never used).
+- `generate_balance_sheet()` is genuinely still frozen (`Account.balance`
+  + `Transaction` via `_calculate_account_balances`) for assets/liabilities,
+  but mixes in a REAL ledger-based `retained_earnings` (via its own call to
+  `generate_profit_loss`) — this mismatch is very likely the direct
+  mechanical cause of the documented "-503,734 vs -24,634" balance-sheet
+  divergence, not a mystery.
+- `generate_cash_flow_projection()`'s revenue/expense flow is real
+  (ledger-based), but its `opening_balance` silently falls back to frozen
+  `Account.balance` whenever the caller omits it — and the live route
+  (`/api/reports/cash-flow-projection`, `/api/reports/summary`) never
+  passes it, so the frozen fallback fires on every real request today.
+- Confirmed genuinely-still-frozen and live+rendered: `BudgetService.
+  _get_actual_by_category` (`/budget`), `CashFlowService` (all of
+  `/cashflow-detail`'s 4 endpoints), `ForecastingService._monthly_totals`
+  (`/forecasting`'s 6 endpoints), `AdvancedAIService.detect_anomalies`
+  (`/ai-analytics` anomalies tab), and `alert_engine.py`'s
+  `_check_large_transactions` (structurally can never fire again for new
+  activity — a silently-missing alert type, not wrong data).
+- **New live-risk finding, not previously documented**: `run_post_sync_
+  tasks` no longer calls `DataSyncService.sync_all()` (confirmed, as the
+  roadmap doc claims) — BUT a second, fully-registered, still-live route,
+  `POST /api/sync/sumit/full` (`src/cfo/api/routes/sync.py`), directly
+  instantiates `DataSyncService` and calls `.sync_all()` with NO guard or
+  deprecation. Its only current UI trigger, `DataSyncDashboard.tsx`, is
+  itself completely orphaned (zero references in `App.tsx` or anywhere
+  else) — so the freeze holds today only because nothing currently calls
+  this route, not because it's disabled. If ever re-linked or hit directly,
+  it would silently resume writing to `Transaction`/`Account` and
+  reintroduce the exact divergence this P0 finding describes.
+- Also confirmed a 3-file orphaned chain unrelated to any live route
+  (`financial_service.py` / `report_service.py` / `ai_insights.py`) — none
+  instantiated anywhere; candidate for deletion alongside any retire
+  decision.
+- Full repair-vs-retire blast radius per option is in the fork's report;
+  key conclusion: retiring (migrating the 5-6 genuinely-frozen consumers
+  onto ledger-based queries, same shape as this session's tax_service fix)
+  is additive new-code work against already-populated tables — NOT
+  destructive under this project's standing rule. Only actually deleting
+  the stale `Transaction`/`Account` rows afterward would need the user's
+  explicit one-time approval.
+
+**Next step**: write this up as a standalone dossier document (concrete
+enough that the user can pick repair/retire/hybrid without re-investigating),
+and consider a small, safe, additive guard on the live `/api/sync/sumit/full`
+writer path (e.g. a clear deprecation response) so the freeze doesn't
+depend on incidental non-use.
