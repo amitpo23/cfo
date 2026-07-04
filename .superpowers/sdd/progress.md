@@ -2404,3 +2404,48 @@ Remaining genuinely-open items are either user-action blockers (see
 explicitly spec-/legally-gated (PCN874 exact field spec not located;
 Payment Ethics Law interest rate needs legal confirmation, not a web
 search) — both correctly left unimplemented rather than guessed at.
+
+## 2026-07-04 (continued) — closed a real gap in the expense-deduction feature: no delete route, test data in org 1's real DB
+
+User confirmed continuing a third time ("אתה יכול להמשיך בתוכנית בינתיים").
+Before declaring convergence (per advisor: two straight iterations that
+found zero bugs is the signal to stop mining and hand back the decision
+list), did one last check the advisor specifically flagged as
+non-optional: the expense-deduction fork's own live-verification had
+left a real `HomeOfficeProfile` (12/80 sqm) and a `VehicleDeductionProfile`
+(`vehicle_label="live-verify-test"`) sitting in **org 1 — the user's own
+real organization** — and the fork's claim that this was "harmless"
+was never actually verified, just asserted.
+
+Grepped every consumer of `HomeOfficeProfile`/`VehicleDeductionProfile`:
+the only readers are `ExpenseDeductionProfileService`, called only from
+the explicit `/api/expenses/deduction/*` routes; `apply_deduction_percent()`
+(the only thing that writes to a real `Expense.deduction_percent`) is
+only invoked when a caller explicitly passes `expense_id` in a
+`/compute` request body. No report, dashboard, or automatic expense/tax
+calculation reads these tables. Confirmed via the live API that org 1
+had zero `Expense` rows carrying a phantom deduction — the test rows
+were profile-only, never applied to a real expense. So: not a live
+fabricated-data bug in the user's numbers, but still real test data with
+no way to remove it (the fork had noted "no DELETE route exists yet").
+
+Added `delete_vehicle_profile()`/`delete_home_office_profile()` to
+`expense_deduction_profile_service.py` and `DELETE
+/api/expenses/deduction/vehicle-profile`/`/home-office-profile` (org-scoped,
+same pattern as every other route in this file), with 6 new tests
+(delete + 404-when-missing + org-isolation for both). 672 tests passing
+(+6), qa_gate PASSED, deployed, 16/16 smoke. Then used the new routes
+live against production to delete both leftover rows in org 1 — confirmed
+gone via a follow-up GET (404 on both).
+
+Commit: `d5abac5`.
+
+**Convergence signal, per advisor**: the last two iterations (roadmap
+reconciliation, P0 write-back verification) found zero bugs — a doc
+update and a test that passed first-try. That's the signal the
+non-blocked, non-guess queue is drained. The real wins this stretch were
+the sync-error frontend fix and the expense-deduction feature; everything
+since has been confirming things already work, plus this one real (if
+minor) gap-closure. The honest next step is handing the decision list
+back to the user rather than manufacturing further marginal iterations —
+told to them directly in the next message.
