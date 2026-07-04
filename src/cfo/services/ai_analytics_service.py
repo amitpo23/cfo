@@ -767,64 +767,6 @@ class AdvancedAIService:
             )
         ]
     
-    def _generate_revenue_insights(self) -> List[AIInsight]:
-        """תובנות הכנסה"""
-        return [
-            AIInsight(
-                insight_id='INS-REV-001',
-                insight_type=InsightType.REVENUE_OPPORTUNITY,
-                title='לקוחות לא פעילים עם פוטנציאל',
-                description='12 לקוחות לא רכשו ב-6 חודשים אחרונים - פוטנציאל הכנסה ₪45,000',
-                impact_amount=45000,
-                confidence=0.7,
-                priority='high',
-                actionable=True,
-                suggested_actions=['ליצור קשר עם הלקוחות', 'להציע מבצע חזרה'],
-                supporting_data={'inactive_customers': 12, 'avg_purchase': 3750},
-                expires_at=(date.today() + timedelta(days=30)).isoformat()
-            )
-        ]
-    
-    def _generate_risk_insights(self) -> List[AIInsight]:
-        """תובנות סיכון"""
-        return [
-            AIInsight(
-                insight_id='INS-RISK-001',
-                insight_type=InsightType.RISK_ALERT,
-                title='גידול בחובות מעל 90 יום',
-                description='חובות מעל 90 יום גדלו ב-25% - סיכון לחובות אבודים',
-                impact_amount=35000,
-                confidence=0.9,
-                priority='high',
-                actionable=True,
-                suggested_actions=['להגביר גבייה', 'לשקול הפרשה'],
-                supporting_data={'growth': '25%', 'total_over_90': 35000},
-                expires_at=None
-            )
-        ]
-    
-    def _generate_efficiency_insights(self) -> List[AIInsight]:
-        """תובנות יעילות"""
-        return []
-    
-    def _generate_trend_insights(self) -> List[AIInsight]:
-        """תובנות מגמה"""
-        return [
-            AIInsight(
-                insight_id='INS-TREND-001',
-                insight_type=InsightType.TREND_INSIGHT,
-                title='מגמת צמיחה חיובית',
-                description='הכנסות גדלו 3 חודשים ברציפות - מגמה חיובית',
-                impact_amount=0,
-                confidence=0.95,
-                priority='low',
-                actionable=False,
-                suggested_actions=['להמשיך במומנטום', 'לתכנן משאבים'],
-                supporting_data={'consecutive_growth': 3, 'avg_growth': '8%'},
-                expires_at=None
-            )
-        ]
-    
     def _get_transactions(self, start_date: date, end_date: date) -> List[Dict]:
         """שליפת עסקאות אמיתיות מה-DB (org-scoped) לזיהוי חריגות.
 
