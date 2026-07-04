@@ -236,7 +236,12 @@ class SumitConnector(AccountingConnector):
         """
         from ..integrations.sumit_models import DocumentListRequest
         from datetime import timedelta
-        from_date = updated_since.date() if updated_since else date.today() - timedelta(days=365)
+        # Found live (2026-07-04 data-parity check): this used to be
+        # date.today() - timedelta(days=365), contradicting the docstring above
+        # -- a real customer whose only invoices were from 2024 (>365 days back)
+        # was silently invisible to every full sync. 10 years comfortably covers
+        # any realistic business history without an unbounded/undated query.
+        from_date = updated_since.date() if updated_since else date.today() - timedelta(days=3650)
         all_docs, seen, offset = [], set(), 0
         for _ in range(max_pages):
             page = await client.list_documents(DocumentListRequest(
