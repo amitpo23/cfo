@@ -44,6 +44,15 @@ class AIChatNotConfiguredError(ValueError):
     unhandled 500."""
 
 
+class AIChatUpstreamError(RuntimeError):
+    """Raised when a correctly-configured ANTHROPIC_API_KEY still fails at
+    the Anthropic API itself (found live in the first real 9.5 test: a
+    valid key with no credit balance raises anthropic.BadRequestError deep
+    inside messages.create). Mapped to a clean HTTP 503 — same "honest
+    upstream failure" pattern as SUMIT's httpx.ConnectError handling —
+    instead of leaking the raw SDK exception as an unhandled 500."""
+
+
 class AIChatService:
     def __init__(self, db: Session, organization_id: int, user_id: int):
         self.db = db
@@ -99,13 +108,19 @@ class AIChatService:
         final_text = ""
 
         for _ in range(_MAX_TOOL_TURNS):
-            response = await client.messages.create(
-                model=settings.ai_chat_model,
-                max_tokens=1024,
-                system=SYSTEM_PROMPT,
-                messages=messages,
-                tools=tool_schemas,
-            )
+            import anthropic
+            try:
+                response = await client.messages.create(
+                    model=settings.ai_chat_model,
+                    max_tokens=1024,
+                    system=SYSTEM_PROMPT,
+                    messages=messages,
+                    tools=tool_schemas,
+                )
+            except anthropic.APIError as exc:
+                raise AIChatUpstreamError(
+                    f"עוזר ה-AI לא זמין כרגע (שגיאת Anthropic API): {exc}"
+                ) from exc
 
             if response.stop_reason != "tool_use":
                 final_text = "".join(

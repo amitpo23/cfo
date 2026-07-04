@@ -84,3 +84,37 @@ def test_missing_anthropic_key_returns_clean_400_not_500(monkeypatch, client, fr
                      json={"session_id": "s1", "message": "היי"})
     assert r.status_code == 400
     assert "לא הוגדר" in r.json()["detail"] or "not configured" in r.json()["detail"].lower()
+
+
+def test_anthropic_upstream_error_returns_clean_503_not_500(monkeypatch, client, fresh_org):
+    """Found via the first live 9.5 test against a real ANTHROPIC_API_KEY:
+    a valid, correctly-configured key but an Anthropic account with no
+    credit balance raises anthropic.BadRequestError deep inside
+    messages.create -- which leaked as a raw unhandled 500 instead of a
+    clean, honest upstream-failure response."""
+    import httpx
+    import anthropic
+
+    class FailingMessages:
+        async def create(self, **_kwargs):
+            response = httpx.Response(
+                400, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+            )
+            raise anthropic.BadRequestError(
+                "Your credit balance is too low to access the Anthropic API.",
+                response=response,
+                body={"type": "error", "error": {"type": "invalid_request_error",
+                                                  "message": "Your credit balance is too low"}},
+            )
+
+    class FailingClient:
+        def __init__(self):
+            self.messages = FailingMessages()
+
+    monkeypatch.setattr(AIChatService, "_make_client", lambda self: FailingClient())
+
+    iso = fresh_org()
+    r = client.post("/api/ai/chat", headers=iso["headers"],
+                     json={"session_id": "s1", "message": "היי"})
+    assert r.status_code == 503, r.text
+    assert "anthropic" in r.json()["detail"].lower() or "עוזר" in r.json()["detail"]

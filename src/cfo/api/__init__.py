@@ -18,7 +18,7 @@ from ..config import settings
 from ..database import init_db
 from ..integrations.sumit_integration import SumitAPIError
 from ..services.data_sync_service import SumitNotConfiguredError, LegacySyncRetiredError
-from ..services.ai_chat_service import AIChatNotConfiguredError
+from ..services.ai_chat_service import AIChatNotConfiguredError, AIChatUpstreamError
 from ..services.ai_analytics_service import AIAnalyticsNotConfiguredError
 
 
@@ -100,6 +100,18 @@ async def ai_chat_not_configured_handler(_request, exc: AIChatNotConfiguredError
     deep inside the anthropic SDK's header-building — an unhandled 500."""
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(AIChatUpstreamError)
+async def ai_chat_upstream_error_handler(_request, exc: AIChatUpstreamError):
+    """A correctly-configured ANTHROPIC_API_KEY can still fail at Anthropic
+    itself (rate limit, no credit balance, outage) — found live in the
+    first real 9.5 test. Without this handler the raw anthropic SDK
+    exception leaks as an unhandled 500 instead of an honest 503."""
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": str(exc)},
     )
 
