@@ -98,10 +98,11 @@
 4. **`CashFlowDashboard` לא ב-nav** — קומפוננטה מוכנה, לא מחווטת. → תכנית TDD.
 5. **balance_sheet חסר `derived:true`+disclaimer** — חוסר-עקביות מול ledger; סיכון רגולטורי (מצג כ"רשמי"). → תכנית TDD.
 6. **AR ערכים hardcoded** — DSO `35+(i%5)*3`, credit_limit `100000`, last_payment_date `None`, email `{id}@example.com`. (יכולת 1)
-7. **AP discount fields hardcoded 0** + פרטי-בנק dummy ב-bank-reconciliation. (יכולת 2)
+7. ~~**AP discount fields hardcoded 0** + פרטי-בנק dummy ב-bank-reconciliation~~ — **AP discount**: בוטל אחרי אימות — אין מקור-נתון אמיתי לתנאי-הנחת-ספק בשום מקום במערכת (honest-null מכוון, לא באג). **bank-reconciliation dummy**: **תוקן 2026-07-04** — `ap_service.run_bank_reconciliation()` היה מחזיר `bank_name='בנק לאומי'`+`account_number='12-345-67890'` קבועים בכל דוח; הוסר ל-`Optional[str]=None` (אין מקור אמיתי בקלט הפונקציה). ה-route היחיד שקורא לזה כבר החריג את שני השדות מהתשובה — אפס חשיפה חיה, אבל מוקש לכל קורא עתידי. (יכולת 2)
 8. **ניכוי ספקים (856) מחזיר ריק** + ח.פ hardcoded ב-`TaxComplianceService`. (יכולת 11)
 9. **יתרות פתיחה ביומן/מאזן** — carry-forward מתקופות קודמות. (יכולת 5)
 10. **`date_trunc` על SQLite** (`forecasting_service.py:678-710`) — נכשל מקומית/בטסטים, **עובד ב-prod Postgres**. באג נאמנות-טסט, לא חוסם-פרודקשן. תיקון: ביטוי portable (strftime/extract לפי dialect).
+11. **`ComplianceAuditService` (`compliance_audit.py`) — שירות-שלד מזויף לגמרי** (נמצא 2026-07-04). חשוף חי ב-6 routes אמיתיים (`/api/audit/log-change`, `/api/audit/trail`, `/api/tax/report-1301`, `/api/tax/report-1214`, `/api/audit/export`, `/api/audit/compliance-checklist`) — כל מתודה מחזירה נתון קבוע/ריק; `compliance_checklist()` תמיד מחזיר "100% תואם, מוכן-לייצוא-ביקורת" ללא קשר למצב בפועל. **אפס חשיפה חיה כרגע** (נבדק ב-grep — אין קורא frontend לאף אחד מ-6 ה-routes). תיקון אמיתי דורש 6 יכולות נפרדות, חלקן כפולות ל-`annual_report_service.py`'s (1301/1214 טיוטה אמיתית כבר קיימת שם) — היקף גדול מדי לתיקון בודד; דורש החלטה: לבנות-מחדש בכנות מול לפרק/למחוק את ה-routes המתים. (יכולת 3 — הנהלת חשבונות כפולה, בהרחבה לביקורת/ייצוא)
 
 ## P1/P2 — העשרות שעברו שער-ביקורת (8 מתוך 28 מועמדות)
 > מבוססות על מחקר ה-skills הישראליים + מערכות OSS, **כל אחת אומתה כלא-קיימת ותואמת-אופי**.
