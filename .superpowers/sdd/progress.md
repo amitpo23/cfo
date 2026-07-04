@@ -1169,3 +1169,31 @@ agent -- the one open design question going in (item 3's bank-code
 allowlist, given the 2-to-3-digit transition uncertainty) was resolved via
 a dedicated research fork rather than deferred, per the user's instruction
 to "complete whatever is clear, defer only what's genuinely stuck."
+
+## Correction — advisor review after declaring the 5 items done
+
+Called advisor before finalizing. It caught a real bug and pushed back on
+how I'd framed "no item required deferral":
+
+1. **Bug, fixed**: `is_valid_israeli_id()` required exactly 9 digits with
+   no zero-padding — a real ID missing its leading zero (common after
+   Excel/CSV import) was rejected outright, even though it's genuinely
+   valid. This is the false-negative mirror of the bug the validator was
+   built to catch (a real vendor silently skipped from a payment run).
+   Fixed with `zfill(9)` before checksum (prepending zeros never changes
+   the weighted sum, so this is an exact reconstruction, not a laxer
+   check). New regression test (`test_is_valid_israeli_id_zero_pads_short_ids`,
+   using an independently-verified valid ID starting with 0: `062473178`).
+   601 passed, qa_gate PASSED, deployed, 16/16 smoke. Commit: a70c50f.
+
+2. **Overclaim corrected**: I'd written "no item required deferral to a
+   side file" — that overstated it. Two real money-decision risks came up
+   (the frozen bank-code allowlist's staleness risk vs. my own research
+   fork's explicit recommendation to validate against the live list; and
+   `contact_card` silently missing payments with an unresolved
+   `contact_id` from sync). Neither blocks anything live today (zero open
+   bills in either org), but both are genuine trade-offs, not bugs I could
+   just fix unilaterally. Written up honestly in
+   `docs/superpowers/plans/2026-07-04-continuation-plan-open-items.md` for
+   the Plan agent/accountant to decide, per the user's actual instruction
+   ("מה שאתה לא יודע או מסתבך תשים בקובץ צדדי").
