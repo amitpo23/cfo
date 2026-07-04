@@ -1324,3 +1324,64 @@ submit real Upay credentials anywhere -- that remains the user's own
 action to take, now that there's finally a UI for it.
 
 Commit: 6be2647.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): backend fabrication scan + Epic 2 research
+
+Re-checked ANTHROPIC_API_KEY: still absent. Dispatched a research-only fork
+to assess Epic 2 ("super-admin + full per-client UI", not started) while
+working in parallel on a backend fabricated-data scan (this session's
+frontend scan found nothing new, so extended the same methodology to
+src/cfo/services/).
+
+**Backend scan result — real bug found and fixed**: grepped all services
+for random/hardcode/placeholder/0.3-style patterns. Most hits were
+legitimate algorithm weights (exponential-smoothing alpha=0.3, matching-
+confidence-score weights in bank_reconciliation.py) -- not fabricated
+business data. One genuine miss: `revenue_analytics.py`'s
+`identify_investment_opportunities()` tagged every "growing customer"
+candidate with `growth_potential: "high"` (a constant, every row, no real
+signal) and `estimated_growth: revenue * 0.3` (flat 30%, no underlying
+growth-trend data) -- the exact same fabrication class this file's own
+`test_revenue_honest_values.py` already fixed twice before (fake
+`average_days_to_payment`=30, fake `gross_profit_estimate`=70% margin) but
+missed this third instance. Reachable via `GET /api/analytics/revenue/
+opportunities` and `GET /api/analytics/ai/executive-summary`'s
+`top_opportunities`, not currently called from any frontend component --
+same "not exposed today but wrong if used" category as an earlier
+tax_service.py finding. Removed both fabricated fields, kept real ones
+(current_revenue, invoice_count), re-based the sort key on current_revenue.
+New test, 606->607 passed, qa_gate PASSED, deployed, 16/16 smoke,
+live-verified both routes return clean empty results (no orgs currently
+have qualifying customers, so nothing to inspect populated, but confirmed
+no crash and no fabricated-field possibility).
+
+**Epic 2 research (fork, not yet fully acted on)**: confirmed via file:line
+evidence that (a) cross-tenant client-list view already works well
+(`AdminClientsDashboard.tsx` + `/admin/control/clients`), (b) drill-into-
+one-client was broken -- the "open" button just reloaded the generic home
+page, forcing manual tab-by-tab navigation, (c) org editing (name/tax_id/
+active) has zero working UI despite `PATCH /organizations/{id}` already
+working, (d) client onboarding creates an org+integration but never a
+login. Also found a real but currently-dead bug: a second, unrouted
+`AdminDashboard.tsx` component has an edit-org modal whose submit handler
+calls the CREATE mutation (POST) instead of PATCH -- "editing" would
+silently create a duplicate org -- plus a hard `DELETE /organizations/{id}`
+with no soft-deactivate option. Zero live exposure today (component isn't
+imported/routed anywhere), so not fixed this pass, flagged for later.
+
+**Acted on the smallest, safest item from that list**: pointed the "open
+client" action at `/engine` (EngineDashboard, an already-built consolidated
+view: connections + ledger + aging + cumulative P&L + anomalies together)
+instead of `/`. Local dev has no client rows to click through (empty admin
+table for "Local Dev Org"), so verified the actual click-path live against
+real production data instead: clicked "open" on a real client ("עמית
+פורת") and confirmed it now lands on `/engine` correctly scoped to that
+org, showing SUMIT connected / Open Finance not / real ledger and aging
+numbers -- not the generic homepage. tsc+build clean, deployed, 16/16 smoke.
+
+Larger Epic 2 pieces (org-edit modal, login-provisioning action, fixing/
+removing the buggy AdminDashboard.tsx, reconciling the two parallel
+"office" concepts) not done this iteration -- noted as the natural next
+steps, none require a user decision to attempt.
+
+Commits: 12e5947 (revenue_analytics fix), 06a198f (admin open→engine).
