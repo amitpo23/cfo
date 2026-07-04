@@ -955,3 +955,35 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 11: considered implementing
   and PCN874 findings earlier this session). Documented the discrepancy
   and the real law citation (nevo.co.il) for whoever verifies and
   implements this properly. No code changed -- nothing to deploy.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 12: re-checked the roadmap's
+  claim "קריאות /analytics/* ללא router תואם" (calls to /analytics/*
+  with no matching router) -- turned out stale/wrong, the router IS
+  registered (analytics.py, prefix /api/analytics). But investigating it
+  surfaced something much more serious: AnalyticsDashboard.tsx, mounted
+  at the nav-reachable /analytics route (labeled "Analytics" in the main
+  CFO menu), was 100% hardcoded mock data with ZERO API calls at all --
+  the file's own comment literally said "Mock data for charts". Fake
+  6-month revenue trend, fake document-type pie chart, fake stat cards
+  (revenue/customers/documents/payments, each with an invented +/-%
+  change indicator). This is a more severe instance of the same
+  fabricated-data class already fixed twice this session (Account/
+  Transaction, AdvancedAIService) -- but worse, since it never even
+  attempted a real API call.
+  Considered rewiring it to real data first: checked ExecutiveDashboard
+  Service._profit_loss and KPIService._get_financial_data, both of which
+  ultimately call FinancialReportsService.generate_profit_loss -- the
+  SAME already-documented broken Account/Transaction path. Wiring the
+  fake numbers to this source would just make them plausible-but-wrong
+  instead of obviously-fake -- the exact mistake already avoided twice
+  this session. /kpis and /ai-analytics already cover this ground with
+  real or honestly-flagged data, so /analytics was also fully redundant.
+  Retired instead: removed the nav entry, deleted the component, and
+  redirected the route to /kpis (not left as a dead link, in case
+  anything is bookmarked). Confirmed via grep that nothing else in the
+  frontend referenced it before removing. tsc+build clean, 566 passed
+  (pure frontend change, backend unaffected), qa_gate PASSED, deployed,
+  16/16 smoke. Corrected both roadmap claims (the stale router claim and
+  the newly-fixed fabrication) in PRODUCT_AUDIT_AND_ROADMAP.md, and
+  marked alert_engine/cfo_brain's "no tests" gap resolved there too
+  (done in iterations 3-4, just never reflected back into that doc).
