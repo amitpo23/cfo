@@ -852,3 +852,34 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 7: implemented the highest-value
   the already-documented "wallet activation" gap item from iteration 6 --
   this company would need to complete SUMIT's own Upay setup first, an
   account-level SUMIT configuration step outside Rezef's control).
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 8: two items per the wakeup
+  prompt's suggestions, both investigate-before-build.
+  (1) Triggers webhook: read the Subscribe/Unsubscribe request schemas in
+  full ({URL, Folder, View, TriggerType}) and cross-checked what Folder/
+  View actually are (/crm/schema/listfolders, /crm/schema/getfolder,
+  /crm/views/listviews -- all CRM-module-only). Conclusion: this trigger
+  mechanism can only push CRM-entity change notifications, NOT
+  invoice/bill/document creation events -- the thing that would actually
+  matter for real-time-instead-of-polling sync. This deflates iteration
+  6's own optimistic framing ("potentially higher-value than it looks");
+  corrected SUMIT_MODULE_COVERAGE.md before anyone builds against the
+  wrong assumption. Not pursued -- correctly de-prioritized after
+  investigation, not left unchecked.
+  (2) Open Finance goal-directive finish line #7 ("activation screen
+  ready + instructions for the user"): the screen already existed
+  (CFOSyncDashboard.tsx's Client ID/Secret/User ID form) but had zero
+  explanatory text. Before writing anything, grepped every
+  OPEN_FINANCE_USER_ID usage across the whole codebase to resolve an
+  ambiguity in docs/OPEN_FINANCE_API_GUIDE.md (one line suggested userId
+  might be Rezef-generated per end-user; another said clientId/
+  clientSecret are "provided by Open Finance during onboarding") --
+  confirmed from the actual code that all three are read identically
+  everywhere (same settings fallback, same per-org credentials dict),
+  meaning all three are static business-level credentials from Open
+  Finance's own onboarding, not something Rezef drives via an in-app
+  consent flow. Added a short, accurate instruction above the form
+  (points to the business's own Open Finance onboarding + the already-
+  documented official reference URL, not a new/guessed one). Pure
+  frontend text change -- 566 passed (full suite unaffected), tsc+build
+  clean, deployed, 16/16 smoke.
