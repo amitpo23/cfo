@@ -11,8 +11,8 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from ..integrations.sumit_models import DocumentItem, DocumentPayment, DocumentRequest, SendDocumentRequest
-from ..models import Invoice, InvoiceStatus
+from ..integrations.sumit_models import ChargeRequest, DocumentItem, DocumentPayment, DocumentRequest, SendDocumentRequest
+from ..models import Contact, Invoice, InvoiceStatus
 from .sync_engine import get_connector_for_org
 
 # SUMIT floors amounts to cents; treat balances at or below this as fully offset.
@@ -312,6 +312,48 @@ class DocumentIssuanceService:
         self.db.commit()
         self.db.refresh(invoice)
         return {"document": self._serialize(invoice), "sumit": response}
+
+    async def create_payment_link(self, invoice_id: int) -> dict[str, Any]:
+        """Generate a hosted payment-page URL for an invoice's outstanding
+        balance (SUMIT POST /billing/payments/beginredirect/) — e.g. to send
+        with a collection reminder instead of just a balance notice."""
+        invoice = self._get_invoice(invoice_id)
+        if invoice.balance is None or invoice.balance <= 0:
+            raise ValueError("לחשבונית אין יתרה לתשלום")
+
+        contact = None
+        if invoice.contact_id:
+            contact = self.db.query(Contact).filter(
+                Contact.organization_id == self.organization_id,
+                Contact.id == invoice.contact_id,
+            ).first()
+
+        connector, _conn_id, source = get_connector_for_org(
+            self.db, self.organization_id, preferred_source="sumit"
+        )
+        if source != "sumit" or not hasattr(connector, "_get_client"):
+            raise ValueError("SUMIT אינו מחובר עבור ארגון זה")
+
+        customer_id = (
+            (contact.external_id if contact else None)
+            or (contact.name if contact else None)
+            or invoice.invoice_number
+            or "Customer"
+        )
+        charge = ChargeRequest(
+            customer_id=customer_id,
+            amount=invoice.balance,
+            currency=invoice.currency or "ILS",
+            description=f"תשלום עבור חשבונית {invoice.invoice_number or invoice.id}",
+        )
+        client = await connector._get_client()
+        async with client:
+            result = await client.create_payment_link(charge)
+        return {
+            "payment_url": result.payment_url,
+            "invoice_id": invoice.id,
+            "amount": float(invoice.balance),
+        }
 
     @staticmethod
     def _document_payment(payment: dict[str, Any]) -> DocumentPayment:

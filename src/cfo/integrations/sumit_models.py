@@ -195,6 +195,13 @@ class ChargeRequest(BaseModel):
     document_id: Optional[str] = None
 
 
+class PaymentLinkResponse(BaseModel):
+    """A hosted payment-page URL for a customer to pay via
+    (SUMIT POST /billing/payments/beginredirect/) — e.g. sent alongside a
+    collection reminder instead of just a balance notice."""
+    payment_url: str
+
+
 class PaymentResponse(BaseModel):
     """Payment response"""
     payment_id: str

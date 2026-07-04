@@ -296,3 +296,85 @@ def test_route_schedule_next_requires_sumit_configured(client, fresh_org):
 
     r = client.post(f"/api/financial/documents/{invoice_id}/schedule-next", headers=headers)
     assert r.status_code == 400
+
+
+def test_create_payment_link_forwards_balance_and_contact_to_sumit(monkeypatch, fresh_org):
+    """SUMIT_MODULE_COVERAGE.md's "payment pages" gap — POST /billing/
+    payments/beginredirect/ generates a hosted payment-page URL for a
+    customer to pay an invoice's outstanding balance."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        source = _fresh_invoice(db, org_id, total="1200")
+        source.balance = Decimal("800")
+        source.currency = "ILS"
+        db.commit()
+        invoice_id = source.id
+
+        captured = {}
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def create_payment_link(self, charge, **kwargs):
+                captured["charge"] = charge
+                from cfo.integrations.sumit_models import PaymentLinkResponse
+                return PaymentLinkResponse(payment_url="https://pay.sumit.co.il/link1")
+
+        class FakeConnector:
+            async def _get_client(self):
+                return FakeClient()
+
+        monkeypatch.setattr(
+            document_issuance_service, "get_connector_for_org",
+            lambda _db, _org, preferred_source=None: (FakeConnector(), 1, "sumit"),
+        )
+
+        service = DocumentIssuanceService(db, org_id)
+        result = asyncio.run(service.create_payment_link(invoice_id))
+
+        assert result["payment_url"] == "https://pay.sumit.co.il/link1"
+        assert result["amount"] == 800.0
+        assert captured["charge"].amount == Decimal("800")
+        assert captured["charge"].customer_id == "לקוח קרדיט"  # falls back to contact name (no external_id set)
+    finally:
+        db.close()
+
+
+def test_payment_link_rejects_invoice_with_no_balance(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        source = _fresh_invoice(db, org_id, total="1200")
+        source.balance = Decimal("0")
+        db.commit()
+        invoice_id = source.id
+
+        service = DocumentIssuanceService(db, org_id)
+        try:
+            asyncio.run(service.create_payment_link(invoice_id))
+            raised = None
+        except ValueError as e:
+            raised = e
+
+        assert raised is not None
+    finally:
+        db.close()
+
+
+def test_route_payment_link_requires_sumit_configured(client, fresh_org):
+    iso = fresh_org()
+    org_id, headers = iso["org_id"], iso["headers"]
+    db = SessionLocal()
+    try:
+        source = _fresh_invoice(db, org_id, total="500")
+        invoice_id = source.id
+    finally:
+        db.close()
+
+    r = client.post(f"/api/financial/invoices/{invoice_id}/payment-link", headers=headers)
+    assert r.status_code == 400

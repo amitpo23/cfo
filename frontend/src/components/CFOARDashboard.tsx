@@ -22,10 +22,16 @@ interface Invoice {
   status: string;
 }
 
+function extractErrorMessage(err: unknown): string {
+  const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+  return detail || 'משהו השתבש. נסה שוב.';
+}
+
 const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
   const [noteText, setNoteText] = useState('');
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'aging' | 'collections'>('aging');
+  const [paymentLinkStatus, setPaymentLinkStatus] = useState<{ invoiceId: number; message: string; isError: boolean } | null>(null);
 
   const { data: aging, isLoading } = useQuery({
     queryKey: ['ar-aging'],
@@ -56,6 +62,19 @@ const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
       entity_type: 'invoice',
       entity_id: invoiceId,
     });
+  };
+
+  const handlePaymentLink = async (invoiceId: number) => {
+    setPaymentLinkStatus(null);
+    try {
+      const response = await apiService.post(`/financial/invoices/${invoiceId}/payment-link`) as {
+        data: { payment_url: string };
+      };
+      window.open(response.data.payment_url, '_blank', 'noopener,noreferrer');
+      setPaymentLinkStatus({ invoiceId, message: 'קישור התשלום נפתח בכרטיסייה חדשה', isError: false });
+    } catch (err) {
+      setPaymentLinkStatus({ invoiceId, message: extractErrorMessage(err), isError: true });
+    }
   };
 
   const fmt = (n: number) =>
@@ -218,6 +237,13 @@ const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
                         >
                           Task
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePaymentLink(inv.id)}
+                          className="text-purple-500 hover:text-purple-600 text-xs"
+                        >
+                          קישור תשלום
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -241,6 +267,19 @@ const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
                           >
                             Save
                           </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {paymentLinkStatus?.invoiceId === inv.id && (
+                    <tr>
+                      <td colSpan={8} className="py-2 px-4">
+                        <div className={`text-xs px-3 py-2 rounded-lg ${
+                          paymentLinkStatus.isError
+                            ? 'bg-red-50 text-red-700'
+                            : 'bg-green-50 text-green-700'
+                        }`}>
+                          {paymentLinkStatus.message}
                         </div>
                       </td>
                     </tr>

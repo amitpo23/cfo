@@ -357,6 +357,21 @@ async def cancel_existing_document(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/invoices/{invoice_id}/payment-link")
+async def create_invoice_payment_link(
+    invoice_id: int,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """קישור תשלום ללקוח ליתרת חשבונית (SUMIT beginredirect) — לשליחה
+    לצד תזכורת גבייה במקום הודעת-יתרה בלבד."""
+    service = DocumentIssuanceService(db, organization_id=org_id)
+    try:
+        return {"status": "success", "data": await service.create_payment_link(invoice_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/invoices/receive")
 async def receive_invoice(
     request: ReceivedInvoiceRequest,

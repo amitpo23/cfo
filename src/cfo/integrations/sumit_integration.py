@@ -28,7 +28,7 @@ from .sumit_models import (
     DocumentListRequest, ExpenseRequest, DebtReportRequest,
     DocumentPayment, ScheduledDocumentResult,
     # Payment models
-    ChargeRequest, PaymentResponse, PaymentMethodResponse,
+    ChargeRequest, PaymentResponse, PaymentMethodResponse, PaymentLinkResponse,
     # Transaction models
     TransactionRequest, TransactionResponse,
     # CRM models
@@ -1990,6 +1990,38 @@ class SumitIntegration(BaseIntegration):
             if status_description:
                 self.logger.warning(f"SUMIT charge declined: {status_description}")
         return response
+
+    async def create_payment_link(
+        self,
+        charge: ChargeRequest,
+        *,
+        redirect_url: Optional[str] = None,
+        cancel_redirect_url: Optional[str] = None,
+        expiration_hours: Optional[int] = None,
+    ) -> PaymentLinkResponse:
+        """
+        Generate a hosted payment-page URL for a customer to pay via
+        (POST /billing/payments/beginredirect/) — e.g. to send with a
+        collection reminder for an overdue invoice, instead of just a
+        balance notice.
+        """
+        payload: Dict[str, Any] = {
+            "Customer": self._customer_ref(charge.customer_id or "Customer"),
+            "Items": self._charge_items(charge),
+        }
+        if charge.description:
+            payload["DocumentDescription"] = charge.description
+        if redirect_url:
+            payload["RedirectURL"] = redirect_url
+        if cancel_redirect_url:
+            payload["CancelRedirectURL"] = cancel_redirect_url
+        if expiration_hours:
+            payload["ExpirationHours"] = expiration_hours
+        data = await self._post("/billing/payments/beginredirect/", payload)
+        payment_url = data.get("RedirectURL")
+        if not payment_url:
+            raise SumitAPIError("SUMIT did not return a payment page URL")
+        return PaymentLinkResponse(payment_url=payment_url)
 
     async def multivendor_charge(
         self,
