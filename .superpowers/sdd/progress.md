@@ -2140,3 +2140,23 @@ yet — did not retire/repair without one), SUMIT manual cleanup (doc 1001
 + customer 2095660683, reserved for the user), quote-cancellation browser
 script (needs the user's live SUMIT session to inspect the real DOM),
 merge-to-main approval (now 250+ commits ahead).
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): ai_analytics liquidity-risk fabrication
+
+Back in the goal-directive's standard loop (gap-mapping grep sweep) after
+Wave 2 continuation directive completed. Found `assess_financial_risks()`'s
+liquidity risk (`RISK-LIQ-001`) hardcoding `potential_impact=100000`/
+`expected_loss=60000` regardless of the org's real liquidity gap — live-
+rendered as real currency in `AIAnalyticsDashboard.tsx` (impact/loss cards
++ an aggregate "total expected loss" sum). The other three risk types
+(credit/cashflow/concentration) already derive `potential_impact` from
+real data with a probability-weight for `expected_loss` — brought
+liquidity risk in line with that pattern: `_assess_liquidity_risk()` now
+returns the real gap (payables − current assets), used as
+`potential_impact`, with the same 0.6 probability weight already set on
+this risk type. 1 new test, 636 total pass, qa_gate PASSED, deployed,
+16/16 smoke, live-checked against org 1 (no liquidity risk currently
+triggers there — score ≥ 70 — confirmed no regression on the other 2
+risks that did render, both showing correct real numbers).
+
+Commit: `edf1e9b`.
