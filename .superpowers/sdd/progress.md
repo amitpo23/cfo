@@ -987,3 +987,18 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 12: re-checked the roadmap's
   the newly-fixed fabrication) in PRODUCT_AUDIT_AND_ROADMAP.md, and
   marked alert_engine/cfo_brain's "no tests" gap resolved there too
   (done in iterations 3-4, just never reflected back into that doc).
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 13: re-verified capability-grid
+  items 1/3/7/10 (only 2/4/5/6/9/11/12 had been checked this session).
+  Item 1 (AR): the claimed "hardcoded DSO/credit_limit/last_payment" is
+  stale -- all three are genuinely computed from real Payment/Invoice
+  data (_last_payment_date queries the actual most-recent payment;
+  _behavioral_credit_limit's own docstring explicitly says "not a fake
+  fixed number"; DSO is a real average of issue-to-payment days).
+  Corrected. Item 10 (Payroll): form_102/form_126 DO exist and compute
+  real per-employee/per-month summaries from Payslip data -- previously
+  undocumented as existing. The actual gap (no official XML filing
+  format, just a structured dict) is still real, refined the note to be
+  precise. Items 3 (expense sync) and 7 (Masav bank-detail validation)
+  re-checked and remain accurately documented as still-open. No code
+  changed -- documentation-only, nothing to deploy.
