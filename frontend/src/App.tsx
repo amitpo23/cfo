@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import api from './services/api';
 import OrgSwitcher, { CurrentUser } from './components/OrgSwitcher';
@@ -47,7 +47,6 @@ import {
 import CustomerDashboard from './components/CustomerDashboard';
 import DocumentManager from './components/DocumentManager';
 import PaymentInterface from './components/PaymentInterface';
-import AnalyticsDashboard from './components/AnalyticsDashboard';
 import ForecastingDashboard from './components/ForecastingDashboard';
 import BankStatementDashboard from './components/BankStatementDashboard';
 import BankInsightsDashboard from './components/BankInsightsDashboard';
@@ -160,7 +159,6 @@ const navigationConfig = [
     items: [
       { to: '/forecasting', icon: TrendingUp, label: 'Forecasting', description: 'ML predictions' },
       { to: '/ai-analytics', icon: Brain, label: 'AI Analytics', description: 'AI-powered insights' },
-      { to: '/analytics', icon: BarChart3, label: 'Analytics', description: 'Data analytics' },
     ]
   },
   {
@@ -372,7 +370,10 @@ function App() {
                 <Route path="/engine" element={<EngineDashboard />} />
                 <Route path="/business-menu" element={<BusinessMenuDashboard />} />
                 <Route path="/sumit-coverage" element={<SumitCoverageDashboard darkMode={darkMode} />} />
-                <Route path="/analytics" element={<AnalyticsDashboard />} />
+                {/* /analytics used to render a fully hardcoded-mock dashboard
+                    (revenue/customers/documents all fake, no API call at
+                    all) -- retired in favor of the real dashboards below. */}
+                <Route path="/analytics" element={<Navigate to="/kpis" replace />} />
                 <Route path="/settings" element={<SettingsPage darkMode={darkMode} />} />
 
                 {/* Financial Operations */}
