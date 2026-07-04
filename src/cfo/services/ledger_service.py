@@ -490,6 +490,75 @@ def general_ledger(db, organization_id: int, account_code: str, *,
     }
 
 
+def contact_card(db, organization_id: int, contact_id: int, *,
+                 start: Optional[date] = None, end: Optional[date] = None) -> Optional[dict[str, Any]]:
+    """כרטסת לקוח/ספק — Invoice/Bill/Payment של איש קשר אחד, כרונולוגית עם יתרה רצה.
+
+    שלא כמו general_ledger (חשבון בספר הכללי, חובה/זכות), זו יתרת "כמה חייבים
+    על החשבון הזה": חשבונית/חשבון ספק מגדילים את היתרה (סכום פתוח), תשלום
+    מקטין אותה — ללא תלות אם מדובר בלקוח (הם חייבים לנו) או ספק (אנחנו חייבים).
+    """
+    from ..models import Contact, Invoice, Bill, Payment
+
+    contact = db.query(Contact).filter(
+        Contact.id == contact_id, Contact.organization_id == organization_id
+    ).first()
+    if not contact:
+        return None
+
+    raw_movements = []
+    for inv in db.query(Invoice).filter(
+        Invoice.contact_id == contact_id, Invoice.organization_id == organization_id
+    ).all():
+        d = inv.issue_date or inv.due_date
+        if not _in_period(d, start, end):
+            continue
+        raw_movements.append((d, {
+            "type": "invoice", "document": inv.invoice_number or f"INV-{inv.id}",
+            "description": "חשבונית", "amount": round(_f(inv.total), 2),
+        }))
+
+    for bill in db.query(Bill).filter(
+        Bill.vendor_id == contact_id, Bill.organization_id == organization_id
+    ).all():
+        d = bill.issue_date or bill.due_date
+        if not _in_period(d, start, end):
+            continue
+        raw_movements.append((d, {
+            "type": "bill", "document": bill.bill_number or f"BILL-{bill.id}",
+            "description": "חשבון ספק", "amount": round(_f(bill.total), 2),
+        }))
+
+    for pay in db.query(Payment).filter(
+        Payment.contact_id == contact_id, Payment.organization_id == organization_id
+    ).all():
+        d = pay.payment_date
+        if not _in_period(d, start, end):
+            continue
+        raw_movements.append((d, {
+            "type": "payment", "document": pay.reference or pay.external_id or f"PAY-{pay.id}",
+            "description": "תשלום/תקבול", "amount": round(-_f(pay.amount), 2),
+        }))
+
+    raw_movements.sort(key=lambda m: m[0] or date.max)
+
+    movements = []
+    running = 0.0
+    for d, m in raw_movements:
+        running = round(running + m["amount"], 2)
+        movements.append({**m, "date": d.isoformat() if d else None, "balance": running})
+
+    return {
+        "contact_id": contact.id,
+        "contact_name": contact.name,
+        "contact_type": getattr(contact.contact_type, "value", contact.contact_type),
+        "movements": movements,
+        "closing_balance": running,
+        "derived": True,
+        "disclaimer": DISCLAIMER,
+    }
+
+
 def balance_sheet(db, organization_id: int, *, start: Optional[date] = None,
                   end: Optional[date] = None) -> dict[str, Any]:
     """מאזן נגזר — assets / liabilities / equity from the ledger.

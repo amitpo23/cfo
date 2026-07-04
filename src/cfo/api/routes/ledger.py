@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
@@ -93,6 +93,22 @@ def get_general_ledger(
 ):
     start, end = _period(year, month)
     return ledger_service.general_ledger(db, org_id, account_code, start=start, end=end)
+
+
+@router.get("/ledger/contact/{contact_id}/card")
+def get_contact_card(
+    contact_id: int,
+    year: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """כרטסת לקוח/ספק — Invoice/Bill/Payment כרונולוגית עם יתרה רצה."""
+    start, end = _period(year, month)
+    card = ledger_service.contact_card(db, org_id, contact_id, start=start, end=end)
+    if card is None:
+        raise HTTPException(status_code=404, detail="איש קשר לא נמצא")
+    return card
 
 
 @router.get("/ledger/balance-sheet")
