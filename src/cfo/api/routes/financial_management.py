@@ -521,13 +521,13 @@ async def set_contact_withholding_rate(
 
 @router.get("/tax/calendar")
 async def get_tax_calendar(
-    year: int = Query(default=None),
+    months_ahead: int = Query(default=3),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):
     """לוח שנה מס"""
     service = TaxComplianceService(db, organization_id=org_id)
-    calendar = service.get_tax_calendar(year or date.today().year)
+    calendar = service.get_tax_calendar(months_ahead)
     return {"status": "success", "data": vars(calendar)}
 
 

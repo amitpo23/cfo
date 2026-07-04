@@ -244,7 +244,7 @@ class BudgetService:
         return buf.getvalue()
 
     def _load_budgets(self, year: int, month: Optional[int]) -> Dict[str, float]:
-        """טעינת תקציבים מה-DB לתקופה. ריק -> ברירת מחדל."""
+        """טעינת תקציבים מה-DB לתקופה. ריק -> dict ריק (ללא תקציב-דמה)."""
         q = self.db.query(Budget).filter(
             Budget.organization_id == self.organization_id,
             Budget.year == year,
@@ -616,24 +616,6 @@ class BudgetService:
                 return category
         
         return 'other_expense' if tx.amount < 0 else 'other_income'
-    
-    def _get_default_budget(self) -> Dict[str, float]:
-        """תקציב ברירת מחדל"""
-        return {
-            'sales': 500000,
-            'services': 200000,
-            'other_income': 50000,
-            'salary': 180000,
-            'rent': 25000,
-            'utilities': 5000,
-            'marketing': 30000,
-            'software': 10000,
-            'office': 5000,
-            'travel': 8000,
-            'insurance': 3000,
-            'professional': 15000,
-            'other_expense': 20000
-        }
     
     def _generate_alert_message(self, cat: BudgetCategory) -> str:
         """יצירת הודעת התראה"""
