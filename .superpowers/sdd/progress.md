@@ -1197,3 +1197,49 @@ how I'd framed "no item required deferral":
    `docs/superpowers/plans/2026-07-04-continuation-plan-open-items.md` for
    the Plan agent/accountant to decide, per the user's actual instruction
    ("מה שאתה לא יודע או מסתבך תשים בקובץ צדדי").
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04, post continuation-plan): Upay wallet activation
+
+Re-checked ANTHROPIC_API_KEY: still absent. Marked TaskCreate #4 (Wave 2)
+completed -- verified against progress.md that all of steps 7.1-7.10,
+8.1-8.6, 9.1-9.4, 10 (qa_gate.py), 11 (final deploy) are done; only 9.5
+(live chatbot test) remains, tracked separately as the standing
+ANTHROPIC_API_KEY blocker, not new work. Task #1 (SUMIT doc 1001/customer
+2095660683) reconfirmed as fully diagnosed already -- ground-truth swagger
+spec shown SUMIT has no delete endpoint and correctly rejects cancelling
+this document type; genuinely nothing left to fix in code, purely a
+pending-user manual-cleanup item.
+
+Found genuinely new, safe, non-destructive work: SUMIT_MODULE_COVERAGE.md's
+"wallet activation" entry (Upay) documented two real API endpoints
+(`setup_upay_credentials`, `open_upay_terminal`) already implemented at the
+integration layer but never wired to a route -- and separately, the ONE
+existing route that WAS wired (`/upay/open-terminal`) always crashed with
+an unhandled 500 (the SUMIT endpoint actually onboards a brand-new merchant
+terminal requiring bank details, not a per-amount payment session as its
+name/route implied -- a real semantic mismatch, not a transient failure).
+
+Fixed via TDD: `open_upay_terminal()`'s bare `Exception` -> `ValueError`,
+caught in the route -> clean 400 (matching this session's established
+*NotConfigured -> 400 pattern). Added `POST /api/payments/upay/setup`
+(forwards email/password straight to SUMIT, never persists the password --
+only a `connected` flag on `IntegrationConnection(source="upay")`, reusing
+the existing per-org credentials-vault model rather than inventing new
+storage) and `GET /api/payments/upay/status`. 5 new tests (auth-required,
+clean-400 regression, setup marks connected, password-not-persisted,
+org-isolation). 601 -> 606 passed, qa_gate PASSED. Deployed
+(`vercel --prod --yes`, no migration needed -- reused existing table),
+16/16 smoke. Live-verified both routes against real org 1: `/upay/status`
+correctly returns `connected: false` (Upay genuinely not linked for this
+org yet); `/upay/open-terminal` now returns a clean 400 with the corrected
+explanation instead of a 500. Deliberately did NOT call `/upay/setup`
+against the live SUMIT account myself -- that requires the org's own real
+Upay email/password, which only the user should ever enter.
+
+This closes the specific gap SUMIT_MODULE_COVERAGE.md flagged as blocking
+a live end-to-end test of the payment-link feature (`create_payment_link`
+returns "clearing module not installed" until Upay is linked) -- an org
+can now link their own Upay account through Rezef's own API/UI once a
+frontend control is added (not built this iteration -- backend-only pass).
+
+Commit: 31d0ee6.
