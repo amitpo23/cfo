@@ -783,3 +783,40 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 5: closed the coverage gap flagged
   suite), qa_gate PASSED. Test-only change (no service code touched) --
   not deployed, since there's no runtime behavior difference to verify
   live; the already-deployed iteration-4 build is unaffected.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 6: attempted the directive's own
+  step 2 (live browser walkthrough of SUMIT's office UI at app.sumit.co.il
+  vs Rezef's coverage) -- blocked cleanly: needs a real SUMIT login the
+  agent doesn't have and must not enter itself (stop-rule ב, missing
+  credential only the user can provide). No existing authenticated
+  browser tab either. Did not force this; pivoted instead to scanning for
+  more instances of the silently-swallowed-exception class already fixed
+  twice this session (alert_engine, cfo_brain_service) -- checked
+  reconciliation_dispatch.py, sync_engine.py, and expense_ocr_pipeline.py's
+  except-Exception blocks specifically. All three turned out to be
+  well-designed already: each surfaces per-item failures visibly (status
+  fields, error lists, sync_run.error_summary) rather than swallowing them
+  silently -- a real, different pattern from the two bugs already found,
+  not a third instance of the same one. No new bug found here; logged as
+  checked so a future pass doesn't re-scan the same three files.
+  Pivoted again to a productive substitute for the blocked live-SUMIT-UI
+  check: re-verified SUMIT_MODULE_COVERAGE.md's "Partial" items against
+  the already-downloaded swagger spec (same ground-truth method used
+  earlier this session for Step 8) instead of a live walkthrough. Found
+  concrete, documented API endpoints for 3 of 8 Partial items that were
+  previously just vague labels: payment pages (POST /billing/payments/
+  beginredirect/ -- generates a hosted payment-page URL given a customer
+  + line items, directly useful for the collections workflow: "send a
+  payment link" instead of just a balance notice); wallet activation
+  (POST /billing/generalbilling/openupayterminal + setupaycredentials --
+  Upay card-terminal setup); triggers (POST /triggers/triggers/subscribe
+  -- SUMIT's own description says "usually done by make.com/zapier, but
+  can also be used directly" -- a real webhook mechanism that could let
+  Rezef receive push notifications instead of relying purely on polling
+  sync, a potentially higher-value finding than a coverage checkbox).
+  None implemented -- documented with exact endpoint names + effort
+  estimates in SUMIT_MODULE_COVERAGE.md for whoever picks this up next.
+  Remaining Partial items (Masav mandates/returns, outgoing email/domain
+  settings, custom dashboards/views builder, file storage quotas) turned
+  up nothing under any obvious API terminology -- likely genuinely
+  correctly classified, not just unchecked.
