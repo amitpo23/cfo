@@ -1726,3 +1726,69 @@ live-verified the real response now shows honest nulls with a clear
 Hebrew reason instead of the old fake constants.
 
 Commit: b8581bd.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): ai_analytics_service.py dead fake-insight methods removed
+
+Same systematic grep sweep (`': [0-9]{4,}|'budget':|'target':|_change':
+[0-9]|_growth': [0-9]` across `src/cfo/services/*.py`) that found the two
+fixes above also surfaced `ai_analytics_service.py:770-826`: four methods
+(`_generate_revenue_insights`, `_generate_risk_insights`,
+`_generate_efficiency_insights`, `_generate_trend_insights`), each
+unconditionally returning a fully-fabricated `AIInsight` with a specific
+fake narrative and dollar figure (e.g. "12 לקוחות לא רכשו ב-6 חודשים
+אחרונים... ₪45,000", "חובות מעל 90 יום גדלו ב-25%... ₪35,000").
+
+Unlike the two fixes above, these were not reachable at all: read
+`generate_insights()` (line ~292) and confirmed it calls
+`self._real_insights()` — a separate, already-real implementation built
+earlier — never any of these four. Grepped `src/cfo/` and `tests/` for
+each method name: zero callers, zero test references anywhere. Genuinely
+dead code, not a live exposure.
+
+Deleted all four methods (58 lines). No new test needed (nothing
+referenced them to begin with) — ran the existing `ai_analytics`/
+`ai_intelligence`-keyed test subset first (6 passed) then the full suite:
+617 passed unchanged (pure deletion), qa_gate PASSED (all sections
+green, no schema change so no migration step this time). Deployed,
+16/16 smoke green. No live before/after check applies since this was
+unreachable code — noting that honestly rather than overclaiming a live
+verification that isn't meaningful here.
+
+This closes the third fabricated-data bug found via the same grep
+methodology this session (after `ap_service.py`'s fake bank identity and
+`kpi_service.py`'s fake comparisons above) — one exposed-but-unrendered,
+one exposed-and-fetched-but-unrendered, one entirely dead. All three
+patterns are worth remembering for future sweeps.
+
+Commit: b3fa142.
+
+## STATUS CHECKPOINT (2026-07-04, continuing per explicit user instruction to work continuously without pausing until Motzei Shabbat)
+
+User's most recent instruction: complete the full work plan by Motzei
+Shabbat, and stop pausing between iterations (`ScheduleWakeup` was
+flagged as too slow). Per that instruction this agent is chaining TDD
+cycles back-to-back with no scheduled delay between them, re-checking
+`vercel env ls production | grep -i anthropic` before/around each new
+item.
+
+Standing blockers (all require the user's own action, not to be
+attempted by the agent — unchanged):
+- `ANTHROPIC_API_KEY` still absent from Vercel production (re-verified
+  again this iteration) — blocks the live chatbot verification (item 9.5
+  in this doc's own runbook above: redeploy → info-only chat test →
+  write-action-with-confirmation chat test → update
+  PRODUCTION_READINESS.md/SUMIT_MODULE_COVERAGE.md).
+- `OPEN_FINANCE_USER_ID` not added (a production env-var change,
+  technically self-choosable per earlier research but still outside
+  this agent's remit without explicit permission).
+- Account/Transaction repair-vs-retire architecture decision (P0) — a
+  product/architecture call, not something to guess at.
+- SUMIT artifact cleanup (document 1001, customer 2095660683) —
+  destructive third-party actions requiring one-time explicit approval.
+- מבנה אחיד/PCN874 byte-level spec sourcing, and Payment Ethics Law
+  interest-rate legal verification — both untouched, unchanged.
+
+Continuing the loop: next up is another pass of the same systematic
+fabricated-data grep sweep across any `src/cfo/services/*.py` files not
+yet explicitly checked this session, since it has found 3 real bugs in a
+row this session alone.
