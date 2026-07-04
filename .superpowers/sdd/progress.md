@@ -1542,3 +1542,37 @@ for a scoped future decision (rebuild the 6 capabilities for real, or
 retire the dead routes entirely) -- not attempted this pass.
 
 Commit: 937e5f3.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): roadmap doc hygiene sweep
+
+Given how much of PRODUCT_AUDIT_AND_ROADMAP.md's P1 list turned out to be
+stale during today's other fixes, did a dedicated pass over the WHOLE P1
+list (10 items) and cross-checked each against current code/tests rather
+than trusting old text. Result: **9 of 10 items were already resolved**,
+some as far back as commit 23353ca (2026-07-03), none of it reflected in
+the P1 list itself even though the capability grid above it already said
+so in several cases:
+- #2 AP route: already routes to CFOAPDashboard correctly.
+- #3 VAT split: already has its own "תוקן ✅" section with a commit hash.
+- #4 CashFlowDashboard nav: already routed at /cashflow-detail.
+- #5 balance_sheet derived/disclaimer: already present (ledger_service.py:603-604).
+- #6 AR hardcoded values: already computed for real (verified earlier today).
+- #7 bank-reconciliation dummy data: fixed this iteration (see above);
+  AP discount: honest-null by design, not a bug.
+- #8 vendor withholding (856): honest-null by design; tax_id already real.
+- #9 opening balances: already works (re-ran tests, 5/5 green).
+- #10 date_trunc: already fixed with Python-side aggregation (verified, 9/9 green).
+
+Only #11 (today's new ComplianceAuditService finding) remains genuinely
+open. Also synced capability grid row 9 (expenses/OCR): both listed gaps
+(deduction_percent write path, duplicate-document detection) are already
+closed -- one by today's own continuation-plan item 2, one by an earlier
+session's 7.5 -- downgraded row 9's remaining gap to P2.
+
+This matters beyond bookkeeping: a stale roadmap is exactly the kind of
+thing that wastes a future agent's time re-investigating already-solved
+problems (the project's own memory flags this as a known risk --
+"אודיט אי-אמינות" from a prior multi-agent pass). Doc-only changes, no
+deploy needed.
+
+Commits: b9e5677, b3f83a3.
