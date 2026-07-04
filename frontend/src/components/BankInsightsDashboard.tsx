@@ -28,6 +28,7 @@ interface ReconciliationResult {
   matched_count: number;
   txn_count: number;
   unmatched_txns?: number[];
+  unmatched_txn_details?: Array<{ id: number; is_provisional: boolean }>;
   unmatched_docs?: Array<Record<string, any>>;
 }
 
@@ -260,6 +261,13 @@ export default function BankInsightsDashboard() {
             <StatusStat label="נכשלו" value={sumitDispatch?.failed ?? 0} tone="red" />
             <StatusStat label="לא נתמך" value={sumitDispatch?.unsupported ?? 0} tone="amber" />
           </div>
+          {!!reconciliation?.unmatched_txn_details?.some((d) => d.is_provisional) && (
+            <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-3">
+              {reconciliation.unmatched_txn_details.filter((d) => d.is_provisional).length} מתוך
+              {' '}{reconciliation.unmatched_txns?.length ?? 0} התנועות הלא-מותאמות הן provisional
+              (מ-Open Finance, טרם אומתו) — לא לסמוך עליהן לדיווח סופי עד אימות ה-consent.
+            </p>
+          )}
           {!!sumitDispatch?.items?.length && (
             <div className="mt-4 overflow-x-auto">
               <table className="w-full text-sm">
