@@ -296,9 +296,16 @@ export default function BankInsightsDashboard() {
           <Loader2 className="w-6 h-6 animate-spin" />
         </div>
       ) : insights.length === 0 ? (
-        <div className="text-center py-20 text-slate-400">
-          <Sparkles className="w-10 h-10 mx-auto mb-3 opacity-40" />
-          <p>אין תובנות עדיין. חבר בנק והפק תובנות.</p>
+        <div className="max-w-xl mx-auto py-16 text-center">
+          <Sparkles className="w-10 h-10 mx-auto mb-3 text-slate-300" />
+          <p className="text-slate-500 mb-6">אין תובנות עדיין. חברו בנק כדי להתחיל.</p>
+          <div className="text-right bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600 space-y-2">
+            <p className="font-semibold text-slate-700">איך זה עובד:</p>
+            <p>1. לחיצה על "חבר בנק" פותחת חלון מאובטח של Open Finance — שם תבחרו את הבנק שלכם ותתחברו לחשבון הבנק הרגיל שלכם (כניסה ישירה לבנק, לא דרכנו — אנחנו לא רואים ולא שומרים את פרטי ההתחברות לבנק).</p>
+            <p>2. תאשרו גישת קריאה-בלבד לתנועות החשבון (ללא יכולת ביצוע פעולות).</p>
+            <p>3. בסיום, סגרו את החלון וחזרו לכאן — לחצו "הפק תובנות" כדי לנתח את התנועות.</p>
+            <p className="text-slate-400">ניתן לחבר יותר מבנק אחד; כל חשבון מנוהל בנפרד ומוצג רק לארגון שלכם.</p>
+          </div>
         </div>
       ) : (
         <div className="space-y-6">

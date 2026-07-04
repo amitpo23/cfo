@@ -82,3 +82,84 @@ def test_bc_routes_return_not_configured_without_creds(client, owner):
     # With auth but no Open Finance credentials, thin pass-throughs return 400.
     r = client.get("/api/open-finance/merchants/m1", headers=owner["headers"])
     assert r.status_code == 400
+
+
+@pytest.fixture
+def of_configured_org(fresh_org):
+    """An isolated org with real-shaped (fake-valued) Open Finance credentials,
+    so get_open_finance_client() succeeds and create_connection is reachable."""
+    from cfo.database import SessionLocal
+    from cfo.models import IntegrationConnection
+    from cfo.services.credentials_vault import encrypt_credentials
+
+    org = fresh_org()
+    db = SessionLocal()
+    try:
+        db.add(IntegrationConnection(
+            organization_id=org["org_id"], source="open_finance", status="active",
+            credentials_encrypted=encrypt_credentials({
+                "client_id": "test-client-id", "client_secret": "test-client-secret",
+                "user_id": "test-user-id",
+            }),
+        ))
+        db.commit()
+    finally:
+        db.close()
+    return org
+
+
+def test_create_connection_returns_connect_url_and_persists_it(client, of_configured_org, monkeypatch):
+    from cfo.services.open_finance_client import OpenFinanceClient
+
+    async def fake_create_connection(self, body):
+        assert body["language"] == "he"
+        return {"id": "conn-123", "connectUrl": "https://consent.example.com/conn-123"}
+
+    monkeypatch.setattr(OpenFinanceClient, "create_connection", fake_create_connection)
+
+    r = client.post(
+        "/api/open-finance/connections", json={"language": "he"},
+        headers=of_configured_org["headers"],
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["connection_id"] == "conn-123"
+    assert body["connect_url"] == "https://consent.example.com/conn-123"
+
+    from cfo.database import SessionLocal
+    from cfo.models import BankConnection
+
+    db = SessionLocal()
+    try:
+        row = db.query(BankConnection).filter(
+            BankConnection.organization_id == of_configured_org["org_id"],
+            BankConnection.connection_id == "conn-123",
+        ).first()
+        assert row is not None
+        assert row.connect_url == "https://consent.example.com/conn-123"
+        assert row.status == "INACTIVE"
+    finally:
+        db.close()
+
+
+def test_create_connection_is_org_scoped(client, of_configured_org, fresh_org, monkeypatch):
+    from cfo.services.open_finance_client import OpenFinanceClient
+
+    async def fake_create_connection(self, body):
+        return {"id": "conn-456", "connectUrl": "https://consent.example.com/conn-456"}
+
+    monkeypatch.setattr(OpenFinanceClient, "create_connection", fake_create_connection)
+
+    client.post(
+        "/api/open-finance/connections", json={"language": "he"},
+        headers=of_configured_org["headers"],
+    )
+
+    other_org = fresh_org()
+    r = client.post(
+        "/api/open-finance/connections", json={"language": "he"},
+        headers=other_org["headers"],
+    )
+    # The other org has no Open Finance credentials configured -> 400, not a
+    # leak of of_configured_org's connection.
+    assert r.status_code == 400
