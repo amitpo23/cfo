@@ -1005,6 +1005,51 @@ class CashflowEntry(Base):
     )
 
 
+class VehicleDeductionProfile(Base):
+    """Real per-vehicle, per-tax-year inputs for the Israeli vehicle-expense
+    higher-of deduction rule (תקנות מס הכנסה (ניכוי הוצאות רכב) התשנ"ה-1995).
+
+    These are facts about the vehicle/tax-year, not about any single receipt —
+    odometer readings and שווי שימוש come from the vehicle's registration and
+    the Tax Authority's own price-group table, not from any expense line-item.
+    See services/expense_deduction_service.py for the calculator that reads
+    these and never fabricates a deduction when a required field is missing.
+    """
+    __tablename__ = "vehicle_deduction_profiles"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    tax_year = Column(Integer, nullable=False)
+    vehicle_label = Column(String(100), nullable=True)  # e.g. license plate, free text
+    running_costs_annual = Column(Numeric(precision=12, scale=2), nullable=True)
+    use_value_monthly = Column(Numeric(precision=12, scale=2), nullable=True)  # שווי שימוש
+    odometer_start = Column(Numeric(precision=10, scale=1), nullable=True)
+    odometer_end = Column(Numeric(precision=10, scale=1), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "tax_year", "vehicle_label", name="uq_vehicle_deduction_profile"),
+    )
+
+
+class HomeOfficeProfile(Base):
+    """Real home-office area inputs for the proportional home-office/internet
+    deduction rule. One active profile per organization."""
+    __tablename__ = "home_office_profiles"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, unique=True)
+    office_sqm = Column(Numeric(precision=8, scale=2), nullable=False)
+    total_home_sqm = Column(Numeric(precision=8, scale=2), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+
 class AlertRule(Base):
     """Configurable alert rules"""
     __tablename__ = "alert_rules"

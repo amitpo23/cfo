@@ -11,7 +11,7 @@ from .routes import (
     accounting, crm, payments, communications, admin,
     cashflow, sync, reports, financial_management, financial_operations
 )
-from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, manual_reconciliation, advanced_features, phase10_12, analytics
+from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, expense_deduction, manual_reconciliation, advanced_features, phase10_12, analytics
 from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding, accounting_events, collections, ai_chat, contacts
 from .dependencies import get_current_user
 from ..config import settings
@@ -165,6 +165,10 @@ app.include_router(
 )
 app.include_router(
     expenses.router, prefix="/api", tags=["Expense Filing"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
+    expense_deduction.router, prefix="/api", tags=["Expense Deduction"],
     dependencies=[Depends(get_current_user)],
 )
 app.include_router(
