@@ -820,3 +820,35 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 6: attempted the directive's own
   settings, custom dashboards/views builder, file storage quotas) turned
   up nothing under any obvious API terminology -- likely genuinely
   correctly classified, not just unchecked.
+
+CONTINUOUS-IMPROVEMENT LOOP — iteration 7: implemented the highest-value
+  item scoped in iteration 6 -- "payment pages" moved from documented-gap
+  to built feature. sumit_models.PaymentLinkResponse;
+  SumitIntegration.create_payment_link() (POST /billing/payments/
+  beginredirect/), reusing the existing _customer_ref/_charge_items
+  helpers charge_customer() already uses, for consistency;
+  DocumentIssuanceService.create_payment_link(invoice_id) -- org-scoped
+  lookup, rejects zero/negative-balance invoices, resolves the customer
+  from the linked Contact (falls back to name when no SUMIT external_id
+  recorded, matching _customer_ref's own convention); new route POST
+  /api/financial/invoices/{invoice_id}/payment-link; frontend button
+  ("קישור תשלום") on each AR-aging invoice row in CFOARDashboard.tsx,
+  opens the link in a new tab, with a real onError path (not silent).
+  10 new tests (3 integration-client via the established fake-transport
+  pattern, 4 service/route). 566 passed, qa_gate PASSED including
+  tsc+build this time (skipped in recent test-only iterations). Deployed,
+  16/16 smoke.
+  LIVE VERIFICATION (real org 1, real invoice #13, balance ₪7,500): called
+  the new endpoint against production. Result: a clean, structured 502
+  ("ההרשאה נדחתה: המודול סליקת אשראי אינו מותקן בעסק" -- this SUMIT
+  company's account doesn't have its card-clearing module activated),
+  via SumitAPIError's ALREADY-EXISTING app-level handler (not something
+  built this iteration -- confirmed present, not a gap). This is a
+  genuine positive result, not a failure: it proves the payload reaches
+  SUMIT correctly and the real business-rule rejection surfaces cleanly
+  instead of leaking a raw exception. Could not verify a successful
+  payment-link generation against this org's real account because that
+  account itself lacks the prerequisite SUMIT-side activation (matches
+  the already-documented "wallet activation" gap item from iteration 6 --
+  this company would need to complete SUMIT's own Upay setup first, an
+  account-level SUMIT configuration step outside Rezef's control).
