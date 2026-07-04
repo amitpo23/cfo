@@ -8,7 +8,6 @@ from cfo.database import SessionLocal
 from cfo.models import Bill, BillStatus, Invoice, Expense
 from cfo.services.payment_orchestration import PaymentOrchestrationService
 from cfo.services.forecasting_advanced import AdvancedForecastingService
-from cfo.services.compliance_audit import ComplianceAuditService
 
 
 @pytest.fixture(scope="module")
@@ -131,110 +130,9 @@ def test_scenario_analysis(acc):
         db.close()
 
 
-# ==================== PHASE 12: Compliance & Audit ====================
-
-def test_log_change(acc):
-    """Log change for audit trail."""
-    org_id = acc["org_id"]
-    db = SessionLocal()
-    try:
-        service = ComplianceAuditService(db, org_id)
-        result = service.log_change(
-            user_id=1,
-            action="update",
-            entity_type="invoice",
-            entity_id=123,
-            changes={"status": {"old": "draft", "new": "sent"}},
-        )
-
-        assert result["action"] == "update"
-        assert result["entity"] == "invoice/123"
-        assert result["user_id"] == 1
-    finally:
-        db.close()
-
-
-def test_get_audit_trail(acc):
-    """Retrieve audit trail."""
-    org_id = acc["org_id"]
-    db = SessionLocal()
-    try:
-        service = ComplianceAuditService(db, org_id)
-
-        # Log some changes
-        service.log_change(1, "create", "invoice", 100, {"amount": {"old": None, "new": 1000}})
-        service.log_change(1, "update", "invoice", 100, {"status": {"old": "draft", "new": "sent"}})
-
-        trail = service.get_audit_trail(entity_type="invoice")
-
-        # Service returns empty list by default (placeholder)
-        assert isinstance(trail, list)
-    finally:
-        db.close()
-
-
-def test_tax_report_1301(acc):
-    """Generate Israeli tax form 1301."""
-    org_id = acc["org_id"]
-    db = SessionLocal()
-    try:
-        service = ComplianceAuditService(db, org_id)
-        result = service.generate_tax_report_1301(year=2026)
-
-        assert result["form"] == "1301"
-        assert result["tax_year"] == 2026
-        assert "revenue" in result
-        assert "expenses" in result
-        assert "net_income" in result
-    finally:
-        db.close()
-
-
-def test_tax_report_1214(acc):
-    """Generate Israeli tax form 1214."""
-    org_id = acc["org_id"]
-    db = SessionLocal()
-    try:
-        service = ComplianceAuditService(db, org_id)
-        result = service.generate_tax_report_1214(year=2026)
-
-        assert result["form"] == "1214"
-        assert "income_statement" in result
-        assert "documentation_status" in result
-    finally:
-        db.close()
-
-
-def test_export_for_auditor(acc):
-    """Export for external auditors."""
-    org_id = acc["org_id"]
-    db = SessionLocal()
-    try:
-        service = ComplianceAuditService(db, org_id)
-        result = service.export_for_auditor(year=2026, format="json")
-
-        assert result["tax_year"] == 2026
-        assert "entities" in result
-        assert "summary" in result
-        assert "audit_trail" in result
-    finally:
-        db.close()
-
-
-def test_compliance_checklist(acc):
-    """Compliance readiness checklist."""
-    org_id = acc["org_id"]
-    db = SessionLocal()
-    try:
-        service = ComplianceAuditService(db, org_id)
-        result = service.compliance_checklist()
-
-        assert "audit_trail_enabled" in result
-        assert "tax_reports_available" in result
-        assert "audit_export_ready" in result
-    finally:
-        db.close()
-
+# Phase 12 (Compliance & Audit / ComplianceAuditService) was removed
+# 2026-07-04 — see phase10_12.py for why (fabricated data, zero real
+# consumers, real twins already exist for the tax reports).
 
 # ==================== API Endpoints ====================
 
@@ -257,9 +155,12 @@ def test_forecast_api(client, acc):
     assert "forecast" in data
 
 
-def test_tax_reports_api(client, acc):
-    """Test tax report generation via API."""
+def test_tax_report_1301_lives_at_annual_reports_not_advanced(client, acc):
+    """The real 1301 form is served by annual_reports.py; the old fabricated
+    /api/advanced/tax/report-1301 duplicate was removed."""
     r = client.get("/api/advanced/tax/report-1301?year=2026", headers=acc["headers"])
-    assert r.status_code == 200, r.text
-    data = r.json()["data"]
-    assert data["form"] == "1301"
+    assert r.status_code == 404
+
+    r2 = client.get("/api/annual-reports/1301?year=2026", headers=acc["headers"])
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["form"] == "1301"

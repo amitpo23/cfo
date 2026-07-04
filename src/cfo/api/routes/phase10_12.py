@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from ..dependencies import get_db, get_current_org_id
 from ...services.payment_orchestration import PaymentOrchestrationService
 from ...services.forecasting_advanced import AdvancedForecastingService
-from ...services.compliance_audit import ComplianceAuditService
 
 router = APIRouter(prefix="/advanced", tags=["Phase 10-12: Advanced Services"])
 
@@ -130,85 +129,13 @@ async def scenario_analysis(
     return {"status": "success", "data": result}
 
 
-# ==================== PHASE 12: Compliance & Audit ====================
-
-@router.post("/audit/log-change")
-async def log_change(
-    action: str,
-    entity_type: str,
-    entity_id: int,
-    changes: dict,
-    user_id: Optional[int] = None,
-    db: Session = Depends(get_db),
-    org_id: int = Depends(get_current_org_id),
-):
-    """Log a change for audit trail."""
-    service = ComplianceAuditService(db, org_id)
-    result = service.log_change(user_id, action, entity_type, entity_id, changes)
-    return {"status": "success", "data": result}
-
-
-@router.get("/audit/trail")
-async def get_audit_trail(
-    entity_type: Optional[str] = None,
-    entity_id: Optional[int] = None,
-    action: Optional[str] = None,
-    from_date: Optional[date] = None,
-    to_date: Optional[date] = None,
-    db: Session = Depends(get_db),
-    org_id: int = Depends(get_current_org_id),
-):
-    """Get filtered audit trail."""
-    service = ComplianceAuditService(db, org_id)
-    result = service.get_audit_trail(entity_type, entity_id, action, from_date, to_date)
-    return {"status": "success", "data": result}
-
-
-@router.get("/tax/report-1301")
-async def tax_report_1301(
-    year: int = 2026,
-    include_audit: bool = False,
-    db: Session = Depends(get_db),
-    org_id: int = Depends(get_current_org_id),
-):
-    """Generate Israeli tax form 1301."""
-    service = ComplianceAuditService(db, org_id)
-    result = service.generate_tax_report_1301(year, include_audit)
-    return {"status": "success", "data": result}
-
-
-@router.get("/tax/report-1214")
-async def tax_report_1214(
-    year: int = 2026,
-    include_audit: bool = False,
-    db: Session = Depends(get_db),
-    org_id: int = Depends(get_current_org_id),
-):
-    """Generate Israeli tax form 1214."""
-    service = ComplianceAuditService(db, org_id)
-    result = service.generate_tax_report_1214(year, include_audit)
-    return {"status": "success", "data": result}
-
-
-@router.get("/audit/export")
-async def export_for_auditor(
-    year: int = 2026,
-    format: str = Query("json", pattern="^(json|csv)$"),
-    db: Session = Depends(get_db),
-    org_id: int = Depends(get_current_org_id),
-):
-    """Export all data for external auditors."""
-    service = ComplianceAuditService(db, org_id)
-    result = service.export_for_auditor(year, format)
-    return {"status": "success", "data": result}
-
-
-@router.get("/audit/compliance-checklist")
-async def compliance_checklist(
-    db: Session = Depends(get_db),
-    org_id: int = Depends(get_current_org_id),
-):
-    """Get compliance readiness checklist."""
-    service = ComplianceAuditService(db, org_id)
-    result = service.compliance_checklist()
-    return {"status": "success", "data": result}
+# Phase 12 (Compliance & Audit) was removed 2026-07-04: every method in
+# ComplianceAuditService returned hardcoded/fabricated data (a
+# compliance_checklist() that unconditionally claimed "100% compliant,
+# audit-export ready" regardless of actual state; tax report generators
+# that always returned zeros). Real, working equivalents for the two tax
+# reports already exist at /api/annual-reports/1301 and /1214
+# (annual_report_service.form_1301/form_1214, computed from real data).
+# The other four (log-change, trail, export, checklist) had no real
+# implementation and zero frontend consumers (confirmed via grep) — see
+# docs/PRODUCT_AUDIT_AND_ROADMAP.md P1 #11 and .superpowers/sdd/progress.md.
