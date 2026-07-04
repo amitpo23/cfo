@@ -176,7 +176,11 @@ export default function AdminClientsDashboard() {
   const openClient = (orgId?: number) => {
     if (!orgId) return;
     localStorage.setItem(ACTIVE_ORG_KEY, String(orgId));
-    window.location.href = '/';
+    // /engine (EngineDashboard) is the one consolidated view — connections,
+    // ledger, aging, P&L and anomalies together — so the operator lands on
+    // that client's full picture immediately instead of the generic home
+    // page and having to click through every tab manually.
+    window.location.href = '/engine';
   };
 
   const fmtMoney = (n?: number) => `₪${Math.round(n || 0).toLocaleString('he-IL')}`;
