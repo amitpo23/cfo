@@ -210,8 +210,8 @@ class AdvancedAIService:
                 description='יחסי נזילות נמוכים מהרצוי',
                 risk_level=RiskLevel.HIGH if liquidity_data['score'] < 50 else RiskLevel.MEDIUM,
                 probability=0.6,
-                potential_impact=100000,
-                expected_loss=60000,
+                potential_impact=liquidity_data['gap'],
+                expected_loss=liquidity_data['gap'] * 0.6,
                 mitigation_actions=[
                     'לזרז גביית חובות',
                     'לנהל מו"מ להארכת תנאי תשלום לספקים',
@@ -695,6 +695,8 @@ class AdvancedAIService:
             'score': score,
             'current_ratio': current_ratio,
             'quick_ratio': quick_ratio,
+            # פער נזילות אמיתי (התחייבויות שוטפות מעל נכסים שוטפים) — לא הערכה קבועה.
+            'gap': max(0.0, payables - current_assets),
             'trend': 'stable',
         }
 
