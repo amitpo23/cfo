@@ -4,7 +4,7 @@
  * office-wide totals. Backed by /api/office/admin/clients.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, Loader2, AlertCircle, Search, RefreshCw, ExternalLink, Clock3, ListChecks, Landmark, WalletCards } from 'lucide-react';
+import { ShieldCheck, Loader2, AlertCircle, Search, RefreshCw, ExternalLink, Clock3, ListChecks, Landmark, WalletCards, Pencil, X } from 'lucide-react';
 import api from '../services/api';
 import { ACTIVE_ORG_KEY } from './OrgSwitcher';
 
@@ -12,6 +12,7 @@ interface AdminClient {
   id: number;
   organization_id?: number;
   sumit_company_id?: string;
+  tax_id?: string;
   company_id: string;
   name: string;
   is_active?: boolean;
@@ -98,6 +99,12 @@ export default function AdminClientsDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [syncingOrg, setSyncingOrg] = useState<number | null>(null);
+  const [editingClient, setEditingClient] = useState<AdminClient | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editTaxId, setEditTaxId] = useState('');
+  const [editIsActive, setEditIsActive] = useState(true);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -132,6 +139,7 @@ export default function AdminClientsDashboard() {
           id: c.organization_id,
           organization_id: c.organization_id,
           sumit_company_id: c.sumit_company_id,
+          tax_id: c.tax_id,
           company_id: c.sumit_company_id || c.tax_id || String(c.organization_id),
           name: c.name,
           is_active: c.is_active,
@@ -212,6 +220,38 @@ export default function AdminClientsDashboard() {
       setError(e?.response?.data?.detail || 'סנכרון הלקוח נכשל');
     } finally {
       setSyncingOrg(null);
+    }
+  };
+
+  const openEdit = (c: AdminClient) => {
+    setEditingClient(c);
+    setEditName(c.name || '');
+    setEditTaxId(c.tax_id || '');
+    setEditIsActive(c.is_active !== false);
+    setEditError(null);
+  };
+
+  const closeEdit = () => {
+    setEditingClient(null);
+    setEditError(null);
+  };
+
+  const saveEdit = async () => {
+    if (!editingClient?.organization_id) return;
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      await api.patch(`/admin/organizations/${editingClient.organization_id}`, {
+        name: editName,
+        tax_id: editTaxId || undefined,
+        is_active: editIsActive,
+      });
+      closeEdit();
+      await load();
+    } catch (e: any) {
+      setEditError(e?.response?.data?.detail || 'שמירת פרטי הארגון נכשלה');
+    } finally {
+      setEditSaving(false);
     }
   };
 
@@ -374,6 +414,12 @@ export default function AdminClientsDashboard() {
                       <RefreshCw className={`w-3 h-3 ${syncingOrg === c.organization_id ? 'animate-spin' : ''}`} />
                       סנכרן
                     </button>
+                    <button
+                      onClick={() => openEdit(c)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs hover:bg-slate-100"
+                    >
+                      <Pencil className="w-3 h-3" /> ערוך
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -381,6 +427,64 @@ export default function AdminClientsDashboard() {
           </tbody>
         </table>
       </div>
+
+      {editingClient && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-md w-full p-6" dir="rtl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold">עריכת פרטי ארגון</h2>
+              <button onClick={closeEdit} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">שם ארגון</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">ח.פ.</label>
+                <input
+                  type="text"
+                  value={editTaxId}
+                  onChange={(e) => setEditTaxId(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                  placeholder="51XXXXXXX"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={editIsActive}
+                  onChange={(e) => setEditIsActive(e.target.checked)}
+                />
+                ארגון פעיל
+              </label>
+              {editError && <div className="p-2 rounded-lg bg-red-50 text-red-700 text-sm">{editError}</div>}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={saveEdit}
+                  disabled={!editName.trim() || editSaving}
+                  className="flex-1 bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {editSaving ? 'שומר...' : 'שמור'}
+                </button>
+                <button
+                  onClick={closeEdit}
+                  className="flex-1 border border-slate-200 rounded-lg px-4 py-2 text-sm hover:bg-slate-50"
+                >
+                  ביטול
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

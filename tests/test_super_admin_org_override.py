@@ -227,3 +227,44 @@ def test_super_admin_can_trigger_client_sync_without_connections(client, fresh_o
     body = resp.json()
     assert body["organization_id"] == client_org["org_id"]
     assert body["results"] == []
+
+
+# --- super admin: editing another org's core details (backs the admin-clients UI edit action) ---
+
+def test_super_admin_can_edit_organization_name_and_tax_id(client, fresh_org, superadmin):
+    client_org = fresh_org()
+
+    resp = client.patch(
+        f"/api/admin/organizations/{client_org['org_id']}",
+        json={"name": "שם חדש בע\"מ", "tax_id": "512345678"},
+        headers=superadmin["headers"],
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["name"] == "שם חדש בע\"מ"
+    assert body["tax_id"] == "512345678"
+
+    # Persisted, not just echoed back.
+    fetched = client.get(f"/api/admin/organizations/{client_org['org_id']}", headers=superadmin["headers"])
+    assert fetched.json()["name"] == "שם חדש בע\"מ"
+
+
+def test_super_admin_can_deactivate_organization(client, fresh_org, superadmin):
+    client_org = fresh_org()
+
+    resp = client.patch(
+        f"/api/admin/organizations/{client_org['org_id']}",
+        json={"is_active": False},
+        headers=superadmin["headers"],
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["is_active"] is False
+
+
+def test_non_super_cannot_edit_another_organization(client, owner, tenant):
+    resp = client.patch(
+        f"/api/admin/organizations/{owner['user']['organization_id']}",
+        json={"name": "hijacked"},
+        headers=tenant["headers"],
+    )
+    assert resp.status_code == 403
