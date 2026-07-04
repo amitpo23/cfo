@@ -4,6 +4,7 @@
  * office-wide totals. Backed by /api/office/admin/clients.
  */
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ShieldCheck, Loader2, AlertCircle, Search, RefreshCw, ExternalLink, Clock3, ListChecks, Landmark, WalletCards, Pencil, X, UserPlus, Copy, Check } from 'lucide-react';
 import api from '../services/api';
 import { ACTIVE_ORG_KEY } from './OrgSwitcher';
@@ -327,6 +328,12 @@ export default function AdminClientsDashboard() {
           <input className="border rounded-lg pr-9 pl-3 py-2 text-sm" placeholder="חיפוש לפי שם/תיק"
             value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
+      </div>
+
+      <div className="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-600">
+        תצוגה זו לניהול פרופיל ארגון (שם/ח.פ), הפעלה/השבתה ויצירת התחברות למשתמש חדש.
+        להוספת תיק-לקוח חדש, הגדרת מפתח SUMIT של המשרד, וסנכרון רוחבי — ראו{' '}
+        <Link to="/office" className="text-indigo-600 hover:underline font-medium">ניהול משרד</Link>.
       </div>
 
       {error && <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-800 text-sm">{error}</div>}
