@@ -53,13 +53,26 @@ reconciliation, categories, and office/client management.
   `GET /api/collections/cases` (200, empty list) live -> confirmed
   `POST /api/ai/chat` returns a clean 400 (not a 500) while
   `ANTHROPIC_API_KEY` is unset.
-  **Not yet complete**: the AI chat tool-use loop has only ever been
-  exercised against mocked Anthropic responses — never a real model call.
-  This requires the user to add `ANTHROPIC_API_KEY` to Vercel production
-  (Vercel env vars only take effect on a new deploy, so a redeploy is
-  required after adding it) followed by one live read-only chat query and
-  one live write-with-confirmation chat action before Wave 2 can be
-  considered fully verified.
+  **Update 2026-07-04**: `ANTHROPIC_API_KEY` was added and a redeploy done.
+  The first live chat request confirmed the key is valid and correctly
+  wired (a real request reached `api.anthropic.com` and got a structured
+  response) — but the Anthropic account itself has no credit balance
+  ("Your credit balance is too low to access the Anthropic API"). This is
+  a billing gap on the Anthropic account, not a code issue. Fixed a real
+  code gap this surfaced: the SDK's `anthropic.APIError` wasn't caught,
+  leaking a raw 500 — now maps to a clean 503 (`AIChatUpstreamError`).
+  **Still not complete**: once credit is added at console.anthropic.com,
+  the same two live tests (one read-only query, one write-with-confirmation
+  action) still need to run before Wave 2's chatbot piece is verified
+  end-to-end.
+  **Update 2026-07-04 (continuation directive)**: all other Wave 2 items
+  (stages 7-11) are code-complete — verified via direct re-inspection, not
+  just re-reading prior notes. A live SUMIT data-parity check (org 1) found
+  and fixed a real P0 bug (customer identity sync, see `.superpowers/sdd/
+  progress.md`'s "WAVE 2 CONTINUATION DIRECTIVE" entry and `docs/audits/
+  2026-07-04-data-parity-sumit.md`) and closed the last open item, 7.8's
+  UI-surfacing half. 635 tests passing, qa_gate green, deployed and
+  smoke-tested throughout.
 
 ## Required Production Environment Variables
 

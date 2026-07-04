@@ -2060,3 +2060,83 @@ Anthropic account (see handoff doc), the exact two tests from the plan
 still need to run: (1) one read-only question, verify a real answer
 comes back; (2) one write-triggering message, verify a pending_action is
 returned and NOT executed (do not call confirm_action).
+
+## WAVE 2 CONTINUATION DIRECTIVE — full run (2026-07-04)
+
+Per `docs/superpowers/plans/2026-07-04-wave2-continuation-directive.md`
+(user-approved, no further confirmation needed). Order followed exactly
+as specified: reconcile → task A (data parity) → remaining stage 7/8
+items → task B (quote cancellation) → stage 10-11.
+
+**Reconciliation against progress.md** (before doing any new work):
+confirmed via direct code inspection (not just re-reading old entries)
+that 7.1–7.7, 7.9–7.10, 8.1–8.6, 9.1–9.4 are ALL already done — verified
+`dashboard_service.py` (COGS real), `payroll_service.py` (imports
+`ledger_service`, calls `add_payroll_entry`), zero `datetime.utcnow()`
+anywhere in `src/`/`tests/` (7.10 done, contradicting the stale progress
+note that flagged it as still needing work), zero `get_debt_report`/
+mandate/refund gaps beyond what Step 8's own audit already closed.
+Confirmed genuinely open: only 7.8's UI-surfacing half.
+
+**Task A — live SUMIT data-parity check (org 1, company 439924597)**:
+full report in `docs/audits/2026-07-04-data-parity-sumit.md`. AR totals
+matched exactly (₪245,527/15 invoices, byte-for-byte). Found and fixed a
+real P0 data-integrity bug: every invoice showed customer "Unknown" in
+production because `fetch_customers()` derived the roster from SUMIT's
+incomplete `get_debt_report()` (2 generic rows) instead of real documents
+via `list_documents()` (which SUMIT actually populates correctly, proven
+live). A second, compounding bug was found while verifying the first:
+`_list_documents_all`'s "full sync" lookback was hard-capped at 365 days,
+directly contradicting its own docstring ("reaches back years, not just
+365 days") — a customer whose only invoices were from 2024 was invisible
+to any full resync. Both fixed (commits `e4809ee`, `fc36d47`), plus a
+self-healing `backfill_invoice_contacts()`/`backfill_bill_vendors()` pair
+wired into every `run_full_sync()` for any invoice/bill left with a null
+contact from before the fix. Live-verified post-deploy: triggered a real
+sync for org 1, `/api/ar/aging` now shows the correct real customer name
+on all 15 invoices, matching SUMIT exactly. Also fixed a stale, misleading
+VAT disclaimer (`daily_reports_service.py` claimed "18% derived" when the
+real figure already comes from real per-document tax fields).
+
+**Task B — SUMIT quote-cancellation research**: no alternative API
+endpoint exists (confirmed against the full Step 8 swagger audit already
+documented in `SUMIT_API_REFERENCE.md` — only the already-known
+`cancel`/`movetobooks`/etc. exist, no separate close/void/delete). A
+fresh swagger.json refetch is currently blocked (403) via both curl and
+WebFetch. Did NOT write a blind browser-console script — the one
+precedent (`sumit_daily_file_expenses.js`) was written from direct DOM
+inspection of the real page, and writing one without ever seeing SUMIT's
+actual quote-management page would be a genuine plausible-but-wrong risk.
+Documented as a real stopping-rule case (credential/access only the user
+can provide) in `docs/audits/2026-07-04-quote-cancellation-research.md`
+— did not halt the whole run, moved to the next unblocked item per the
+directive's own instruction.
+
+**7.8 completion**: added an additive `unmatched_txn_details` field
+(`{id, is_provisional}`) to `bank_reconciliation.reconcile()` alongside
+the existing `unmatched_txns` (kept as a bare `list[int]` — 3+ existing
+typed consumers confirmed, same non-breaking-change reasoning as the
+earlier session pass that scoped this out). `BankInsightsDashboard.tsx`
+now shows an amber notice when any unmatched transaction is provisional.
+Live-checked the page loads cleanly post-deploy (no crash from the new
+field) — the actual badge couldn't be visually verified against real
+data since Open Finance isn't connected yet (blocked on
+`OPEN_FINANCE_USER_ID`), noting that honestly rather than overclaiming.
+
+**Stage 10-11 (this run)**: qa_gate PASSED after every commit (6 commits
+this run: `e4809ee`, `fc36d47`, `31b1d0c`, `0446b18`, `c0ffbd1`, plus this
+doc update), each deployed to prod individually and smoke-tested (16/16
+throughout), 635 tests passing (+8 this run). All docs/commits pushed.
+
+**Wave 2 status**: code-complete across all of stages 7-11. The only
+remaining gap (9.5's full live verification) is blocked purely on the
+user adding credit to the Anthropic account — not a code gap, tracked in
+the handoff doc, not re-litigated here.
+
+**Standing blockers, unchanged** (reported once at the start of this run
+per the directive, not re-asked): Anthropic account credit, `OPEN_FINANCE_
+USER_ID`, Account/Transaction P0 decision (dossier written, no decision
+yet — did not retire/repair without one), SUMIT manual cleanup (doc 1001
++ customer 2095660683, reserved for the user), quote-cancellation browser
+script (needs the user's live SUMIT session to inspect the real DOM),
+merge-to-main approval (now 250+ commits ahead).
