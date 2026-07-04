@@ -2221,3 +2221,46 @@ org's Settings page. Org 2 is worth prioritizing — it has ₪1.5M of real
 invoice history sitting with wrong customer names that a working
 credential + one re-sync would immediately fix (the underlying fix is
 already deployed and proven against org 1).
+
+## 2026-07-04 (continued) — frontend half of the same fix: surface last_sync_errors
+
+The backend fix above made `GET /api/integration/status` return
+`last_sync_errors` honestly, but nothing consumed it — `CFOSyncDashboard.tsx`
+(the page linked from `/sync` and Settings) still rendered a plain green
+"מחובר" for SUMIT based only on `configured.sumit`, which stays `true` for
+orgs 2/3/4 (credentials ARE configured, just wrong). An org owner visiting
+their own sync page would see nothing wrong. Also the "שגיאות" (errors)
+metric only counted `status === 'failed'` runs, missing the `'partial'`
+status the fix above actually produces.
+
+Fixed: `CFOSyncDashboard.tsx` now derives `sumitHealthy = configured.sumit
+&& !last_sync_errors.sumit`; the top status badges and the "מסמכים" metric
+card flip to a red "שגיאת חיבור" with the real error text when unhealthy;
+the errors counter now includes `'partial'` runs. No backend change needed
+— `last_sync_errors` already existed from the prior fix.
+
+No frontend test runner exists in this project (confirmed: no `*.test.*`
+files, no test script in `package.json`) — verified instead via `tsc
+--noEmit` (clean), `npm run build` (clean), full backend suite unaffected
+(640 passed), `qa_gate.py` PASSED, deployed, 16/16 smoke, then live browser
+verification: switched the super-admin org-switcher to org #2 (שף אליהב
+כהן) on `https://cfo-2.vercel.app/sync` — confirmed the top badge now
+reads "שגיאת חיבור" (red) and the מסמכים card shows "4 entity types had
+errors", where before this fix it showed a plain green "מחובר". Org 1
+(healthy) still shows the correct green state — no regression.
+
+Also corrected a stale P0 entry in `docs/PRODUCT_AUDIT_AND_ROADMAP.md`
+claiming `AgreementCashFlow` has no DB persistence — verified live that
+`CashflowAgreement`/`CashflowEntry` tables and the write-back already
+exist (`models.py:968,991`); the roadmap's own grid table already said so,
+the P0 list just hadn't been updated.
+
+Commit: `fe836d3`.
+
+**Advisor guidance this iteration** (both fixes above stemmed from it):
+verify the class of bug, not just the one instance fixed (this is what
+surfaced the org 2/3/4 credential problem in the first place); stop
+mining the fabricated-data grep sweep further — diminishing, judgment-
+relitigating returns; the merge-to-main decision and the SUMIT credential
+re-entry are now the highest-value remaining items, and both are the
+user's to act on, not code work.
