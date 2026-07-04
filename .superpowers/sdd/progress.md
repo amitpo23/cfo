@@ -1640,3 +1640,35 @@ SUMIT-UI data-compatibility verification (blocked on a login I shouldn't
 perform myself); `OPEN_FINANCE_USER_ID` (clarified today: likely
 self-choosable, but still a production env-var change requiring explicit
 permission, not something to guess at).
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): Open Finance provisional-flag (data layer)
+
+Checked roadmap grid row 8 (Open Finance) for its 3 stated gaps beyond
+OPEN_FINANCE_USER_ID: "no per-org credentials UI" (already resolved --
+CFOSyncDashboard's Open Finance Credentials card, confirmed earlier
+today), "provisional label not shown" (genuinely open -- `is_provisional`
+didn't exist anywhere), "no trust/idempotency layer" (already resolved --
+`_upsert_bank_transaction`'s payload-hash dedup on (org, external_id,
+source), confirmed by reading the code).
+
+Fixed the one genuinely-open piece, scoped to the data layer: added
+`BankTransaction.is_provisional` (additive column) and set it at creation
+time in `SyncEngine._upsert_bank_transaction` -- True for source ==
+"open_finance", False otherwise -- directly implementing the principle
+already documented in the roadmap's own preamble ("Open Finance data is
+provisional until the consent journey + USER_ID are live"), not a guess.
+2 new tests, 616 passed, qa_gate PASSED (schema drift resolved via
+`apply_additive` locally, then via the real `/api/admin/db/migrate`
+self-heal endpoint against Neon prod -- verified `schema_drift_check.py`
+clean afterward). Deployed, 16/16 smoke, live-verified the reconciliation
+route still works cleanly with the new column (no crash; org 1 currently
+has zero bank transactions to inspect populated, expected given
+OPEN_FINANCE_USER_ID is still missing).
+
+Deliberately NOT done: surfacing this flag in the actual reconciliation
+UI, which would require propagating it through `BankTxnLite` ->
+`reconcile()` -> the route response -> a frontend badge -- real plumbing
+across the whole pipeline, meaningfully bigger than this bounded fix.
+Left as the clear next step for whoever continues this.
+
+Commit: 98e314c.
