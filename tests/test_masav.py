@@ -215,9 +215,18 @@ def test_is_valid_israeli_id_checkdigit_rejects_invalid():
     assert is_valid_israeli_id("789621340") is False  # ספרת ביקורת שגויה
     assert is_valid_israeli_id("123456789") is False
     assert is_valid_israeli_id("") is False
-    assert is_valid_israeli_id("12345") is False        # קצר מדי
-    assert is_valid_israeli_id("12345678901") is False  # ארוך מדי
+    assert is_valid_israeli_id("12345678901") is False  # ארוך מדי (מעל 9 ספרות)
     assert is_valid_israeli_id("abcdefghi") is False    # לא ספרות
+
+
+def test_is_valid_israeli_id_zero_pads_short_ids():
+    """ת.ז אמיתית שמתחילה באפס נשמרת לעיתים בלי ה-0 המוביל (8 ספרות
+    במקום 9) -- למשל אחרי ייבוא מגיליון Excel שמוריד אפסים מובילים.
+    יש לבדוק מול הצורה המלאה (מרופדת ב-0), לא לפסול על הסף לפי אורך."""
+    # 062473178 היא ת.ז תקינה (ביקורת ספרה עוברת); מאוחסנת לעיתים כ-62473178.
+    assert is_valid_israeli_id("062473178") is True
+    assert is_valid_israeli_id("62473178") is True   # אותה ת.ז, בלי ה-0 המוביל
+    assert is_valid_israeli_id("2473178") is False    # השחתת נתונים אמיתית, לא ת.ז
 
 
 # ---------- ולידציית קוד בנק (מול רשימת חברי מס"ב) ----------

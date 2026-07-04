@@ -160,10 +160,15 @@ def is_valid_israeli_id(id_number: str) -> bool:
     """ביקורת ספרה (אלגוריתם Luhn) לת.ז/ח.פ ישראלי בן 9 ספרות.
 
     משמש הן לת.ז (9 ספרות) והן למספר חברה/ח.פ (גם 9 ספרות) — אותו אלגוריתם.
+    מרפד באפסים מובילים לפני הבדיקה: ת.ז שמתחילה ב-0 מאוחסנת לעיתים קרובות
+    בלי ה-0 המוביל (8 ספרות) — למשל אחרי ייבוא מ-Excel/CSV. אפסים מובילים
+    שמתווספים אינם משנים את סכום הביקורת (משקל x 0 = 0), כך שריפוד הוא
+    שחזור מדויק של המספר המקורי ולא הרחבה מסוכנת של הקבלה.
     """
     digits = str(id_number).strip()
-    if not digits.isdigit() or len(digits) != 9:
+    if not digits or not digits.isdigit() or len(digits) > 9:
         return False
+    digits = digits.zfill(9)
     total = 0
     for i, ch in enumerate(digits):
         val = int(ch) * (1 if i % 2 == 0 else 2)
