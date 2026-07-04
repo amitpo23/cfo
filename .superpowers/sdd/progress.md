@@ -2160,3 +2160,64 @@ triggers there — score ≥ 70 — confirmed no regression on the other 2
 risks that did render, both showing correct real numbers).
 
 Commit: `edf1e9b`.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): SUMIT credential-fix propagation check → real cross-org bug found
+
+Advisor flagged a real gap before continuing the grep sweep further: the
+customer-sync fix (`fetch_customers()`) had only been live-verified against
+org 1. Checked orgs 2-5's `/api/ar/aging` directly — org 2 (₪1,498,072 /
+21 invoices) still showed customer "Unknown" for every invoice.
+
+Root cause turned out to be a **different, pre-existing problem, not a
+propagation gap in the fix itself**: orgs 2, 3, and 4 (of 5 total) have
+invalid SUMIT credentials — every real API call returns "Invalid
+Credentials (CompanyID/APIKey are incorrect)". Org 2 has real historical
+data (synced before credentials broke, or before this fix existed) sitting
+with wrong customer names it can no longer self-correct until its
+credentials are fixed. Orgs 3/4 have 0 invoices and were created
+2026-06-30 — consistent with having never had valid credentials since
+onboarding. Orgs 1 and 5 are confirmed healthy.
+
+This is a credential-value problem — explicitly the user's action, not
+something to guess at or enter. But it exposed two real, fixable code
+bugs that made it **completely invisible to anyone**, including the org
+owners: (1) every `fetch_*` method in `sumit_connector.py` swallowed its
+own exception and returned an empty-but-"successful" `FetchResult`. so
+`run_full_sync()` reported `status=completed` even when 100% of real
+SUMIT calls failed; (2) `IntegrationConnection.status` is set once at
+configure-time and never re-derived from actual sync health, so
+`GET /api/integration/status` claimed `connections.sumit == "active"`
+regardless.
+
+Fixed via TDD (`tests/test_sync_error_visibility.py`, 4 new tests):
+`FetchResult` gained an `error` field; `SyncEngine._sync_entity_type`
+raises when it's set, routing into `run_full_sync`'s **existing**
+error-aggregation machinery (`errors`/`error_summary`/`error_details`/
+`SyncStatus.PARTIAL`) that already existed but was never reached.
+`GET /api/integration/status` gained a `last_sync_errors` field sourced
+from the latest `SyncRun`, deliberately NOT touching `connections.sumit`
+or `configured.sumit` (4 existing dashboards render `connections.sumit`
+truthily — checkmark vs. warning — so overwriting it to `"error"` would
+misreport broken-but-configured as disconnected). `fetch_bank_transactions`
+excluded on purpose: its failure is permanent/credential-independent
+(SUMIT doesn't expose that listing at all), so treating it as a health
+signal would falsely flag every org including the healthy ones.
+
+640 tests passing (+4), qa_gate PASSED, deployed, schema drift clean (no
+migration needed), 16/16 smoke. Live-verified against production:
+re-triggering org 2's sync now returns `status: "partial"`,
+`error_summary: "4 entity types had errors"`; `GET /api/integration/status`
+for org 2 now shows the real error in `last_sync_errors` while
+`connections.sumit`/`configured.sumit` stay correct; orgs 1 and 5 show
+`last_sync_errors: {}` — no regression.
+
+Full findings and per-org table: `docs/audits/2026-07-04-sumit-credential-status.md`.
+
+Commit: `510f1e3`.
+
+**New standing blocker (user action required, added to the list above)**:
+orgs 2/3/4's SUMIT `CompanyID`/`APIKey` need to be re-entered via each
+org's Settings page. Org 2 is worth prioritizing — it has ₪1.5M of real
+invoice history sitting with wrong customer names that a working
+credential + one re-sync would immediately fix (the underlying fix is
+already deployed and proven against org 1).
