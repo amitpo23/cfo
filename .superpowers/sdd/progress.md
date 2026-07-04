@@ -2353,3 +2353,54 @@ Account/Transaction, ComplianceAuditService (already removed above),
 PCN874/מבנה אחיד, the Payment Ethics Law interest rate.
 
 Commit: `a7d1643`.
+
+## 2026-07-04 (continued) — roadmap reconciliation + P0 write-back verification closed
+
+User confirmed continuing the loop again ("אתה יכול להמשיך בתוכנית בינתיים").
+
+**Reconciliation** (same staleness pattern as `AgreementCashFlow`/
+`ComplianceAuditService` earlier): re-checked the P1/P2 "עשרות שעברו
+שער-ביקורת" table against actual code. Two more entries were already
+fully built and just never marked done: "workflow גבייה מתמשך"
+(`CollectionCase` model — status open/promised/paid/escalated, `attempts`
+JSON log, `promise_date` — already wired into
+`alert_engine._check_stale_collection_cases()`) and "Open Finance
+provisional staging" (`BankTransaction.is_provisional` already exists,
+already wired into `bank_reconciliation.py` and `BankInsightsDashboard.tsx`
+via 7.8 earlier this session). Both struck through in the roadmap doc.
+
+**P0 item #3 closed — verified, not just read.** The roadmap claimed no
+write-back verification exists when creating documents in SUMIT
+("`SumitConnector` מנרמל וסופר בלבד"). True for that class, but the real
+write path is `DocumentIssuanceService.create_document()` (didn't exist
+yet at the original 2026-06-19 audit) — it already only commits the
+local `Invoice` row after successfully capturing a real `document_id`/
+`document_number` from SUMIT's response. Rather than trust that reading
+of the code, wrote `test_create_document_sumit_failure_leaves_no_false_
+success_invoice` (`tests/test_document_issuance.py`): forces a genuine
+`SumitAPIError` from the SUMIT call, then re-queries with a **fresh** DB
+session to confirm zero `Invoice` rows exist for that org. Passed on
+first run — `get_db()`'s dependency never calls `db.commit()` itself
+(only the service's own final line does, which is never reached on
+failure), so SQLAlchemy's implicit rollback-on-close already protects
+against a silent false-success record. No code fix needed; this
+converts an assumption into a proven, regression-tested guarantee.
+
+**P0 list is now fully accounted for**: #1 (AgreementCashFlow) and #3
+(write-back verification) resolved/verified this session; #2 (Open
+Finance) and #4 (env/deploy secrets) are both user-action blockers, not
+code gaps — every item on the original P0 list has a real disposition
+now, none are open-and-unaddressed.
+
+666 tests passing (+1), qa_gate PASSED, deployed, 16/16 smoke.
+
+Commit: `9332af9`.
+
+**Where this leaves the loop**: the P0 list, the P1 grid (capability
+table), and most of the P1/P2 candidate table are now reconciled against
+real code — no more silently-stale "still open" claims found this pass.
+Remaining genuinely-open items are either user-action blockers (see
+`docs/superpowers/plans/2026-07-04-motzei-shabbat-handoff.md`) or
+explicitly spec-/legally-gated (PCN874 exact field spec not located;
+Payment Ethics Law interest rate needs legal confirmation, not a web
+search) — both correctly left unimplemented rather than guessed at.
