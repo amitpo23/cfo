@@ -1495,3 +1495,50 @@ architectural/product question, not attempted; noted for whoever makes
 that call.
 
 Commit: 8cee228.
+
+## CONTINUOUS-IMPROVEMENT LOOP — iteration (2026-07-04): ap_service fake bank identity + compliance_audit finding
+
+Dispatched a research fork to check the 4 highest-visibility dashboards
+(KPIDashboard, CFOOverview, ExecutiveDashboard, BudgetDashboard) for the
+"real API call but some fields still fabricated" pattern -- came back
+clean, no issues found in those four.
+
+While that ran, continued the backend hardcode grep from a different
+angle (searching bank/account-number-shaped literals specifically) and
+found a real one myself: `ap_service.py`'s `run_bank_reconciliation()`
+hardcoded `bank_name='בנק לאומי'` and `account_number='12-345-67890'` into
+every `BankReconciliationReport` -- same fabrication class as the
+`revenue_analytics.py` fix earlier today. Traced its actual live exposure
+carefully: it IS reachable via a real route
+(`GET /api/financial/ap/bank-reconciliation`), but that route's own
+response dict already excludes both fields before returning -- so today's
+live UI exposure is zero (confirmed the *different* function that actually
+feeds ExecutiveDashboard.tsx's "bank_reconciliation" panel is
+`FinancialControlService.get_control_overview()` via
+`executive_dashboard_service.py`, not this one at all). Still a real
+landmine for any future caller reading the field directly. Fixed: made
+both fields `Optional[str] = None`, removed the hardcoded values, added a
+test (zero existing coverage for this function beforehand). 611 passed,
+qa_gate PASSED, deployed, 16/16 smoke, live-verified the route's real
+response shape (empty/zero for org 1 today -- no bank transactions
+currently -- but no crash and no possibility of the fake fields leaking
+through).
+
+**Bigger finding, documented not fixed**: `ComplianceAuditService`
+(compliance_audit.py) is an entirely fake stub service, live-registered
+across 6 routes (`/api/audit/log-change`, `/api/audit/trail`,
+`/api/tax/report-1301`, `/api/tax/report-1214`, `/api/audit/export`,
+`/api/audit/compliance-checklist`) -- every method returns hardcoded or
+always-empty placeholder data;
+`compliance_checklist()` literally always returns "100% compliant,
+audit-export-ready" regardless of any actual state. Confirmed via grep:
+zero frontend consumers call any of these 6 routes today, so no live
+exposure. Rebuilding this properly would mean 6 separate real features,
+some duplicating `annual_report_service.py`'s already-real 1301/1214 draft
+generation (a second, parallel, fully-fake implementation of the same tax
+forms) -- too large in scope for a single bounded loop iteration. Flagged
+here and should be added to `PRODUCT_AUDIT_AND_ROADMAP.md` as a P1/P2 item
+for a scoped future decision (rebuild the 6 capabilities for real, or
+retire the dead routes entirely) -- not attempted this pass.
+
+Commit: 937e5f3.
