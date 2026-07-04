@@ -1002,3 +1002,45 @@ CONTINUOUS-IMPROVEMENT LOOP — iteration 13: re-verified capability-grid
   precise. Items 3 (expense sync) and 7 (Masav bank-detail validation)
   re-checked and remain accurately documented as still-open. No code
   changed -- documentation-only, nothing to deploy.
+
+CONTINUATION PLAN — item 1 (contact resolve-or-create, DONE): the user
+  asked for a briefing document to hand to a Plan agent for a proper
+  continuation plan. Wrote docs/superpowers/plans/2026-07-04-
+  continuation-briefing.md (8 open questions with full context),
+  dispatched a Plan agent against it. It verified everything against
+  live code (not just the briefing's claims) and surfaced two NEW
+  findings the briefing hadn't flagged:
+  - DocumentManager.tsx sends a free-text customer name directly as
+    SUMIT's customer_id on EVERY document issuance today, with zero
+    Contact lookup anywhere in the repo -- the likely root cause of the
+    already-tracked "2095660683" ghost-customer artifact, and a live bug
+    (not a hypothetical future chatbot risk as originally framed).
+  - Expense.deduction_percent is a fully dead feature end-to-end: the
+    field exists and annual_report_service already honors it in 1301
+    calculations, but no API/service path lets any user actually set it.
+  Saved the Plan agent's output to docs/superpowers/plans/2026-07-04-
+  continuation-plan.md (5 prioritized TDD items + 6 explicit
+  pending-user questions it correctly declined to guess at). Verified
+  both new findings myself against the actual code before trusting them
+  (grep confirmed both precisely as described).
+  Implemented item 1 (highest priority): new contact_service.py
+  (search_contacts, resolve_or_create_contact -- exact case-insensitive
+  name match reuses an existing Contact, only creates one when nothing
+  matches); new GET /api/contacts?query= route; document_issuance_
+  service.create_document now resolves/creates a Contact before building
+  the SUMIT request, sends contact.external_id (once known) instead of
+  the raw name, sets invoice.contact_id, and persists SUMIT's returned
+  customer_id back onto the Contact so the next document for the same
+  name reuses it. DocumentManager.tsx customer field is now an
+  autocomplete against the new endpoint. 10 new tests, 576 passed
+  (up from 566), qa_gate PASSED (tsc+build included), deployed, 16/16
+  smoke, and live-verified: GET /api/contacts?query=Unknown against real
+  org 1 data returned real matches correctly.
+  SIDE-FINDING (real, not chased -- separate bug, out of scope for this
+  fix): org 1's Contact table has only 2 rows despite 21 real synced
+  invoices, and both are literally named "Unknown" (distinct real
+  external_ids: 445335143, 522073078). The SUMIT sync path that creates
+  Contact rows is producing generic placeholder names instead of real
+  customer names -- a genuine data-quality bug in the sync pipeline, not
+  in the document-issuance path just fixed. Logged here for whoever picks
+  up the next gap-mapping pass; not investigated further this iteration.
