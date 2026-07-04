@@ -2264,3 +2264,29 @@ mining the fabricated-data grep sweep further — diminishing, judgment-
 relitigating returns; the merge-to-main decision and the SUMIT credential
 re-entry are now the highest-value remaining items, and both are the
 user's to act on, not code work.
+
+## 2026-07-04 (continued) — removed ComplianceAuditService (fabricated skeleton, zero consumers)
+
+User confirmed continuing the loop while they handle their own blockers
+separately ("אני אשלים את שלי בהמשך"). Picked up the roadmap's P1 #11
+finding: `ComplianceAuditService` (`compliance_audit.py`) — all 6 methods
+returned hardcoded/fabricated data; `compliance_checklist()`
+unconditionally claimed `"audit_export_ready": True` / `"100%"` document
+status regardless of actual org state, tax report generators always
+returned zeros. Confirmed via grep: zero frontend consumers of any of the
+6 `/api/advanced/audit/*` and `/api/advanced/tax/report-*` routes, and
+the two tax-report routes duplicate a REAL, already-working
+implementation at `/api/annual-reports/1301`/`1214`
+(`annual_report_service.form_1301`/`form_1214`, computed from real data).
+
+Per advisor guidance (explicitly lower severity than the sync-visibility
+fix above — zero live consumers means nobody currently sees the fake
+"100% compliant" claim): deleted the service file and all 6 routes
+rather than rewrite fake-asserting tests for a surface nobody calls,
+matching this session's `mock_integration.py`/`LegacySyncRetiredError`
+precedent. 634 tests passing (net -5 after removing 6 fake-behavior
+tests and adding 1 confirming the old route 404s while the real
+`/api/annual-reports/1301` still works), qa_gate PASSED, deployed,
+16/16 smoke.
+
+Commit: `8abb410`.
