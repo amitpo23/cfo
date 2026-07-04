@@ -175,7 +175,7 @@ def vat_report(db, organization_id: int, year: int, month: int) -> dict[str, Any
         "sales_documents": sales_docs,
         "purchase_documents": purchase_docs,
         "derived": True,
-        "disclaimer": DISCLAIMER + " מע\"מ נגזר 18% (ה-API של SUMIT אינו חושף פירוק VAT).",
+        "disclaimer": DISCLAIMER,
     }
 
 

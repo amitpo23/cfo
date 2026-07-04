@@ -122,6 +122,18 @@ class SyncEngine:
                 })
                 counts[entity_type] = {"error": str(e)}
 
+        # Self-heal any invoice/bill left with a null contact_id/vendor_id from
+        # before fetch_customers() was fixed to derive real customers from
+        # documents instead of SUMIT's incomplete get_debt_report() (2026-07-04).
+        # Cheap (indexed WHERE ... IS NULL scan) and safe to run every sync.
+        try:
+            counts["contact_backfill"] = {
+                **self.backfill_invoice_contacts(),
+                **self.backfill_bill_vendors(),
+            }
+        except Exception as e:
+            logger.error("Contact backfill failed: %s", e)
+
         # Update SyncRun
         has_errors = len(errors) > 0
         sync_run.status = SyncStatus.PARTIAL if has_errors else SyncStatus.COMPLETED
@@ -143,6 +155,63 @@ class SyncEngine:
         self.db.refresh(sync_run)
 
         return sync_run
+
+    def backfill_invoice_contacts(self) -> dict:
+        """Re-resolve contact_id for existing invoices left null because their
+        real customer wasn't in the Contact table yet when the invoice was
+        synced (root cause: fetch_customers() used to derive customers from
+        SUMIT's incomplete get_debt_report() instead of real documents --
+        fixed 2026-07-04, see sumit_connector.py). A normal re-sync doesn't
+        self-heal this: _upsert_invoice's payload_hash short-circuit skips an
+        invoice whose underlying SUMIT document hasn't changed, so it never
+        reaches the contact_id assignment even after the Contact row exists.
+        Pure local-DB repair — no SUMIT calls, safe to run repeatedly.
+        """
+        fixed = 0
+        candidates = self.db.query(Invoice).filter(
+            Invoice.organization_id == self.org_id,
+            Invoice.source == self.source,
+            Invoice.contact_id.is_(None),
+        ).all()
+        for inv in candidates:
+            cust_id = (inv.raw_data or {}).get("customer_id")
+            if not cust_id:
+                continue
+            contact = self.db.query(Contact).filter(
+                Contact.organization_id == self.org_id,
+                Contact.external_id == str(cust_id),
+                Contact.source == self.source,
+            ).first()
+            if contact:
+                inv.contact_id = contact.id
+                fixed += 1
+        if fixed:
+            self.db.commit()
+        return {"invoices_fixed": fixed}
+
+    def backfill_bill_vendors(self) -> dict:
+        """Same repair as backfill_invoice_contacts, for Bill.vendor_id."""
+        fixed = 0
+        candidates = self.db.query(Bill).filter(
+            Bill.organization_id == self.org_id,
+            Bill.source == self.source,
+            Bill.vendor_id.is_(None),
+        ).all()
+        for bill in candidates:
+            vendor_id_raw = (bill.raw_data or {}).get("vendor_id") or (bill.raw_data or {}).get("customer_id")
+            if not vendor_id_raw:
+                continue
+            vendor = self.db.query(Contact).filter(
+                Contact.organization_id == self.org_id,
+                Contact.external_id == str(vendor_id_raw),
+                Contact.source == self.source,
+            ).first()
+            if vendor:
+                bill.vendor_id = vendor.id
+                fixed += 1
+        if fixed:
+            self.db.commit()
+        return {"bills_fixed": fixed}
 
     async def _sync_entity_type(self, entity_type: str) -> dict:
         """Sync a single entity type with pagination."""

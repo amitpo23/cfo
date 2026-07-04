@@ -171,17 +171,31 @@ class SumitConnector(AccountingConnector):
         cursor: Optional[str] = None,
         page_size: int = 100,
     ) -> FetchResult:
+        """Derive the customer roster from real invoice documents.
+
+        Previously used SUMIT's get_debt_report() to discover customers — found
+        via a live data-parity check (2026-07-04) to be badly incomplete (2
+        generic "Unknown"-named debt rows for a company with 15 real, named,
+        open invoices), because of a reverse-engineered DebitSource/CreditSource
+        payload that only captures a narrow subset of debt (see get_debt_report's
+        own docstring). SUMIT has no bulk "list all customers" endpoint (confirmed
+        against the swagger spec), but list_documents() already returns the real
+        customer_id + customer_name for every document — fetch_invoices() already
+        uses the same customer_id as contact_external_id. Deriving customers from
+        the same source keeps both in sync and fixes every invoice's contact_id
+        silently resolving to None (ledger_service._upsert_invoice only sets
+        contact_id when a matching Contact row already exists) whenever a real
+        customer never happened to appear in the debt report.
+        """
         try:
             client = await self._get_client()
             async with client:
-                # Use SUMIT's debt report to get customer list
-                from ..integrations.sumit_models import DebtReportRequest
-                debts = await client.get_debt_report(DebtReportRequest())
+                documents = await self._list_documents_all(client, "0", updated_since)
 
                 contacts = []
                 seen_ids = set()
-                for debt in debts:
-                    cust_id = str(debt.get("customer_id", debt.get("id", "")))
+                for doc in documents:
+                    cust_id = str(doc.customer_id) if getattr(doc, "customer_id", None) else None
                     if not cust_id or cust_id in seen_ids:
                         continue
                     seen_ids.add(cust_id)
@@ -189,10 +203,8 @@ class SumitConnector(AccountingConnector):
                     contacts.append(NormalizedContact(
                         external_id=cust_id,
                         contact_type="customer",
-                        name=debt.get("customer_name", "Unknown"),
-                        email=debt.get("email"),
-                        phone=debt.get("phone"),
-                        raw_data=debt,
+                        name=getattr(doc, "customer_name", None) or "Unknown",
+                        raw_data=doc.__dict__ if hasattr(doc, "__dict__") else {},
                     ))
 
                 return FetchResult(items=contacts, has_more=False)
