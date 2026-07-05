@@ -340,7 +340,7 @@ function App() {
               <Routes>
                 {/* CFO Command Center */}
                 <Route path="/" element={<CFOOverview darkMode={darkMode} />} />
-                <Route path="/ai-chat" element={<ChatAssistant darkMode={darkMode} />} />
+                <Route path="/ai-chat" element={<ChatAssistant darkMode={darkMode} currentUser={currentUser} />} />
                 <Route path="/cashflow" element={<CFOCashFlowProjection darkMode={darkMode} />} />
                 <Route path="/cashflow-detail" element={<CashFlowDashboard />} />
                 <Route path="/ar" element={<CFOARDashboard darkMode={darkMode} />} />
