@@ -2449,3 +2449,15 @@ since has been confirming things already work, plus this one real (if
 minor) gap-closure. The honest next step is handing the decision list
 back to the user rather than manufacturing further marginal iterations —
 told to them directly in the next message.
+
+# === WAVE 2 continuation (Fable controller, 2026-07-05) ===
+Base before OfficeBot task: 70d09a6
+Finding: bot has NO office/super-admin tools, no role gating; per-client scoping exists. No ANTHROPIC_API_KEY local or prod — live LLM test blocked on user.
+OfficeBot: implemented (70d09a6..c132789, 3 commits, 691 passed incl 19 new; tsc+build clean). Review dispatched.
+  DECISION for user/final-review: office tools are roster-scoped (mirrors /api/office/*), not global all-tenants; run_client_sync duplicates route helper.
+Parity findings (read-only agent, report in scratchpad data-parity-sumit.md): AR+2026 docs MATCH exactly; H0 stale receipt-as-Invoice row; H1 fetch_bills filter 15->16 flip = latent sync freeze; H2 expense pull not on cron (lags 43 docs); H3 compute_vat_position double-counts input VAT +47.5% (Bill.tax + Expense.vat_amount same docs via external_id).
+Base before parity-fix task: c132789
+Parity fixes (INLINE by Fable controller — subagents died on spend limit):
+  H3 fixed 0f5c9b9 (VAT dedupe, Bill canonical); H1 fixed d3e47b1 (fetch_bills 15+16, draft skip; 23353ca rationale was inverted vs live evidence); H2 fixed e80ac72 (expense pull in cron, isolated failure); H0 regression test + audit doc committed (docs/audits/2026-07-05-data-parity-sumit.md). Suite 696 passed.
+  USER APPROVAL NEEDED: delete stale Invoice row org1 external_id=974527677 (receipt-as-invoice, -23600, 2025-06-30).
+  PENDING: OfficeBot review incomplete (spend limit) — re-review 70d09a6..c132789 or fold into final branch review.
