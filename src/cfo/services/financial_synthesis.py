@@ -248,13 +248,18 @@ def compute_vat_position(
     output_vat = sum(abs(float(r.tax or 0)) for r in inv
                      if invoice_counts(r.status)
                      and _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
+    # מסמך SUMIT מסונכרן פעמיים — כ-Bill (ספר AP) וגם כ-Expense (טבלת עבודה) — עם
+    # אותו external_id. ה-Bill קנוני לתשומות; Expense עם תאום-Bill מדולג, אחרת כפל
+    # תשומות (נמצא באודיט תאימות מול SUMIT: ניפוח 47.5%).
+    bill_ext_ids = {str(r.external_id) for r in bills if r.external_id}
     input_vat = (
         sum(abs(float(r.tax or 0)) for r in bills
             if bill_counts(r.status)
             and _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
         + sum(abs(float(getattr(r, "vat_amount", 0) or 0)) for r in exps
               if expense_counts(getattr(r, "status", None))
-              and _in_period(getattr(r, "expense_date", None)))
+              and _in_period(getattr(r, "expense_date", None))
+              and (not r.external_id or str(r.external_id) not in bill_ext_ids))
     )
     net = round(output_vat - input_vat, 2)
     return {
