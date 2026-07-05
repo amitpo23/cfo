@@ -28,6 +28,19 @@ SYSTEM_PROMPT = (
     "צריך (ואסור לך) להניח שאושר."
 )
 
+# Appended to SYSTEM_PROMPT only when the caller is SUPER_ADMIN (see
+# AIChatService.is_super_admin) — i.e. only when the office tools are also
+# present in the schema, so the model is never told about a persona whose
+# tools it can't actually see.
+OFFICE_SYSTEM_PROMPT_ADDENDUM = (
+    "אתה פועל כרגע במצב מנהל משרד רואי-חשבון (Office Manager): מעבר לתיק "
+    "לקוח בודד, יש לך כלים נוספים לצפייה בכל תיקי הלקוחות של המשרד, סטטוס "
+    "הסנכרון וחיבור SUMIT שלהם, רולאפ פיננסי חוצה-לקוחות, וסקירת תיק לקוח "
+    "ספציפי. פעולות כתיבה (הרצת סנכרון, רישום תיק לקוח חדש) עדיין דורשות "
+    "אישור מפורש של המשתמש לפני ביצוע — בדיוק כמו כל פעולת כתיבה אחרת; "
+    "לעולם אל תניח שאושרו."
+)
+
 _MAX_TOOL_TURNS = 6
 
 
@@ -53,11 +66,24 @@ class AIChatUpstreamError(RuntimeError):
     instead of leaking the raw SDK exception as an unhandled 500."""
 
 
+_OFFICE_REFUSAL_TEXT = (
+    "אין הרשאה לפעולה זו — כלי משרד זמינים רק במצב מנהל משרד (SUPER_ADMIN)."
+)
+
+
 class AIChatService:
-    def __init__(self, db: Session, organization_id: int, user_id: int):
+    def __init__(
+        self, db: Session, organization_id: int, user_id: int,
+        *, is_super_admin: bool = False,
+    ):
         self.db = db
         self.organization_id = organization_id
         self.user_id = user_id
+        # Re-derived by the caller on EVERY request from the authenticated
+        # user's current role (see routes/ai_chat.py) — never persisted,
+        # never trusted from a prior turn. This is the single gate for both
+        # office-tool schema visibility and office-tool execution below.
+        self.is_super_admin = is_super_admin
 
     def _history(self, session_id: str) -> list[ChatMessage]:
         # Scoped to (org, user) — a chat session is a private conversation,
@@ -102,7 +128,14 @@ class AIChatService:
         messages.append({"role": "user", "content": text})
 
         client = self._make_client()
-        tool_schemas = anthropic_tool_schemas()
+        # Fail closed: office tools are added to the schema ONLY for a
+        # confirmed SUPER_ADMIN — a regular user's request never even
+        # mentions these tools exist (see anthropic_tool_schemas).
+        tool_schemas = anthropic_tool_schemas(include_office=self.is_super_admin)
+        system_prompt = (
+            f"{SYSTEM_PROMPT}\n\n{OFFICE_SYSTEM_PROMPT_ADDENDUM}"
+            if self.is_super_admin else SYSTEM_PROMPT
+        )
 
         pending_action: Optional[dict[str, Any]] = None
         final_text = ""
@@ -113,7 +146,7 @@ class AIChatService:
                 response = await client.messages.create(
                     model=settings.ai_chat_model,
                     max_tokens=1024,
-                    system=SYSTEM_PROMPT,
+                    system=system_prompt,
                     messages=messages,
                     tools=tool_schemas,
                 )
@@ -142,6 +175,13 @@ class AIChatService:
             write_call = next(
                 (b for b in tool_use_blocks if TOOLS[b.name].category == "write"), None
             )
+            if write_call is not None and TOOLS[write_call.name].office and not self.is_super_admin:
+                # Defense in depth: this tool must never have been offered to
+                # a non-super-admin in the first place (see tool_schemas
+                # above) — if it's requested anyway, refuse outright without
+                # ever proposing (let alone executing) it.
+                final_text = _OFFICE_REFUSAL_TEXT
+                break
             if write_call is not None:
                 # Halt here — never execute a write tool from the model's
                 # own call. Persist what it proposed; only an explicit,
@@ -159,7 +199,13 @@ class AIChatService:
             tool_results = []
             for block in tool_use_blocks:
                 tool = TOOLS[block.name]
-                result = await tool.fn(self.db, self.organization_id, **block.input)
+                if tool.office and not self.is_super_admin:
+                    # Same defense-in-depth as the write-tool check above,
+                    # for read office tools: never execute, never leak data,
+                    # even if somehow requested by name.
+                    result = {"error": _OFFICE_REFUSAL_TEXT}
+                else:
+                    result = await tool.fn(self.db, self.organization_id, **block.input)
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -202,7 +248,21 @@ class AIChatService:
             raise ChatConfirmationError("הפעולה כבר בוצעה")
 
         tool = TOOLS[msg.pending_action["tool"]]
-        result = await tool.fn(self.db, self.organization_id, **msg.pending_action["input"])
+        if tool.office and not self.is_super_admin:
+            # Defense in depth: role is re-derived on THIS request, not
+            # trusted from whatever it was when the action was proposed. A
+            # demoted/former-super-admin user (or any other caller) must not
+            # be able to execute an office write via a stale pending_action.
+            raise ChatConfirmationError(_OFFICE_REFUSAL_TEXT)
+
+        try:
+            result = await tool.fn(self.db, self.organization_id, **msg.pending_action["input"])
+        except ValueError as exc:
+            # Never fake success: a business-validation failure (e.g.
+            # register_office_client with no SUMIT key configured) must
+            # surface as an honest refusal — msg.executed stays False and no
+            # "בוצע" confirmation is posted, exactly as if nothing happened.
+            raise ChatConfirmationError(str(exc)) from exc
         msg.executed = True
 
         confirmation_msg = ChatMessage(

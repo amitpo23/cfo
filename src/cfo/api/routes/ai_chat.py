@@ -5,11 +5,18 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
-from ...models import ChatMessage, User
+from ...models import ChatMessage, User, UserRole
 from ..dependencies import get_current_org_id, get_current_user
 from ...services.ai_chat_service import AIChatService, ChatConfirmationError
 
 router = APIRouter(prefix="/ai", tags=["AI Chat"])
+
+
+def _service_for(db: Session, org_id: int, user: User) -> AIChatService:
+    # Role is read from the DB-backed `user` (get_current_user), never a
+    # client-supplied claim — same source of truth the rest of the app uses
+    # for SUPER_ADMIN checks (see api/dependencies.py get_super_admin).
+    return AIChatService(db, org_id, user.id, is_super_admin=user.role == UserRole.SUPER_ADMIN)
 
 
 @router.post("/chat")
@@ -24,7 +31,7 @@ async def send_chat_message(
     if not session_id or not text.strip():
         raise HTTPException(400, "session_id ו-message נדרשים")
 
-    service = AIChatService(db, org_id, user.id)
+    service = _service_for(db, org_id, user)
     return await service.send_message(session_id, text)
 
 
@@ -39,7 +46,7 @@ async def confirm_chat_action(
     if not isinstance(message_id, int):
         raise HTTPException(400, "message_id נדרש")
 
-    service = AIChatService(db, org_id, user.id)
+    service = _service_for(db, org_id, user)
     try:
         return await service.confirm_action(message_id)
     except ChatConfirmationError as exc:
