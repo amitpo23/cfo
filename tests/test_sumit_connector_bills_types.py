@@ -62,3 +62,25 @@ def test_fetch_bills_covers_both_expense_types_and_skips_drafts(monkeypatch):
     assert ids == ["d15", "d16"], f"expected real docs only, got {ids}"
     # הטיוטה הסרוקה (status=draft, סכום 0) לא הופכת ל-Bill בספרים
     assert "d15-draft" not in ids
+
+
+def test_fetch_invoices_asks_only_type_zero(monkeypatch):
+    """חשבוניות נמשכות רק מסוג 0 — קבלה (סוג 5) לעולם לא תהפוך ל-Invoice.
+
+    מקבע את תיקון 60fb0d2; שורש ממצא H0 באודיט התאימות (שורת קבלה ישנה
+    שיובאה כחשבונית ע"י פילטר רחב מדי, לפני התיקון).
+    """
+    from cfo.services.sumit_connector import SumitConnector
+
+    connector = SumitConnector(api_key="k", company_id="c")
+    client = _TypeAwareClient()  # מחזיר [] לסוגים לא מוכרים
+
+    async def _fake_get_client(self):
+        return client
+
+    monkeypatch.setattr(SumitConnector, "_get_client", _fake_get_client)
+    asyncio.run(connector.fetch_invoices())
+
+    assert client.requested_types == ["0"], (
+        f"fetch_invoices חייב לבקש רק סוג 0, ביקש: {client.requested_types}"
+    )
