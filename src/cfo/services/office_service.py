@@ -23,8 +23,11 @@ from ..models import (
     SyncRun, User,
 )
 from .credentials_vault import encrypt_credentials, decrypt_credentials
-from .client_automation_service import enqueue_client_automation
+from .client_automation_service import (
+    enqueue_client_automation, mark_client_loop_result, run_post_sync_tasks,
+)
 from .financial_synthesis import synthesize_organization
+from .sync_engine import SyncEngine, get_connector_for_org
 
 
 OFFICE_DEFAULT_COMPANY = "__office_default__"
@@ -231,6 +234,64 @@ def list_clients(db, office_organization_id: int) -> list[dict[str, Any]]:
             } if last_sync else None,
         })
     return out
+
+
+async def run_client_sync(
+    db, office_organization_id: int, *, client_id: int,
+    entity_types: Optional[str] = None,
+) -> dict[str, Any]:
+    """Run an on-demand sync for one client file in this office's roster —
+    the same path POST /api/office/clients/{id}/sync uses (mirrored here so
+    the AI chat office tool can reuse it directly; see ai_chat_tools.py).
+
+    `client_id` is a SumitCompany roster row id, scoped to this office —
+    never a bare organization_id, so one office can only trigger syncs for
+    client files it actually registered.
+    """
+    client = db.query(SumitCompany).filter(
+        SumitCompany.id == client_id,
+        SumitCompany.office_organization_id == office_organization_id,
+    ).first()
+    if not client or not client.target_organization_id:
+        raise ValueError(f"Client file {client_id} not found")
+
+    target_org_id = client.target_organization_id
+    # get_connector_for_org raises ValueError on its own when the client file
+    # has no active integration connection — let it propagate unchanged.
+    connector, conn_id, source = get_connector_for_org(db, target_org_id, None)
+
+    engine = SyncEngine(db, connector, target_org_id, source, conn_id)
+    types = [t.strip() for t in entity_types.split(",")] if entity_types else None
+    try:
+        sync_run = await engine.run_full_sync(entity_types=types)
+    finally:
+        await connector.close()
+
+    automation = await run_post_sync_tasks(
+        db, target_org_id, sources=[source], resume_onboarding=True
+    )
+    mark_client_loop_result(
+        db,
+        organization_id=target_org_id,
+        source=source,
+        ok=sync_run.status.value in {"completed", "partial"},
+        summary={
+            "sync_run_id": sync_run.id,
+            "status": sync_run.status.value,
+            "counts": sync_run.counts,
+            "error_summary": sync_run.error_summary,
+        },
+        error=sync_run.error_summary,
+    )
+    client.last_synced_at = datetime.now(timezone.utc)
+    db.commit()
+    return {
+        "company_id": client.company_id,
+        "sync_run_id": sync_run.id,
+        "status": sync_run.status.value,
+        "counts": sync_run.counts,
+        "automation": automation,
+    }
 
 
 def office_rollup(db, office_organization_id: int) -> dict[str, Any]:

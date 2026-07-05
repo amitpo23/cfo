@@ -22,6 +22,13 @@ class ChatTool:
     input_schema: dict[str, Any]
     category: str  # "read" | "write"
     fn: Callable[..., Awaitable[dict[str, Any]]]
+    # Office-manager tier (Wave — office bot). True only for the 5 tools that
+    # give a SUPER_ADMIN cross-client, accounting-office-manager capability
+    # (roster, rollup, per-client overview, sync, register). ai_chat_service
+    # uses this flag as the single gate for BOTH schema visibility (a non-
+    # super-admin never sees these tool definitions at all) AND execution
+    # (defense in depth — refused even if somehow requested by name).
+    office: bool = False
 
 
 async def _get_ar_aging(db, org_id: int, **_kwargs) -> dict:
@@ -122,6 +129,71 @@ async def _create_payment_link(db, org_id: int, *, invoice_id: int, **_kwargs) -
     from .document_issuance_service import DocumentIssuanceService
     service = DocumentIssuanceService(db, org_id)
     return await service.create_payment_link(invoice_id)
+
+
+# ------------------------------------------------------------------------ #
+# Office-manager tools (SUPER_ADMIN tier). `org_id` here means the CALLER's
+# own organization acting as the office — same as every other tool, injected
+# by ai_chat_service, never model-supplied. Where a tool needs to reach a
+# DIFFERENT organization (a specific client file), that target is an
+# explicit, differently-named input (`client_org_id` / `client_id`) — never
+# `org_id` itself, since block.input is spread as **kwargs onto a call that
+# already binds org_id positionally; a same-named key would raise
+# "got multiple values for argument 'org_id'" instead of silently doing
+# anything, but using a distinct name avoids relying on that crash as a
+# safety net.
+# ------------------------------------------------------------------------ #
+async def _list_office_clients(db, org_id: int, **_kwargs) -> dict:
+    from . import office_service
+    roster = office_service.list_clients(db, org_id)
+    rollup = office_service.office_rollup(db, org_id)
+    by_company = {c["company_id"]: c for c in rollup["clients"]}
+    for c in roster:
+        synth = by_company.get(c["company_id"], {})
+        c["required_actions"] = synth.get("required_actions", 0)
+        c["net_vat"] = synth.get("net_vat", 0)
+        c["reconciliation"] = synth.get("reconciliation", {})
+    return {"totals": rollup["totals"], "clients": roster}
+
+
+async def _get_office_rollup(db, org_id: int, **_kwargs) -> dict:
+    from . import office_service
+    return office_service.office_rollup(db, org_id)
+
+
+async def _get_client_overview(db, org_id: int, *, client_org_id: int, **_kwargs) -> dict:
+    from . import engine_service, financial_synthesis
+    return {
+        "organization_id": client_org_id,
+        "engine_status": engine_service.status(db, client_org_id),
+        "synthesis": financial_synthesis.synthesize_organization(db, client_org_id),
+    }
+
+
+async def _run_client_sync(
+    db, org_id: int, *, client_id: int, entity_types: str | None = None, **_kwargs,
+) -> dict:
+    from . import office_service
+    return await office_service.run_client_sync(
+        db, org_id, client_id=client_id, entity_types=entity_types,
+    )
+
+
+async def _register_office_client(
+    db, org_id: int, *, name: str, company_id: str, api_key: str | None = None,
+    business_type: str | None = None, tax_id: str | None = None,
+    open_finance: dict | None = None, **_kwargs,
+) -> dict:
+    from . import office_service
+    return office_service.register_client(
+        db, org_id,
+        name=name,
+        sumit_company_id=company_id,
+        sumit_api_key=api_key,
+        business_type=business_type,
+        tax_id=tax_id,
+        open_finance=open_finance,
+    )
 
 
 TOOLS: dict[str, ChatTool] = {
@@ -292,12 +364,99 @@ TOOLS: dict[str, ChatTool] = {
         category="write",
         fn=_create_payment_link,
     ),
+    "list_office_clients": ChatTool(
+        name="list_office_clients",
+        description=(
+            "רשימת כל תיקי הלקוחות של המשרד — סטטוס סנכרון וחיבור SUMIT לכל תיק. "
+            "כלי משרד — זמין רק במצב מנהל משרד (SUPER_ADMIN)."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_list_office_clients,
+        office=True,
+    ),
+    "get_office_rollup": ChatTool(
+        name="get_office_rollup",
+        description=(
+            "רולאפ פיננסי רוחבי על כל תיקי הלקוחות של המשרד — סה\"כ מע\"מ, פעולות "
+            "נדרשות והתאמות, לפי לקוח וסה\"כ. כלי משרד — זמין רק במצב מנהל משרד."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_office_rollup,
+        office=True,
+    ),
+    "get_client_overview": ChatTool(
+        name="get_client_overview",
+        description=(
+            "סקירת מצב של תיק לקוח ספציפי (כל ארגון במערכת) — סטטוס מנוע ההנה\"ח "
+            "ומספרים מרכזיים (מע\"מ, התאמות נדרשות). כלי משרד — זמין רק במצב מנהל משרד."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "client_org_id": {"type": "integer", "description": "מזהה הארגון (Organization ID) של תיק הלקוח"},
+            },
+            "required": ["client_org_id"],
+        },
+        category="read",
+        fn=_get_client_overview,
+        office=True,
+    ),
+    "run_client_sync": ChatTool(
+        name="run_client_sync",
+        description=(
+            "הרצת סנכרון על-פי דרישה לתיק לקוח ספציפי של המשרד. פעולת כתיבה אמיתית "
+            "(מושכת נתונים חדשים) — דורשת אישור מפורש. כלי משרד — זמין רק במצב מנהל משרד."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "client_id": {"type": "integer", "description": "מזהה תיק הלקוח ברשימת המשרד (roster id)"},
+                "entity_types": {"type": "string", "description": "רשימת סוגי ישויות מופרדת בפסיקים, ריק=הכול"},
+            },
+            "required": ["client_id"],
+        },
+        category="write",
+        fn=_run_client_sync,
+        office=True,
+    ),
+    "register_office_client": ChatTool(
+        name="register_office_client",
+        description=(
+            "רישום תיק לקוח חדש למשרד (ארגון-שוכר נפרד משלו עם אימות SUMIT משלו). "
+            "פעולת כתיבה — דורשת אישור מפורש. אם אין מפתח SUMIT (לא של המשרד ולא "
+            "ספציפי) הפעולה נכשלת בכנות — לעולם לא 'מצליחה' בלי חיבור אמיתי. "
+            "כלי משרד — זמין רק במצב מנהל משרד."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "company_id": {"type": "string", "description": "מזהה חברה ב-SUMIT (תיק)"},
+                "api_key": {"type": "string", "description": "מפתח SUMIT ספציפי ללקוח זה; אופציונלי אם למשרד יש מפתח ברירת מחדל"},
+                "business_type": {"type": "string"},
+                "tax_id": {"type": "string"},
+            },
+            "required": ["name", "company_id"],
+        },
+        category="write",
+        fn=_register_office_client,
+        office=True,
+    ),
 }
 
 
-def anthropic_tool_schemas() -> list[dict[str, Any]]:
-    """Tool schemas in the shape the Anthropic Messages API expects."""
+def anthropic_tool_schemas(*, include_office: bool = False) -> list[dict[str, Any]]:
+    """Tool schemas in the shape the Anthropic Messages API expects.
+
+    Fails closed: office tools are excluded unless include_office=True is
+    passed explicitly. ai_chat_service passes True only when the requesting
+    user's role is SUPER_ADMIN (see ai_chat_service.py) — a regular user's
+    tool schema never even mentions these tools exist.
+    """
     return [
         {"name": t.name, "description": t.description, "input_schema": t.input_schema}
         for t in TOOLS.values()
+        if include_office or not t.office
     ]
