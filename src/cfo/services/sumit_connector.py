@@ -315,10 +315,24 @@ class SumitConnector(AccountingConnector):
         try:
             client = await self._get_client()
             async with client:
-                # SUMIT numeric DocumentType code 16 = ExpenseInvoice (finalized supplier
-                # invoices). Code 15 = ExpenseReceipt (pending scan drafts) — wrong type.
-                # Paginated + full-history fetch (see _list_documents_all).
-                documents = await self._list_documents_all(client, "16", updated_since)
+                # SUMIT expense documents live under TWO numeric DocumentType codes:
+                # 15 = ExpenseReceipt (includes filed receipts AND pending scan drafts)
+                # and 16 = ExpenseInvoice. Live parity audit (2026-07-05, org 439924597)
+                # proved the real books are type 15 (274 docs in 2026) while type 16 is
+                # nearly empty — the previous "16"-only filter (23353ca) would silently
+                # freeze bill sync. Fetch both, skip drafts, dedupe by document id.
+                docs_15 = await self._list_documents_all(client, "15", updated_since)
+                docs_16 = await self._list_documents_all(client, "16", updated_since)
+                seen_ids: set = set()
+                documents = []
+                for doc in docs_15 + docs_16:
+                    did = str(getattr(doc, "id", "") or "")
+                    if did and did in seen_ids:
+                        continue
+                    seen_ids.add(did)
+                    if str(getattr(doc, "status", "") or "").lower() == "draft":
+                        continue  # טיוטת סריקה — סכומים ריקים, לא חומר לספרים
+                    documents.append(doc)
 
                 bills = []
                 for doc in documents:
