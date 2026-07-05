@@ -277,3 +277,44 @@ def test_sumit_routes_reject_unconfigured_tenant(client, fresh_org):
     resp = client.get("/api/accounting/documents", headers=other["headers"])
     assert resp.status_code == 400, resp.text
     assert "SUMIT" in resp.text
+
+
+def test_cron_sync_pulls_pending_expenses_per_sumit_org(client, monkeypatch):
+    """ה-cron חייב למשוך הוצאות ממתינות מ-SUMIT לכל ארגון — לא רק SyncEngine.
+
+    ממצא אודיט התאימות (2026-07-05): טבלת ההוצאות פיגרה ב~43 מסמכים כי
+    sync_pending_from_sumit רץ רק ידנית.
+    """
+    calls = []
+
+    async def _fake_pull(self, from_date=None, to_date=None):
+        calls.append(self.organization_id)
+        return {"imported": 0}
+
+    monkeypatch.setattr(
+        "cfo.services.expense_filing_service.ExpenseFilingService.sync_pending_from_sumit",
+        _fake_pull,
+    )
+    resp = client.get("/api/cron/sync", headers={"Authorization": "Bearer test-cron-secret"})
+    assert resp.status_code == 200
+    assert 1 in calls, "org 1 (SUMIT env) חייב לקבל משיכת הוצאות בכל ריצת cron"
+    org1_results = [r for r in resp.json()["results"]
+                    if r.get("organization_id") == 1 and "expenses_pull" in r]
+    assert org1_results, "התוצאה חייבת לדווח על משיכת ההוצאות"
+
+
+def test_cron_sync_expense_pull_failure_does_not_abort(client, monkeypatch):
+    """כשל במשיכת הוצאות של ארגון לא מפיל את ריצת ה-cron כולה."""
+
+    async def _boom(self, from_date=None, to_date=None):
+        raise RuntimeError("SUMIT rate limit")
+
+    monkeypatch.setattr(
+        "cfo.services.expense_filing_service.ExpenseFilingService.sync_pending_from_sumit",
+        _boom,
+    )
+    resp = client.get("/api/cron/sync", headers={"Authorization": "Bearer test-cron-secret"})
+    assert resp.status_code == 200
+    org1 = [r for r in resp.json()["results"] if r.get("organization_id") == 1]
+    assert any("expenses_pull" in r and "error" in str(r.get("expenses_pull"))
+               for r in org1), "הכשל חייב להירשם בתוצאה, לא להפיל את הריצה"

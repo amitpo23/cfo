@@ -74,6 +74,18 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
             result["automation"] = await run_post_sync_tasks(
                 db, org_id, sources=[resolved], resume_onboarding=True
             )
+            if resolved == "sumit":
+                # משיכת הוצאות ממתינות — בלעדיה טבלת ההוצאות מפגרת אחרי SUMIT
+                # (אודיט תאימות 2026-07-05: פיגור ~43 מסמכים). כשל כאן נרשם
+                # בתוצאה ולא מפיל את הארגון/הריצה.
+                try:
+                    from ...services.expense_filing_service import ExpenseFilingService
+                    result["expenses_pull"] = await ExpenseFilingService(
+                        db, org_id
+                    ).sync_pending_from_sumit()
+                except Exception as exc:
+                    logger.warning("Expense pull failed for org %s: %s", org_id, exc)
+                    result["expenses_pull"] = {"error": str(exc)}
             mark_client_loop_result(
                 db,
                 organization_id=org_id,
