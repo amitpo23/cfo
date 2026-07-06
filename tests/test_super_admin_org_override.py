@@ -12,7 +12,11 @@ from datetime import date, datetime, timedelta, timezone
 
 from cfo.database import SessionLocal
 from cfo.models import (
+    Account,
+    AccountType,
     Alert,
+    Transaction,
+    TransactionType,
     AlertSeverity,
     AlertStatus,
     AuditLog,
@@ -268,3 +272,50 @@ def test_non_super_cannot_edit_another_organization(client, owner, tenant):
         headers=tenant["headers"],
     )
     assert resp.status_code == 403
+
+
+# --- cashflow.py + reports.py honor the override (were reading current_user directly) ---
+def test_cashflow_dashboard_honors_org_override(client, superadmin, fresh_org):
+    """בחירת תיק במתג חייבת לשלוט במסך התזרים — נתוני ארגון אחר לא מודלפים.
+
+    רגרסיה ל-29 נקודות שקראו current_user.organization_id ישירות (תוקן 2026-07-06):
+    בקוד השבור, הבקשה הייתה נענית עם נתוני הארגון של המשתמש עצמו.
+    """
+    from datetime import datetime as _dt
+    own_org = superadmin["own_org"]
+    db = SessionLocal()
+    try:
+        acct = Account(organization_id=own_org, name="בנק סמן",
+                       account_type=AccountType.BANK, balance=54321)
+        db.add(acct)
+        db.flush()
+        db.add(Transaction(organization_id=own_org, account_id=acct.id,
+                           transaction_type=TransactionType.INCOME,
+                           amount=54321, category="sales",
+                           transaction_date=_dt.now()))
+        db.commit()
+    finally:
+        db.close()
+
+    empty_org = fresh_org()["org_id"]
+    headers = {**superadmin["headers"], "X-Active-Org-Id": str(empty_org)}
+    resp = client.get("/api/cashflow/daily?days=2", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = str(resp.json())
+    assert "54321" not in body, "נתוני הארגון של המשתמש דלפו לתיק הנבחר"
+
+    # בקרת-חיוב: לארגון של המשתמש עצמו הסמן כן מופיע — הטסט אינו ריק מתוכן
+    own = client.get("/api/cashflow/daily?days=2",
+                     headers={**superadmin["headers"], "X-Active-Org-Id": str(own_org)})
+    assert own.status_code == 200, own.text
+    assert "54321" in str(own.json()), "בקרת החיוב נכשלה — המקור לא משקף את הסמן"
+
+
+def test_reports_route_honors_org_override(client, superadmin, fresh_org):
+    """route דוחות מייצג חייב להיות מסונן לפי X-Active-Org-Id."""
+    iso = fresh_org()
+    org_id = iso["org_id"]
+    headers = {**superadmin["headers"], "X-Active-Org-Id": str(org_id)}
+    resp = client.get("/api/reports/summary", headers=headers)
+    # לא 500; והתשובה לעולם לא מדלפת תבניות של ארגון אחר
+    assert resp.status_code == 200, resp.text

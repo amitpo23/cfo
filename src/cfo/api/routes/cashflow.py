@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta
 from pydantic import BaseModel, Field
 from decimal import Decimal
 
-from ..dependencies import get_current_user, get_db
+from ..dependencies import get_current_user, get_current_org_id, get_db
 from ...services.cash_flow_service import CashFlowService, CashFlowCategory
 from ...services.forecasting_service import ForecastingService, ForecastMethod
 from ...services.ml_models import EnsembleForecaster
@@ -142,15 +142,15 @@ async def get_cash_flow_statement(
     start_date: date = Query(..., description="תאריך התחלה"),
     end_date: date = Query(..., description="תאריך סיום"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     דוח תזרים מזומנים
     Get cash flow statement for a period
     """
     service = CashFlowService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     statement = service.get_cash_flow_statement(
         organization_id=organization_id,
         start_date=datetime.combine(start_date, datetime.min.time()),
@@ -200,15 +200,15 @@ async def get_cash_flow_statement(
 async def get_monthly_cash_flow(
     months: int = Query(12, ge=1, le=36, description="מספר חודשים"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     תזרים מזומנים חודשי
     Get monthly cash flow analysis
     """
     service = CashFlowService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     data = service.get_monthly_cash_flow(organization_id, months)
     
     return [MonthlyCashFlowResponse(**item) for item in data]
@@ -218,15 +218,15 @@ async def get_monthly_cash_flow(
 async def get_daily_cash_position(
     days: int = Query(30, ge=1, le=90, description="מספר ימים"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     מצב מזומנים יומי
     Get daily cash position
     """
     service = CashFlowService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     data = service.get_daily_cash_position(organization_id, days)
     
     return [DailyCashPositionResponse(**item) for item in data]
@@ -236,15 +236,15 @@ async def get_daily_cash_position(
 async def get_burn_rate(
     months: int = Query(3, ge=1, le=12, description="תקופת חישוב"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     קצב שריפת מזומנים
     Calculate cash burn rate
     """
     service = CashFlowService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     data = service.get_cash_burn_rate(organization_id, months)
     
     return BurnRateResponse(**data)
@@ -255,15 +255,15 @@ async def get_cash_flow_by_category(
     start_date: date = Query(..., description="תאריך התחלה"),
     end_date: date = Query(..., description="תאריך סיום"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     תזרים מזומנים לפי קטגוריות
     Get cash flow breakdown by category
     """
     service = CashFlowService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     data = service.get_cash_flow_by_category(
         organization_id,
         datetime.combine(start_date, datetime.min.time()),
@@ -285,15 +285,15 @@ async def get_cash_flow_by_category(
 @router.get("/liquidity-ratios", response_model=LiquidityRatiosResponse)
 async def get_liquidity_ratios(
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     יחסי נזילות
     Get liquidity ratios
     """
     service = CashFlowService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     data = service.get_liquidity_ratios(organization_id)
     
     return LiquidityRatiosResponse(**data)
@@ -302,30 +302,30 @@ async def get_liquidity_ratios(
 @router.get("/receivables-aging")
 async def get_receivables_aging(
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     גיול חובות לקוחות
     Get accounts receivable aging report
     """
     service = CashFlowService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     return service.get_receivables_aging(organization_id)
 
 
 @router.get("/payables-aging")
 async def get_payables_aging(
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     גיול חובות לספקים
     Get accounts payable aging report
     """
     service = CashFlowService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     return service.get_payables_aging(organization_id)
 
 
@@ -336,15 +336,15 @@ async def forecast_revenue(
     periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
     method: str = Query("exponential_smoothing", description="שיטת תחזית"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     תחזית הכנסות
     Forecast revenue
     """
     service = ForecastingService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     try:
         forecast_method = ForecastMethod(method)
     except ValueError:
@@ -368,15 +368,15 @@ async def forecast_expenses(
     periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
     method: str = Query("exponential_smoothing", description="שיטת תחזית"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     תחזית הוצאות
     Forecast expenses
     """
     service = ForecastingService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     try:
         forecast_method = ForecastMethod(method)
     except ValueError:
@@ -400,15 +400,15 @@ async def forecast_cash_flow(
     periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
     current_balance: float = Query(0, description="יתרה נוכחית"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     תחזית תזרים מזומנים
     Forecast cash flow
     """
     service = ForecastingService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     results = service.forecast_cash_flow(organization_id, periods, current_balance)
     
     return [CashFlowForecastResponse(**r) for r in results]
@@ -419,15 +419,15 @@ async def get_scenario_analysis(
     periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
     current_balance: float = Query(0, description="יתרה נוכחית"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     ניתוח תרחישים
     Get scenario analysis (best/worst/expected)
     """
     service = ForecastingService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     return service.get_scenario_analysis(organization_id, periods, current_balance)
 
 
@@ -435,15 +435,15 @@ async def get_scenario_analysis(
 async def analyze_budget_variance(
     request: BudgetRequest,
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     ניתוח סטיות תקציב
     Analyze budget variance
     """
     service = ForecastingService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     results = service.analyze_budget_variance(
         organization_id,
         request.budget,
@@ -467,15 +467,15 @@ async def analyze_budget_variance(
 async def detect_trends(
     months: int = Query(12, ge=3, le=36, description="תקופת ניתוח"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     זיהוי מגמות
     Detect financial trends
     """
     service = ForecastingService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     return service.detect_trends(organization_id, months)
 
 
@@ -483,15 +483,15 @@ async def detect_trends(
 async def forecast_financial_ratios(
     periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     תחזית יחסים פיננסיים
     Forecast financial ratios
     """
     service = ForecastingService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     return service.calculate_financial_ratios_forecast(organization_id, periods)
 
 
@@ -499,15 +499,15 @@ async def forecast_financial_ratios(
 async def evaluate_forecast_accuracy(
     test_months: int = Query(3, ge=1, le=6, description="חודשי מבחן"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     הערכת דיוק תחזית
     Evaluate forecast accuracy
     """
     service = ForecastingService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     metrics = service.evaluate_forecast_accuracy(organization_id, test_months)
     
     return {
@@ -524,15 +524,15 @@ async def evaluate_forecast_accuracy(
 async def get_ml_ensemble_forecast(
     periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
     db = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
 ):
     """
     תחזית ML משולבת
     Get ensemble ML forecast (LSTM + Prophet + XGBoost)
     """
     forecasting_service = ForecastingService(db)
-    organization_id = (current_user.organization_id or 1)
-    
+    organization_id = org_id
     # שליפת נתונים היסטוריים
     historical = forecasting_service._get_monthly_revenue(organization_id, 24)
     
