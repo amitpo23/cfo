@@ -2478,3 +2478,9 @@ API-for-chat-only: 97063f3 (OCR gated OCR_LLM_ENABLED=false, process-ocr cron re
 FINDING: 4 SUMIT connections had bad creds hammering the account -> lockout blocking valid org5 pulls. orgs 2(שף אליהב),3(מדיצ'י),4(עומר-ועודד DUP) set status=inactive. org5 = the VALID Omer-Oded (CompanyID 1999386278). org4 is a stale duplicate — needs user cleanup decision.
 Smoke user pw reset -> scratchpad/smoke_creds.txt (SUPER_ADMIN).
 PENDING: org5 expense pull running in background after lockout clears (pull_org5_expenses.py).
+
+# === type-1 income sync fix (2026-07-06) ===
+FIXED f6497a1: fetch_invoices pulls types 0+1 (Invoice + InvoiceAndReceipt). Live finding org5: 9 type-1 docs ₪124,605 were dropped. Deployed + verified via prod cron: org5 invoices 8->17, gross ₪319,422. 796 suite.
+LOCKOUT INSIGHT: SUMIT "Repeated incorrect credentials" lockout is on the LOCAL IP (my inspection calls), NOT Vercel. Prod /api/cron/sync (Vercel IP) works fine. STOP local SUMIT calls; let hourly cron handle syncs. Disabled orgs 2,3,4 (bad creds) stay inactive so cron won't hammer.
+EXPENSES: org5 (Omer-Oded) has ZERO expense docs in SUMIT (all docs are income: types 0,1,5,6). Expense-categorization-for-VAT workflow is built+deployed but has nothing to categorize until they log expenses. Input VAT = 0 currently (correct).
+OPEN: org4 is a stale duplicate of Omer-Oded (bad creds) — needs user approval to delete.
