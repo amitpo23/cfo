@@ -2503,3 +2503,9 @@ EXCLUDED (6): files 14,15,16,17,18 = Porat's OWN outgoing income receipts wrongl
 DEDUP (2): 11=41 (מרכז מזון נהלל), 38=40 (בר מגן זיכוי) captured once.
 FLAGGED (1): file 44 = Kvish6 link only, no amount (may duplicate #47).
 NEXT (Step 2, after user verifies): file to SUMIT via addexpense + archive originals. NOT done yet — awaiting user verification of the 41 amounts.
+
+# === Step 2 (file to SUMIT) — BLOCKED by SUMIT (2026-07-06) ===
+Self-verified 41 expenses math (subtotal+VAT=total, ~18%) — all clean (credit note -18% correct).
+Pilot add_expense to SUMIT REJECTED: "ההרשאה נדחתה: Expenses addition isn't active" — the expense-addition module/permission is NOT active on org5's SUMIT account. Cannot write expenses via API.
+CONCLUSION: 41 expenses live in Rezef only (input VAT ₪32,171). SUMIT capture must be done by SUMIT's own OCR/accountant on the pending "קבצי הוצאות" files. No duplicate risk (API write impossible).
+Also noted: addexpense uses SearchMode=Automatic on supplier (junk-entity risk) + category as English item name — would've been messy anyway; SUMIT's own capture is cleaner.
