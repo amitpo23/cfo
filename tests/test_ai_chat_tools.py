@@ -509,3 +509,57 @@ def test_classify_pending_expenses_tool_returns_counts_and_actually_updates_rows
 
 def test_classify_pending_expenses_tool_is_write_category():
     assert TOOLS["classify_pending_expenses"].category == "write"
+
+
+# ---------------------------------------------------------------------- #
+# rezef_help — project knowledge-base lookup tool. Read-only, no org data
+# involved (ignores db/org_id) — content correctness is covered exhaustively
+# in test_rezef_kb.py; these tests only confirm the tool wrapper dispatches
+# to rezef_kb correctly and is registered/categorized right.
+# ---------------------------------------------------------------------- #
+
+def test_rezef_help_tool_is_read_category():
+    assert TOOLS["rezef_help"].category == "read"
+
+
+def test_rezef_help_tool_with_no_topic_returns_index(fresh_org):
+    from cfo.services import rezef_kb
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["rezef_help"].fn(db, org_id))
+        assert result["content"] == rezef_kb.topic_index()
+        assert "לא נמצא" not in result["content"]
+    finally:
+        db.close()
+
+
+def test_rezef_help_tool_with_known_topic_returns_section(fresh_org):
+    from cfo.services import rezef_kb
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["rezef_help"].fn(db, org_id, topic="expenses"))
+        assert result["content"] == rezef_kb.TOPICS["expenses"]
+    finally:
+        db.close()
+
+
+def test_rezef_help_tool_with_unknown_topic_returns_index_and_not_found(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["rezef_help"].fn(db, org_id, topic="שיווק"))
+        assert "לא נמצא" in result["content"]
+        assert "שיווק" in result["content"]
+    finally:
+        db.close()
+
+
+def test_rezef_help_tool_is_included_in_default_schema_and_not_office_gated():
+    schemas = ai_chat_tools.anthropic_tool_schemas()
+    names = {s["name"] for s in schemas}
+    assert "rezef_help" in names
+    assert TOOLS["rezef_help"].office is False

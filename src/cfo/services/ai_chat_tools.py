@@ -222,6 +222,16 @@ async def _classify_pending_expenses(db, org_id: int, **_kwargs) -> dict:
     return ExpenseFilingService(db, organization_id=org_id).classify_pending()
 
 
+async def _rezef_help(db, org_id: int, *, topic: str | None = None, **_kwargs) -> dict:
+    """Project knowledge-base lookup — "how do I / what can Rezef do / where
+    is X". Ignores db/org_id (same signature as every other tool for
+    uniform dispatch in ai_chat_service, but this one tool is pure content,
+    no query) — see rezef_kb.py for the KB itself and why it lives outside
+    SYSTEM_PROMPT (token cost)."""
+    from . import rezef_kb
+    return {"content": rezef_kb.get_topic(topic)}
+
+
 # ------------------------------------------------------------------------ #
 # Office-manager tools (SUPER_ADMIN tier). `org_id` here means the CALLER's
 # own organization acting as the office — same as every other tool, injected
@@ -530,6 +540,34 @@ TOOLS: dict[str, ChatTool] = {
         input_schema={"type": "object", "properties": {}},
         category="write",
         fn=_classify_pending_expenses,
+    ),
+    "rezef_help": ChatTool(
+        name="rezef_help",
+        description=(
+            "מדריך/מאגר-ידע פנימי על רצף עצמו — מה כל מסך במערכת עושה, איך "
+            "מבצעים תהליך מסוים (הוצאות/מע\"מ/גבייה/מס\"ב/הנה\"ח וכו'), אילו "
+            "כלים זמינים לעוזר עצמו, ומה המגבלות הידועות. ללא topic מחזיר "
+            "אינדקס נושאים עם תקציר שורה לכל אחד; עם topic ידוע מחזיר את "
+            "התוכן המלא של אותו נושא. יש להשתמש בכלי הזה לפני שעונים על "
+            "שאלות 'איך עושים X' / 'מה רצף יודע לעשות' / 'איפה נמצא Y' — "
+            "ולא לנחש מהזיכרון."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": (
+                        "מפתח נושא (למשל expenses/vat/bookkeeping/reports/"
+                        "collections/masav/office/bot/integrations/"
+                        "limitations/overview). ריק או לא ידוע מחזיר את "
+                        "אינדקס הנושאים."
+                    ),
+                },
+            },
+        },
+        category="read",
+        fn=_rezef_help,
     ),
     "list_office_clients": ChatTool(
         name="list_office_clients",

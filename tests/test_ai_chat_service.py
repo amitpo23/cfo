@@ -903,3 +903,10 @@ def test_confirm_action_executes_classify_pending_expenses_successfully(monkeypa
         assert row.category == "travel"
     finally:
         db.close()
+
+
+def test_system_prompt_tells_the_model_about_rezef_help():
+    """The KB (rezef_kb.py) is deliberately NOT pasted into SYSTEM_PROMPT —
+    only a pointer to the rezef_help tool is, so "how do I / what can Rezef
+    do" questions don't inflate every single request's token count."""
+    assert "rezef_help" in ai_chat_service.SYSTEM_PROMPT
