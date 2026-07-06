@@ -64,8 +64,8 @@ def test_fetch_bills_covers_both_expense_types_and_skips_drafts(monkeypatch):
     assert "d15-draft" not in ids
 
 
-def test_fetch_invoices_asks_only_type_zero(monkeypatch):
-    """חשבוניות נמשכות רק מסוג 0 — קבלה (סוג 5) לעולם לא תהפוך ל-Invoice.
+def test_fetch_invoices_never_pulls_receipts_or_expenses(monkeypatch):
+    """חשבוניות נמשכות רק מסוגי הכנסה (0,1) — קבלה (5) והוצאות (15/16) לעולם לא.
 
     מקבע את תיקון 60fb0d2; שורש ממצא H0 באודיט התאימות (שורת קבלה ישנה
     שיובאה כחשבונית ע"י פילטר רחב מדי, לפני התיקון).
@@ -81,6 +81,39 @@ def test_fetch_invoices_asks_only_type_zero(monkeypatch):
     monkeypatch.setattr(SumitConnector, "_get_client", _fake_get_client)
     asyncio.run(connector.fetch_invoices())
 
-    assert client.requested_types == ["0"], (
-        f"fetch_invoices חייב לבקש רק סוג 0, ביקש: {client.requested_types}"
+    assert set(client.requested_types) == {"0", "1"}, (
+        f"fetch_invoices חייב לבקש רק סוגי הכנסה 0+1, ביקש: {client.requested_types}"
     )
+    for forbidden in ("5", "15", "16"):
+        assert forbidden not in client.requested_types, (
+            f"סוג {forbidden} (קבלה/הוצאה) לא אמור להימשך כחשבונית"
+        )
+
+
+def test_fetch_invoices_covers_invoice_and_invoice_receipt(monkeypatch):
+    """הכנסות = חשבונית (סוג 0) + חשבונית-מס-קבלה (סוג 1). בלי סוג 1 מפספסים הכנסה.
+
+    ממצא חי (2026-07-06, תיק עומר-ועודד org 5): 9 מסמכי סוג 1 בסך ₪124,605
+    לא סונכרנו כי fetch_invoices משך רק סוג 0. שניהם מסמכי הכנסה חייבים-מע"מ.
+    """
+    from cfo.services.sumit_connector import SumitConnector
+
+    connector = SumitConnector(api_key="k", company_id="c")
+    client = _TypeAwareClient()
+    client.docs_by_type = {
+        "0": [_doc("inv0", 234, status="open")],
+        "1": [_doc("invrcpt1", 117, status="open"), _doc("d-draft", 0, status="draft")],
+    }
+
+    async def _fake_get_client(self):
+        return client
+
+    monkeypatch.setattr(SumitConnector, "_get_client", _fake_get_client)
+    result = asyncio.run(connector.fetch_invoices())
+
+    assert sorted(client.requested_types) == ["0", "1"], (
+        f"fetch_invoices חייב לבקש סוג 0 וגם סוג 1, ביקש: {client.requested_types}"
+    )
+    ids = sorted(i.external_id for i in result.items)
+    assert ids == ["inv0", "invrcpt1"], f"expected both income docs, got {ids}"
+    assert "d-draft" not in ids, "טיוטה לא הופכת לחשבונית"

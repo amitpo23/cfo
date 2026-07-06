@@ -272,10 +272,23 @@ class SumitConnector(AccountingConnector):
         try:
             client = await self._get_client()
             async with client:
-                # SUMIT numeric DocumentType code 0 = Invoice (income/sales documents).
-                # Filtering by the enum *name* proved unreliable; the numeric code is exact.
-                # Paginated + full-history fetch (see _list_documents_all).
-                documents = await self._list_documents_all(client, "0", updated_since)
+                # SUMIT income documents live under TWO numeric DocumentType codes:
+                # 0 = Invoice (חשבונית מס) and 1 = InvoiceAndReceipt (חשבונית מס קבלה).
+                # Both are VAT-bearing revenue documents. Live finding (2026-07-06, org
+                # 439... / Omer-Oded): a 0-only filter silently dropped ₪124,605 of type-1
+                # income. Fetch both, skip drafts, dedupe by document id.
+                docs_0 = await self._list_documents_all(client, "0", updated_since)
+                docs_1 = await self._list_documents_all(client, "1", updated_since)
+                seen_ids: set = set()
+                documents = []
+                for doc in docs_0 + docs_1:
+                    did = str(getattr(doc, "id", "") or "")
+                    if did and did in seen_ids:
+                        continue
+                    seen_ids.add(did)
+                    if str(getattr(doc, "status", "") or "").lower() == "draft":
+                        continue  # טיוטה — לא נכנסת לספרים
+                    documents.append(doc)
 
                 invoices = []
                 for doc in documents:
