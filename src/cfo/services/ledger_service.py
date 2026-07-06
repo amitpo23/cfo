@@ -32,6 +32,8 @@ CHART: dict[str, dict[str, str]] = {
     "5100": {"name": "הוצאות שכר", "type": "expense"},
     "2110": {"name": "שכר נטו לתשלום", "type": "liability"},
     "2300": {"name": "ניכויי שכר לתשלום", "type": "liability"},
+    "5200": {"name": "הוצאות פחת", "type": "expense"},
+    "1250": {"name": "פחת נצבר (רכוש קבוע)", "type": "asset"},  # contra-asset — a credit balance nets against gross assets
 }
 
 # Statuses that should NOT post to the ledger (not real economic events).
@@ -349,6 +351,18 @@ def _payroll_entries(db, organization_id: int) -> list[Entry]:
     return _entries_by_source(db, organization_id, "payroll", "פקודת שכר")
 
 
+def _depreciation_entries(db, organization_id: int) -> list[Entry]:
+    """פחת שנתי נגזר מ-FixedAsset (Wave 2 addition E) — Entry אחת מאוחדת לכל
+    שנה (DR 5200 הוצאות פחת / CR 1250 פחת נצבר), רק לשנים שיש בהן נכסים.
+
+    lazy import: depreciation_service imports Entry/Line/CHART/DISCLAIMER
+    from this module at load time, so importing it back here at module level
+    would be circular; deferring to call time avoids that (both modules are
+    already fully loaded by the time build_journal actually runs)."""
+    from .depreciation_service import entries_for_ledger
+    return entries_for_ledger(db, organization_id)
+
+
 def build_journal(db, organization_id: int, *, start: Optional[date] = None,
                   end: Optional[date] = None, include_opening: bool = True) -> list[Entry]:
     """Derive the full balanced journal for the period from synced documents.
@@ -408,6 +422,14 @@ def build_journal(db, organization_id: int, *, start: Optional[date] = None,
 
     # פקודות יומן שכר נגזרות
     for e in _payroll_entries(db, organization_id):
+        if _in_period(e.entry_date, start, end):
+            entries.append(e)
+
+    # פחת שנתי נגזר מרכוש קבוע (Wave 2 addition E) — dated Dec 31 of the
+    # relevant year, so it participates through the SAME _in_period filter as
+    # every other source (a monthly period other than December simply won't
+    # include it, matching the annual-close posting cadence this module uses).
+    for e in _depreciation_entries(db, organization_id):
         if _in_period(e.entry_date, start, end):
             entries.append(e)
 

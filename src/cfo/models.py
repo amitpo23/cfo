@@ -748,6 +748,33 @@ class Expense(Base):
     )
 
 
+class FixedAsset(Base):
+    """נכס קבוע (רכוש קבוע) לצורך חישוב פחת — Wave 2 addition E.
+
+    depreciation_rate is the asset's OWN chosen annual rate (%), defaulted at
+    creation time from depreciation_service.DEPRECIATION_RATE_CONFIG by
+    category but always overridable/auditable per asset — never recomputed
+    silently from the category later."""
+    __tablename__ = "fixed_assets"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    category = Column(String(50), nullable=False)  # buildings/equipment/computers/vehicles/furniture/other
+    cost = Column(Numeric(precision=12, scale=2), nullable=False)
+    purchase_date = Column(Date, nullable=False)
+    depreciation_rate = Column(Numeric(precision=5, scale=2), nullable=False)  # % annual, straight-line
+    salvage_value = Column(Numeric(precision=12, scale=2), nullable=False, default=0)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_fixedasset_org", "organization_id"),
+    )
+
+
 class BankTransaction(Base):
     """Bank/credit card transaction for reconciliation"""
     __tablename__ = "bank_transactions"

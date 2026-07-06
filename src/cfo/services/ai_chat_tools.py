@@ -131,6 +131,17 @@ async def _create_payment_link(db, org_id: int, *, invoice_id: int, **_kwargs) -
     return await service.create_payment_link(invoice_id)
 
 
+async def _get_depreciation_schedule(db, org_id: int, *, asset_id: int, **_kwargs) -> dict:
+    from . import depreciation_service
+    asset = depreciation_service.get_asset(db, org_id, asset_id)
+    if asset is None:
+        return {"error": "נכס קבוע לא נמצא"}
+    return {
+        "asset": depreciation_service.asset_to_dict(asset),
+        "schedule": depreciation_service.depreciation_schedule(asset),
+    }
+
+
 # ------------------------------------------------------------------------ #
 # Office-manager tools (SUPER_ADMIN tier). `org_id` here means the CALLER's
 # own organization acting as the office — same as every other tool, injected
@@ -363,6 +374,17 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="write",
         fn=_create_payment_link,
+    ),
+    "get_depreciation_schedule": ChatTool(
+        name="get_depreciation_schedule",
+        description="לוח פחת שנתי לנכס קבוע ספציפי (פחת ישר, לפי תקנות מס הכנסה) — שנתי, מצטבר וערך בספרים.",
+        input_schema={
+            "type": "object",
+            "properties": {"asset_id": {"type": "integer", "description": "מזהה הנכס הקבוע"}},
+            "required": ["asset_id"],
+        },
+        category="read",
+        fn=_get_depreciation_schedule,
     ),
     "list_office_clients": ChatTool(
         name="list_office_clients",

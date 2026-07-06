@@ -294,3 +294,27 @@ def test_run_client_sync_tool_raises_for_unknown_client(fresh_org):
             asyncio.run(TOOLS["run_client_sync"].fn(db, office_org, client_id=999999))
     finally:
         db.close()
+
+
+def test_get_depreciation_schedule_tool_is_org_scoped(fresh_org):
+    """Wave 2 addition E — chatbot tool over depreciation_service.depreciation_schedule."""
+    from decimal import Decimal
+    from cfo.services import depreciation_service
+
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        asset = depreciation_service.create_asset(
+            db, org_a, name="מחשב נייד", category="computers",
+            cost=Decimal("12000"), purchase_date=date(2024, 1, 1),
+            depreciation_rate=Decimal("33"), salvage_value=Decimal("0"),
+        )
+
+        result_a = asyncio.run(TOOLS["get_depreciation_schedule"].fn(db, org_a, asset_id=asset.id))
+        assert result_a["schedule"][0]["annual_depreciation"] == 3960.0
+
+        result_b = asyncio.run(TOOLS["get_depreciation_schedule"].fn(db, org_b, asset_id=asset.id))
+        assert "error" in result_b
+    finally:
+        db.close()
