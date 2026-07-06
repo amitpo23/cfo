@@ -2466,3 +2466,5 @@ CLIENT ONBOARDED (2026-07-06): "עומר ועודד פורת" roster id 4, org 5
 FINDING: עמית פורת CompanyID = 439924597 = org 1's existing file — the "main" connected file IS Amit Porat's osek (env key ...0IGO belongs to it). No new registration needed.
 PAUSED by user (going live + VAT reporting): depreciation module — WIP saved on branch wip/depreciation-module (uncommitted work of stopped agent; suite status unknown). Resume later: review WIP, finish tests, merge.
 QUEUE when resuming: depreciation WIP; credential-source column in admin-clients; office sync-orchestration dedup refactor; 6111; quote-cancel path; Medici onboarding (needs key+CompanyID as text).
+Expense workflow (categories+bot tools): implemented 7645a83..8a4a72e (2 commits), review APPROVED (0 blocking). Minor #1 (empty-keyword hijack) fixed inline by controller + test. 728 suite.
+  Minors deferred to final review: date-filter silent drop in list_expenses (echo applied filters); check-then-act on duplicate key (IntegrityError 500 on race); stale test name; classify_pending overwrites deliberate "other" (documented interpretation).

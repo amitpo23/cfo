@@ -93,9 +93,12 @@ def create_category(
     if existing:
         raise ValueError(f"כרטיס עם המפתח '{key}' כבר קיים בארגון זה")
 
+    # מילת-מפתח ריקה/רווחים הייתה "תופסת" כל טקסט ("" in text == True) וחוטפת
+    # את כל הסיווג האוטומטי של הארגון — מסננים החוצה.
+    clean_keywords = [k.strip() for k in (keywords or []) if k and k.strip()]
     category = ExpenseCategory(
         organization_id=organization_id, key=key, name_he=name_he,
-        keywords=list(keywords) if keywords else None,
+        keywords=clean_keywords or None,
     )
     db.add(category)
     db.commit()

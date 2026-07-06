@@ -122,3 +122,20 @@ def test_delete_category_in_use_returns_409_with_count(client, acc):
     # עדיין קיים — לא נמחק
     lst = client.get("/api/expenses/categories", headers=acc["headers"]).json()["data"]
     assert any(c["key"] == "used_card" for c in lst)
+
+
+def test_empty_keywords_are_stripped_on_create(fresh_org):
+    """מילת-מפתח ריקה ("") תופסת כל טקסט וחוטפת את הסיווג — מסוננת ביצירה."""
+    from cfo.database import SessionLocal
+    from cfo.services.expense_category_service import create_category
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        cat = create_category(
+            db, org_id, key="hijack_test", name_he="בדיקת חטיפה",
+            keywords=["", "  ", "דלק", " חניה "],
+        )
+    finally:
+        db.close()
+    assert cat["keywords"] == ["דלק", "חניה"]
