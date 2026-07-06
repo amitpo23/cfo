@@ -28,6 +28,7 @@ class ExpenseFilingService:
 
     def create_expense(self, data: Dict) -> Dict:
         from .expense_classifier import classify_expense
+        from . import expense_category_service
 
         amount = Decimal(str(data.get("amount", 0)))
         vat = Decimal(str(data.get("vat_amount", 0) or 0))
@@ -36,8 +37,12 @@ class ExpenseFilingService:
         # סיווג אוטומטי אם לא סופקה קטגוריה
         category = data.get("category")
         if not category:
+            org_categories = expense_category_service.get_classifier_categories(
+                self.db, self.organization_id
+            )
             category = classify_expense(
-                data.get("supplier_name"), data.get("description"), data.get("invoice_number")
+                data.get("supplier_name"), data.get("description"), data.get("invoice_number"),
+                org_categories=org_categories,
             )
         exp = Expense(
             organization_id=self.organization_id,
@@ -70,6 +75,15 @@ class ExpenseFilingService:
         )
         if not exp:
             raise ValueError(f"הוצאה {expense_id} לא נמצאה")
+        if data.get("category") is not None:
+            from .expense_classifier import VALID_CATEGORIES
+            from . import expense_category_service
+
+            valid_keys = VALID_CATEGORIES | expense_category_service.org_category_keys(
+                self.db, self.organization_id
+            )
+            if data["category"] not in valid_keys:
+                raise ValueError(f"קטגוריה לא מוכרת: {data['category']}")
         for field in ("supplier_name", "category", "description", "invoice_number"):
             if data.get(field) is not None:
                 setattr(exp, field, data[field])
@@ -91,7 +105,11 @@ class ExpenseFilingService:
     def classify_uncategorized(self, reclassify_all: bool = False) -> Dict:
         """סיווג אוטומטי של הוצאות. ברירת מחדל: רק ללא קטגוריה / 'other'."""
         from .expense_classifier import classify_expense
+        from . import expense_category_service
 
+        org_categories = expense_category_service.get_classifier_categories(
+            self.db, self.organization_id
+        )
         q = self.db.query(Expense).filter(Expense.organization_id == self.organization_id)
         if not reclassify_all:
             q = q.filter((Expense.category.is_(None)) | (Expense.category == "") | (Expense.category == "other"))
@@ -99,13 +117,47 @@ class ExpenseFilingService:
         for exp in q.all():
             new_cat = classify_expense(
                 exp.supplier_name, exp.description, exp.invoice_number,
-                sumit_item_name=exp.sumit_item_name,
+                sumit_item_name=exp.sumit_item_name, org_categories=org_categories,
             )
             if new_cat != exp.category:
                 exp.category = new_cat
                 updated += 1
         self.db.commit()
         return {"classified": updated}
+
+    def classify_pending(self) -> Dict:
+        """סיווג אוטומטי של הוצאות ממתינות (status='pending') שעדיין ללא
+        קטגוריה אמיתית (None/''/'other'), עם פירוט לפי קטגוריה. משמש את כלי
+        הצ'אט classify_pending_expenses — הוצאות שכבר תויקו או שכבר סווגו
+        ידנית לקטגוריה אחרת אינן נגעות."""
+        from .expense_classifier import classify_expense
+        from . import expense_category_service
+
+        org_categories = expense_category_service.get_classifier_categories(
+            self.db, self.organization_id
+        )
+        rows = (
+            self.db.query(Expense)
+            .filter(
+                Expense.organization_id == self.organization_id,
+                Expense.status == "pending",
+            )
+            .filter((Expense.category.is_(None)) | (Expense.category == "") | (Expense.category == "other"))
+            .all()
+        )
+        by_category: Dict[str, int] = {}
+        updated = 0
+        for exp in rows:
+            new_cat = classify_expense(
+                exp.supplier_name, exp.description, exp.invoice_number,
+                sumit_item_name=exp.sumit_item_name, org_categories=org_categories,
+            )
+            if new_cat != exp.category:
+                exp.category = new_cat
+                updated += 1
+            by_category[new_cat] = by_category.get(new_cat, 0) + 1
+        self.db.commit()
+        return {"scanned": len(rows), "classified": updated, "by_category": by_category}
 
     # ---------- SUMIT filing ----------
 
@@ -123,12 +175,17 @@ class ExpenseFilingService:
 
         from .sync_engine import get_connector_for_org
         from .expense_classifier import classify_expense
+        from . import expense_category_service
 
         connector, _conn_id, source = get_connector_for_org(
             self.db, self.organization_id, preferred_source="sumit"
         )
         if source != "sumit" or not hasattr(connector, "get_document_supplier_details"):
             raise ValueError("SUMIT אינו מחובר עבור ארגון זה")
+
+        org_categories = expense_category_service.get_classifier_categories(
+            self.db, self.organization_id
+        )
 
         # הוצאות SUMIT שעדיין חסר בהן שם ספק אמיתי או ח.פ
         q = (
@@ -176,7 +233,7 @@ class ExpenseFilingService:
                 resolved += 1
             new_cat = classify_expense(
                 e.supplier_name, e.description, e.invoice_number,
-                sumit_item_name=e.sumit_item_name,
+                sumit_item_name=e.sumit_item_name, org_categories=org_categories,
             )
             if new_cat != e.category:
                 e.category = new_cat
@@ -327,6 +384,7 @@ class ExpenseFilingService:
         """
         from .sync_engine import get_connector_for_org
         from .expense_classifier import classify_expense
+        from . import expense_category_service
         from ..integrations.sumit_models import DocumentListRequest
 
         connector, _conn_id, source = get_connector_for_org(
@@ -334,6 +392,10 @@ class ExpenseFilingService:
         )
         if source != "sumit" or not hasattr(connector, "list_documents"):
             raise ValueError("SUMIT אינו מחובר עבור ארגון זה")
+
+        org_categories = expense_category_service.get_classifier_categories(
+            self.db, self.organization_id
+        )
 
         # הטיוטות הממתינות (עמוד fileexpenses) הן status="draft" — לא מסוננות
         # נכון ע"י document_type="expense" (הן סוג 15, לא 16). מושכים הכל ומסננים
@@ -385,7 +447,7 @@ class ExpenseFilingService:
                 total=total,
                 expense_date=getattr(d, "issue_date", None) or date.today(),
                 invoice_number=invoice_no,
-                category=classify_expense(supplier, None, invoice_no),
+                category=classify_expense(supplier, None, invoice_no, org_categories=org_categories),
                 # טיוטה = ממתינה לאישור; מסמך סופי = כבר מתויק ב-SUMIT
                 status="pending" if is_draft else "filed",
                 sumit_expense_id=None if is_draft else ext,

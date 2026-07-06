@@ -191,6 +191,33 @@ def test_update_expense_deduction_percent_omitted_stays_null(client, acc):
     assert u.json()["data"]["deduction_percent"] is None
 
 
+def test_update_expense_accepts_org_custom_category_key(client, acc):
+    client.post("/api/expenses/categories", json={
+        "key": "custom_filing_card", "name_he": "כרטיס תיוק מותאם",
+    }, headers=acc["headers"])
+
+    r = client.post("/api/expenses", json={
+        "supplier_name": "ספק לכרטיס מותאם", "amount": 100,
+        "expense_date": date.today().isoformat(),
+    }, headers=acc["headers"])
+    eid = r.json()["data"]["id"]
+
+    u = client.patch(f"/api/expenses/{eid}", json={"category": "custom_filing_card"}, headers=acc["headers"])
+    assert u.status_code == 200, u.text
+    assert u.json()["data"]["category"] == "custom_filing_card"
+
+
+def test_update_expense_rejects_unknown_category_key(client, acc):
+    r = client.post("/api/expenses", json={
+        "supplier_name": "ספק לקטגוריה לא ידועה", "amount": 100,
+        "expense_date": date.today().isoformat(),
+    }, headers=acc["headers"])
+    eid = r.json()["data"]["id"]
+
+    u = client.patch(f"/api/expenses/{eid}", json={"category": "totally_made_up_category"}, headers=acc["headers"])
+    assert u.status_code == 400, u.text
+
+
 def test_pcn874_readiness(client, acc):
     """דוח מוכנות PCN874 — מסמן הוצאות מתויקות ללא ח.פ/מע"מ."""
     from datetime import date

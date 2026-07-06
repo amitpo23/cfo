@@ -41,6 +41,42 @@ def test_unknown_item_name_falls_back_to_supplier_keywords():
     assert classify_expense("תחנת דלק פז", sumit_item_name="פריט לא מוכר") == "travel"
 
 
+# ---------------------------------------------------------------------- #
+# org_categories — כרטיסים מותאמים אישית לארגון. מילות המפתח שלהם גוברות
+# על מילות המפתח המובנות (CATEGORY_KEYWORDS).
+# ---------------------------------------------------------------------- #
+
+def test_org_category_keyword_wins_over_built_in_on_the_same_keyword():
+    """הבוחן המכריע: 'ביטוח' הוא גם מילת מפתח מובנית (-> 'insurance') וגם
+    מילת מפתח של כרטיס מותאם אישית. אם הכרטיס המותאם אינו נבדק ראשון, הבדיקה
+    הזו הייתה עוברת גם בטעות (למשל אם רק ה-built-in נבדק) — לכן מילת המפתח
+    זהה בשני המקורות, לא ייחודית לכרטיס המותאם."""
+    org_categories = [{"key": "vehicle_insurance_card", "keywords": ["ביטוח"]}]
+    result = classify_expense("חברת ביטוח ישיר", org_categories=org_categories)
+    assert result == "vehicle_insurance_card"
+    # ובלי org_categories אותה מחרוזת מסווגת ל-built-in הרגיל
+    assert classify_expense("חברת ביטוח ישיר") == "insurance"
+
+
+def test_org_category_falls_back_to_built_in_when_no_org_keyword_matches():
+    org_categories = [{"key": "custom_card", "keywords": ["מילה-שלא-מופיעה-בטקסט"]}]
+    assert classify_expense("תחנת דלק פז", org_categories=org_categories) == "travel"
+
+
+def test_sumit_item_name_still_beats_org_category_keywords():
+    # שם פריט SUMIT הוא האות האמין ביותר — גובר גם על כרטיסים מותאמים אישית.
+    org_categories = [{"key": "custom_travel", "keywords": ["נסיעה"]}]
+    result = classify_expense(
+        "ספק כללי", sumit_item_name="הוצאות נסיעה", org_categories=org_categories,
+    )
+    assert result == "travel"
+
+
+def test_org_categories_with_no_keywords_are_safely_ignored():
+    org_categories = [{"key": "no_keywords_card", "keywords": None}]
+    assert classify_expense("תחנת דלק פז", org_categories=org_categories) == "travel"
+
+
 @pytest.fixture(scope="module")
 def acc(client):
     reg = client.post("/api/admin/auth/register", json={

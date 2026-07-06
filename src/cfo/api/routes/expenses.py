@@ -3,13 +3,15 @@
 Expense filing routes.
 """
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..dependencies import get_db, get_current_org_id
+from ...services import expense_category_service
+from ...services.expense_category_service import CategoryInUseError
 from ...services.expense_filing_service import ExpenseFilingService
 from ...services.expense_ocr_pipeline import ExpenseOCRPipeline
 
@@ -73,7 +75,9 @@ async def update_expense(
     try:
         return {"status": "success", "data": service.update_expense(expense_id, request.model_dump(exclude_none=True))}
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        detail = str(exc)
+        code = 404 if "לא נמצאה" in detail else 400
+        raise HTTPException(status_code=code, detail=detail)
 
 
 @router.post("/{expense_id}/file")
@@ -180,3 +184,58 @@ async def sync_pending(
         return {"status": "success", "data": await service.sync_pending_from_sumit()}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ---------------------------------------------------------------------- #
+# כרטיסי הוצאה מותאמים אישית לארגון (ExpenseCategory) — "לבנות קטגוריות
+# הוצאה שההוצאות ייקלטו לפי כרטיסים שאני אגיד לפתוח". משלימים את הקטגוריות
+# המובנות (VALID_CATEGORIES) בממשק אחד; ה-classifier מעדיף את מילות המפתח
+# של הכרטיסים המותאמים על פני המובנות.
+# ---------------------------------------------------------------------- #
+
+class ExpenseCategoryCreateRequest(BaseModel):
+    key: str
+    name_he: str
+    keywords: Optional[List[str]] = None
+
+
+@router.get("/categories")
+async def list_expense_categories(
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """קטגוריות מובנות + כרטיסים מותאמים אישית של הארגון, מסומן מי הוא מי."""
+    return {"status": "success", "data": expense_category_service.list_categories(db, org_id)}
+
+
+@router.post("/categories")
+async def create_expense_category(
+    request: ExpenseCategoryCreateRequest,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """פתיחת כרטיס הוצאה מותאם אישית לארגון."""
+    try:
+        data = expense_category_service.create_category(
+            db, org_id, key=request.key, name_he=request.name_he, keywords=request.keywords,
+        )
+        return {"status": "success", "data": data}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/categories/{category_id}")
+async def delete_expense_category(
+    category_id: int,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """מחיקת כרטיס הוצאה מותאם אישית של הארגון. מסורב (409) אם הוצאות
+    כלשהן עדיין משתמשות בקטגוריה זו — עם הכמות, לא רק סירוב עיוור."""
+    try:
+        expense_category_service.delete_category(db, org_id, category_id)
+        return {"status": "success", "data": {"deleted": category_id}}
+    except CategoryInUseError as exc:
+        raise HTTPException(status_code=409, detail={"message": str(exc), "count": exc.count})
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

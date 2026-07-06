@@ -748,6 +748,27 @@ class Expense(Base):
     )
 
 
+class ExpenseCategory(Base):
+    """קטגוריית הוצאה מותאמת אישית לארגון ("כרטיס") — משלימה את הקטגוריות
+    המובנות (VALID_CATEGORIES ב-expense_classifier.py). המשתמש פותח כרטיסים
+    לפי הצורך שלו; keywords (אופציונלי) מזינים את המסווג האוטומטי וגוברים
+    על מילות המפתח המובנות."""
+    __tablename__ = "expense_categories"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    key = Column(String(100), nullable=False)  # slug, ייחודי בתוך הארגון
+    name_he = Column(String(255), nullable=False)
+    keywords = Column(JSON, nullable=True)  # list[str], אופציונלי — לסיווג אוטומטי
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_expensecat_org_key", "organization_id", "key", unique=True),
+    )
+
+
 class BankTransaction(Base):
     """Bank/credit card transaction for reconciliation"""
     __tablename__ = "bank_transactions"
