@@ -2461,3 +2461,8 @@ Parity fixes (INLINE by Fable controller — subagents died on spend limit):
   H3 fixed 0f5c9b9 (VAT dedupe, Bill canonical); H1 fixed d3e47b1 (fetch_bills 15+16, draft skip; 23353ca rationale was inverted vs live evidence); H2 fixed e80ac72 (expense pull in cron, isolated failure); H0 regression test + audit doc committed (docs/audits/2026-07-05-data-parity-sumit.md). Suite 696 passed.
   USER APPROVAL NEEDED: delete stale Invoice row org1 external_id=974527677 (receipt-as-invoice, -23600, 2025-06-30).
   PENDING: OfficeBot review incomplete (spend limit) — re-review 70d09a6..c132789 or fold into final branch review.
+OfficeBot review (resumed): APPROVED — gate airtight both layers, X-Active-Org-Id vector traced safe; Important: ~20-line verbatim sync-orchestration duplication (office_service.run_client_sync vs routes/office.py _run_sync) — follow-up refactor: route should call the service.
+CLIENT ONBOARDED (2026-07-06): "עומר ועודד פורת" roster id 4, org 5, CompanyID 1999386278, own key (validated live, stored encrypted). First sync: 5 customers, 8 invoices, 1 payment. In hourly cron.
+FINDING: עמית פורת CompanyID = 439924597 = org 1's existing file — the "main" connected file IS Amit Porat's osek (env key ...0IGO belongs to it). No new registration needed.
+PAUSED by user (going live + VAT reporting): depreciation module — WIP saved on branch wip/depreciation-module (uncommitted work of stopped agent; suite status unknown). Resume later: review WIP, finish tests, merge.
+QUEUE when resuming: depreciation WIP; credential-source column in admin-clients; office sync-orchestration dedup refactor; 6111; quote-cancel path; Medici onboarding (needs key+CompanyID as text).
