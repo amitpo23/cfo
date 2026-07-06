@@ -57,10 +57,6 @@
       "schedule": "15 */4 * * *"
     },
     {
-      "path": "/api/cron/process-ocr",
-      "schedule": "30 5 * * *"
-    },
-    {
       "path": "/api/cron/collection-reminders",
       "schedule": "0 7 * * *"
     }

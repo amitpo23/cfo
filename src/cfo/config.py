@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     # Vision model used to read receipt scans. Claude reads PDFs natively.
     ocr_vision_model: str = "claude-opus-4-8"
     ocr_vision_model_openai: str = "gpt-4o"
+    # החלטת משתמש (2026-07-06): מפתח ה-API משרת את עוזר ה-AI בלבד.
+    # OCR מבוסס-LLM נצרך מכסה ברקע (cron) — כבוי אלא אם הופעל במפורש.
+    ocr_llm_enabled: bool = False
     # AI chat assistant (Wave 2 Step 9) — same anthropic_api_key as OCR above.
     ai_chat_model: str = "claude-sonnet-5"
     # Companies-registry (רשם החברות) lookup over data.gov.il CKAN.
