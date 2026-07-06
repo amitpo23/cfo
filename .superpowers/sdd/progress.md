@@ -2494,3 +2494,12 @@ Client connection status: org1 עמית פורת (439924597) ✓ | org2 שף א�
 # === org5 expense cards built (2026-07-06) ===
 Built 7 custom expense category cards for org5 (Omer-Oded) directly in Neon prod: fuel_vehicle, office_supplies, communications, rent_property, hospitality, suppliers, bank_fees (+ built-ins professional/marketing/insurance already exist). Persisted, active.
 VERIFIED 3 WAYS org5 has ZERO expense docs in SUMIT (types 15/16 = 0 via direct list, cron bills=0, targeted query=0). User believes they "sent expenses for capture" but none exist as SUMIT expense documents. Cannot fabricate. Paths: (a) they finalize scans in SUMIT UI -> auto-sync; (b) manual entry in Rezef; (c) re-enable OCR (OCR_LLM_ENABLED) + user shares receipt files -> Rezef OCRs + files to SUMIT via addexpense (appears in both).
+
+# === org5 expense capture from SUMIT fileexpenses (2026-07-06) ===
+User asked to capture 50 expense files sitting in SUMIT "קבצי הוצאות" as "ממתין לקליטה" (SUMIT auto-capture wasn't running; no user capture button). API OCR key exhausted -> I read receipts MYSELF (vision).
+Method: crm/downloadfile/{uuid} downloads WITHOUT auth (redirects to presigned S3) -> Python urllib batch download all 50 -> pdftotext for ~30 digital + image Read for ~20 scanned.
+RESULT: 41 real expenses created in Rezef org5 (source=sumit_fileexpense, external_id=sumit_file_{uuid}), input VAT ₪32,171.39, total ₪211,108.
+EXCLUDED (6): files 14,15,16,17,18 = Porat's OWN outgoing income receipts wrongly in expense inbox; 39 = company logo image.
+DEDUP (2): 11=41 (מרכז מזון נהלל), 38=40 (בר מגן זיכוי) captured once.
+FLAGGED (1): file 44 = Kvish6 link only, no amount (may duplicate #47).
+NEXT (Step 2, after user verifies): file to SUMIT via addexpense + archive originals. NOT done yet — awaiting user verification of the 41 amounts.
