@@ -2509,3 +2509,8 @@ Self-verified 41 expenses math (subtotal+VAT=total, ~18%) — all clean (credit 
 Pilot add_expense to SUMIT REJECTED: "ההרשאה נדחתה: Expenses addition isn't active" — the expense-addition module/permission is NOT active on org5's SUMIT account. Cannot write expenses via API.
 CONCLUSION: 41 expenses live in Rezef only (input VAT ₪32,171). SUMIT capture must be done by SUMIT's own OCR/accountant on the pending "קבצי הוצאות" files. No duplicate risk (API write impossible).
 Also noted: addexpense uses SearchMode=Automatic on supplier (junk-entity risk) + category as English item name — would've been messy anyway; SUMIT's own capture is cleaner.
+
+# === WHY "expense addition isn't active" on org5 SUMIT (2026-07-06) ===
+Browser investigation: org5 (עומר-ועודד, SUMIT companyid 1999386278) "הוצאות" module = UPLOAD INBOX ONLY (mobile/email 558402376@expense.co.il/WhatsApp for smart-scan capture). Active.
+KEY: settings page "הנהלת חשבונות" link -> /books/?companyid=844329067 = a DIFFERENT SUMIT company (the accountant/office "ניהול משרד"). The client's actual bookkeeping + expense DOCUMENTS live in the ACCOUNTANT's SUMIT, not the client's own. So client account is invoicing+file-collection only; addexpense API blocked by design.
+DECISION: do NOT force-enable expense-addition on client account — would create parallel/duplicate bookkeeping conflicting with the accountant (companyid 844329067). Not a fault; a standard accounting-firm setup. Reported to user. Rezef holds all 41 correctly for user's own visibility/VAT.
