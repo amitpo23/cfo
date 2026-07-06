@@ -717,3 +717,189 @@ def test_confirm_action_executes_run_client_sync_successfully(monkeypatch, fresh
         assert roster_row.last_synced_at is not None
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------- #
+# Expense-workflow write tools (create_expense_category, set_expense_category,
+# classify_pending_expenses) — same confirmation gate as every other write
+# tool: proposed on the first call, never executed until a separate,
+# explicit confirm_action().
+# ---------------------------------------------------------------------- #
+
+def _seed_pending_expense(db, org_id, supplier_name="ספק", category=None):
+    from cfo.services.expense_filing_service import ExpenseFilingService
+    return ExpenseFilingService(db, organization_id=org_id).create_expense({
+        "supplier_name": supplier_name, "amount": 100, "vat_amount": 18,
+        "expense_date": date.today(), "category": category,
+    })
+
+
+def test_create_expense_category_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
+    from cfo.models import ExpenseCategory
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "create_expense_category", {
+                    "key": "conference_travel", "name_he": "נסיעות לכנסים",
+                })],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        result = asyncio.run(service.send_message("s1", "פתח לי כרטיס הוצאה לנסיעות כנסים"))
+
+        assert result["pending_action"]["tool"] == "create_expense_category"
+        assert db.query(ExpenseCategory).filter(
+            ExpenseCategory.organization_id == org_id,
+            ExpenseCategory.key == "conference_travel",
+        ).count() == 0
+    finally:
+        db.close()
+
+
+def test_confirm_action_executes_create_expense_category_successfully(monkeypatch, fresh_org):
+    from cfo.models import ExpenseCategory
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "create_expense_category", {
+                    "key": "conference_travel", "name_he": "נסיעות לכנסים",
+                })],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        proposed = asyncio.run(service.send_message("s1", "פתח כרטיס הוצאה"))
+        pending_id = proposed["message_id"]
+
+        confirmed = asyncio.run(service.confirm_action(pending_id))
+        assert confirmed["result"]["key"] == "conference_travel"
+        assert db.query(ExpenseCategory).filter(
+            ExpenseCategory.organization_id == org_id,
+            ExpenseCategory.key == "conference_travel",
+        ).count() == 1
+
+        try:
+            asyncio.run(service.confirm_action(pending_id))
+            raised = None
+        except ChatConfirmationError as exc:
+            raised = exc
+        assert raised is not None
+    finally:
+        db.close()
+
+
+def test_set_expense_category_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
+    from cfo.models import Expense
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        exp = _seed_pending_expense(db, org_id, supplier_name="ספק לשינוי קטגוריה")
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "set_expense_category", {
+                    "expense_id": exp["id"], "category": "rent",
+                })],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        result = asyncio.run(service.send_message("s1", "שנה את הקטגוריה של ההוצאה הזו לשכירות"))
+
+        assert result["pending_action"]["tool"] == "set_expense_category"
+        row = db.query(Expense).filter(Expense.id == exp["id"]).first()
+        assert row.category != "rent"
+    finally:
+        db.close()
+
+
+def test_confirm_action_executes_set_expense_category_successfully(monkeypatch, fresh_org):
+    from cfo.models import Expense
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        exp = _seed_pending_expense(db, org_id, supplier_name="ספק לשינוי קטגוריה 2")
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "set_expense_category", {
+                    "expense_id": exp["id"], "category": "rent",
+                })],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        proposed = asyncio.run(service.send_message("s1", "שנה קטגוריה"))
+        pending_id = proposed["message_id"]
+
+        confirmed = asyncio.run(service.confirm_action(pending_id))
+        assert confirmed["result"]["category"] == "rent"
+
+        row = db.query(Expense).filter(Expense.id == exp["id"]).first()
+        assert row.category == "rent"
+    finally:
+        db.close()
+
+
+def test_classify_pending_expenses_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
+    from cfo.models import Expense
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        exp = _seed_pending_expense(db, org_id, supplier_name="תחנת דלק פז")
+        db.query(Expense).filter(Expense.id == exp["id"]).update({"category": None})
+        db.commit()
+
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "classify_pending_expenses", {})],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        result = asyncio.run(service.send_message("s1", "סווג את כל ההוצאות הממתינות"))
+
+        assert result["pending_action"]["tool"] == "classify_pending_expenses"
+        db.expire_all()
+        row = db.query(Expense).filter(Expense.id == exp["id"]).first()
+        assert row.category is None  # לא בוצע עדיין
+    finally:
+        db.close()
+
+
+def test_confirm_action_executes_classify_pending_expenses_successfully(monkeypatch, fresh_org):
+    from cfo.models import Expense
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        exp = _seed_pending_expense(db, org_id, supplier_name="תחנת דלק פז")
+        db.query(Expense).filter(Expense.id == exp["id"]).update({"category": None})
+        db.commit()
+
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "classify_pending_expenses", {})],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        proposed = asyncio.run(service.send_message("s1", "סווג את כל ההוצאות הממתינות"))
+        pending_id = proposed["message_id"]
+
+        confirmed = asyncio.run(service.confirm_action(pending_id))
+        assert confirmed["result"]["classified"] == 1
+
+        db.expire_all()
+        row = db.query(Expense).filter(Expense.id == exp["id"]).first()
+        assert row.category == "travel"
+    finally:
+        db.close()

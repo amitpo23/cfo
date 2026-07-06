@@ -131,6 +131,97 @@ async def _create_payment_link(db, org_id: int, *, invoice_id: int, **_kwargs) -
     return await service.create_payment_link(invoice_id)
 
 
+def _parse_date_safe(value: str | None):
+    """Best-effort ISO date parse for model-supplied filter args. A read tool
+    executes inline in the chat loop with no surrounding try/except (unlike
+    write tools, which are only ever run from confirm_action's ValueError
+    guard) — a malformed string here must not raise and turn into an
+    unhandled 500; it's simply treated as "no filter" instead."""
+    from datetime import date as date_type
+    if not value:
+        return None
+    try:
+        return date_type.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+
+
+async def _list_expenses(
+    db, org_id: int, *, status: str | None = None, category: str | None = None,
+    from_date: str | None = None, to_date: str | None = None, supplier: str | None = None,
+    **_kwargs,
+) -> dict:
+    """הצגת הוצאות — קריאה בלבד. עד 50 שורות מוחזרות, אך count/totals
+    משקפים את כל הסט המסונן (לא רק את 50 השורות המוצגות)."""
+    from sqlalchemy import func
+    from ..models import Expense
+
+    q = db.query(Expense).filter(Expense.organization_id == org_id)
+    if status:
+        q = q.filter(Expense.status == status)
+    if category:
+        q = q.filter(Expense.category == category)
+    parsed_from = _parse_date_safe(from_date)
+    if parsed_from:
+        q = q.filter(Expense.expense_date >= parsed_from)
+    parsed_to = _parse_date_safe(to_date)
+    if parsed_to:
+        q = q.filter(Expense.expense_date <= parsed_to)
+    if supplier:
+        q = q.filter(Expense.supplier_name.ilike(f"%{supplier}%"))
+
+    count = q.count()
+    total_amount, total_vat = q.with_entities(
+        func.sum(Expense.amount), func.sum(Expense.vat_amount)
+    ).first()
+    rows = q.order_by(Expense.expense_date.desc()).limit(50).all()
+
+    return {
+        "count": count,
+        "totals": {
+            "amount": round(float(total_amount or 0), 2),
+            "vat": round(float(total_vat or 0), 2),
+        },
+        "expenses": [
+            {
+                "id": e.id,
+                "supplier": e.supplier_name,
+                "amount": float(e.amount or 0),
+                "vat": float(e.vat_amount or 0),
+                "date": e.expense_date.isoformat() if e.expense_date else None,
+                "category": e.category,
+                "status": e.status,
+            }
+            for e in rows
+        ],
+    }
+
+
+async def _get_pcn874_readiness(db, org_id: int, **_kwargs) -> dict:
+    from .expense_filing_service import ExpenseFilingService
+    return ExpenseFilingService(db, organization_id=org_id).pcn874_readiness()
+
+
+async def _create_expense_category(
+    db, org_id: int, *, key: str, name_he: str, keywords: list[str] | None = None, **_kwargs,
+) -> dict:
+    from . import expense_category_service
+    return expense_category_service.create_category(
+        db, org_id, key=key, name_he=name_he, keywords=keywords,
+    )
+
+
+async def _set_expense_category(db, org_id: int, *, expense_id: int, category: str, **_kwargs) -> dict:
+    from .expense_filing_service import ExpenseFilingService
+    service = ExpenseFilingService(db, organization_id=org_id)
+    return service.update_expense(expense_id, {"category": category})
+
+
+async def _classify_pending_expenses(db, org_id: int, **_kwargs) -> dict:
+    from .expense_filing_service import ExpenseFilingService
+    return ExpenseFilingService(db, organization_id=org_id).classify_pending()
+
+
 # ------------------------------------------------------------------------ #
 # Office-manager tools (SUPER_ADMIN tier). `org_id` here means the CALLER's
 # own organization acting as the office — same as every other tool, injected
@@ -363,6 +454,82 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="write",
         fn=_create_payment_link,
+    ),
+    "list_expenses": ChatTool(
+        name="list_expenses",
+        description=(
+            "רשימת הוצאות עם סינון (סטטוס, קטגוריה, טווח תאריכים, חיפוש חופשי לפי "
+            "שם ספק) — עד 50 שורות מוחזרות, עם count וסה\"כ (amount/vat) על כל "
+            "הסט המסונן, לא רק על השורות המוצגות."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["pending", "filed", "error"]},
+                "category": {"type": "string", "description": "מפתח קטגוריה, מובנית או כרטיס מותאם אישית"},
+                "from_date": {"type": "string", "description": "ISO date"},
+                "to_date": {"type": "string", "description": "ISO date"},
+                "supplier": {"type": "string", "description": "התאמה חלקית לשם ספק"},
+            },
+        },
+        category="read",
+        fn=_list_expenses,
+    ),
+    "get_pcn874_readiness": ChatTool(
+        name="get_pcn874_readiness",
+        description="דוח מוכנות PCN874 — אילו הוצאות מתויקות חסרות ח.פ/מע\"מ וסיכום סכומים.",
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_pcn874_readiness,
+    ),
+    "create_expense_category": ChatTool(
+        name="create_expense_category",
+        description=(
+            "פתיחת קטגוריית/כרטיס הוצאה מותאם אישית לארגון, עם מילות מפתח "
+            "אופציונליות לסיווג אוטומטי עתידי. פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "מזהה ייחודי (slug) לכרטיס"},
+                "name_he": {"type": "string", "description": "שם תצוגה בעברית"},
+                "keywords": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "מילות מפתח לסיווג אוטומטי (אופציונלי)",
+                },
+            },
+            "required": ["key", "name_he"],
+        },
+        category="write",
+        fn=_create_expense_category,
+    ),
+    "set_expense_category": ChatTool(
+        name="set_expense_category",
+        description=(
+            "שינוי קטגוריית הוצאה בודדת (לפי מזהה) — מובנית או כרטיס מותאם "
+            "אישית קיים. פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "expense_id": {"type": "integer"},
+                "category": {"type": "string"},
+            },
+            "required": ["expense_id", "category"],
+        },
+        category="write",
+        fn=_set_expense_category,
+    ),
+    "classify_pending_expenses": ChatTool(
+        name="classify_pending_expenses",
+        description=(
+            "סיווג אוטומטי גורף של הוצאות ממתינות (status=pending) שעדיין ללא "
+            "קטגוריה אמיתית — מחזיר פירוט כמות לפי קטגוריה. פעולת כתיבה — "
+            "דורשת אישור מפורש."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="write",
+        fn=_classify_pending_expenses,
     ),
     "list_office_clients": ChatTool(
         name="list_office_clients",

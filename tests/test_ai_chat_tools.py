@@ -26,6 +26,7 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
     assert write_tools == {
         "issue_document", "log_collection_attempt", "create_payment_link",
         "run_client_sync", "register_office_client",
+        "create_expense_category", "set_expense_category", "classify_pending_expenses",
     }
 
 
@@ -294,3 +295,217 @@ def test_run_client_sync_tool_raises_for_unknown_client(fresh_org):
             asyncio.run(TOOLS["run_client_sync"].fn(db, office_org, client_id=999999))
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------- #
+# Expense-workflow tools — org-scoped (not office-tier). Let the accounting-
+# office manager view expenses, open custom expense "cards" (categories),
+# recategorize, bulk-classify, and check PCN874 readiness through the chat.
+# ---------------------------------------------------------------------- #
+
+def _create_expense(db, org_id, **overrides):
+    from cfo.services.expense_filing_service import ExpenseFilingService
+    data = {
+        "supplier_name": "ספק לבדיקה", "amount": 100, "vat_amount": 18,
+        "expense_date": date.today(),
+    }
+    data.update(overrides)
+    if isinstance(data.get("expense_date"), str):
+        data["expense_date"] = date.fromisoformat(data["expense_date"])
+    return ExpenseFilingService(db, organization_id=org_id).create_expense(data)
+
+
+def test_list_expenses_tool_is_org_scoped_with_totals_and_count(fresh_org):
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _create_expense(db, org_a, supplier_name="ספק א", amount=100, vat_amount=18)
+        _create_expense(db, org_a, supplier_name="ספק ב", amount=200, vat_amount=36)
+
+        result_a = asyncio.run(TOOLS["list_expenses"].fn(db, org_a))
+        result_b = asyncio.run(TOOLS["list_expenses"].fn(db, org_b))
+
+        assert result_a["count"] == 2
+        assert len(result_a["expenses"]) == 2
+        assert result_a["totals"]["amount"] == 300.0
+        assert result_a["totals"]["vat"] == 54.0
+        row = result_a["expenses"][0]
+        assert set(row.keys()) == {"id", "supplier", "amount", "vat", "date", "category", "status"}
+        assert result_b["count"] == 0
+        assert result_b["expenses"] == []
+    finally:
+        db.close()
+
+
+def test_list_expenses_tool_filters_by_status_category_and_supplier(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _create_expense(db, org_id, supplier_name="חברת חשמל ארצית", category="utilities")
+        filed = _create_expense(db, org_id, supplier_name="עו\"ד כהן", category="professional")
+        from cfo.models import Expense
+        row = db.query(Expense).filter(Expense.id == filed["id"]).first()
+        row.status = "filed"
+        db.commit()
+
+        by_status = asyncio.run(TOOLS["list_expenses"].fn(db, org_id, status="filed"))
+        assert by_status["count"] == 1
+        assert by_status["expenses"][0]["supplier"] == "עו\"ד כהן"
+
+        by_category = asyncio.run(TOOLS["list_expenses"].fn(db, org_id, category="utilities"))
+        assert by_category["count"] == 1
+        assert by_category["expenses"][0]["category"] == "utilities"
+
+        by_supplier = asyncio.run(TOOLS["list_expenses"].fn(db, org_id, supplier="חשמל"))
+        assert by_supplier["count"] == 1
+        assert "חשמל" in by_supplier["expenses"][0]["supplier"]
+    finally:
+        db.close()
+
+
+def test_list_expenses_tool_filters_by_date_range(fresh_org):
+    from datetime import timedelta as td
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        old = _create_expense(
+            db, org_id, supplier_name="ישן", expense_date=(date.today() - td(days=100)).isoformat(),
+        )
+        recent = _create_expense(
+            db, org_id, supplier_name="חדש", expense_date=date.today().isoformat(),
+        )
+        result = asyncio.run(TOOLS["list_expenses"].fn(
+            db, org_id, from_date=(date.today() - td(days=10)).isoformat(),
+        ))
+        ids = {e["id"] for e in result["expenses"]}
+        assert recent["id"] in ids
+        assert old["id"] not in ids
+    finally:
+        db.close()
+
+
+def test_list_expenses_tool_respects_50_row_limit_but_reports_true_count(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        for i in range(55):
+            _create_expense(db, org_id, supplier_name=f"ספק {i}", invoice_number=str(i))
+        result = asyncio.run(TOOLS["list_expenses"].fn(db, org_id))
+        assert result["count"] == 55
+        assert len(result["expenses"]) == 50
+    finally:
+        db.close()
+
+
+def test_get_pcn874_readiness_tool_wraps_service(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        exp = _create_expense(db, org_id, supplier_name="ספק מתויק")
+        from cfo.models import Expense
+        row = db.query(Expense).filter(Expense.id == exp["id"]).first()
+        row.status = "filed"
+        row.supplier_tax_id = "511402547"
+        db.commit()
+
+        result = asyncio.run(TOOLS["get_pcn874_readiness"].fn(db, org_id))
+        assert result["filed_total"] == 1
+        assert result["pcn_ready"] == 1
+    finally:
+        db.close()
+
+
+def test_create_expense_category_tool_creates_a_custom_card(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["create_expense_category"].fn(
+            db, org_id, key="conference_travel", name_he="נסיעות לכנסים",
+            keywords=["כנס"],
+        ))
+        assert result["key"] == "conference_travel"
+        assert result["built_in"] is False
+
+        from cfo.services import expense_category_service
+        keys = expense_category_service.org_category_keys(db, org_id)
+        assert "conference_travel" in keys
+    finally:
+        db.close()
+
+
+def test_create_expense_category_tool_is_write_category():
+    assert TOOLS["create_expense_category"].category == "write"
+
+
+def test_set_expense_category_tool_recategorizes_and_rejects_unknown_category(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        exp = _create_expense(db, org_id, supplier_name="ספק לשינוי")
+
+        result = asyncio.run(TOOLS["set_expense_category"].fn(
+            db, org_id, expense_id=exp["id"], category="rent",
+        ))
+        assert result["category"] == "rent"
+
+        with pytest.raises(ValueError):
+            asyncio.run(TOOLS["set_expense_category"].fn(
+                db, org_id, expense_id=exp["id"], category="not_a_real_category",
+            ))
+    finally:
+        db.close()
+
+
+def test_set_expense_category_tool_is_write_category():
+    assert TOOLS["set_expense_category"].category == "write"
+
+
+def test_classify_pending_expenses_tool_returns_counts_and_actually_updates_rows(fresh_org):
+    """create_expense auto-classifies at creation time, so a freshly-created
+    expense is never actually 'uncategorized' — to exercise
+    classify_pending_expenses honestly, force rows back into the
+    None/'other' state it targets (as e.g. a raw SUMIT sync import would
+    leave them) directly via the DB, bypassing the auto-classify-on-create
+    path."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        from cfo.models import Expense
+
+        travel = _create_expense(db, org_id, supplier_name="תחנת דלק פז")
+        rent = _create_expense(db, org_id, supplier_name="השכרת משרד", description="דמי שכירות")
+        # already-categorized (non-'other') and filed rows must NOT be touched
+        manually_set = _create_expense(db, org_id, supplier_name="ספק שנקבע ידנית", category="materials")
+        already_filed = _create_expense(db, org_id, supplier_name="תחנת דלק שכבר תויקה")
+
+        db.query(Expense).filter(
+            Expense.id.in_([travel["id"], rent["id"], already_filed["id"]])
+        ).update({"category": None}, synchronize_session=False)
+        db.query(Expense).filter(Expense.id == already_filed["id"]).update(
+            {"status": "filed"}, synchronize_session=False
+        )
+        db.commit()
+
+        result = asyncio.run(TOOLS["classify_pending_expenses"].fn(db, org_id))
+
+        assert result["scanned"] == 2  # travel + rent only — not manually_set, not already_filed
+        assert result["classified"] == 2
+        assert result["by_category"]["travel"] == 1
+        assert result["by_category"]["rent"] == 1
+
+        db.expire_all()
+        travel_row = db.query(Expense).filter(Expense.id == travel["id"]).first()
+        rent_row = db.query(Expense).filter(Expense.id == rent["id"]).first()
+        manual_row = db.query(Expense).filter(Expense.id == manually_set["id"]).first()
+        filed_row = db.query(Expense).filter(Expense.id == already_filed["id"]).first()
+        assert travel_row.category == "travel"
+        assert rent_row.category == "rent"
+        assert manual_row.category == "materials"  # untouched
+        assert filed_row.category is None  # untouched — already filed
+    finally:
+        db.close()
+
+
+def test_classify_pending_expenses_tool_is_write_category():
+    assert TOOLS["classify_pending_expenses"].category == "write"
