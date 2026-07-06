@@ -2468,3 +2468,13 @@ PAUSED by user (going live + VAT reporting): depreciation module — WIP saved o
 QUEUE when resuming: depreciation WIP; credential-source column in admin-clients; office sync-orchestration dedup refactor; 6111; quote-cancel path; Medici onboarding (needs key+CompanyID as text).
 Expense workflow (categories+bot tools): implemented 7645a83..8a4a72e (2 commits), review APPROVED (0 blocking). Minor #1 (empty-keyword hijack) fixed inline by controller + test. 728 suite.
   Minors deferred to final review: date-filter silent drop in list_expenses (echo applied filters); check-then-act on duplicate key (IntegrityError 500 on race); stale test name; classify_pending overwrites deliberate "other" (documented interpretation).
+
+# === 2026-07-06 per-client UI + expense/VAT (Fable inline, agents died on spend) ===
+Bug A FIXED (74c505a): cashflow.py+reports.py 29 sites -> get_current_org_id (org-switcher aware). Leak-test+positive control. 795 suite.
+Bug B (executive dashboard zeros): NOT a code bug — generate_profit_loss already reads ledger (Invoice/Bill/Expense), verified LIVE org5 revenue=₪90,760 both /reports/profit-loss and /dashboard/executive after deploy. Zeros were the un-deployed frontend cache + no expenses yet.
+Deployed prod (itgf1wa9s), live-verified per-client scoping works.
+KB bot: b83d184, 793 suite, 11 topics + rezef_help tool.
+API-for-chat-only: 97063f3 (OCR gated OCR_LLM_ENABLED=false, process-ocr cron removed).
+FINDING: 4 SUMIT connections had bad creds hammering the account -> lockout blocking valid org5 pulls. orgs 2(שף אליהב),3(מדיצ'י),4(עומר-ועודד DUP) set status=inactive. org5 = the VALID Omer-Oded (CompanyID 1999386278). org4 is a stale duplicate — needs user cleanup decision.
+Smoke user pw reset -> scratchpad/smoke_creds.txt (SUPER_ADMIN).
+PENDING: org5 expense pull running in background after lockout clears (pull_org5_expenses.py).
