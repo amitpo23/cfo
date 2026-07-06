@@ -2484,3 +2484,9 @@ FIXED f6497a1: fetch_invoices pulls types 0+1 (Invoice + InvoiceAndReceipt). Liv
 LOCKOUT INSIGHT: SUMIT "Repeated incorrect credentials" lockout is on the LOCAL IP (my inspection calls), NOT Vercel. Prod /api/cron/sync (Vercel IP) works fine. STOP local SUMIT calls; let hourly cron handle syncs. Disabled orgs 2,3,4 (bad creds) stay inactive so cron won't hammer.
 EXPENSES: org5 (Omer-Oded) has ZERO expense docs in SUMIT (all docs are income: types 0,1,5,6). Expense-categorization-for-VAT workflow is built+deployed but has nothing to categorize until they log expenses. Input VAT = 0 currently (correct).
 OPEN: org4 is a stale duplicate of Omer-Oded (bad creds) — needs user approval to delete.
+
+# === client connections cleanup (2026-07-06 pm) ===
+CONNECTED שף אליהב כהן (org 2, CompanyID 642076960) with NEW valid key (user-provided, encrypted in DB) — re-activated, prod cron synced 30 invoices (27+3). 
+DELETED duplicate org 4 (Omer-Oded, empty of business data — 0 inv/exp/contacts; removed 196 sync-cruft rows across 9 tables + org). Now exactly ONE Omer-Oded = org 5.
+Prod cron (Vercel IP) is the reliable sync path — local IP still SUMIT-locked from earlier inspection bursts.
+Client connection status: org1 עמית פורת (439924597) ✓ | org2 שף אליהב כהן (642076960) ✓ NEW | org3 מדיצ'י (444973420) inactive-needs-key | org5 עומר-ועודד (1999386278) ✓.
