@@ -2490,3 +2490,7 @@ CONNECTED שף אליהב כהן (org 2, CompanyID 642076960) with NEW valid key
 DELETED duplicate org 4 (Omer-Oded, empty of business data — 0 inv/exp/contacts; removed 196 sync-cruft rows across 9 tables + org). Now exactly ONE Omer-Oded = org 5.
 Prod cron (Vercel IP) is the reliable sync path — local IP still SUMIT-locked from earlier inspection bursts.
 Client connection status: org1 עמית פורת (439924597) ✓ | org2 שף אליהב כהן (642076960) ✓ NEW | org3 מדיצ'י (444973420) inactive-needs-key | org5 עומר-ועודד (1999386278) ✓.
+
+# === org5 expense cards built (2026-07-06) ===
+Built 7 custom expense category cards for org5 (Omer-Oded) directly in Neon prod: fuel_vehicle, office_supplies, communications, rent_property, hospitality, suppliers, bank_fees (+ built-ins professional/marketing/insurance already exist). Persisted, active.
+VERIFIED 3 WAYS org5 has ZERO expense docs in SUMIT (types 15/16 = 0 via direct list, cron bills=0, targeted query=0). User believes they "sent expenses for capture" but none exist as SUMIT expense documents. Cannot fabricate. Paths: (a) they finalize scans in SUMIT UI -> auto-sync; (b) manual entry in Rezef; (c) re-enable OCR (OCR_LLM_ENABLED) + user shares receipt files -> Rezef OCRs + files to SUMIT via addexpense (appears in both).
