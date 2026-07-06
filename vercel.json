@@ -58,7 +58,7 @@
     },
     {
       "path": "/api/cron/process-ocr",
-      "schedule": "30 * * * *"
+      "schedule": "30 5 * * *"
     },
     {
       "path": "/api/cron/collection-reminders",
