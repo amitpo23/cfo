@@ -256,6 +256,28 @@ async def _classify_pending_expenses(db, org_id: int, **_kwargs) -> dict:
     return ExpenseFilingService(db, organization_id=org_id).classify_pending()
 
 
+async def _query_bank_transactions(
+    db, org_id: int, *, date_from: str | None = None, date_to: str | None = None,
+    search: str | None = None, txn_type: str | None = None, direction: str | None = None,
+    only_unmatched: bool = False, limit: int = 50, **_kwargs,
+) -> dict:
+    from .bank_query_service import query_bank_transactions
+    return query_bank_transactions(
+        db, org_id, date_from=date_from, date_to=date_to, search=search,
+        txn_type=txn_type, direction=direction, only_unmatched=only_unmatched, limit=limit,
+    )
+
+
+async def _get_bank_position(db, org_id: int, **_kwargs) -> dict:
+    from .bank_query_service import get_bank_position
+    return get_bank_position(db, org_id)
+
+
+async def _get_missing_documents(db, org_id: int, *, date_from: str | None = None, **_kwargs) -> dict:
+    from .bank_query_service import classify_missing_documents
+    return classify_missing_documents(db, org_id, date_from=date_from)
+
+
 async def _rezef_help(db, org_id: int, *, topic: str | None = None, **_kwargs) -> dict:
     """Project knowledge-base lookup — "how do I / what can Rezef do / where
     is X". Ignores db/org_id (same signature as every other tool for
@@ -603,6 +625,60 @@ TOOLS: dict[str, ChatTool] = {
         input_schema={"type": "object", "properties": {}},
         category="write",
         fn=_classify_pending_expenses,
+    ),
+    "query_bank_transactions": ChatTool(
+        name="query_bank_transactions",
+        description=(
+            "חיפוש/סינון תנועות בנק ואשראי (Open Finance) — לפי טווח תאריכים, "
+            "טקסט חופשי בתיאור, סוג חשבון (CHECKING/CARD), כיוון (in=זיכוי/"
+            "out=חיוב), ורק תנועות שלא הותאמו (only_unmatched). שימושי לשאלות "
+            "כמו 'כמה הוצאתי על X' או 'מה נכנס/יצא מהחשבון החודש'. עד 50 שורות "
+            "מוחזרות, אך count/total_amount משקפים את כל הסט המסונן (לא רק את "
+            "השורות המוצגות)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "date_from": {"type": "string", "description": "תאריך התחלה (ISO)"},
+                "date_to": {"type": "string", "description": "תאריך סיום (ISO)"},
+                "search": {"type": "string", "description": "חיפוש חופשי בתיאור התנועה"},
+                "txn_type": {"type": "string", "enum": ["CHECKING", "CARD"]},
+                "direction": {"type": "string", "enum": ["in", "out"], "description": "in=זיכוי, out=חיוב"},
+                "only_unmatched": {"type": "boolean", "description": "רק תנועות שלא הותאמו למסמך", "default": False},
+                "limit": {"type": "integer", "default": 50},
+            },
+        },
+        category="read",
+        fn=_query_bank_transactions,
+    ),
+    "get_bank_position": ChatTool(
+        name="get_bank_position",
+        description=(
+            "תמונת מצב עדכנית לכל חשבון בנק/אשראי — יתרה, תאריך התנועה האחרונה "
+            "וכמות תנועות. מסמן בפירוש אם קיימים נתונים 'זמניים' (is_provisional, "
+            "טרם אושרו סופית דרך מסע ה-Open Finance) כדי שלא יוצגו כעובדה סופית."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_bank_position,
+    ),
+    "get_missing_documents": ChatTool(
+        name="get_missing_documents",
+        description=(
+            "איתור תנועות בנק יוצאות שלא הותאמו למסמך הנה\"ח וסיווגן: תשלומי "
+            "מס/ביטוח לאומי, העברות, משיכות מזומן, סליקת אשראי (card_settlement), "
+            "הוראות קבע, עמלות בנק, הלוואות ושכר — מול 'missing_document' שהן "
+            "התנועות שבאמת חסר להן מסמך. מחזיר סה\"כ לכל קטגוריה ורשימת הספקים/"
+            "התיאורים החוזרים (top_candidates) לפי ערוץ (בנק/אשראי)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "date_from": {"type": "string", "description": "תאריך התחלה (ISO) — ברירת מחדל: כל ההיסטוריה"},
+            },
+        },
+        category="read",
+        fn=_get_missing_documents,
     ),
     "rezef_help": ChatTool(
         name="rezef_help",

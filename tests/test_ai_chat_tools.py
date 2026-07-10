@@ -9,7 +9,7 @@ from decimal import Decimal
 import pytest
 
 from cfo.database import SessionLocal
-from cfo.models import Contact, ContactType, Invoice, InvoiceStatus
+from cfo.models import Account, AccountType, BankTransaction, Contact, ContactType, Invoice, InvoiceStatus
 from cfo.services import ai_chat_tools
 from cfo.services.ai_chat_tools import TOOLS
 
@@ -572,3 +572,116 @@ def test_rezef_help_tool_is_included_in_default_schema_and_not_office_gated():
     names = {s["name"] for s in schemas}
     assert "rezef_help" in names
     assert TOOLS["rezef_help"].office is False
+
+
+# ---------------------------------------------------------------------- #
+# M8 — bank-aware chat tools. Thin wrappers over bank_query_service, which
+# is exhaustively tested in test_bank_query_service.py; these tests only
+# confirm registration, category, and correct org-scoped dispatch.
+# ---------------------------------------------------------------------- #
+
+def _mk_bank_account(db, org_id, external_id="open_finance:chat1"):
+    acc = Account(
+        organization_id=org_id, name="בנק דיסקונט", account_type=AccountType.BANK,
+        external_id=external_id, balance=Decimal("5000"),
+    )
+    db.add(acc)
+    db.flush()
+    return acc
+
+
+def _mk_bank_txn(db, org_id, account_id, *, amount, description="עסקה", days_ago=0, **raw_kwargs):
+    raw = {"type": "CHECKING"}
+    raw.update(raw_kwargs)
+    txn = BankTransaction(
+        organization_id=org_id, account_id=account_id,
+        transaction_date=date.today() - timedelta(days=days_ago),
+        description=description, amount=Decimal(str(amount)), currency="ILS",
+        raw_data=raw,
+    )
+    db.add(txn)
+    db.flush()
+    return txn
+
+
+def test_bank_chat_tools_are_registered_and_read_category():
+    for name in ("query_bank_transactions", "get_bank_position", "get_missing_documents"):
+        assert name in TOOLS
+        assert TOOLS[name].category == "read"
+
+
+def test_query_bank_transactions_tool_executes_against_seeded_data(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        acc = _mk_bank_account(db, org_id)
+        _mk_bank_txn(db, org_id, acc.id, amount=-150, description="קפה ומאפה")
+        _mk_bank_txn(db, org_id, acc.id, amount=800, description="תקבול לקוח")
+        db.commit()
+
+        result = asyncio.run(TOOLS["query_bank_transactions"].fn(db, org_id))
+        assert result["count"] == 2
+        assert result["total_amount"] == 650.0
+
+        result_out = asyncio.run(TOOLS["query_bank_transactions"].fn(db, org_id, direction="out"))
+        assert result_out["count"] == 1
+        assert result_out["transactions"][0]["description"] == "קפה ומאפה"
+    finally:
+        db.close()
+
+
+def test_get_bank_position_tool_executes_against_seeded_data(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        acc = _mk_bank_account(db, org_id)
+        _mk_bank_txn(db, org_id, acc.id, amount=-100)
+        db.commit()
+
+        result = asyncio.run(TOOLS["get_bank_position"].fn(db, org_id))
+        assert len(result["accounts"]) == 1
+        assert result["accounts"][0]["balance"] == 5000.0
+        assert result["accounts"][0]["transaction_count"] == 1
+    finally:
+        db.close()
+
+
+def test_get_missing_documents_tool_executes_against_seeded_data(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        acc = _mk_bank_account(db, org_id)
+        _mk_bank_txn(db, org_id, acc.id, amount=-300, description="הוראת קבע ביטוח")
+        _mk_bank_txn(db, org_id, acc.id, amount=-450, description="ספק לא מזוהה", merchantName="ספק חדש בע\"מ")
+        db.commit()
+
+        result = asyncio.run(TOOLS["get_missing_documents"].fn(db, org_id))
+        assert result["excluded"]["standing_orders"]["count"] == 1
+        assert result["missing_document"]["count"] == 1
+        assert result["missing_document"]["total"] == 450.0
+    finally:
+        db.close()
+
+
+def test_bank_chat_tools_are_org_scoped(fresh_org):
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        acc_a = _mk_bank_account(db, org_a, external_id="open_finance:a")
+        acc_b = _mk_bank_account(db, org_b, external_id="open_finance:b")
+        _mk_bank_txn(db, org_a, acc_a.id, amount=-10, description="A")
+        _mk_bank_txn(db, org_b, acc_b.id, amount=-99999, description="B")
+        db.commit()
+
+        result_a = asyncio.run(TOOLS["query_bank_transactions"].fn(db, org_a))
+        assert result_a["count"] == 1
+        assert result_a["transactions"][0]["description"] == "A"
+
+        position_a = asyncio.run(TOOLS["get_bank_position"].fn(db, org_a))
+        assert len(position_a["accounts"]) == 1
+
+        missing_a = asyncio.run(TOOLS["get_missing_documents"].fn(db, org_a))
+        assert missing_a["missing_document"]["total"] == 10.0
+    finally:
+        db.close()
