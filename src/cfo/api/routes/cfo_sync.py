@@ -3,6 +3,7 @@ Sync API routes.
 /api/sync/* for triggering sync, viewing runs, testing connections.
 """
 import json
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException
@@ -11,9 +12,9 @@ from sqlalchemy.orm import Session
 
 from ...database import get_db_session
 from ..dependencies import get_current_org_id
-from ...models import SyncRun, SyncStatus, IntegrationConnection
+from ...models import SyncRun, SyncStatus, IntegrationConnection, SyncCheckpoint
 from ...config import settings
-from ...services.sync_engine import SyncEngine, get_connector_for_org
+from ...services.sync_engine import SOURCE_CHECKPOINT_ENTITY, SyncEngine, SyncSkipped, get_connector_for_org
 from ...services.credentials_vault import encrypt_credentials
 from ...services.client_automation_service import run_post_sync_tasks
 
@@ -239,6 +240,42 @@ async def test_connection(
         return {"success": False, "message": str(e)}
 
 
+def _manual_refresh_cooldown_check(db: Session, org_id: int, source: str) -> Optional[dict]:
+    """Return a 429-style payload if a manual refresh for this org/source ran
+    too recently, else None (proceed). RSF-029 -- stops a UI "Refresh" button
+    (or an impatient user double-clicking it) from hammering the provider on
+    top of the scheduled cron sync."""
+    cp = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == org_id,
+        SyncCheckpoint.source == source,
+        SyncCheckpoint.entity_type == SOURCE_CHECKPOINT_ENTITY,
+    ).first()
+    if not cp or not cp.cooldown_until:
+        return None
+    now = datetime.utcnow()
+    if now < cp.cooldown_until:
+        return {
+            "error": "manual_refresh_cooldown",
+            "detail": "A manual sync for this integration was triggered too recently. Please wait before retrying.",
+            "retry_after_seconds": int((cp.cooldown_until - now).total_seconds()),
+            "cooldown_until": cp.cooldown_until.isoformat(),
+        }
+    return None
+
+
+def _start_manual_refresh_cooldown(db: Session, org_id: int, source: str) -> None:
+    cp = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == org_id,
+        SyncCheckpoint.source == source,
+        SyncCheckpoint.entity_type == SOURCE_CHECKPOINT_ENTITY,
+    ).first()
+    if not cp:
+        cp = SyncCheckpoint(organization_id=org_id, source=source, entity_type=SOURCE_CHECKPOINT_ENTITY)
+        db.add(cp)
+    cp.cooldown_until = datetime.utcnow() + timedelta(minutes=settings.manual_refresh_cooldown_minutes)
+    db.commit()
+
+
 @router.post("/sync/run")
 async def trigger_sync(
     entity_types: Optional[str] = Query(None, description="Comma-separated: invoices,bills,payments"),
@@ -256,6 +293,16 @@ async def trigger_sync(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    cooldown = _manual_refresh_cooldown_check(db, org_id, source)
+    if cooldown:
+        try:
+            await connector.close()
+        except Exception:
+            pass
+        raise HTTPException(status_code=429, detail=cooldown)
+
+    _start_manual_refresh_cooldown(db, org_id, source)
+
     engine = SyncEngine(db, connector, org_id, source, conn_id)
 
     types = None
@@ -268,6 +315,17 @@ async def trigger_sync(
         raise HTTPException(status_code=500, detail=f"Sync failed: {e}")
     finally:
         await connector.close()
+
+    if isinstance(sync_run, SyncSkipped):
+        return {
+            "id": None,
+            "status": "skipped",
+            "started_at": None,
+            "finished_at": None,
+            "counts": {},
+            "error_summary": sync_run.error_summary,
+            "automation": None,
+        }
 
     automation = None
     try:

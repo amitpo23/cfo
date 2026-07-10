@@ -6,15 +6,21 @@ Sync engine: orchestrates data ingestion from accounting connectors.
 - Cursor-based resumption
 - Reconciliation checks
 """
+import asyncio
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
+import random
+import re
+import zlib
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..models import (
     Account,
     AccountType,
@@ -30,6 +36,7 @@ from ..models import (
     InvoiceStatus,
     JournalEntry,
     Payment,
+    SyncCheckpoint,
     SyncRun,
     SyncStatus,
 )
@@ -49,11 +56,72 @@ from .credentials_vault import decrypt_credentials
 
 logger = logging.getLogger(__name__)
 
+# Sentinel entity_type for source-level (not per-entity) SyncCheckpoint state:
+# the manual-refresh cooldown and the Open-Finance daily-full-sync budget gate.
+SOURCE_CHECKPOINT_ENTITY = "__source__"
+
+# Error classification for the call-protection circuit breaker (RSF-026/027).
+# Matches connector error strings like "SUMIT API error 403: ..." or
+# "Open Finance API error 401: ..." (see sumit_integration.py / open_finance_client.py),
+# plus generic auth/quota/IP-block keywords. Anchored to "api error <code>" (not a
+# bare \b403\b) so a 403 appearing inside payload text/IDs can't false-positive.
+_API_ERROR_CODE_RE = re.compile(r"api error\s+(\d{3})", re.IGNORECASE)
+_BREAKING_KEYWORDS_RE = re.compile(
+    r"\bunauthorized\b|\bforbidden\b|\bquota\b|\bobligo\b|ip[-_ ]?block",
+    re.IGNORECASE,
+)
+_TRANSIENT_KEYWORDS_RE = re.compile(
+    r"\btimeout\b|\btimed out\b|connection reset",
+    re.IGNORECASE,
+)
+
+
+def _classify_error(exc: Optional[BaseException], message: str) -> str:
+    """Classify a fetch failure as "breaking" (auth/quota/IP-block -- never
+    retry, open the circuit), "transient" (5xx -- retry with backoff), or
+    "other" (leave to the existing per-run error aggregation, no special
+    handling)."""
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        m = _API_ERROR_CODE_RE.search(message or "")
+        if m:
+            status_code = int(m.group(1))
+
+    if status_code in (401, 403):
+        return "breaking"
+    if status_code is not None and 500 <= status_code < 600:
+        return "transient"
+
+    if _BREAKING_KEYWORDS_RE.search(message or ""):
+        return "breaking"
+    if _TRANSIENT_KEYWORDS_RE.search(message or ""):
+        return "transient"
+    return "other"
+
 
 def _hash_payload(data: dict) -> str:
     """SHA-256 hash of JSON-serialized payload for change detection."""
     serialized = json.dumps(data, sort_keys=True, default=str)
     return hashlib.sha256(serialized.encode()).hexdigest()
+
+
+class SyncSkipped:
+    """Lightweight stand-in for a SyncRun, returned by run_full_sync when the
+    cross-run advisory lock is held by another process. Deliberately NOT a
+    SyncRun row (no id, no persisted status) so it can't be mistaken for a
+    real completed/failed/partial run by /api/integration/status or anything
+    else that reads the latest SyncRun for health signals."""
+
+    def __init__(self, reason: str):
+        self.id = None
+        self.status = None
+        self.counts = {}
+        self.error_summary = f"skipped: {reason}"
+        self.error_details = None
+        self.started_at = None
+        self.finished_at = None
+        self.locked = True
+        self.reason = reason
 
 
 class SyncEngine:
@@ -76,85 +144,155 @@ class SyncEngine:
         self.source = source
         self.connection_id = connection_id
 
+    # ---- Cross-run advisory lock (RSF-024) ----
+    # Prevents two overlapping sync runs for the same (org, source) -- e.g. a
+    # slow cron invocation still running when the next hourly tick fires, or a
+    # manual "Refresh" click racing the scheduler. Postgres-only (session-level
+    # pg_try_advisory_lock, explicitly released in a finally); on SQLite (all
+    # tests, and any deploy without Postgres) there's no cross-process lock
+    # primitive available, so we always proceed -- this must never block a
+    # single-process/test environment.
+    #
+    # Deliberately NOT pg_advisory_xact_lock: that releases at transaction end,
+    # and run_full_sync commits multiple times per run (SyncRun creation, each
+    # page) -- an xact-scoped lock would let a second run in immediately after
+    # the first commit. Also non-blocking (pg_try_, not pg_) so a serverless
+    # cron invocation skips instantly instead of hanging behind another run.
+    def _dialect_name(self) -> str:
+        bind = self.db.get_bind() if hasattr(self.db, "get_bind") else getattr(self.db, "bind", None)
+        return getattr(getattr(bind, "dialect", None), "name", "sqlite")
+
+    def _lock_keys(self) -> tuple:
+        source_hash = zlib.crc32(self.source.encode("utf-8")) & 0x7FFFFFFF
+        return self.org_id, source_hash
+
+    def _acquire_lock(self) -> bool:
+        if self._dialect_name() != "postgresql":
+            return True
+        k1, k2 = self._lock_keys()
+        acquired = self.db.execute(
+            text("SELECT pg_try_advisory_lock(:k1, :k2)"), {"k1": k1, "k2": k2}
+        ).scalar()
+        return bool(acquired)
+
+    def _release_lock(self) -> None:
+        if self._dialect_name() != "postgresql":
+            return
+        k1, k2 = self._lock_keys()
+        try:
+            self.db.execute(text("SELECT pg_advisory_unlock(:k1, :k2)"), {"k1": k1, "k2": k2})
+        except Exception as e:
+            logger.warning("Failed to release sync advisory lock for org %s source %s: %s",
+                            self.org_id, self.source, e)
+
     async def run_full_sync(
         self,
         entity_types: Optional[list] = None,
-    ) -> SyncRun:
+        updated_since: Optional[datetime] = None,
+    ):
         """
         Execute a full or partial sync.
         entity_types: list of types to sync, e.g. ["accounts","customers","invoices"]
                       None = sync all.
+        updated_since: if given, used as the watermark for every entity type in
+                       this run (overrides the per-entity SyncCheckpoint watermark --
+                       e.g. a webhook-triggered delta-sync for a known changed window).
+                       If None (the common case), each entity type computes its own
+                       watermark from SyncCheckpoint.last_success_at minus the
+                       configured overlap window.
+
+        Returns a SyncRun row, or a SyncSkipped stand-in if another run currently
+        holds the cross-run lock for this (org, source).
         """
-        all_types = [
-            "accounts", "customers", "vendors",
-            "invoices", "bills", "payments",
-            "bank_transactions", "journal_entries",
-        ]
-        types_to_sync = entity_types or all_types
+        if not self._acquire_lock():
+            logger.info("Sync skipped for org %s source %s: lock held by another run",
+                        self.org_id, self.source)
+            return SyncSkipped("locked")
 
-        # Create SyncRun record
-        sync_run = SyncRun(
-            organization_id=self.org_id,
-            connection_id=self.connection_id,
-            source=self.source,
-            sync_type="full" if not entity_types else "partial",
-            entity_types=",".join(types_to_sync),
-            status=SyncStatus.RUNNING,
-            started_at=datetime.now(timezone.utc),
-            counts={},
-        )
-        self.db.add(sync_run)
-        self.db.commit()
-        self.db.refresh(sync_run)
-
-        counts = {}
-        errors = []
-
-        for entity_type in types_to_sync:
-            try:
-                result = await self._sync_entity_type(entity_type)
-                counts[entity_type] = result
-            except Exception as e:
-                logger.error("Sync failed for %s: %s", entity_type, e)
-                errors.append({
-                    "entity_type": entity_type,
-                    "error": str(e),
-                })
-                counts[entity_type] = {"error": str(e)}
-
-        # Self-heal any invoice/bill left with a null contact_id/vendor_id from
-        # before fetch_customers() was fixed to derive real customers from
-        # documents instead of SUMIT's incomplete get_debt_report() (2026-07-04).
-        # Cheap (indexed WHERE ... IS NULL scan) and safe to run every sync.
         try:
-            counts["contact_backfill"] = {
-                **self.backfill_invoice_contacts(),
-                **self.backfill_bill_vendors(),
-            }
-        except Exception as e:
-            logger.error("Contact backfill failed: %s", e)
+            all_types = [
+                "accounts", "customers", "vendors",
+                "invoices", "bills", "payments",
+                "bank_transactions", "journal_entries",
+            ]
+            types_to_sync = entity_types or all_types
 
-        # Update SyncRun
-        has_errors = len(errors) > 0
-        sync_run.status = SyncStatus.PARTIAL if has_errors else SyncStatus.COMPLETED
-        if all(isinstance(c, dict) and "error" in c for c in counts.values()):
-            sync_run.status = SyncStatus.FAILED
-        sync_run.finished_at = datetime.now(timezone.utc)
-        sync_run.counts = counts
-        if errors:
-            sync_run.error_summary = f"{len(errors)} entity types had errors"
-            sync_run.error_details = errors
+            # Create SyncRun record
+            sync_run = SyncRun(
+                organization_id=self.org_id,
+                connection_id=self.connection_id,
+                source=self.source,
+                sync_type="full" if not entity_types else "partial",
+                entity_types=",".join(types_to_sync),
+                status=SyncStatus.RUNNING,
+                started_at=datetime.now(timezone.utc),
+                counts={},
+            )
+            self.db.add(sync_run)
+            self.db.commit()
+            self.db.refresh(sync_run)
 
-        # Update last_synced_at on connection
-        if self.connection_id:
-            conn = self.db.get(IntegrationConnection, self.connection_id)
-            if conn:
-                conn.last_synced_at = datetime.now(timezone.utc)
+            counts = {}
+            errors = []
+            any_partial = False
 
-        self.db.commit()
-        self.db.refresh(sync_run)
+            for entity_type in types_to_sync:
+                try:
+                    result = await self._sync_entity_type(entity_type, updated_since=updated_since)
+                    counts[entity_type] = result
+                    if isinstance(result, dict) and result.get("status") == "PARTIAL":
+                        any_partial = True
+                except Exception as e:
+                    logger.error("Sync failed for %s: %s", entity_type, e)
+                    errors.append({
+                        "entity_type": entity_type,
+                        "error": str(e),
+                    })
+                    counts[entity_type] = {"error": str(e)}
 
-        return sync_run
+            # Self-heal any invoice/bill left with a null contact_id/vendor_id from
+            # before fetch_customers() was fixed to derive real customers from
+            # documents instead of SUMIT's incomplete get_debt_report() (2026-07-04).
+            # Cheap (indexed WHERE ... IS NULL scan) and safe to run every sync.
+            try:
+                counts["contact_backfill"] = {
+                    **self.backfill_invoice_contacts(),
+                    **self.backfill_bill_vendors(),
+                }
+            except Exception as e:
+                logger.error("Contact backfill failed: %s", e)
+
+            # Update SyncRun
+            has_errors = len(errors) > 0
+            sync_run.status = SyncStatus.PARTIAL if (has_errors or any_partial) else SyncStatus.COMPLETED
+            if all(isinstance(c, dict) and "error" in c for c in counts.values()):
+                sync_run.status = SyncStatus.FAILED
+            sync_run.finished_at = datetime.now(timezone.utc)
+            sync_run.counts = counts
+            if errors:
+                sync_run.error_summary = f"{len(errors)} entity types had errors"
+                sync_run.error_details = errors
+
+            # Update last_synced_at on connection
+            if self.connection_id:
+                conn = self.db.get(IntegrationConnection, self.connection_id)
+                if conn:
+                    conn.last_synced_at = datetime.now(timezone.utc)
+
+            self.db.commit()
+            self.db.refresh(sync_run)
+
+            # Mark the source-level checkpoint's watermark only for a genuinely
+            # successful, unfiltered full sync -- used by the Open Finance daily
+            # budget gate (cron.py) to allow at most one such sync per interval.
+            # A PARTIAL/FAILED run, or an explicit entity_types/updated_since
+            # subset, must not count against (or reset) that budget.
+            if not entity_types and updated_since is None and sync_run.status == SyncStatus.COMPLETED:
+                self._touch_source_checkpoint()
+
+            return sync_run
+        finally:
+            self._release_lock()
 
     def backfill_invoice_contacts(self) -> dict:
         """Re-resolve contact_id for existing invoices left null because their
@@ -213,8 +351,92 @@ class SyncEngine:
             self.db.commit()
         return {"bills_fixed": fixed}
 
-    async def _sync_entity_type(self, entity_type: str) -> dict:
-        """Sync a single entity type with pagination."""
+    # ---- SyncCheckpoint helpers (watermark / cursor / circuit breaker) ----
+
+    def _get_or_create_checkpoint(self, entity_type: str) -> SyncCheckpoint:
+        cp = self.db.query(SyncCheckpoint).filter(
+            SyncCheckpoint.organization_id == self.org_id,
+            SyncCheckpoint.source == self.source,
+            SyncCheckpoint.entity_type == entity_type,
+        ).first()
+        if not cp:
+            cp = SyncCheckpoint(
+                organization_id=self.org_id, source=self.source, entity_type=entity_type,
+            )
+            self.db.add(cp)
+            self.db.commit()
+            self.db.refresh(cp)
+        return cp
+
+    def _touch_source_checkpoint(self) -> None:
+        cp = self._get_or_create_checkpoint(SOURCE_CHECKPOINT_ENTITY)
+        cp.last_success_at = datetime.utcnow()
+        self.db.commit()
+
+    @staticmethod
+    def _circuit_is_open(cp: SyncCheckpoint) -> bool:
+        return bool(cp.circuit_open_until and cp.circuit_open_until > datetime.utcnow())
+
+    @staticmethod
+    def _compute_watermark(cp: SyncCheckpoint) -> Optional[datetime]:
+        if not cp.last_success_at:
+            return None
+        return cp.last_success_at - timedelta(days=settings.sync_overlap_days)
+
+    def _record_entity_failure(self, cp: SyncCheckpoint, exc: BaseException) -> None:
+        classification = _classify_error(exc, str(exc))
+        if classification == "breaking":
+            cp.consecutive_failures = (cp.consecutive_failures or 0) + 1
+            cp.circuit_open_until = datetime.utcnow() + timedelta(hours=settings.sync_circuit_open_hours)
+            logger.warning(
+                "Circuit opened for org %s source %s entity %s until %s (failure #%s): %s",
+                self.org_id, self.source, cp.entity_type, cp.circuit_open_until,
+                cp.consecutive_failures, exc,
+            )
+        self.db.commit()
+
+    async def _fetch_with_retry(self, fetch_method, updated_since, cursor) -> FetchResult:
+        """Call a connector fetch_* method, retrying transient 5xx failures at
+        most twice with jittered backoff (RSF-026). Auth/quota/IP-block ("breaking")
+        and any other failure are surfaced immediately with zero retries -- SUMIT's
+        hard 403 rate-limit must never be hammered (RSF-027)."""
+        attempt = 0
+        while True:
+            try:
+                result: FetchResult = await fetch_method(updated_since=updated_since, cursor=cursor)
+            except Exception as exc:
+                classification = _classify_error(exc, str(exc))
+                if classification == "transient" and attempt < 2:
+                    await self._retry_sleep(attempt, getattr(exc, "retry_after", None))
+                    attempt += 1
+                    continue
+                raise
+
+            if result.error:
+                classification = _classify_error(None, result.error)
+                if classification == "transient" and attempt < 2:
+                    await self._retry_sleep(attempt, getattr(result, "retry_after", None))
+                    attempt += 1
+                    continue
+
+            return result
+
+    @staticmethod
+    async def _retry_sleep(attempt: int, retry_after: Optional[float]) -> None:
+        if retry_after:
+            delay = float(retry_after)
+        else:
+            base = settings.sync_retry_base_delay_seconds
+            delay = base * (2 ** attempt) + random.uniform(0, base)
+        await asyncio.sleep(delay)
+
+    async def _sync_entity_type(
+        self,
+        entity_type: str,
+        updated_since: Optional[datetime] = None,
+    ) -> dict:
+        """Sync a single entity type with pagination, watermarking, a page cap,
+        and circuit-breaker protection (RSF-022/023/025/026)."""
         fetch_method = {
             "accounts": self.connector.fetch_accounts,
             "customers": self.connector.fetch_customers,
@@ -240,36 +462,75 @@ class SyncEngine:
             "journal_entries": self._upsert_journal_entry,
         }[entity_type]
 
+        cp = self._get_or_create_checkpoint(entity_type)
+
+        if self._circuit_is_open(cp):
+            return {
+                "skipped_circuit_open": True,
+                "circuit_open_until": cp.circuit_open_until.isoformat(),
+                "consecutive_failures": cp.consecutive_failures,
+            }
+
+        effective_since = updated_since if updated_since is not None else self._compute_watermark(cp)
+
         created = 0
         updated = 0
         skipped = 0
-        cursor = None
+        cursor = cp.cursor  # resume from a previous page-capped run, if any
+        pages = 0
+        page_capped = False
+        max_pages = settings.sync_max_pages_per_entity
 
-        while True:
-            result: FetchResult = await fetch_method(cursor=cursor)
-            if result.error:
-                # The connector already logged the underlying exception; raising
-                # here routes it into run_full_sync's existing error aggregation
-                # (errors list / error_summary / SyncStatus.PARTIAL) instead of
-                # silently reporting 0 created/updated/skipped as if it succeeded.
-                raise RuntimeError(result.error)
+        try:
+            while True:
+                pages += 1
+                if pages > max_pages:
+                    page_capped = True
+                    break
 
-            for item in result.items:
-                action = upsert_method(item)
-                if action == "created":
-                    created += 1
-                elif action == "updated":
-                    updated += 1
-                else:
-                    skipped += 1
+                result = await self._fetch_with_retry(fetch_method, effective_since, cursor)
+                if result.error:
+                    # The connector already logged the underlying exception; raising
+                    # here routes it into run_full_sync's existing error aggregation
+                    # (errors list / error_summary / SyncStatus.PARTIAL) instead of
+                    # silently reporting 0 created/updated/skipped as if it succeeded.
+                    raise RuntimeError(result.error)
 
-            self.db.commit()
+                for item in result.items:
+                    action = upsert_method(item)
+                    if action == "created":
+                        created += 1
+                    elif action == "updated":
+                        updated += 1
+                    else:
+                        skipped += 1
 
-            if not result.has_more:
-                break
-            cursor = result.next_cursor
+                self.db.commit()
 
-        return {"created": created, "updated": updated, "skipped": skipped}
+                if not result.has_more:
+                    break
+                cursor = result.next_cursor
+        except Exception as exc:
+            self._record_entity_failure(cp, exc)
+            raise
+
+        # Success (a page-capped stop is not a failure -- it's an intentional,
+        # resumable early exit so one entity type can't loop unbounded against a
+        # live API for an entire hour).
+        cp.consecutive_failures = 0
+        cp.circuit_open_until = None
+        if page_capped:
+            cp.cursor = cursor
+        else:
+            cp.cursor = None
+            cp.last_success_at = datetime.utcnow()
+        self.db.commit()
+
+        out = {"created": created, "updated": updated, "skipped": skipped}
+        if page_capped:
+            out["status"] = "PARTIAL"
+            out["reason"] = "page_cap_exceeded"
+        return out
 
     # ---- Upsert methods ----
 

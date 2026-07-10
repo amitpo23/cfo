@@ -860,8 +860,15 @@ async def webhook(
         else:
             _upsert_open_finance_payment(db, org_id, payment_id, event)
 
+    # M1b — bidirectional webhooks: also feed the event into the targeted
+    # delta-sync service (SyncEngine, scoped entity types) so a completed
+    # bank connection or payment update is reflected without waiting for the
+    # next cron poll. Never allowed to affect the ack below.
+    from ...services.webhook_delta_sync import handle_open_finance_event
+    delta_sync_result = await handle_open_finance_event(db, event)
+
     logger.info("Open Finance webhook received: keys=%s", list(event.keys()))
-    return {"received": True}
+    return {"received": True, "delta_sync": delta_sync_result}
 
 
 # ---------------------------------------------------------------------- #

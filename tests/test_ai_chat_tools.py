@@ -25,6 +25,7 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
     write_tools = {name for name, t in TOOLS.items() if t.category == "write"}
     assert write_tools == {
         "issue_document", "log_collection_attempt", "create_payment_link",
+        "create_bank_payment_request",
         "run_client_sync", "register_office_client",
         "create_expense_category", "set_expense_category", "classify_pending_expenses",
     }
@@ -211,6 +212,14 @@ def test_get_engine_status_tool_returns_status(fresh_org):
 
 def test_create_payment_link_tool_is_write_category():
     assert TOOLS["create_payment_link"].category == "write"
+
+
+def test_create_bank_payment_request_tool_is_write_category_with_required_fields():
+    tool = TOOLS["create_bank_payment_request"]
+    assert tool.category == "write"
+    assert set(tool.input_schema["required"]) == {
+        "amount", "description", "creditor_name", "creditor_account_number",
+    }
 
 
 # ---------------------------------------------------------------------- #

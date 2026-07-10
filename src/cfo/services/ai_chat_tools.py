@@ -131,6 +131,40 @@ async def _create_payment_link(db, org_id: int, *, invoice_id: int, **_kwargs) -
     return await service.create_payment_link(invoice_id)
 
 
+async def _create_bank_payment_request(
+    db,
+    org_id: int,
+    *,
+    amount: float,
+    description: str,
+    creditor_name: str,
+    creditor_account_number: str,
+    creditor_account_type: str = "bban",
+    **_kwargs,
+) -> dict:
+    from ..api.routes.open_finance import get_open_finance_client
+
+    client = get_open_finance_client(db, org_id)
+    try:
+        payload = await client.create_payment({
+            "paymentInformation": {
+                "amount": amount,
+                "currency": "ILS",
+                "description": description,
+                "creditorName": creditor_name,
+                "creditorAccountNumber": creditor_account_number,
+                "creditorAccountType": creditor_account_type,
+            },
+        })
+    finally:
+        await client.close()
+    return {
+        "payment_id": payload.get("id") or payload.get("paymentId"),
+        "pay_url": payload.get("payUrl"),
+        "note": "קישור התשלום נוצר; המשלם מאשר את ההעברה מול הבנק שלו דרך הקישור.",
+    }
+
+
 def _parse_date_safe(value: str | None):
     """Best-effort ISO date parse for model-supplied filter args. A read tool
     executes inline in the chat loop with no surrounding try/except (unlike
@@ -464,6 +498,35 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="write",
         fn=_create_payment_link,
+    ),
+    "create_bank_payment_request": ChatTool(
+        name="create_bank_payment_request",
+        description=(
+            "יצירת בקשת תשלום בהעברה בנקאית דרך Open Finance (בנקאות פתוחה): מחזירה "
+            "קישור תשלום (payUrl) שנשלח למשלם, והמשלם מאשר את ההעברה ישירות מול הבנק "
+            "שלו. פעולת כתיבה אמיתית מול Open Finance — דורשת אישור מפורש של המשתמש "
+            "לפני ביצוע. הכסף עובר רק לאחר אישור המשלם בבנק."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "amount": {"type": "number", "description": "סכום בש\"ח (חיובי)"},
+                "description": {"type": "string", "description": "תיאור התשלום"},
+                "creditor_name": {"type": "string", "description": "שם המוטב"},
+                "creditor_account_number": {
+                    "type": "string",
+                    "description": "חשבון המוטב: bban בפורמט בנק-סניף-חשבון (למשל 12-345-67890) או IBAN",
+                },
+                "creditor_account_type": {
+                    "type": "string",
+                    "enum": ["bban", "iban"],
+                    "default": "bban",
+                },
+            },
+            "required": ["amount", "description", "creditor_name", "creditor_account_number"],
+        },
+        category="write",
+        fn=_create_bank_payment_request,
     ),
     "list_expenses": ChatTool(
         name="list_expenses",

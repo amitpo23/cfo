@@ -12,7 +12,7 @@ from .routes import (
     cashflow, sync, reports, financial_management, financial_operations
 )
 from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, expense_deduction, manual_reconciliation, advanced_features, phase10_12, analytics
-from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding, accounting_events, collections, ai_chat, contacts
+from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding, accounting_events, collections, ai_chat, contacts, sumit_webhooks
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
@@ -209,6 +209,13 @@ app.include_router(
 # posts events to it and no signature scheme is documented).
 app.include_router(
     open_finance.router, prefix="/api/open-finance", tags=["Open Finance"],
+)
+
+# SUMIT trigger webhooks — /webhooks is intentionally public (shared-secret
+# validated inside the route, like open_finance.webhooks); /webhooks/subscribe
+# is org-scoped via get_current_org_id (per-route, not router-level auth).
+app.include_router(
+    sumit_webhooks.router, prefix="/api/sumit", tags=["SUMIT Webhooks"],
 )
 
 # Accounting-office (multi-company) + cross-source synthesis

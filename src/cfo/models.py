@@ -435,6 +435,44 @@ class SyncRun(Base):
     )
 
 
+class SyncCheckpoint(Base):
+    """Per (org, source, entity_type) sync-call-protection state (M1a).
+
+    Tracks the watermark used to compute `updated_since` for the next run,
+    a resumable cursor when a run stops early (page cap), and the
+    backoff/circuit-breaker state that keeps a broken/rate-limited provider
+    from being hammered every cron tick.
+
+    entity_type also carries a source-level sentinel row, "__source__", used
+    for state that isn't per-entity: the manual-refresh cooldown and the
+    Open-Finance daily-full-sync budget gate. Naive UTC datetimes throughout
+    (matches this file's existing `datetime.utcnow` convention) so SQLite
+    comparisons never mix naive/aware.
+    """
+    __tablename__ = "sync_checkpoints"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    source = Column(String(50), nullable=False)  # sumit, open_finance
+    entity_type = Column(String(50), nullable=False)  # invoices, bills, ... or "__source__"
+    last_success_at = Column(DateTime, nullable=True)
+    cursor = Column(String(500), nullable=True)  # resume cursor when a run stopped at the page cap
+    cooldown_until = Column(DateTime, nullable=True)  # manual-refresh cooldown (source-level row)
+    consecutive_failures = Column(Integer, default=0, nullable=False)
+    circuit_open_until = Column(DateTime, nullable=True)  # skip syncing this entity until then
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "source", "entity_type",
+            name="uq_sync_checkpoint_org_source_entity",
+        ),
+    )
+
+
 class OnboardingTask(Base):
     """One codified data-mapping step in a business's onboarding checklist.
 
