@@ -1,27 +1,52 @@
 """
 FastAPI application initialization
 """
-from fastapi import Depends, FastAPI, status
+from contextlib import asynccontextmanager
+
+import httpx
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from .routes import (
     accounting, crm, payments, communications, admin,
     cashflow, sync, reports, financial_management, financial_operations
 )
-from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, manual_reconciliation, advanced_features, phase10_12, analytics
-from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding
+from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, expense_deduction, manual_reconciliation, advanced_features, phase10_12, analytics
+from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding, accounting_events, collections, ai_chat, contacts, sumit_webhooks
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
 from ..integrations.sumit_integration import SumitAPIError
+from ..services.data_sync_service import SumitNotConfiguredError, LegacySyncRetiredError
+from ..services.ai_chat_service import AIChatNotConfiguredError, AIChatUpstreamError
+from ..services.ai_analytics_service import AIAnalyticsNotConfiguredError
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Initialize database tables on startup."""
+    if settings.auto_create_db:
+        init_db()
+    yield
+
 
 app = FastAPI(
     title=settings.app_name,
     description="CFO Financial Management System with SUMIT API Integration",
     version="2.0.0",
     docs_url="/api/docs",
-    redoc_url="/api/redoc"
+    redoc_url="/api/redoc",
+    lifespan=_lifespan,
 )
+
+
+@app.exception_handler(httpx.HTTPError)
+async def upstream_error_handler(request: Request, exc: httpx.HTTPError):
+    """כשל תקשורת מול שירות חיצוני (SUMIT/Open Finance) — 503 כן, לא 500."""
+    return JSONResponse(
+        status_code=503,
+        content={"detail": f"upstream integration unavailable: {type(exc).__name__}"},
+    )
 
 # CORS middleware
 app.add_middleware(
@@ -42,6 +67,64 @@ async def sumit_api_error_handler(_request, exc: SumitAPIError):
             "source": "sumit",
             "code": "external_integration_error",
         },
+    )
+
+
+@app.exception_handler(SumitNotConfiguredError)
+async def sumit_not_configured_handler(_request, exc: SumitNotConfiguredError):
+    """DataSyncService raises this when no SUMIT credentials exist for the
+    org. Some /api/sync/sumit/* routes call DataSyncService directly (no
+    Depends(get_sumit_integration)), so without this handler the bare
+    ValueError subclass would fall through as a raw 500."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(LegacySyncRetiredError)
+async def legacy_sync_retired_handler(_request, exc: LegacySyncRetiredError):
+    """DataSyncService.sync_documents/sync_payments/sync_billing_transactions/
+    sync_all raise this — they write to the frozen Account/Transaction pipeline
+    (P0 finding). Without this handler the bare ValueError subclass would fall
+    through as a raw 500 instead of a clean 400 pointing at SyncEngine."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(AIChatNotConfiguredError)
+async def ai_chat_not_configured_handler(_request, exc: AIChatNotConfiguredError):
+    """Without this, a missing ANTHROPIC_API_KEY raises a bare TypeError
+    deep inside the anthropic SDK's header-building — an unhandled 500."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(AIChatUpstreamError)
+async def ai_chat_upstream_error_handler(_request, exc: AIChatUpstreamError):
+    """A correctly-configured ANTHROPIC_API_KEY can still fail at Anthropic
+    itself (rate limit, no credit balance, outage) — found live in the
+    first real 9.5 test. Without this handler the raw anthropic SDK
+    exception leaks as an unhandled 500 instead of an honest 503."""
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(AIAnalyticsNotConfiguredError)
+async def ai_analytics_not_configured_handler(_request, exc: AIAnalyticsNotConfiguredError):
+    """AdvancedAIService raises this instead of fabricating a plausible-
+    looking answer (no OpenAI key, no real context, no real prediction
+    data source) — map it to a clean 400 like every other *NotConfigured
+    error in this app."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": str(exc)},
     )
 
 # Include existing routers
@@ -85,6 +168,10 @@ app.include_router(
     dependencies=[Depends(get_current_user)],
 )
 app.include_router(
+    expense_deduction.router, prefix="/api", tags=["Expense Deduction"],
+    dependencies=[Depends(get_current_user)],
+)
+app.include_router(
     manual_reconciliation.router, prefix="/api",
     dependencies=[Depends(get_current_user)],
 )
@@ -124,6 +211,13 @@ app.include_router(
     open_finance.router, prefix="/api/open-finance", tags=["Open Finance"],
 )
 
+# SUMIT trigger webhooks — /webhooks is intentionally public (shared-secret
+# validated inside the route, like open_finance.webhooks); /webhooks/subscribe
+# is org-scoped via get_current_org_id (per-route, not router-level auth).
+app.include_router(
+    sumit_webhooks.router, prefix="/api/sumit", tags=["SUMIT Webhooks"],
+)
+
 # Accounting-office (multi-company) + cross-source synthesis
 app.include_router(
     office.router, prefix="/api", tags=["Office & Synthesis"],
@@ -142,6 +236,12 @@ app.include_router(
 # Derived double-entry shadow ledger — organization-scoped, not the official books
 app.include_router(
     ledger.router, prefix="/api", tags=["Ledger (Derived)"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Read-only accounting event plane — normalized operational events, not a source of truth
+app.include_router(
+    accounting_events.router, prefix="/api", tags=["Accounting Events (Derived)"],
     dependencies=[Depends(get_current_user)],
 )
 
@@ -175,15 +275,26 @@ app.include_router(
     dependencies=[Depends(get_current_user)],
 )
 
+# Manual collection-case tracking — organization-scoped
+app.include_router(
+    collections.router, prefix="/api", tags=["Collections"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# AI chat assistant — organization-scoped; write actions require explicit confirmation
+app.include_router(
+    ai_chat.router, prefix="/api", tags=["AI Chat"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Contact search — org-scoped, backs the customer autocomplete in document issuance
+app.include_router(
+    contacts.router, prefix="/api", tags=["Contacts"],
+    dependencies=[Depends(get_current_user)],
+)
+
 # Cron jobs authenticate with CRON_SECRET, not user tokens
 app.include_router(cron.router, prefix="/api", tags=["Scheduled Jobs"])
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database tables on startup."""
-    if settings.auto_create_db:
-        init_db()
 
 
 @app.get("/")

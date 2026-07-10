@@ -25,6 +25,7 @@ class BankTxnLite:
     amount: float            # signed: + inflow, - outflow
     date: date
     description: str = ""
+    is_provisional: bool = False
 
 
 @dataclass
@@ -86,9 +87,18 @@ def reconcile(
         for d in (inflow_pool + outflow_pool)
         if (d.entity_type, d.id) not in used
     ]
+    txn_by_id = {t.id: t for t in bank_txns}
     return {
         "matches": [m.__dict__ for m in matches],
         "unmatched_txns": unmatched_txns,
+        # Additive alongside unmatched_txns (kept as a bare list[int] for
+        # existing consumers — financial_synthesis.py, BankInsightsDashboard.tsx's
+        # number[] typing). Carries is_provisional so the UI can flag Open
+        # Finance data as unverified without a breaking shape change.
+        "unmatched_txn_details": [
+            {"id": tid, "is_provisional": txn_by_id[tid].is_provisional}
+            for tid in unmatched_txns
+        ],
         "unmatched_docs": unmatched_docs,
         "matched_count": len(matches),
         "txn_count": len(bank_txns),
@@ -148,7 +158,10 @@ def reconcile_organization(db, organization_id: int, *, persist: bool = True) ->
         .all()
     )
     bank_txns = [
-        BankTxnLite(id=r.id, amount=float(r.amount), date=r.transaction_date, description=r.description or "")
+        BankTxnLite(
+            id=r.id, amount=float(r.amount), date=r.transaction_date,
+            description=r.description or "", is_provisional=bool(r.is_provisional),
+        )
         for r in bank_rows
         if r.transaction_date is not None
     ]

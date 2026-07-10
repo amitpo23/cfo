@@ -6,7 +6,7 @@ balances (Σdebit == Σcredit), including when source `total` is rounded oddly.
 from datetime import date
 
 from cfo.database import SessionLocal
-from cfo.models import Invoice, Bill, Expense, Payment, InvoiceStatus, BillStatus
+from cfo.models import Invoice, Bill, Expense, Payment, Contact, ContactType, InvoiceStatus, BillStatus
 from cfo.services import ledger_service
 
 
@@ -124,3 +124,148 @@ def test_balance_sheet_identity_holds(fresh_org):
         assert abs(bs["total_assets"] - bs["total_equity_and_liabilities"]) < 0.01
     finally:
         db.close()
+
+
+# ---------- כרטסת לקוח/ספק (contact_card) ----------
+
+def _seed_contact_card(org_id):
+    """לקוח עם חשבונית+תקבול, ספק עם חשבון+תשלום — כרונולוגיה שונה בין השניים."""
+    db = SessionLocal()
+    try:
+        customer = Contact(organization_id=org_id, contact_type=ContactType.CUSTOMER,
+                           name="לקוח כרטסת")
+        vendor = Contact(organization_id=org_id, contact_type=ContactType.VENDOR,
+                         name="ספק כרטסת")
+        db.add_all([customer, vendor])
+        db.flush()
+        inv = Invoice(organization_id=org_id, contact_id=customer.id,
+                     invoice_number="CARD-INV-1", issue_date=date(2026, 5, 1),
+                     status=InvoiceStatus.SENT, subtotal=1000, tax=180, total=1180,
+                     paid_amount=0, balance=1180)
+        bill = Bill(organization_id=org_id, vendor_id=vendor.id,
+                    bill_number="CARD-BILL-1", issue_date=date(2026, 5, 3),
+                    status=BillStatus.RECEIVED, subtotal=500, tax=90, total=590,
+                    paid_amount=0, balance=590)
+        db.add_all([inv, bill])
+        db.commit()
+        db.add(Payment(organization_id=org_id, contact_id=customer.id, invoice_id=inv.id,
+                      payment_date=date(2026, 5, 15), amount=1180))
+        db.add(Payment(organization_id=org_id, contact_id=vendor.id, bill_id=bill.id,
+                      payment_date=date(2026, 5, 20), amount=590))
+        db.commit()
+        return {"customer_id": customer.id, "vendor_id": vendor.id}
+    finally:
+        db.close()
+
+
+def test_contact_card_customer_running_balance(fresh_org):
+    org_id = fresh_org()["org_id"]
+    ids = _seed_contact_card(org_id)
+    db = SessionLocal()
+    try:
+        card = ledger_service.contact_card(db, org_id, ids["customer_id"])
+        assert card["contact_name"] == "לקוח כרטסת"
+        assert len(card["movements"]) == 2
+        # חשבונית מגדילה את היתרה, תקבול מקזז אותה במלואה
+        assert card["movements"][0]["amount"] == 1180
+        assert card["movements"][0]["balance"] == 1180
+        assert card["movements"][1]["amount"] == -1180
+        assert card["closing_balance"] == 0.0
+        assert card["derived"] is True
+    finally:
+        db.close()
+
+
+def test_contact_card_vendor_running_balance(fresh_org):
+    org_id = fresh_org()["org_id"]
+    ids = _seed_contact_card(org_id)
+    db = SessionLocal()
+    try:
+        card = ledger_service.contact_card(db, org_id, ids["vendor_id"])
+        assert card["contact_name"] == "ספק כרטסת"
+        assert len(card["movements"]) == 2
+        assert card["movements"][0]["amount"] == 590
+        assert card["movements"][1]["amount"] == -590
+        assert card["closing_balance"] == 0.0
+    finally:
+        db.close()
+
+
+def test_contact_card_finds_payment_with_unresolved_contact_id(fresh_org):
+    """A Payment synced with contact_id=NULL (contact_external_id didn't
+    resolve) but a valid invoice_id/bill_id link must still be picked up
+    via that link -- otherwise the card understates how much is actually
+    settled, overstating the outstanding balance."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        customer = Contact(organization_id=org_id, contact_type=ContactType.CUSTOMER,
+                           name="לקוח לא-משוייך")
+        vendor = Contact(organization_id=org_id, contact_type=ContactType.VENDOR,
+                         name="ספק לא-משוייך")
+        db.add_all([customer, vendor])
+        db.flush()
+        inv = Invoice(organization_id=org_id, contact_id=customer.id,
+                     invoice_number="UNLINKED-INV-1", issue_date=date(2026, 5, 1),
+                     status=InvoiceStatus.SENT, subtotal=1000, tax=180, total=1180,
+                     paid_amount=0, balance=0)
+        bill = Bill(organization_id=org_id, vendor_id=vendor.id,
+                    bill_number="UNLINKED-BILL-1", issue_date=date(2026, 5, 3),
+                    status=BillStatus.RECEIVED, subtotal=500, tax=90, total=590,
+                    paid_amount=0, balance=0)
+        db.add_all([inv, bill])
+        db.commit()
+        # contact_id intentionally omitted -- simulates an unresolved sync.
+        db.add(Payment(organization_id=org_id, contact_id=None, invoice_id=inv.id,
+                      payment_date=date(2026, 5, 15), amount=1180))
+        db.add(Payment(organization_id=org_id, contact_id=None, bill_id=bill.id,
+                      payment_date=date(2026, 5, 20), amount=590))
+        db.commit()
+        customer_id, vendor_id = customer.id, vendor.id
+    finally:
+        db.close()
+
+    db = SessionLocal()
+    try:
+        customer_card = ledger_service.contact_card(db, org_id, customer_id)
+        vendor_card = ledger_service.contact_card(db, org_id, vendor_id)
+    finally:
+        db.close()
+
+    assert len(customer_card["movements"]) == 2, customer_card["movements"]
+    assert customer_card["closing_balance"] == 0.0
+    assert len(vendor_card["movements"]) == 2, vendor_card["movements"]
+    assert vendor_card["closing_balance"] == 0.0
+
+
+def test_contact_card_returns_none_for_other_org_contact(fresh_org):
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    ids = _seed_contact_card(org_a)
+    db = SessionLocal()
+    try:
+        assert ledger_service.contact_card(db, org_b, ids["customer_id"]) is None
+    finally:
+        db.close()
+
+
+def test_contact_card_route_requires_auth(client):
+    assert client.get("/api/ledger/contact/1/card").status_code == 403
+
+
+def test_contact_card_route_404_for_other_org_contact(fresh_org, client):
+    iso_a = fresh_org()
+    iso_b = fresh_org()
+    ids = _seed_contact_card(iso_a["org_id"])
+    r = client.get(f"/api/ledger/contact/{ids['customer_id']}/card", headers=iso_b["headers"])
+    assert r.status_code == 404
+
+
+def test_contact_card_route_returns_card(fresh_org, client):
+    iso = fresh_org()
+    ids = _seed_contact_card(iso["org_id"])
+    r = client.get(f"/api/ledger/contact/{ids['customer_id']}/card", headers=iso["headers"])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["contact_name"] == "לקוח כרטסת"
+    assert body["closing_balance"] == 0.0

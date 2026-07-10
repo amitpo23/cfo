@@ -5,6 +5,7 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+const AUTH_BYPASS = import.meta.env.VITE_AUTH_BYPASS === 'true';
 
 class ApiService {
   private client: AxiosInstance;
@@ -23,6 +24,15 @@ class ApiService {
         const token = localStorage.getItem('auth_token');
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
+        }
+        // Super-admin "act as organization" override. When an active org is
+        // selected it rides on every request; the backend honors the header
+        // ONLY for SUPER_ADMIN (silently ignored for everyone else), so it is
+        // always safe to send. This drives the whole app — dashboards, AR/AP,
+        // sync — to the chosen client org.
+        const activeOrg = localStorage.getItem('active_org_id') || (AUTH_BYPASS ? '1' : null);
+        if (activeOrg) {
+          config.headers['X-Active-Org-Id'] = activeOrg;
         }
         // נרמול נתיב: בקומפוננטות יש שתי קונבנציות ('/api/financial/..' ו-'/ar/..')
         // ועם baseURL שמסתיים ב-/api נוצרת כפילות '/api/api/..' (404),
@@ -100,7 +110,7 @@ class ApiService {
   // ==================== Accounting - Documents ====================
 
   async createDocument(document: any) {
-    return this.post('/accounting/documents', document);
+    return this.post('/financial/documents', document);
   }
 
   async getDocument(documentId: string) {
@@ -108,12 +118,11 @@ class ApiService {
   }
 
   async listDocuments(params?: any) {
-    return this.get<any>('/accounting/documents', { params });
+    return this.get<any>('/financial/documents', { params });
   }
 
   async sendDocument(documentId: string, email: string) {
-    return this.post('/accounting/documents/send', {
-      document_id: documentId,
+    return this.post(`/financial/documents/${documentId}/send`, {
       recipient_email: email,
     });
   }
@@ -127,7 +136,7 @@ class ApiService {
   }
 
   async cancelDocument(documentId: string) {
-    return this.post(`/accounting/documents/${documentId}/cancel`);
+    return this.post(`/financial/documents/${documentId}/cancel`);
   }
 
   // ==================== Accounting - Income Items ====================

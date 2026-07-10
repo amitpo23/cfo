@@ -526,25 +526,24 @@ class KPIService:
                 'deadline': (today + timedelta(days=7 if alert['severity'] == 'critical' else 14)).isoformat()
             })
         
-        # השוואה לתקציב
+        # השוואה לתקציב ולתקופה קודמת: אין נתון-אמת אמין זמין כרגע.
+        # BudgetService.get_budget_vs_actual ו-_get_financial_data (דרך
+        # FinancialReportsService) שניהם נשענים על טבלאות Account/Transaction
+        # שקפואות (ר' "ממצא חדש — שתי מערכות חשבונאות מקבילות" ב-
+        # PRODUCT_AUDIT_AND_ROADMAP.md) — לכן לא ממציאים מספר "סביר" מעל
+        # נתון שבור/קפוא (זה מסוכן יותר, לא פחות, מהקבועים המזויפים
+        # שהיו כאן קודם: 500000/400000/8.5/5.2/12.3).
+        _unreliable_reason = (
+            "אין נתון-תקציב/השוואת-תקופה אמין זמין — תלוי בטבלאות "
+            "Account/Transaction הקפואות, ר' תיעוד P0"
+        )
         budget_comparison = {
-            'revenue': {'budget': 500000, 'actual': snapshot.revenue_mtd, 'variance': 0},
-            'expenses': {'budget': 400000, 'actual': snapshot.expenses_mtd, 'variance': 0}
+            'revenue': None, 'expenses': None,
+            'available': False, 'reason': _unreliable_reason,
         }
-        budget_comparison['revenue']['variance'] = (
-            (budget_comparison['revenue']['actual'] - budget_comparison['revenue']['budget']) 
-            / budget_comparison['revenue']['budget'] * 100
-        )
-        budget_comparison['expenses']['variance'] = (
-            (budget_comparison['expenses']['actual'] - budget_comparison['expenses']['budget'])
-            / budget_comparison['expenses']['budget'] * 100
-        )
-        
-        # השוואה לתקופה קודמת
         previous_comparison = {
-            'revenue_change': 8.5,
-            'expenses_change': 5.2,
-            'profit_change': 12.3
+            'revenue_change': None, 'expenses_change': None, 'profit_change': None,
+            'available': False, 'reason': _unreliable_reason,
         }
         
         return ExecutiveSummary(

@@ -1,5 +1,5 @@
 """Tests for Phase 9 advanced features."""
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -135,10 +135,11 @@ def test_check_aging_report(acc):
     try:
         service = CheckReconciliationService(db, org_id)
 
+        today = date.today()
         # Old check (30+ days)
-        service.record_check_deposit("OLD-CHECK", 500.0, "Old Payer", date(2026, 5, 1))
+        service.record_check_deposit("OLD-CHECK", 500.0, "Old Payer", today - timedelta(days=31))
         # Recent check (5 days)
-        service.record_check_deposit("NEW-CHECK", 300.0, "New Payer", date(2026, 6, 20))
+        service.record_check_deposit("NEW-CHECK", 300.0, "New Payer", today - timedelta(days=5))
 
         aging = service.get_check_aging()
         assert aging["0_7_days"]["count"] >= 1

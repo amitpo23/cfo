@@ -7,6 +7,9 @@ allocation number, ~12× the next-largest invoice. The checks:
   magnitude_outlier   — an invoice far larger than the rest of the book
   missing_allocation  — a large taxable invoice with no חשבונית-ישראל allocation number
   vendor_as_customer  — an invoice issued to a contact that is actually a supplier
+  duplicate_expense   — two bills from the same vendor, same amount, within a few
+                        days of each other, or sharing the same bill_number —
+                        likely the same expense filed twice
 
 Each check is conservative (flags for human review, never auto-mutates SUMIT) and
 returns a structured finding. Thresholds carry a `verify` note where they update.
@@ -22,6 +25,7 @@ SEV_INFO, SEV_MED, SEV_HIGH = "info", "medium", "high"
 ALLOCATION_THRESHOLD = 20000.0          # ₪ (2025; 2026 verify)
 OUTLIER_MIN_ABS = 50000.0               # below this, never flag as magnitude outlier
 OUTLIER_FACTOR = 8.0                    # flag if abs(total) > FACTOR × median of the rest
+DUPLICATE_DATE_WINDOW_DAYS = 3           # same vendor+amount within this many days
 
 
 def _f(value) -> float:
@@ -44,8 +48,6 @@ def detect_document_anomalies(db, organization_id: int) -> list[dict[str, Any]]:
         if i.status not in {InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED}
     ]
     findings: list[dict[str, Any]] = []
-    if not invoices:
-        return findings
 
     # Vendor tax-ids and vendor contact-ids, for the supplier-as-customer check.
     bills = db.query(Bill).filter(Bill.organization_id == organization_id).all()
@@ -102,6 +104,50 @@ def detect_document_anomalies(db, organization_id: int) -> list[dict[str, Any]]:
                 f"חשבונית {label} הופקה ל\"{cust_name}\" שמופיע כספק במערכת. "
                 f"ייתכן שזו הוצאה שתויקה בטעות כמסמך יוצא.",
                 refs={"invoice_id": inv.id, "contact_id": inv.contact_id},
+            ))
+
+    findings.extend(_detect_duplicate_expenses(bills, contacts))
+
+    return findings
+
+
+def _detect_duplicate_expenses(bills: list, contacts: dict) -> list[dict[str, Any]]:
+    """Flag pairs of bills that look like the same expense filed twice:
+    same vendor+amount within DUPLICATE_DATE_WINDOW_DAYS, or the same
+    bill_number reused across two rows."""
+    from ..models import BillStatus
+
+    bills = [b for b in bills if b.status not in {BillStatus.DRAFT, BillStatus.VOID}]
+    findings: list[dict[str, Any]] = []
+    flagged_pairs: set[tuple[int, int]] = set()
+
+    for i, a in enumerate(bills):
+        for b in bills[i + 1:]:
+            pair = (min(a.id, b.id), max(a.id, b.id))
+            if pair in flagged_pairs:
+                continue
+
+            same_number = bool(a.bill_number) and a.bill_number == b.bill_number
+            same_vendor_amount_close_date = (
+                a.vendor_id is not None
+                and a.vendor_id == b.vendor_id
+                and _f(a.total) == _f(b.total)
+                and a.issue_date is not None and b.issue_date is not None
+                and abs((a.issue_date - b.issue_date).days) <= DUPLICATE_DATE_WINDOW_DAYS
+            )
+            if not (same_number or same_vendor_amount_close_date):
+                continue
+
+            flagged_pairs.add(pair)
+            contact = contacts.get(a.vendor_id)
+            vendor_name = contact.name if contact else "ספק"
+            reason = "אותו מספר מסמך" if same_number else "אותו ספק+סכום בטווח ימים קרוב"
+            findings.append(_finding(
+                "duplicate_expense", SEV_MED,
+                f"חשד לכפילות הוצאה: {a.bill_number or a.id} / {b.bill_number or b.id}",
+                f"שתי הוצאות מ\"{vendor_name}\" על ₪{_f(a.total):,.0f} ({reason}) — "
+                f"תאריכים {a.issue_date} ו-{b.issue_date}. בדוק אם זו אותה הוצאה שתויקה פעמיים.",
+                refs={"bill_id_a": a.id, "bill_id_b": b.id},
             ))
 
     return findings

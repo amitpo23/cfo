@@ -1,5 +1,5 @@
 """T1.4 — revenue_analytics honest values: real average_days_to_payment + no fabricated gross-profit."""
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from cfo.database import SessionLocal
@@ -109,3 +109,56 @@ def test_gross_profit_estimate_is_null_not_fabricated(fresh_org):
         assert row["gross_profit_available"] is False, (
             f"gross_profit_available should be False, got {row.get('gross_profit_available')!r}"
         )
+
+
+# ── Test C: identify_investment_opportunities has no fabricated growth estimate ──
+
+def test_investment_opportunities_have_no_fabricated_growth_fields(fresh_org):
+    """A "growing_customer" opportunity previously carried growth_potential: "high"
+    (a constant, for every row) and estimated_growth: revenue * 0.3 (a fabricated
+    flat 30% multiplier, not derived from any real growth trend). Neither field
+    should exist -- only fields backed by real, queried data."""
+    org_id = fresh_org()["org_id"]
+    today = date.today()
+
+    customer = Contact(organization_id=org_id, name="לקוח צומח", contact_type=ContactType.CUSTOMER)
+    db = SessionLocal()
+    try:
+        db.add(customer)
+        db.flush()
+        customer_id = customer.id
+        for i in range(4):
+            db.add(Invoice(
+                organization_id=org_id, contact_id=customer_id,
+                total=Decimal("1000"), paid_amount=Decimal("1000"),
+                status=InvoiceStatus.PAID,
+                created_at=datetime.now(timezone.utc),
+                issue_date=today - timedelta(days=10 * i),
+            ))
+        # A second, much larger customer so the first stays under the 15% threshold.
+        big_customer = Contact(organization_id=org_id, name="לקוח גדול", contact_type=ContactType.CUSTOMER)
+        db.add(big_customer)
+        db.flush()
+        db.add(Invoice(
+            organization_id=org_id, contact_id=big_customer.id,
+            total=Decimal("50000"), paid_amount=Decimal("50000"),
+            status=InvoiceStatus.PAID, created_at=datetime.now(timezone.utc),
+            issue_date=today,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    db = SessionLocal()
+    try:
+        opportunities = RevenueAnalyticsService(db, org_id).identify_investment_opportunities(days=90)
+    finally:
+        db.close()
+
+    growing = [o for o in opportunities if o["customer_id"] == customer_id]
+    assert len(growing) == 1, f"Expected the 4-invoice customer to qualify, got {opportunities!r}"
+    opp = growing[0]
+    assert "estimated_growth" not in opp, "estimated_growth was a fabricated revenue*0.3 value"
+    assert "growth_potential" not in opp, "growth_potential was a hardcoded constant, not a real signal"
+    assert opp["current_revenue"] == 4000.0
+    assert opp["invoice_count"] == 4

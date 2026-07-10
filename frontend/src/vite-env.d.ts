@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly VITE_ENABLE_AI_INSIGHTS: string;
   readonly VITE_ENABLE_FORECASTING: string;
   readonly VITE_ENABLE_DARK_MODE: string;
+  readonly VITE_AUTH_BYPASS: string;
+  readonly VITE_GOOGLE_CLIENT_ID: string;
 }
 
 interface ImportMeta {

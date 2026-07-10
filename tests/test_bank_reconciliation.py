@@ -46,3 +46,17 @@ def test_score_capped_at_one():
     invoices = [DocLite("i1", "invoice", 1000.0, date(2026, 6, 5), "אקמה בעמ")]
     res = reconcile(txns, invoices, [], [])
     assert res["matches"][0]["score"] <= 1.0
+
+
+def test_unmatched_txn_details_carries_is_provisional_additively():
+    """unmatched_txns stays a bare list[int] (existing consumers:
+    financial_synthesis.py, BankInsightsDashboard.tsx's number[] typing) --
+    is_provisional surfaces only via a new, additive field."""
+    txns = [
+        BankTxnLite(1, -99.0, date(2026, 6, 9), "לא ידוע", is_provisional=True),
+        BankTxnLite(2, -50.0, date(2026, 6, 9), "גם לא ידוע", is_provisional=False),
+    ]
+    res = reconcile(txns, [], [], [])
+    assert res["unmatched_txns"] == [1, 2]
+    details = {d["id"]: d["is_provisional"] for d in res["unmatched_txn_details"]}
+    assert details == {1: True, 2: False}

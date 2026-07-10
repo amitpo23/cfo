@@ -301,13 +301,9 @@ async def set_next_document_number(
 
 @router.get("/balance")
 async def get_balance(
-    current_user: dict = Depends(get_current_user)
+    sumit: SumitIntegration = Depends(get_sumit_integration),
+    current_user: dict = Depends(get_current_user),
 ):
     """Get account balance information"""
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "SUMIT does not expose a generic account balance endpoint. "
-            "Use debt reports, payments, or bank-ledger dashboards instead."
-        ),
-    )
+    async with sumit:
+        return await sumit.get_balance()

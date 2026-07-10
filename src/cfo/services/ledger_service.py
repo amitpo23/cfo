@@ -29,6 +29,9 @@ CHART: dict[str, dict[str, str]] = {
     "3000": {"name": "הון ויתרות פתיחה", "type": "equity"},
     "4000": {"name": "הכנסות", "type": "revenue"},
     "5000": {"name": "הוצאות", "type": "expense"},
+    "5100": {"name": "הוצאות שכר", "type": "expense"},
+    "2110": {"name": "שכר נטו לתשלום", "type": "liability"},
+    "2300": {"name": "ניכויי שכר לתשלום", "type": "liability"},
 }
 
 # Statuses that should NOT post to the ledger (not real economic events).
@@ -248,12 +251,8 @@ def get_opening_balances(db, organization_id: int) -> dict[str, Any]:
 # ---------------------------------------------------------------------- #
 # Public API
 # ---------------------------------------------------------------------- #
-def add_manual_entry(db, organization_id: int, *, entry_date: date, memo: str,
-                     lines: list[dict]) -> "object":
-    """פקודת יומן ידנית (התאמת רו"ח). חייבת להיות מאוזנת (Σחובה==Σזכות, >0).
-
-    נשמרת ב-JournalEntry(source='manual') ונכללת אוטומטית ב-build_journal/trial_balance.
-    """
+def _normalize_and_validate_lines(lines: list[dict], *, require_min_two: bool = True) -> list[dict]:
+    """Shared normalization/balance-check for manual and payroll journal entries."""
     norm = []
     total_d = total_c = 0.0
     for ln in lines or []:
@@ -267,7 +266,7 @@ def add_manual_entry(db, organization_id: int, *, entry_date: date, memo: str,
             "credit": round(c, 2),
             "description": ln.get("description", ""),
         })
-    if len(norm) < 2:
+    if require_min_two and len(norm) < 2:
         raise ValueError("פקודת יומן דורשת לפחות שתי שורות")
     if round(total_d, 2) <= 0:
         raise ValueError("פקודת יומן ריקה (סכום אפס)")
@@ -275,6 +274,16 @@ def add_manual_entry(db, organization_id: int, *, entry_date: date, memo: str,
         raise ValueError(f"פקודת יומן אינה מאוזנת: חובה {total_d:.2f} ≠ זכות {total_c:.2f}")
     if any(not ln["account"] for ln in norm):
         raise ValueError("כל שורה חייבת קוד חשבון")
+    return norm
+
+
+def add_manual_entry(db, organization_id: int, *, entry_date: date, memo: str,
+                     lines: list[dict]) -> "object":
+    """פקודת יומן ידנית (התאמת רו"ח). חייבת להיות מאוזנת (Σחובה==Σזכות, >0).
+
+    נשמרת ב-JournalEntry(source='manual') ונכללת אוטומטית ב-build_journal/trial_balance.
+    """
+    norm = _normalize_and_validate_lines(lines)
 
     from ..models import JournalEntry
     row = JournalEntry(
@@ -286,21 +295,58 @@ def add_manual_entry(db, organization_id: int, *, entry_date: date, memo: str,
     return row
 
 
-def _manual_entries(db, organization_id: int) -> list[Entry]:
-    """פקודות יומן ידניות שמורות → Entry objects (מאוזנות בבנייה)."""
+def add_payroll_entry(db, organization_id: int, *, entry_date: date, memo: str,
+                      lines: list[dict], external_id: str) -> "object":
+    """פקודת יומן שכר נגזרת (ברוטו הוצאה / ניכויים התחייבות / נטו לתשלום).
+
+    נשמרת ב-JournalEntry(source='payroll'), מעודכנת (לא משוכפלת) בהרצה חוזרת
+    לאותו external_id — נכללת אוטומטית ב-build_journal/trial_balance.
+    """
+    norm = _normalize_and_validate_lines(lines)
+
+    from ..models import JournalEntry
+    row = db.query(JournalEntry).filter(
+        JournalEntry.organization_id == organization_id,
+        JournalEntry.source == "payroll",
+        JournalEntry.external_id == external_id,
+    ).first()
+    if row:
+        row.entry_date = entry_date
+        row.memo = memo
+        row.lines = norm
+    else:
+        row = JournalEntry(
+            organization_id=organization_id, source="payroll", external_id=external_id,
+            entry_date=entry_date, memo=memo, lines=norm,
+        )
+        db.add(row)
+    db.flush()
+    return row
+
+
+def _entries_by_source(db, organization_id: int, source: str, default_memo: str) -> list[Entry]:
+    """פקודות יומן שמורות (ידניות/שכר) → Entry objects (מאוזנות בבנייה)."""
     from ..models import JournalEntry
     out: list[Entry] = []
     rows = db.query(JournalEntry).filter(
         JournalEntry.organization_id == organization_id,
-        JournalEntry.source == "manual",
+        JournalEntry.source == source,
     ).all()
     for r in rows:
         lines = [Line(account=str(l.get("account")), debit=_f(l.get("debit")),
                       credit=_f(l.get("credit")), description=l.get("description", ""))
                  for l in (r.lines or [])]
-        out.append(Entry(entry_date=r.entry_date, memo=r.memo or "פקודת יומן ידנית",
-                          source_ref=f"manual:{r.id}", lines=lines))
+        out.append(Entry(entry_date=r.entry_date, memo=r.memo or default_memo,
+                          source_ref=f"{source}:{r.id}", lines=lines))
     return out
+
+
+def _manual_entries(db, organization_id: int) -> list[Entry]:
+    return _entries_by_source(db, organization_id, "manual", "פקודת יומן ידנית")
+
+
+def _payroll_entries(db, organization_id: int) -> list[Entry]:
+    return _entries_by_source(db, organization_id, "payroll", "פקודת שכר")
 
 
 def build_journal(db, organization_id: int, *, start: Optional[date] = None,
@@ -357,6 +403,11 @@ def build_journal(db, organization_id: int, *, start: Optional[date] = None,
 
     # פקודות יומן ידניות (התאמות רו"ח)
     for e in _manual_entries(db, organization_id):
+        if _in_period(e.entry_date, start, end):
+            entries.append(e)
+
+    # פקודות יומן שכר נגזרות
+    for e in _payroll_entries(db, organization_id):
         if _in_period(e.entry_date, start, end):
             entries.append(e)
 
@@ -432,6 +483,90 @@ def general_ledger(db, organization_id: int, account_code: str, *,
         "account": account_code,
         "name": meta.get("name", account_code),
         "type": meta.get("type", "other"),
+        "movements": movements,
+        "closing_balance": running,
+        "derived": True,
+        "disclaimer": DISCLAIMER,
+    }
+
+
+def contact_card(db, organization_id: int, contact_id: int, *,
+                 start: Optional[date] = None, end: Optional[date] = None) -> Optional[dict[str, Any]]:
+    """כרטסת לקוח/ספק — Invoice/Bill/Payment של איש קשר אחד, כרונולוגית עם יתרה רצה.
+
+    שלא כמו general_ledger (חשבון בספר הכללי, חובה/זכות), זו יתרת "כמה חייבים
+    על החשבון הזה": חשבונית/חשבון ספק מגדילים את היתרה (סכום פתוח), תשלום
+    מקטין אותה — ללא תלות אם מדובר בלקוח (הם חייבים לנו) או ספק (אנחנו חייבים).
+    """
+    from sqlalchemy import or_
+    from ..models import Contact, Invoice, Bill, Payment
+
+    contact = db.query(Contact).filter(
+        Contact.id == contact_id, Contact.organization_id == organization_id
+    ).first()
+    if not contact:
+        return None
+
+    invoices = db.query(Invoice).filter(
+        Invoice.contact_id == contact_id, Invoice.organization_id == organization_id
+    ).all()
+    bills = db.query(Bill).filter(
+        Bill.vendor_id == contact_id, Bill.organization_id == organization_id
+    ).all()
+    invoice_ids = [inv.id for inv in invoices]
+    bill_ids = [bill.id for bill in bills]
+
+    raw_movements = []
+    for inv in invoices:
+        d = inv.issue_date or inv.due_date
+        if not _in_period(d, start, end):
+            continue
+        raw_movements.append((d, {
+            "type": "invoice", "document": inv.invoice_number or f"INV-{inv.id}",
+            "description": "חשבונית", "amount": round(_f(inv.total), 2),
+        }))
+
+    for bill in bills:
+        d = bill.issue_date or bill.due_date
+        if not _in_period(d, start, end):
+            continue
+        raw_movements.append((d, {
+            "type": "bill", "document": bill.bill_number or f"BILL-{bill.id}",
+            "description": "חשבון ספק", "amount": round(_f(bill.total), 2),
+        }))
+
+    # Payment.contact_id is often NULL when sync couldn't resolve
+    # contact_external_id — fall back to the linked invoice/bill (which we
+    # already know belongs to this contact) so a real settlement isn't
+    # silently invisible to the card, overstating the outstanding balance.
+    payment_query = db.query(Payment).filter(Payment.organization_id == organization_id).filter(
+        or_(
+            Payment.contact_id == contact_id,
+            Payment.invoice_id.in_(invoice_ids),
+            Payment.bill_id.in_(bill_ids),
+        )
+    )
+    for pay in payment_query.all():
+        d = pay.payment_date
+        if not _in_period(d, start, end):
+            continue
+        raw_movements.append((d, {
+            "type": "payment", "document": pay.reference or pay.external_id or f"PAY-{pay.id}",
+            "description": "תשלום/תקבול", "amount": round(-_f(pay.amount), 2),
+        }))
+
+    raw_movements.sort(key=lambda m: m[0] or date.max)
+
+    movements = []
+    running = 0.0
+    for d, m in raw_movements:
+        running = round(running + m["amount"], 2)
+        movements.append({**m, "date": d.isoformat() if d else None, "balance": running})
+
+    return {
+        "contact_id": contact.id,
+        "contact_name": contact.name,
+        "contact_type": getattr(contact.contact_type, "value", contact.contact_type),
         "movements": movements,
         "closing_balance": running,
         "derived": True,

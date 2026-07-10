@@ -5,16 +5,23 @@ Not behind user auth — protected by CRON_SECRET instead (Vercel sends
 "Authorization: Bearer <CRON_SECRET>" automatically when the env var is set).
 """
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from ...config import settings
 from ...database import get_db_session
-from ...models import IntegrationConnection, Organization
-from ...services.sync_engine import SyncEngine, get_connector_for_org
+from ...models import IntegrationConnection, Organization, SyncCheckpoint
+from ...services.sync_engine import SOURCE_CHECKPOINT_ENTITY, SyncEngine, SyncSkipped, get_connector_for_org
+from ...services.client_automation_service import (
+    mark_client_loop_result,
+    repair_missing_client_roster,
+    roster_sync_targets,
+    run_post_sync_tasks,
+)
 from ...services.collection_service import CollectionService, dispatch_reminders
 from ...services.email_sender import send_email_smtp
 from ..dependencies import sumit_for_org
@@ -32,20 +39,11 @@ def _verify_cron_secret(authorization: str = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid cron credentials")
 
 
-@router.get("/cron/sync", dependencies=[Depends(_verify_cron_secret)])
-async def scheduled_sync(db: Session = Depends(get_db_session)):
-    """Run a sync for every organization with an active integration."""
-    # Org/source pairs from configured connections, plus the default org's
-    # env-credential SUMIT fallback.
-    targets = {
-        (conn.organization_id, conn.source)
-        for conn in db.query(IntegrationConnection).filter(
-            IntegrationConnection.status == "active",
-        ).all()
-    }
-    if settings.sumit_api_key:
-        targets.add((1, "sumit"))
-
+async def _run_sync_targets(db: Session, targets: set) -> list:
+    """Shared sync loop for a set of (org_id, source) targets. Used by both the
+    SUMIT (hourly) and Open Finance (daily-budgeted) cron routes so each keeps
+    its own call-frequency policy while sharing the run/automation/roster
+    bookkeeping (RSF-020: split cron paths, one engine loop)."""
     results = []
     for org_id, source in sorted(targets):
         try:
@@ -57,26 +55,58 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
         try:
             engine = SyncEngine(db, connector, org_id, resolved, conn_id)
             run = await engine.run_full_sync()
+            if isinstance(run, SyncSkipped):
+                # Another process already holds the cross-run lock for this
+                # org/source -- not an error, just don't double-sync.
+                results.append({
+                    "organization_id": org_id, "source": resolved,
+                    "skipped": run.reason, "error_summary": run.error_summary,
+                })
+                continue
             result = {
                 "organization_id": org_id,
                 "source": resolved,
                 "status": run.status.value if run.status else None,
                 "counts": run.counts,
             }
-            # SyncEngine ממלא Invoice/Bill (AR/AP). את טבלת Transaction
-            # (בסיס רווח-והפסד/תזרים/מאזן) ממלא DataSyncService — חייב לרוץ גם
-            # הוא אחרת הדוחות הכספיים לא יתעדכנו. רק עבור SUMIT.
+            result["automation"] = await run_post_sync_tasks(
+                db, org_id, sources=[resolved], resume_onboarding=True
+            )
             if resolved == "sumit":
+                # משיכת הוצאות ממתינות — בלעדיה טבלת ההוצאות מפגרת אחרי SUMIT
+                # (אודיט תאימות 2026-07-05: פיגור ~43 מסמכים). כשל כאן נרשם
+                # בתוצאה ולא מפיל את הארגון/הריצה.
                 try:
-                    from ...services.data_sync_service import DataSyncService
-                    svc = DataSyncService(db, org_id)
-                    result["transactions"] = await svc.sync_all()
+                    from ...services.expense_filing_service import ExpenseFilingService
+                    result["expenses_pull"] = await ExpenseFilingService(
+                        db, org_id
+                    ).sync_pending_from_sumit()
                 except Exception as exc:
-                    logger.warning("Transaction sync failed for org %s: %s", org_id, exc)
-                    result["transactions_error"] = str(exc)
+                    logger.warning("Expense pull failed for org %s: %s", org_id, exc)
+                    result["expenses_pull"] = {"error": str(exc)}
+            mark_client_loop_result(
+                db,
+                organization_id=org_id,
+                source=resolved,
+                ok=True,
+                summary={
+                    "sync_run_id": run.id,
+                    "status": run.status.value if run.status else None,
+                    "counts": run.counts,
+                },
+            )
+            db.commit()
             results.append(result)
         except Exception as exc:
             logger.error("Scheduled sync failed for org %s source %s: %s", org_id, source, exc)
+            mark_client_loop_result(
+                db,
+                organization_id=org_id,
+                source=source,
+                ok=False,
+                error=str(exc),
+            )
+            db.commit()
             results.append({"organization_id": org_id, "source": source, "error": str(exc)})
         finally:
             try:
@@ -84,14 +114,90 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
             except Exception:
                 pass
 
-        # Refresh insights after each org sync; never fail the cron over it.
-        try:
-            from ...services.cfo_brain_service import CFOBrainService
-            CFOBrainService(db, org_id).run_analysis()
-        except Exception as exc:
-            logger.warning("Brain analysis failed for org %s: %s", org_id, exc)
+    return results
 
+
+def _of_budget_gate(db: Session, org_id: int, source: str) -> Optional[dict]:
+    """Return a skip-result dict if this org/source already had a successful
+    full sync within the configured interval (RSF-025: Open Finance's monthly
+    call budget means scheduled syncs must be daily-capped, not hourly), else
+    None to proceed."""
+    cp = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == org_id,
+        SyncCheckpoint.source == source,
+        SyncCheckpoint.entity_type == SOURCE_CHECKPOINT_ENTITY,
+    ).first()
+    if not cp or not cp.last_success_at:
+        return None
+    next_eligible = cp.last_success_at + timedelta(hours=settings.of_sync_min_interval_hours)
+    if datetime.utcnow() < next_eligible:
+        return {
+            "organization_id": org_id,
+            "source": source,
+            "skipped": "of_daily_budget",
+            "last_success_at": cp.last_success_at.isoformat(),
+            "next_eligible_at": next_eligible.isoformat(),
+        }
+    return None
+
+
+@router.get("/cron/sync-sumit", dependencies=[Depends(_verify_cron_secret)])
+async def scheduled_sync_sumit(db: Session = Depends(get_db_session)):
+    """Hourly: run a sync for every organization with an active SUMIT integration.
+
+    Open Finance is intentionally excluded here -- see /cron/sync-open-finance,
+    which enforces its own daily call budget (RSF-020/021).
+    """
+    repaired_roster = repair_missing_client_roster(db)
+    targets = {
+        (conn.organization_id, conn.source)
+        for conn in db.query(IntegrationConnection).filter(
+            IntegrationConnection.status == "active",
+            IntegrationConnection.source == "sumit",
+        ).all()
+    }
+    targets.update((org_id, src) for org_id, src in roster_sync_targets(db) if src == "sumit")
+    if settings.sumit_api_key:
+        targets.add((1, "sumit"))
+
+    results = await _run_sync_targets(db, targets)
+    return {"synced": len(results), "repaired_roster": repaired_roster, "results": results}
+
+
+@router.get("/cron/sync-open-finance", dependencies=[Depends(_verify_cron_secret)])
+async def scheduled_sync_open_finance(db: Session = Depends(get_db_session)):
+    """Daily: run a sync for every organization with an active Open Finance
+    integration, gated to at most one successful full sync per org per
+    OF_SYNC_MIN_INTERVAL_HOURS (default 20h) to stay well inside the ~500/month
+    call budget (RSF-025)."""
+    targets = {
+        (conn.organization_id, conn.source)
+        for conn in db.query(IntegrationConnection).filter(
+            IntegrationConnection.status == "active",
+            IntegrationConnection.source == "open_finance",
+        ).all()
+    }
+    targets.update((org_id, src) for org_id, src in roster_sync_targets(db) if src == "open_finance")
+
+    results = []
+    to_run = set()
+    for org_id, source in sorted(targets):
+        gated = _of_budget_gate(db, org_id, source)
+        if gated:
+            results.append(gated)
+        else:
+            to_run.add((org_id, source))
+
+    results.extend(await _run_sync_targets(db, to_run))
     return {"synced": len(results), "results": results}
+
+
+@router.get("/cron/sync", dependencies=[Depends(_verify_cron_secret)])
+async def scheduled_sync(db: Session = Depends(get_db_session)):
+    """Legacy alias, kept for backward compatibility with existing Vercel Cron
+    config during rollout -- SUMIT-only (see /cron/sync-sumit). Open Finance
+    moved to its own daily-budgeted /cron/sync-open-finance (RSF-020/021)."""
+    return await scheduled_sync_sumit(db)
 
 
 @router.get("/cron/enrich-expenses", dependencies=[Depends(_verify_cron_secret)])

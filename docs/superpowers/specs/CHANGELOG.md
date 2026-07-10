@@ -96,6 +96,7 @@
 ### מצב audit שנותר (לא קריסות)
 - 4 EXC נותרו, כולם `/api/sync/sumit/*` — `ValueError: SUMIT API key not configured` (צפוי בסביבת audit ללא מפתח; בפרודקשן מוגדר).
 - ~36 × 400 — Open Finance/CRM/communications/payments דורשים credentials/params (התנהגות תקינה, לא 5xx).
+- QA 2026-06-30: אומת מול production. `DATABASE_URL` קיים ומצביע ל-Postgres מנוהל; `sumit:ping` עובר; Open Finance חסום נקי עם 400 עד להגדרת `OPEN_FINANCE_USER_ID`.
 
 ### נותר בפאזה 4 (ongoing)
 - המרת ValueError של SUMIT ל-400 נקי (polish).

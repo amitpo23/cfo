@@ -4,6 +4,7 @@
  * required reconciliations and VAT position aggregated across all clients.
  */
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Building2, Plus, Loader2, FolderSync, AlertCircle, CheckCircle2,
 } from 'lucide-react';
@@ -137,6 +138,12 @@ export default function OfficeDashboard() {
             סנכרן הכל
           </button>
         </div>
+      </div>
+
+      <div className="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-600">
+        תצוגה זו להוספת תיקי-לקוח, מפתח SUMIT של המשרד, וסנכרון/סינתזה רוחבית.
+        לעריכת פרופיל ארגון (שם/ח.פ) או יצירת התחברות למשתמש חדש — ראו{' '}
+        <Link to="/admin-clients" className="text-indigo-600 hover:underline font-medium">אדמין — כל הלקוחות</Link>.
       </div>
 
       {notice && <div className="mb-4 p-3 rounded-lg bg-emerald-50 text-emerald-800 text-sm">{notice}</div>}

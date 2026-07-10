@@ -352,58 +352,63 @@ class TaxComplianceService:
         overdue = []
         completed = []
         
-        # מע"מ חודשי
+        # מע"מ חודשי -- הסכום נגזר מ-generate_vat_report (שדות מע"מ אמיתיים
+        # מהמסמכים), לא הערכה קבועה.
         for m in range(months_ahead + 1):
             month_date = today + timedelta(days=m * 30)
             due = date(month_date.year, month_date.month, 15)
-            
+            vat_report = self.generate_vat_report(month_date.year, month_date.month)
+
             item = {
                 'type': 'VAT',
                 'type_hebrew': 'דוח מע"מ',
                 'period': f"{month_date.year}-{month_date.month:02d}",
                 'due_date': due.isoformat(),
-                'estimated_amount': 15000,  # הערכה
+                'estimated_amount': round(vat_report.vat_payable, 2),
                 'status': 'pending'
             }
-            
+
             if due < today:
                 overdue.append(item)
             elif due <= end_date:
                 upcoming.append(item)
-        
-        # מקדמות מס
+
+        # מקדמות מס -- נגזר מ-calculate_tax_advance (מבוסס P&L אמיתי מה-ledger)
         for m in range(months_ahead + 1):
             month_date = today + timedelta(days=m * 30)
             due = date(month_date.year, month_date.month, 15)
-            
+            advance = self.calculate_tax_advance(month_date.year, month_date.month)
+
             item = {
                 'type': 'TAX_ADVANCE',
                 'type_hebrew': 'מקדמות מס',
                 'period': f"{month_date.year}-{month_date.month:02d}",
                 'due_date': due.isoformat(),
-                'estimated_amount': 8000,
+                'estimated_amount': round(advance.remaining_amount, 2),
                 'status': 'pending'
             }
-            
+
             if due < today:
                 overdue.append(item)
             elif due <= end_date:
                 upcoming.append(item)
-        
-        # ניכויים (102)
+
+        # ניכויים (102) -- נגזר מ-generate_withholding_report (תלושי שכר +
+        # ניכויי ספקים אמיתיים)
         for m in range(months_ahead + 1):
             month_date = today + timedelta(days=m * 30)
             due = date(month_date.year, month_date.month, 15)
-            
+            withholding = self.generate_withholding_report(month_date.year, month_date.month)
+
             item = {
                 'type': 'WITHHOLDING_102',
                 'type_hebrew': 'דוח 102 - ניכויים',
                 'period': f"{month_date.year}-{month_date.month:02d}",
                 'due_date': due.isoformat(),
-                'estimated_amount': 25000,
+                'estimated_amount': round(withholding.total_withholding, 2),
                 'status': 'pending'
             }
-            
+
             if due < today:
                 overdue.append(item)
             elif due <= end_date:

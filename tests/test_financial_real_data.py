@@ -157,6 +157,92 @@ def test_masav_settings_are_org_scoped(client, owner, tenant, seeded):
     assert resp.json()["configured"] is False
 
 
+def test_masav_gather_skips_vendor_with_bad_id_checkdigit(client, owner, seeded):
+    """ספק עם ח.פ שנכשל בביקורת הספרה מדולג (לא נכנס לקובץ המס"ב)."""
+    from cfo.database import SessionLocal
+    from cfo.models import Contact, ContactType, Bill, BillStatus
+
+    org_id = seeded["org_id"]
+    db = SessionLocal()
+    try:
+        bad_vendor = Contact(
+            organization_id=org_id, contact_type=ContactType.VENDOR,
+            name="ספק ח.פ שגוי", tax_id="123456789",  # נכשל בביקורת הספרה
+            bank_code="12", bank_branch="345", bank_account_number="111222",
+        )
+        db.add(bad_vendor)
+        db.flush()
+        bad_bill = Bill(
+            organization_id=org_id, vendor_id=bad_vendor.id,
+            bill_number="BILL-BADID", issue_date=date.today() - timedelta(days=3),
+            due_date=date.today() + timedelta(days=20),
+            total=300, paid_amount=0, balance=300, status=BillStatus.APPROVED,
+        )
+        db.add(bad_bill)
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.post("/api/masav/settings", json={
+        "institution_code": "12345678",
+        "sending_institution": "54321",
+        "institution_name": "העסק שלי",
+    }, headers=owner["headers"])
+    assert r.status_code == 200, r.text
+
+    prev = client.post("/api/masav/preview", json={
+        "payment_date": date.today().isoformat(),
+    }, headers=owner["headers"]).json()
+    reasons = [s["reason"] for s in prev["skipped"] if s.get("vendor") == "ספק ח.פ שגוי"]
+    assert reasons, prev["skipped"]
+    assert "ביקורת הספרה" in reasons[0]
+    names = [p["beneficiary_name"] for p in prev["payments"]]
+    assert "ספק ח.פ שגוי" not in names
+
+
+def test_masav_gather_skips_vendor_with_invalid_bank_code(client, owner, seeded):
+    """ספק עם קוד בנק שאינו ברשימת חברי מס"ב מדולג (לא נכנס לקובץ המס"ב)."""
+    from cfo.database import SessionLocal
+    from cfo.models import Contact, ContactType, Bill, BillStatus
+
+    org_id = seeded["org_id"]
+    db = SessionLocal()
+    try:
+        bad_vendor = Contact(
+            organization_id=org_id, contact_type=ContactType.VENDOR,
+            name="ספק קוד בנק שגוי", tax_id="123456782",
+            bank_code="77", bank_branch="345", bank_account_number="333444",  # 77 אינו קוד בנק פעיל
+        )
+        db.add(bad_vendor)
+        db.flush()
+        bad_bill = Bill(
+            organization_id=org_id, vendor_id=bad_vendor.id,
+            bill_number="BILL-BADBANK", issue_date=date.today() - timedelta(days=3),
+            due_date=date.today() + timedelta(days=20),
+            total=400, paid_amount=0, balance=400, status=BillStatus.APPROVED,
+        )
+        db.add(bad_bill)
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.post("/api/masav/settings", json={
+        "institution_code": "12345678",
+        "sending_institution": "54321",
+        "institution_name": "העסק שלי",
+    }, headers=owner["headers"])
+    assert r.status_code == 200, r.text
+
+    prev = client.post("/api/masav/preview", json={
+        "payment_date": date.today().isoformat(),
+    }, headers=owner["headers"]).json()
+    reasons = [s["reason"] for s in prev["skipped"] if s.get("vendor") == "ספק קוד בנק שגוי"]
+    assert reasons, prev["skipped"]
+    assert "קוד בנק" in reasons[0]
+    names = [p["beneficiary_name"] for p in prev["payments"]]
+    assert "ספק קוד בנק שגוי" not in names
+
+
 def test_financial_routes_org_scoped_no_crash(client, owner, seeded):
     """כל ה-routes הפיננסיים מקבלים org_id מה-JWT ולא קורסים (NameError)."""
     crashed = []

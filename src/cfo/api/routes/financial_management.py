@@ -393,7 +393,7 @@ async def get_cost_breakdown(
 
 @router.get("/costs/profitability")
 async def analyze_profitability(
-    by: str = Query('customer', regex='^(customer|product|segment)$'),
+    by: str = Query('customer', pattern='^(customer|product|segment)$'),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):
@@ -465,7 +465,7 @@ async def generate_vat_report(
 
 @router.get("/tax/advance")
 async def calculate_tax_advance(
-    period: str = Query(..., regex='^[0-9]{4}-[0-9]{2}$'),
+    period: str = Query(..., pattern='^[0-9]{4}-[0-9]{2}$'),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):
@@ -479,7 +479,7 @@ async def calculate_tax_advance(
 
 @router.get("/tax/withholding")
 async def generate_withholding_report(
-    period: str = Query(..., regex='^[0-9]{4}-[0-9]{2}$'),
+    period: str = Query(..., pattern='^[0-9]{4}-[0-9]{2}$'),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):
@@ -521,13 +521,13 @@ async def set_contact_withholding_rate(
 
 @router.get("/tax/calendar")
 async def get_tax_calendar(
-    year: int = Query(default=None),
+    months_ahead: int = Query(default=3),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):
     """לוח שנה מס"""
     service = TaxComplianceService(db, organization_id=org_id)
-    calendar = service.get_tax_calendar(year or date.today().year)
+    calendar = service.get_tax_calendar(months_ahead)
     return {"status": "success", "data": vars(calendar)}
 
 

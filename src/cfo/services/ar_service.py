@@ -743,7 +743,8 @@ class AccountsReceivableService:
 
     def _contact_id(self, customer_id: str):
         try:
-            return int(customer_id)
+            cid = int(customer_id)
+            return None if cid == 0 else cid  # '0' is the sentinel for NULL-contact invoices
         except (TypeError, ValueError):
             return -1
 

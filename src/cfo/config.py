@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
     auto_create_db: bool = False if os.getenv("VERCEL") else True
+    # Development/QA only. When enabled, API requests without a Bearer token are
+    # treated as a super-admin session. Do not enable on public production.
+    auth_bypass_enabled: bool = False
     cors_allowed_origins: str = (
         "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173"
         if not os.getenv("VERCEL")
@@ -69,6 +72,9 @@ class Settings(BaseSettings):
     open_finance_api_base_url: str = "https://api.open-finance.ai/v2"
     open_finance_oauth_url: str = "https://api.open-finance.ai/oauth/token"
     open_finance_webhook_secret: Optional[str] = None
+    # Shared secret for the SUMIT triggers webhook receiver (see
+    # api/routes/sumit_webhooks.py) — same pattern as the Open Finance one.
+    sumit_webhook_secret: Optional[str] = None
 
     # Google Sign-In
     google_client_id: Optional[str] = None
@@ -89,6 +95,11 @@ class Settings(BaseSettings):
     # Vision model used to read receipt scans. Claude reads PDFs natively.
     ocr_vision_model: str = "claude-opus-4-8"
     ocr_vision_model_openai: str = "gpt-4o"
+    # החלטת משתמש (2026-07-06): מפתח ה-API משרת את עוזר ה-AI בלבד.
+    # OCR מבוסס-LLM נצרך מכסה ברקע (cron) — כבוי אלא אם הופעל במפורש.
+    ocr_llm_enabled: bool = False
+    # AI chat assistant (Wave 2 Step 9) — same anthropic_api_key as OCR above.
+    ai_chat_model: str = "claude-sonnet-5"
     # Companies-registry (רשם החברות) lookup over data.gov.il CKAN.
     companies_registry_resource_id: str = "f004176c-b85f-4542-8901-7b3176f9a054"
     companies_registry_base_url: str = "https://data.gov.il/api/3/action/datastore_search"
@@ -103,6 +114,28 @@ class Settings(BaseSettings):
     smtp_user: Optional[str] = None
     smtp_password: Optional[str] = None
     smtp_from: Optional[str] = None
+
+    # Sync call-protection (M1a — RSF-020..032). See services/sync_engine.py.
+    # Overlap window subtracted from SyncCheckpoint.last_success_at to compute
+    # the `updated_since` watermark passed to connectors (covers late-arriving
+    # documents/clock skew without re-fetching full history every run).
+    sync_overlap_days: int = 3
+    # Hard page cap per entity type per run; stop with a PARTIAL result (and a
+    # resumable cursor) instead of an unbounded loop against a live API.
+    sync_max_pages_per_entity: int = 20
+    # How long to skip an entity after a 401/403/quota/obligo/IP-block error
+    # before trying again (circuit breaker).
+    sync_circuit_open_hours: int = 6
+    # Base delay (seconds) for the transient-5xx retry backoff. Kept small and
+    # overridable so tests don't burn real wall-clock time.
+    sync_retry_base_delay_seconds: float = 0.5
+    # Open Finance has a limited monthly call budget (~500 calls) — scheduled
+    # OF syncs are capped to at most one *successful full* sync per org per
+    # this many hours (daily-ish, not hourly).
+    of_sync_min_interval_hours: int = 20
+    # Minimum time between manually-triggered (POST /sync/run) syncs for the
+    # same org/source, to stop a user/UI from hammering the provider.
+    manual_refresh_cooldown_minutes: int = 15
 
     @field_validator("database_url", mode="before")
     @classmethod

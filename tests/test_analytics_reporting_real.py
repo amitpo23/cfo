@@ -91,3 +91,24 @@ def test_monthly_pl_report_runs_without_column_error(fresh_org):
     assert report["report_type"] == "monthly_pl"
     assert "revenue" in report
     assert "expenses" in report
+
+
+def test_prorated_budget_spans_month_boundary(fresh_org):
+    """שבוע שחוצה חודשים חייב לשקלל תקציב משני החודשים — לא רק מחודש ההתחלה."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Budget(organization_id=org_id, category_name="rent",
+                      year=2026, month=6, budgeted_amount=Decimal("3000")))
+        db.add(Budget(organization_id=org_id, category_name="rent",
+                      year=2026, month=7, budgeted_amount=Decimal("3100")))
+        db.commit()
+        svc = AnalyticsReportingService(db, org_id)
+        # שבוע 2026-06-29 (שני) עד 2026-07-05 (ראשון): 2 ימי יוני + 5 ימי יולי
+        total, by_cat = svc._prorated_budget(date(2026, 6, 29), date(2026, 7, 5))
+    finally:
+        db.close()
+
+    expected = 3000 * (2 / 30) + 3100 * (5 / 31)  # 200 + 500 = 700
+    assert abs(total - expected) < 0.01
+    assert abs(by_cat["rent"] - expected) < 0.01

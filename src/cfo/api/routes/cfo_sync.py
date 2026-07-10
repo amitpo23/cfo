@@ -3,6 +3,7 @@ Sync API routes.
 /api/sync/* for triggering sync, viewing runs, testing connections.
 """
 import json
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException
@@ -11,11 +12,11 @@ from sqlalchemy.orm import Session
 
 from ...database import get_db_session
 from ..dependencies import get_current_org_id
-from ...models import SyncRun, SyncStatus, IntegrationConnection
+from ...models import SyncRun, SyncStatus, IntegrationConnection, SyncCheckpoint
 from ...config import settings
-from ...services.sync_engine import SyncEngine, get_connector_for_org
+from ...services.sync_engine import SOURCE_CHECKPOINT_ENTITY, SyncEngine, SyncSkipped, get_connector_for_org
 from ...services.credentials_vault import encrypt_credentials
-from ...services.alert_engine import AlertEngine
+from ...services.client_automation_service import run_post_sync_tasks
 
 router = APIRouter()
 
@@ -76,41 +77,66 @@ async def integration_status(
         ).all()
     }
 
-    required = {
-        "production_database": ["DATABASE_URL"],
-        "security": ["JWT_SECRET_KEY"],
-        "sumit": ["SUMIT_API_KEY"],
-        "open_finance": [
-            "OPEN_FINANCE_CLIENT_ID",
-            "OPEN_FINANCE_CLIENT_SECRET",
-            "OPEN_FINANCE_USER_ID",
-        ],
-        "ai": ["OPENAI_API_KEY"],
-    }
-
     # Env credentials only apply to the default organization; every other
     # tenant must configure its own credentials.
     env_allowed = org_id == 1
+    sumit_configured = connections.get("sumit") == "active" or (env_allowed and bool(settings.sumit_api_key))
+    open_finance_configured = connections.get("open_finance") == "active" or (env_allowed and all([
+        settings.open_finance_client_id,
+        settings.open_finance_client_secret,
+        settings.open_finance_user_id,
+    ]))
     configured = {
         "production_database": not settings.database_url.startswith("sqlite:"),
         "security": settings.jwt_secret_key != "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING",
-        "sumit": connections.get("sumit") == "active" or (env_allowed and bool(settings.sumit_api_key)),
-        "open_finance": connections.get("open_finance") == "active" or (env_allowed and all([
-            settings.open_finance_client_id,
-            settings.open_finance_client_secret,
-            settings.open_finance_user_id,
-        ])),
+        "sumit": sumit_configured,
+        "open_finance": open_finance_configured,
         "ai": bool(settings.openai_api_key),
     }
+    missing = {
+        "production_database": [] if configured["production_database"] else ["DATABASE_URL"],
+        "security": [] if configured["security"] else ["JWT_SECRET_KEY"],
+        "sumit": [] if sumit_configured else ["SUMIT_API_KEY"],
+        "open_finance": [],
+        "ai": [] if configured["ai"] else ["OPENAI_API_KEY"],
+    }
+    if not open_finance_configured:
+        if connections.get("open_finance") == "active":
+            missing["open_finance"] = []
+        elif env_allowed:
+            missing["open_finance"] = [
+                name for name, value in {
+                    "OPEN_FINANCE_CLIENT_ID": settings.open_finance_client_id,
+                    "OPEN_FINANCE_CLIENT_SECRET": settings.open_finance_client_secret,
+                    "OPEN_FINANCE_USER_ID": settings.open_finance_user_id,
+                }.items()
+                if not value
+            ]
+        else:
+            missing["open_finance"] = ["organization_open_finance_credentials"]
+
+    # `connections.sumit` reflects configuration, not live health -- a connector
+    # can be "active" (credentials present) while every real API call fails
+    # (wrong CompanyID/APIKey). Surface the latest sync run's real error
+    # alongside it rather than overwriting connections.sumit, since several
+    # dashboards render connections.sumit truthily (checkmark vs. warning) and
+    # would misreport an "error" string as connected.
+    last_sync_errors = {}
+    latest_sumit_run = (
+        db.query(SyncRun)
+        .filter(SyncRun.organization_id == org_id, SyncRun.source == "sumit")
+        .order_by(SyncRun.id.desc())
+        .first()
+    )
+    if latest_sumit_run and latest_sumit_run.error_summary:
+        last_sync_errors["sumit"] = latest_sumit_run.error_summary
 
     return {
         "organization_id": org_id,
         "configured": configured,
-        "missing": {
-            key: [] if value else required[key]
-            for key, value in configured.items()
-        },
+        "missing": missing,
         "connections": connections,
+        "last_sync_errors": last_sync_errors,
         "notes": {
             "production_database": (
                 "Persistent database is configured."
@@ -214,6 +240,42 @@ async def test_connection(
         return {"success": False, "message": str(e)}
 
 
+def _manual_refresh_cooldown_check(db: Session, org_id: int, source: str) -> Optional[dict]:
+    """Return a 429-style payload if a manual refresh for this org/source ran
+    too recently, else None (proceed). RSF-029 -- stops a UI "Refresh" button
+    (or an impatient user double-clicking it) from hammering the provider on
+    top of the scheduled cron sync."""
+    cp = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == org_id,
+        SyncCheckpoint.source == source,
+        SyncCheckpoint.entity_type == SOURCE_CHECKPOINT_ENTITY,
+    ).first()
+    if not cp or not cp.cooldown_until:
+        return None
+    now = datetime.utcnow()
+    if now < cp.cooldown_until:
+        return {
+            "error": "manual_refresh_cooldown",
+            "detail": "A manual sync for this integration was triggered too recently. Please wait before retrying.",
+            "retry_after_seconds": int((cp.cooldown_until - now).total_seconds()),
+            "cooldown_until": cp.cooldown_until.isoformat(),
+        }
+    return None
+
+
+def _start_manual_refresh_cooldown(db: Session, org_id: int, source: str) -> None:
+    cp = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == org_id,
+        SyncCheckpoint.source == source,
+        SyncCheckpoint.entity_type == SOURCE_CHECKPOINT_ENTITY,
+    ).first()
+    if not cp:
+        cp = SyncCheckpoint(organization_id=org_id, source=source, entity_type=SOURCE_CHECKPOINT_ENTITY)
+        db.add(cp)
+    cp.cooldown_until = datetime.utcnow() + timedelta(minutes=settings.manual_refresh_cooldown_minutes)
+    db.commit()
+
+
 @router.post("/sync/run")
 async def trigger_sync(
     entity_types: Optional[str] = Query(None, description="Comma-separated: invoices,bills,payments"),
@@ -231,6 +293,16 @@ async def trigger_sync(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    cooldown = _manual_refresh_cooldown_check(db, org_id, source)
+    if cooldown:
+        try:
+            await connector.close()
+        except Exception:
+            pass
+        raise HTTPException(status_code=429, detail=cooldown)
+
+    _start_manual_refresh_cooldown(db, org_id, source)
+
     engine = SyncEngine(db, connector, org_id, source, conn_id)
 
     types = None
@@ -244,13 +316,24 @@ async def trigger_sync(
     finally:
         await connector.close()
 
-    # Run alert engine after sync
+    if isinstance(sync_run, SyncSkipped):
+        return {
+            "id": None,
+            "status": "skipped",
+            "started_at": None,
+            "finished_at": None,
+            "counts": {},
+            "error_summary": sync_run.error_summary,
+            "automation": None,
+        }
+
+    automation = None
     try:
-        alert_engine = AlertEngine(db, org_id)
-        alert_engine.evaluate_all()
+        automation = await run_post_sync_tasks(
+            db, org_id, sources=[source], resume_onboarding=True
+        )
     except Exception as e:
-        # Don't fail sync because of alert evaluation
-        pass
+        automation = {"error": str(e)}
 
     return {
         "id": sync_run.id,
@@ -259,6 +342,7 @@ async def trigger_sync(
         "finished_at": sync_run.finished_at.isoformat() if sync_run.finished_at else None,
         "counts": sync_run.counts,
         "error_summary": sync_run.error_summary,
+        "automation": automation,
     }
 
 

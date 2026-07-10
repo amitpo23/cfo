@@ -97,8 +97,6 @@ class ExpenseOCRPipeline:
                 filed += 1
             elif res.get("status") == "flagged":
                 flagged += 1
-            elif res.get("status") == "error":
-                errors += 1
             if delay and i < len(rows) - 1:
                 await asyncio.sleep(delay)
 

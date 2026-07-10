@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import { FileCheck, Download } from 'lucide-react';
 import apiService from '../services/api';
+import CollectionCasesTab from './CollectionCasesTab';
 
 interface Props {
   darkMode: boolean;
@@ -21,13 +22,21 @@ interface Invoice {
   status: string;
 }
 
+function extractErrorMessage(err: unknown): string {
+  const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+  return detail || 'משהו השתבש. נסה שוב.';
+}
+
 const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
   const [noteText, setNoteText] = useState('');
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<'aging' | 'collections'>('aging');
+  const [paymentLinkStatus, setPaymentLinkStatus] = useState<{ invoiceId: number; message: string; isError: boolean } | null>(null);
 
   const { data: aging, isLoading } = useQuery({
     queryKey: ['ar-aging'],
     queryFn: () => apiService.get('/ar/aging'),
+    enabled: activeTab === 'aging',
   });
 
   const agingData = aging as Record<string, unknown> | undefined;
@@ -55,12 +64,53 @@ const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
     });
   };
 
+  const handlePaymentLink = async (invoiceId: number) => {
+    setPaymentLinkStatus(null);
+    try {
+      const response = await apiService.post(`/financial/invoices/${invoiceId}/payment-link`) as {
+        data: { payment_url: string };
+      };
+      window.open(response.data.payment_url, '_blank', 'noopener,noreferrer');
+      setPaymentLinkStatus({ invoiceId, message: 'קישור התשלום נפתח בכרטיסייה חדשה', isError: false });
+    } catch (err) {
+      setPaymentLinkStatus({ invoiceId, message: extractErrorMessage(err), isError: true });
+    }
+  };
+
   const fmt = (n: number) =>
     new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(n);
 
   const cardClass = `p-6 rounded-2xl ${
     darkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-200'
   }`;
+
+  const tabButtonClass = (tab: 'aging' | 'collections') =>
+    `px-4 py-2 font-medium border-b-2 transition ${
+      activeTab === tab
+        ? 'text-blue-500 border-blue-500'
+        : `border-transparent ${darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'}`
+    }`;
+
+  const tabBar = (
+    <div className={`flex gap-2 border-b ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+      <button type="button" className={tabButtonClass('aging')} onClick={() => setActiveTab('aging')}>
+        גיול חובות
+      </button>
+      <button type="button" className={tabButtonClass('collections')} onClick={() => setActiveTab('collections')}>
+        תיקי גבייה
+      </button>
+    </div>
+  );
+
+  if (activeTab === 'collections') {
+    return (
+      <div className={`p-6 space-y-6 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+        <h1 className="text-3xl font-bold">Accounts Receivable</h1>
+        {tabBar}
+        <CollectionCasesTab darkMode={darkMode} />
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -93,6 +143,7 @@ const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
           Export CSV
         </button>
       </div>
+      {tabBar}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -186,6 +237,13 @@ const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
                         >
                           Task
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePaymentLink(inv.id)}
+                          className="text-purple-500 hover:text-purple-600 text-xs"
+                        >
+                          קישור תשלום
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -209,6 +267,19 @@ const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
                           >
                             Save
                           </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {paymentLinkStatus?.invoiceId === inv.id && (
+                    <tr>
+                      <td colSpan={8} className="py-2 px-4">
+                        <div className={`text-xs px-3 py-2 rounded-lg ${
+                          paymentLinkStatus.isError
+                            ? 'bg-red-50 text-red-700'
+                            : 'bg-green-50 text-green-700'
+                        }`}>
+                          {paymentLinkStatus.message}
                         </div>
                       </td>
                     </tr>

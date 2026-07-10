@@ -84,7 +84,7 @@ def check_env(require_postgres: bool) -> list[Check]:
     db_url = env_value("DATABASE_URL")
     checks.append(Check("database:not_sqlite", not db_url.startswith("sqlite:"), "required for Vercel production"))
     if require_postgres:
-        checks.append(Check("database:postgres", db_url.startswith(("postgresql://", "postgresql+psycopg://")), "expected Supabase/Postgres"))
+        checks.append(Check("database:postgres", db_url.startswith(("postgresql://", "postgresql+psycopg://")), "expected managed Postgres"))
     return checks
 
 

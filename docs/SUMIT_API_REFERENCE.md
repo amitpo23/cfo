@@ -1164,9 +1164,29 @@ The following methods exist in the client but always raise `Exception` because t
 | `get_entities_html(folder_id, entity_ids)` | Requires a saved ViewID; cannot render arbitrary entity list | `get_entity_print_html()` per entity |
 | `send_letter_by_click(recipient, content)` | No postal letter service in SUMIT API | `send_fax()` or `send_document()` |
 | `get_letter_tracking_code(letter_id)` | No postal letter service in SUMIT API | N/A |
-| `create_scheduled_document(document, schedule_date)` | Endpoint requires an existing DocumentID, not raw details | `create_document()` then schedule from it |
 
 ---
 
-*Total documented public methods: 67*  
-*(Includes 8 not-supported stubs, 59 operational methods)*
+*Total documented public methods: 68*
+*(Includes 7 not-supported stubs, 61 operational methods)*
+
+---
+
+## Wave 2 Step 8 additions (verified against the live OpenAPI spec)
+
+Pulled `https://api.sumit.co.il/swagger/v1/swagger.json` directly (WebFetch's
+summarization dropped schema fields — the raw JSON is the source of truth
+here) to close out the plan's "SUMIT API gaps" item. Findings reshaped the
+plan's scope — most of it doesn't exist as specified:
+
+| Method | What it really does | Notes |
+|---|---|---|
+| `create_document_from_existing(document_id)` | Clones an EXISTING document via `/scheduleddocuments/documents/createfromdocument/` | Replaces the old `create_scheduled_document(document, schedule_date)` stub. There is no `schedule_date`/raw-details endpoint — confirmed by reading the full request schema (`ScheduledDocuments_Documents_CreateFromDocument_Request` only has `DocumentID` + optional `IncomeItem`). Returns `ScheduledDocumentResult` (id/date/total only — SUMIT doesn't echo back the rest of the document). |
+| `DocumentRequest.payments` (cash/cheque) | Adds a `Payments` array to `/accounting/documents/create/` | `Accounting_Typed_DocumentPayment` — one `Details_Cash` (empty object) or `Details_Cheque` (BankNumber/BranchNumber/AccountNumber/ChequeNumber/DueDate) per entry. Card payments still go through `charge_customer()`, unrelated to this. |
+| `DocumentRequest.original_document_id` | Sets `OriginalDocumentID` on document-create | SUMIT's documented mechanism for "keeping a relationship between an original and a created document (such as credits for debit invoices)" — this is how a credit note gets linked to the invoice it credits. **There is no separate refund/reversal endpoint anywhere in the 84-path spec** — a credit note is the only refund primitive SUMIT exposes via API. |
+
+**Confirmed gaps — no clean API path, not built:**
+- **Mandates (הרשאות מס"ב) creation**: `/billing/recurring/{cancel,charge,listforcustomer,update,updatesettings}/` all operate on an *existing* `RecurringCustomerItemID`. There is no create-a-mandate endpoint in the spec — a recurring item is created some other way (SUMIT's own UI/income-item flow), not via a documented API call. `list`/`cancel`/`update` of existing recurring items were already fully wired (`/api/payments/recurring/*`, `payment_request_service.py`) before this audit — nothing to build for the "manage existing mandates" half of 8.3.
+- **Chargeback alerts**: no chargeback-specific endpoint or webhook trigger type (`/triggers/triggers/subscribe/`'s `TriggerType` is generic CRM-entity CreateOrUpdate/Create/Update/Archive/Delete, nothing payment-specific). The only signal is `Payment.Status`/`Payment.ValidPayment` from `/billing/payments/list/`, and `Status` is undocumented free text — any detection would be a heuristic guess without real chargeback data to validate against.
+
+**Bug found while auditing 8.3**: `POST /api/payments/recurring/{id}/charge` routed directly to `charge_recurring()` — a documented Not-Supported Stub that always raises a bare `Exception` (not `SumitAPIError`), so no handler caught it and any call would have leaked an unhandled 500 in production. Removed the route (kept the stub method, same as every other Not-Supported Stub — documented, never routed).

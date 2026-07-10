@@ -113,6 +113,13 @@ async def extract_receipt(
     """
     if not content:
         raise VisionExtractionError("קובץ ריק — אין מה לחלץ")
+    if not settings.ocr_llm_enabled:
+        # החלטת משתמש (2026-07-06): מפתח ה-Anthropic משרת את הצ'אטבוט בלבד.
+        # OCR בראייה ממוחשבת מופעל רק בהסכמה מפורשת (OCR_LLM_ENABLED=true).
+        raise VisionExtractionError(
+            "חילוץ OCR מבוסס-LLM כבוי — מפתח ה-API מוקצה לעוזר ה-AI בלבד. "
+            "להפעלה: OCR_LLM_ENABLED=true"
+        )
     if media_type is None:
         media_type = "application/pdf" if _looks_like_pdf(content) else "image/png"
 

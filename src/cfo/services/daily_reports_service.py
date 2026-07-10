@@ -175,7 +175,7 @@ def vat_report(db, organization_id: int, year: int, month: int) -> dict[str, Any
         "sales_documents": sales_docs,
         "purchase_documents": purchase_docs,
         "derived": True,
-        "disclaimer": DISCLAIMER + " מע\"מ נגזר 18% (ה-API של SUMIT אינו חושף פירוק VAT).",
+        "disclaimer": DISCLAIMER,
     }
 
 
@@ -194,7 +194,7 @@ def supplier_breakdown(db, organization_id: int, year: int, month: int) -> dict[
             continue
         name = "ספק"
         if bill.vendor_id:
-            c = db.query(Contact).get(bill.vendor_id)
+            c = db.get(Contact, bill.vendor_id)
             if c:
                 name = c.name or name
         totals[name] = totals.get(name, 0.0) + _f(bill.total)

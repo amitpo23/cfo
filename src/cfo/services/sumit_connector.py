@@ -171,17 +171,31 @@ class SumitConnector(AccountingConnector):
         cursor: Optional[str] = None,
         page_size: int = 100,
     ) -> FetchResult:
+        """Derive the customer roster from real invoice documents.
+
+        Previously used SUMIT's get_debt_report() to discover customers — found
+        via a live data-parity check (2026-07-04) to be badly incomplete (2
+        generic "Unknown"-named debt rows for a company with 15 real, named,
+        open invoices), because of a reverse-engineered DebitSource/CreditSource
+        payload that only captures a narrow subset of debt (see get_debt_report's
+        own docstring). SUMIT has no bulk "list all customers" endpoint (confirmed
+        against the swagger spec), but list_documents() already returns the real
+        customer_id + customer_name for every document — fetch_invoices() already
+        uses the same customer_id as contact_external_id. Deriving customers from
+        the same source keeps both in sync and fixes every invoice's contact_id
+        silently resolving to None (ledger_service._upsert_invoice only sets
+        contact_id when a matching Contact row already exists) whenever a real
+        customer never happened to appear in the debt report.
+        """
         try:
             client = await self._get_client()
             async with client:
-                # Use SUMIT's debt report to get customer list
-                from ..integrations.sumit_models import DebtReportRequest
-                debts = await client.get_debt_report(DebtReportRequest())
+                documents = await self._list_documents_all(client, "0", updated_since)
 
                 contacts = []
                 seen_ids = set()
-                for debt in debts:
-                    cust_id = str(debt.get("customer_id", debt.get("id", "")))
+                for doc in documents:
+                    cust_id = str(doc.customer_id) if getattr(doc, "customer_id", None) else None
                     if not cust_id or cust_id in seen_ids:
                         continue
                     seen_ids.add(cust_id)
@@ -189,16 +203,14 @@ class SumitConnector(AccountingConnector):
                     contacts.append(NormalizedContact(
                         external_id=cust_id,
                         contact_type="customer",
-                        name=debt.get("customer_name", "Unknown"),
-                        email=debt.get("email"),
-                        phone=debt.get("phone"),
-                        raw_data=debt,
+                        name=getattr(doc, "customer_name", None) or "Unknown",
+                        raw_data=doc.__dict__ if hasattr(doc, "__dict__") else {},
                     ))
 
                 return FetchResult(items=contacts, has_more=False)
         except Exception as e:
             logger.error("Failed to fetch customers from SUMIT: %s", e)
-            return FetchResult(items=[], has_more=False)
+            return FetchResult(items=[], has_more=False, error=str(e))
 
     async def fetch_vendors(
         self,
@@ -223,7 +235,13 @@ class SumitConnector(AccountingConnector):
           offset that never advances.
         """
         from ..integrations.sumit_models import DocumentListRequest
-        from_date = updated_since.date() if updated_since else date(2015, 1, 1)
+        from datetime import timedelta
+        # Found live (2026-07-04 data-parity check): this used to be
+        # date.today() - timedelta(days=365), contradicting the docstring above
+        # -- a real customer whose only invoices were from 2024 (>365 days back)
+        # was silently invisible to every full sync. 10 years comfortably covers
+        # any realistic business history without an unbounded/undated query.
+        from_date = updated_since.date() if updated_since else date.today() - timedelta(days=3650)
         all_docs, seen, offset = [], set(), 0
         for _ in range(max_pages):
             page = await client.list_documents(DocumentListRequest(
@@ -254,10 +272,23 @@ class SumitConnector(AccountingConnector):
         try:
             client = await self._get_client()
             async with client:
-                # SUMIT numeric DocumentType code 0 = Invoice (income/sales documents).
-                # Filtering by the enum *name* proved unreliable; the numeric code is exact.
-                # Paginated + full-history fetch (see _list_documents_all).
-                documents = await self._list_documents_all(client, "0", updated_since)
+                # SUMIT income documents live under TWO numeric DocumentType codes:
+                # 0 = Invoice (חשבונית מס) and 1 = InvoiceAndReceipt (חשבונית מס קבלה).
+                # Both are VAT-bearing revenue documents. Live finding (2026-07-06, org
+                # 439... / Omer-Oded): a 0-only filter silently dropped ₪124,605 of type-1
+                # income. Fetch both, skip drafts, dedupe by document id.
+                docs_0 = await self._list_documents_all(client, "0", updated_since)
+                docs_1 = await self._list_documents_all(client, "1", updated_since)
+                seen_ids: set = set()
+                documents = []
+                for doc in docs_0 + docs_1:
+                    did = str(getattr(doc, "id", "") or "")
+                    if did and did in seen_ids:
+                        continue
+                    seen_ids.add(did)
+                    if str(getattr(doc, "status", "") or "").lower() == "draft":
+                        continue  # טיוטה — לא נכנסת לספרים
+                    documents.append(doc)
 
                 invoices = []
                 for doc in documents:
@@ -286,7 +317,7 @@ class SumitConnector(AccountingConnector):
                 return FetchResult(items=invoices, has_more=False)
         except Exception as e:
             logger.error("Failed to fetch invoices from SUMIT: %s", e)
-            return FetchResult(items=[], has_more=False)
+            return FetchResult(items=[], has_more=False, error=str(e))
 
     async def fetch_bills(
         self,
@@ -297,11 +328,24 @@ class SumitConnector(AccountingConnector):
         try:
             client = await self._get_client()
             async with client:
-                # SUMIT numeric DocumentType code 15 = ExpenseInvoice (supplier/expense
-                # documents). The name "ExpenseInvoice" returns nothing; the numeric code
-                # is the reliable filter for purchase/expense documents.
-                # Paginated + full-history fetch (see _list_documents_all).
-                documents = await self._list_documents_all(client, "15", updated_since)
+                # SUMIT expense documents live under TWO numeric DocumentType codes:
+                # 15 = ExpenseReceipt (includes filed receipts AND pending scan drafts)
+                # and 16 = ExpenseInvoice. Live parity audit (2026-07-05, org 439924597)
+                # proved the real books are type 15 (274 docs in 2026) while type 16 is
+                # nearly empty — the previous "16"-only filter (23353ca) would silently
+                # freeze bill sync. Fetch both, skip drafts, dedupe by document id.
+                docs_15 = await self._list_documents_all(client, "15", updated_since)
+                docs_16 = await self._list_documents_all(client, "16", updated_since)
+                seen_ids: set = set()
+                documents = []
+                for doc in docs_15 + docs_16:
+                    did = str(getattr(doc, "id", "") or "")
+                    if did and did in seen_ids:
+                        continue
+                    seen_ids.add(did)
+                    if str(getattr(doc, "status", "") or "").lower() == "draft":
+                        continue  # טיוטת סריקה — סכומים ריקים, לא חומר לספרים
+                    documents.append(doc)
 
                 bills = []
                 for doc in documents:
@@ -328,7 +372,7 @@ class SumitConnector(AccountingConnector):
                 return FetchResult(items=bills, has_more=False)
         except Exception as e:
             logger.error("Failed to fetch bills from SUMIT: %s", e)
-            return FetchResult(items=[], has_more=False)
+            return FetchResult(items=[], has_more=False, error=str(e))
 
     async def fetch_payments(
         self,
@@ -389,7 +433,7 @@ class SumitConnector(AccountingConnector):
                 return FetchResult(items=payments, has_more=False)
         except Exception as e:
             logger.error("Failed to fetch payments from SUMIT: %s", e)
-            return FetchResult(items=[], has_more=False)
+            return FetchResult(items=[], has_more=False, error=str(e))
 
     async def fetch_bank_transactions(
         self,
@@ -427,6 +471,11 @@ class SumitConnector(AccountingConnector):
 
                 return FetchResult(items=transactions, has_more=False)
         except Exception as e:
+            # load_billing_transactions() is permanently unsupported by the real
+            # SUMIT API (see its own docstring) -- this fails identically for
+            # every org regardless of credential validity, so it must not be
+            # treated as a credential/health signal (unlike the other fetch_*
+            # methods below, whose failures are genuinely org-specific).
             logger.error("Failed to fetch bank transactions from SUMIT: %s", e)
             return FetchResult(items=[], has_more=False)
 

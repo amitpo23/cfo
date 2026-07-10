@@ -7,7 +7,7 @@ Expense classifier.
    האמין ביותר, כי שם הספק להוצאות שיובאו מ-SUMIT הוא לרוב גנרי ("ספק כללי").
 2. שם ספק / תיאור / מספר חשבונית — סיווג מבוסס מילות-מפתח (עברית + אנגלית).
 """
-from typing import Optional
+from typing import Dict, List, Optional
 
 # קטגוריה -> מילות מפתח (עברית + אנגלית). הסדר קובע עדיפות.
 CATEGORY_KEYWORDS = {
@@ -81,6 +81,24 @@ SUMIT_ITEM_CATEGORY_MAP = [
 
 VALID_CATEGORIES = set(CATEGORY_KEYWORDS.keys()) | {"office", "petty_cash", "other"}
 
+# שמות תצוגה בעברית לקטגוריות המובנות — משמש את GET /expenses/categories כדי
+# להציג את הכרטיסים המובנים לצד הכרטיסים המותאמים אישית של הארגון.
+CATEGORY_NAMES_HE: Dict[str, str] = {
+    "rent": "שכירות",
+    "salary": "משכורות",
+    "utilities": "חשמל/מים/תקשורת",
+    "professional": "שירותים מקצועיים",
+    "marketing": "שיווק ופרסום",
+    "travel": "נסיעות ורכב",
+    "equipment": "ציוד",
+    "insurance": "ביטוח",
+    "office": "הוצאות משרד",
+    "materials": "חומרי גלם/סחורה",
+    "services": "שירותים ומנויים",
+    "petty_cash": "קופה קטנה",
+    "other": "אחר",
+}
+
 
 def _classify_by_sumit_item(item_name: str) -> Optional[str]:
     """מיפוי שם פריט SUMIT -> קטגוריה. מחזיר None אם לא נמצאה התאמה."""
@@ -98,19 +116,32 @@ def classify_expense(
     description: Optional[str] = None,
     invoice_number: Optional[str] = None,
     sumit_item_name: Optional[str] = None,
+    org_categories: Optional[List[Dict]] = None,
 ) -> str:
-    """מחזיר קטגוריה (אחת מ-VALID_CATEGORIES). ברירת מחדל: 'other'.
+    """מחזיר קטגוריה (אחת מ-VALID_CATEGORIES, או מפתח כרטיס מותאם אישית).
+    ברירת מחדל: 'other'.
 
-    עדיפות: שם פריט SUMIT -> מילות מפתח בשם ספק/תיאור/חשבונית.
+    עדיפות: שם פריט SUMIT -> מילות מפתח של כרטיסים מותאמים אישית לארגון
+    (org_categories) -> מילות מפתח מובנות בשם ספק/תיאור/חשבונית.
+
+    org_categories: רשימת dict-ים בצורה {"key": ..., "keywords": [...]} —
+    הכרטיסים המותאמים אישית של הארגון (ExpenseCategory). מתקבלת כפרמטר
+    ולא נטענת כאן מה-DB כדי לשמור על הפונקציה הזו טהורה וללא תלות ב-DB.
     """
-    # 1. שם פריט SUMIT — האות האמין
+    # 1. שם פריט SUMIT — האות האמין ביותר
     by_item = _classify_by_sumit_item(sumit_item_name) if sumit_item_name else None
     if by_item and by_item != "other":
         return by_item
 
-    # 2. מילות מפתח בשם ספק / תיאור
+    # 2. מילות מפתח בשם ספק / תיאור / חשבונית
     text = " ".join(filter(None, [supplier_name, description, invoice_number])).lower()
     if text.strip():
+        # 2א. כרטיסים מותאמים אישית לארגון — גוברים על המובנות
+        for cat in org_categories or []:
+            keywords = cat.get("keywords") or []
+            if any(str(kw).lower() in text for kw in keywords):
+                return cat["key"]
+        # 2ב. מילות מפתח מובנות
         for category, keywords in CATEGORY_KEYWORDS.items():
             if any(kw.lower() in text for kw in keywords):
                 return category

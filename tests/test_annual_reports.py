@@ -1,8 +1,9 @@
 """Tests for annual report DRAFTS (1301/1214) — derived from the ledger."""
 from datetime import date
+from decimal import Decimal
 
 from cfo.database import SessionLocal
-from cfo.models import Invoice, Bill, InvoiceStatus, BillStatus
+from cfo.models import Invoice, Bill, Expense, InvoiceStatus, BillStatus
 from cfo.services import annual_report_service
 
 
@@ -54,6 +55,57 @@ def test_form_1301_individual_progressive(fresh_org):
         assert f["gross_income_tax"] == 6000.0
         # Credit 2.25 * 2904 = 6534 > gross -> net tax 0.
         assert f["income_tax_due"] == 0.0
+    finally:
+        db.close()
+
+
+def test_form_1301_no_deduction_percent_unchanged(fresh_org):
+    """Wave 2 item 7.7: an Expense with no deduction_percent must not change the
+    1301 output at all vs. the pre-existing behavior (honest null = no-op)."""
+    org_id = fresh_org()["org_id"]
+    _seed(org_id)
+    db = SessionLocal()
+    try:
+        db.add(Expense(
+            organization_id=org_id, source="ar-test", supplier_name="Office Supplies Co",
+            expense_date=date(2025, 5, 1), amount=Decimal("5000"), vat_amount=Decimal("900"),
+            total=Decimal("5900"), category="office", status="filed",
+            deduction_percent=None,
+        ))
+        db.commit()
+
+        rep = annual_report_service.form_1301(db, org_id, 2025, credit_points=2.25)
+        f = rep["fields"]
+        # Full 5000 recognized as expense -> business_income drops by 5000 from the
+        # no-expense baseline (60000 - 5000 = 55000), no add-back for the untagged expense.
+        assert f["business_income"] == 55000.0
+        assert f.get("non_deductible_expenses_addback", 0) == 0.0
+    finally:
+        db.close()
+
+
+def test_form_1301_partial_deduction_percent_adds_back_disallowed_portion(fresh_org):
+    """An Expense with deduction_percent=45 (e.g. vehicle) must only recognize 45%
+    for tax purposes — the other 55% is added back to taxable business_income,
+    even though the full amount was booked as an expense (real cash outflow)."""
+    org_id = fresh_org()["org_id"]
+    _seed(org_id)
+    db = SessionLocal()
+    try:
+        db.add(Expense(
+            organization_id=org_id, source="ar-test", supplier_name="Fuel Station",
+            expense_date=date(2025, 6, 1), amount=Decimal("10000"), vat_amount=Decimal("1800"),
+            total=Decimal("11800"), category="vehicle", status="filed",
+            deduction_percent=Decimal("45"),
+        ))
+        db.commit()
+
+        rep = annual_report_service.form_1301(db, org_id, 2025, credit_points=2.25)
+        f = rep["fields"]
+        # Book expense (full 10000) already reduced net profit to 50000; the 55%
+        # disallowed portion (5500) is added back -> taxable business_income = 55500.
+        assert f["non_deductible_expenses_addback"] == 5500.0
+        assert f["business_income"] == 55500.0
     finally:
         db.close()
 

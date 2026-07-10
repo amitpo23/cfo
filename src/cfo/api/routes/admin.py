@@ -4,19 +4,25 @@ Admin API routes
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 import secrets
 from urllib.parse import urlencode
+from datetime import date, datetime, timedelta, timezone
 
 from ...database import get_db_session
 from ...models import (
-    User, Organization, AuditLog,
+    User, Organization, AuditLog, IntegrationConnection, SyncRun,
     UserCreate, UserUpdate, UserResponse, UserLogin, GoogleLogin, Token,
     OrganizationCreate, OrganizationUpdate, OrganizationResponse,
-    UserRole, IntegrationType
+    UserRole, IntegrationType, SumitCompany, Invoice, Bill, BankTransaction,
+    Alert, Task, OnboardingTask, AlertStatus, TaskStatus,
 )
 from ...auth import verify_password, get_password_hash, create_access_token
+from ...config import settings
+from ...services.sync_engine import SyncEngine, get_connector_for_org
+from ...services.client_automation_service import mark_client_loop_result, run_post_sync_tasks
 from ..dependencies import (
     get_current_user, 
     get_super_admin, 
@@ -59,6 +65,40 @@ class CheckoutCreate(BaseModel):
     cancel_path: str = "/"
 
 
+def _to_float(value) -> float:
+    return float(value or 0)
+
+
+def _freshness_status(last_finished_at: Optional[datetime]) -> dict:
+    if not last_finished_at:
+        return {
+            "state": "never_synced",
+            "age_hours": None,
+            "label": "טרם סונכרן",
+            "is_stale": True,
+        }
+    now = datetime.now(timezone.utc)
+    finished = last_finished_at
+    if finished.tzinfo is None:
+        finished = finished.replace(tzinfo=timezone.utc)
+    age_hours = max((now - finished).total_seconds() / 3600, 0)
+    if age_hours <= 2:
+        state = "fresh"
+        label = "מעודכן"
+    elif age_hours <= 24:
+        state = "aging"
+        label = "דורש רענון"
+    else:
+        state = "stale"
+        label = "לא מעודכן"
+    return {
+        "state": state,
+        "age_hours": round(age_hours, 1),
+        "label": label,
+        "is_stale": age_hours > 24,
+    }
+
+
 async def _assert_registration_allowed(
     registration_code: Optional[str],
     checkout_session_id: Optional[str] = None,
@@ -68,7 +108,11 @@ async def _assert_registration_allowed(
 
     if checkout_session_id:
         if checkout_session_id.startswith("mock_") and getenv("VERCEL_ENV") != "production":
-            return
+            # Preview/dev: mock checkout satisfies payment. Skip VERCEL registration gate;
+            # still enforce registration_secret if one is explicitly configured.
+            if not settings.registration_secret:
+                return
+            # fall through to registration_secret check below
         if settings.stripe_secret_key and checkout_session_id.startswith("cs_"):
             import httpx
 
@@ -307,12 +351,12 @@ def _create_self_registered_user(
     is_first_user = db.query(User).first() is None
 
     # Every self-registered user gets an organization of their own (and is
-    # its admin), so integrations/credentials are isolated per tenant. The
-    # first user attaches to the default org, which may use env credentials.
+    # its admin), so integrations/credentials are isolated per tenant. On a
+    # fresh PostgreSQL database this row must be created before the user because
+    # the FK is enforced (SQLite tests historically hid that bootstrapping bug).
     if organization_id is None:
-        if is_first_user:
-            organization_id = 1
-        else:
+        org = db.query(Organization).filter(Organization.id == 1).first() if is_first_user else None
+        if org is None:
             org = Organization(
                 name=f"{full_name}",
                 business_type="financial_management",
@@ -332,7 +376,7 @@ def _create_self_registered_user(
             )
             db.add(org)
             db.flush()
-            organization_id = org.id
+        organization_id = org.id
 
     if (
         selected_plan or annual_revenue or annual_report_requested is not None
@@ -440,8 +484,7 @@ async def google_login(
     if user:
         if not user.is_active:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is disabled")
-        from datetime import datetime
-        user.last_login = datetime.utcnow()
+        user.last_login = datetime.now(timezone.utc)
         db.commit()
         db.refresh(user)
         return _token_for_user(user)
@@ -484,8 +527,7 @@ async def login(
         )
     
     # Update last login
-    from datetime import datetime
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now(timezone.utc)
     db.commit()
     
     # Log login
@@ -523,6 +565,7 @@ async def run_db_migrations(current_user: User = Depends(require_admin)):
     """
     from pathlib import Path
 
+    import sqlalchemy
     from alembic import command as alembic_command
     from alembic.config import Config as AlembicConfig
     from sqlalchemy import inspect as sa_inspect
@@ -533,21 +576,31 @@ async def run_db_migrations(current_user: User = Depends(require_admin)):
     cfg = AlembicConfig(str(root / "alembic.ini"))
     cfg.set_main_option("script_location", str(root / "alembic"))
 
+    from ...services.schema_sync import apply_additive
+
     inspector = sa_inspect(engine)
     tables = inspector.get_table_names()
-    if "users" in tables and "alembic_version" not in tables:
-        # Pre-Alembic database: schema already matches the baseline.
+    try:
+        if "users" in tables and "alembic_version" not in tables:
+            # Pre-Alembic database: schema already matches the baseline.
+            alembic_command.stamp(cfg, "head")
+            action = "stamped"
+        else:
+            alembic_command.upgrade(cfg, "head")
+            action = "upgraded"
+    except sqlalchemy.exc.DatabaseError as exc:  # create_all↔alembic: "already exists" וכדומה
+        if "already exists" not in str(exc).lower():
+            raise
         alembic_command.stamp(cfg, "head")
-        action = "stamped"
-    else:
-        alembic_command.upgrade(cfg, "head")
-        action = "upgraded"
+        action = f"stamped_after_conflict ({type(exc).__name__})"
+
+    schema_sync_report = apply_additive(engine)
 
     with engine.connect() as conn:
         from sqlalchemy import text
         revision = conn.execute(text("select version_num from alembic_version")).scalar()
 
-    return {"action": action, "current_revision": revision}
+    return {"action": action, "current_revision": revision, "schema_sync": schema_sync_report}
 
 
 @router.get("/auth/me", response_model=UserResponse, tags=["Auth"])
@@ -605,6 +658,293 @@ async def list_organizations(
     """רשימת כל הארגונים (רק super admin)"""
     orgs = db.query(Organization).offset(skip).limit(limit).all()
     return [OrganizationResponse.model_validate(org) for org in orgs]
+
+
+@router.get("/control/clients", tags=["Super Admin Control"])
+async def super_admin_clients_overview(
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """Global super-admin control plane over every tenant organization."""
+    orgs = db.query(Organization).order_by(Organization.id.asc()).all()
+    roster_by_org: Dict[int, SumitCompany] = {
+        row.target_organization_id: row
+        for row in db.query(SumitCompany).filter(
+            SumitCompany.target_organization_id.isnot(None),
+        ).all()
+    }
+    clients = []
+    invoice_stats = {
+        row.organization_id: row
+        for row in db.query(
+            Invoice.organization_id,
+            func.count(Invoice.id).label("count"),
+            func.coalesce(func.sum(Invoice.total), 0).label("total"),
+        ).group_by(Invoice.organization_id).all()
+    }
+    bill_stats = {
+        row.organization_id: row
+        for row in db.query(
+            Bill.organization_id,
+            func.count(Bill.id).label("count"),
+            func.coalesce(func.sum(Bill.total), 0).label("total"),
+        ).group_by(Bill.organization_id).all()
+    }
+    bank_stats = {
+        row.organization_id: row
+        for row in db.query(
+            BankTransaction.organization_id,
+            func.count(BankTransaction.id).label("count"),
+            func.sum(case((BankTransaction.is_reconciled.is_(False), 1), else_=0)).label("unreconciled_count"),
+        ).group_by(BankTransaction.organization_id).all()
+    }
+    alert_stats = {
+        row.organization_id: row
+        for row in db.query(
+            Alert.organization_id,
+            func.count(Alert.id).label("open_count"),
+        ).filter(
+            Alert.status.in_([AlertStatus.ACTIVE, AlertStatus.ACKNOWLEDGED])
+        ).group_by(Alert.organization_id).all()
+    }
+    task_stats = {
+        row.organization_id: row
+        for row in db.query(
+            Task.organization_id,
+            func.count(Task.id).label("open_count"),
+        ).filter(
+            Task.status.in_([TaskStatus.OPEN, TaskStatus.IN_PROGRESS])
+        ).group_by(Task.organization_id).all()
+    }
+    onboarding_stats = {
+        row.organization_id: row
+        for row in db.query(
+            OnboardingTask.organization_id,
+            func.count(OnboardingTask.id).label("total"),
+            func.sum(case((OnboardingTask.status == "completed", 1), else_=0)).label("completed"),
+            func.sum(case((OnboardingTask.status == "failed", 1), else_=0)).label("failed"),
+        ).group_by(OnboardingTask.organization_id).all()
+    }
+
+    for org in orgs:
+        today = date.today()
+        soon = today + timedelta(days=14)
+        roster = roster_by_org.get(org.id)
+        connections = db.query(IntegrationConnection).filter(
+            IntegrationConnection.organization_id == org.id,
+        ).all()
+        connection_statuses = {c.source: c.status for c in connections}
+        if org.id == 1 and settings.sumit_api_key and "sumit" not in connection_statuses:
+            connection_statuses["sumit"] = "env"
+
+        last_sync = db.query(SyncRun).filter(
+            SyncRun.organization_id == org.id,
+        ).order_by(SyncRun.created_at.desc()).first()
+
+        users_count = db.query(User).filter(User.organization_id == org.id).count()
+        active_connections = [
+            source for source, status_value in connection_statuses.items()
+            if status_value in {"active", "env", "ACTIVE"}
+        ]
+        inv = invoice_stats.get(org.id)
+        bills = bill_stats.get(org.id)
+        bank = bank_stats.get(org.id)
+        alerts = alert_stats.get(org.id)
+        tasks = task_stats.get(org.id)
+        onboarding = onboarding_stats.get(org.id)
+        revenue = float(inv.total or 0) if inv else 0.0
+        expenses = abs(float(bills.total or 0)) if bills else 0.0
+        net_profit = revenue - expenses
+        ar_open = _to_float(db.query(func.coalesce(func.sum(Invoice.balance), 0)).filter(
+            Invoice.organization_id == org.id,
+            Invoice.balance > 0,
+        ).scalar())
+        ap_open = _to_float(db.query(func.coalesce(func.sum(Bill.balance), 0)).filter(
+            Bill.organization_id == org.id,
+            Bill.balance > 0,
+        ).scalar())
+        overdue_ar = int(db.query(func.count(Invoice.id)).filter(
+            Invoice.organization_id == org.id,
+            Invoice.balance > 0,
+            Invoice.due_date.isnot(None),
+            Invoice.due_date < today,
+        ).scalar() or 0)
+        due_ap_14d = int(db.query(func.count(Bill.id)).filter(
+            Bill.organization_id == org.id,
+            Bill.balance > 0,
+            Bill.due_date.isnot(None),
+            Bill.due_date >= today,
+            Bill.due_date <= soon,
+        ).scalar() or 0)
+        unreconciled_count = int(bank.unreconciled_count or 0) if bank else 0
+        open_alerts = int(alerts.open_count or 0) if alerts else 0
+        open_tasks = int(tasks.open_count or 0) if tasks else 0
+        onboarding_total = int(onboarding.total or 0) if onboarding else 0
+        onboarding_completed = int(onboarding.completed or 0) if onboarding else 0
+        onboarding_failed = int(onboarding.failed or 0) if onboarding else 0
+        onboarding_pending = max(onboarding_total - onboarding_completed - onboarding_failed, 0)
+        freshness = _freshness_status(last_sync.finished_at if last_sync else None)
+        action_score = (
+            (1 if (last_sync and last_sync.error_summary) else 0)
+            + (1 if freshness["is_stale"] else 0)
+            + min(unreconciled_count, 10)
+            + min(overdue_ar, 10)
+            + min(due_ap_14d, 10)
+            + min(open_alerts, 10)
+            + min(open_tasks, 10)
+            + onboarding_failed
+            + onboarding_pending
+        )
+
+        clients.append({
+            "organization_id": org.id,
+            "name": org.name,
+            "roster_id": roster.id if roster else None,
+            "sumit_company_id": roster.company_id if roster else None,
+            "office_organization_id": roster.office_organization_id if roster else None,
+            "business_type": org.business_type,
+            "tax_id": org.tax_id,
+            "email": org.email,
+            "is_active": org.is_active,
+            "users_count": users_count,
+            "connections": active_connections,
+            "connection_statuses": connection_statuses,
+            "automation": (roster.raw_data or {}).get("automation", {}) if roster else {},
+            "roster_last_synced_at": roster.last_synced_at.isoformat() if roster and roster.last_synced_at else None,
+            "finance": {
+                "invoice_count": int(inv.count) if inv else 0,
+                "bill_count": int(bills.count) if bills else 0,
+                "bank_transaction_count": int(bank.count) if bank else 0,
+                "revenue": revenue,
+                "expenses": expenses,
+                "net_profit": net_profit,
+                "ar_open": ar_open,
+                "ap_open": ap_open,
+                "overdue_ar_count": overdue_ar,
+                "ap_due_14d_count": due_ap_14d,
+                "has_activity": bool((inv and inv.count) or (bills and bills.count) or (bank and bank.count)),
+            },
+            "freshness": freshness,
+            "work_queues": {
+                "unreconciled_bank_transactions": unreconciled_count,
+                "overdue_receivables": overdue_ar,
+                "payables_due_14d": due_ap_14d,
+                "open_alerts": open_alerts,
+                "open_tasks": open_tasks,
+                "onboarding_pending": onboarding_pending,
+                "onboarding_failed": onboarding_failed,
+                "action_score": action_score,
+            },
+            "reconciliation": {
+                "matched": int((bank.count or 0) - unreconciled_count) if bank else 0,
+                "txn_count": int(bank.count or 0) if bank else 0,
+                "unmatched_txns": unreconciled_count,
+                "coverage_pct": round((((bank.count or 0) - unreconciled_count) / bank.count) * 100, 1) if bank and bank.count else None,
+            },
+            "last_sync": {
+                "id": last_sync.id,
+                "source": last_sync.source,
+                "status": last_sync.status.value if last_sync.status else None,
+                "started_at": last_sync.started_at.isoformat() if last_sync.started_at else None,
+                "finished_at": last_sync.finished_at.isoformat() if last_sync.finished_at else None,
+                "error_summary": last_sync.error_summary,
+                "counts": last_sync.counts,
+            } if last_sync else None,
+        })
+
+    totals = {
+        "organizations": len(clients),
+        "roster_clients": sum(1 for c in clients if c["roster_id"] is not None),
+        "connected_sumit": sum(1 for c in clients if "sumit" in c["connections"]),
+        "connected_open_finance": sum(1 for c in clients if "open_finance" in c["connections"]),
+        "with_sync_errors": sum(1 for c in clients if (c["last_sync"] or {}).get("error_summary")),
+        "total_revenue": sum(c["finance"]["revenue"] for c in clients),
+        "total_expenses": sum(c["finance"]["expenses"] for c in clients),
+        "net_profit": sum(c["finance"]["net_profit"] for c in clients),
+        "with_financial_activity": sum(1 for c in clients if c["finance"]["has_activity"]),
+        "stale_clients": sum(1 for c in clients if c["freshness"]["is_stale"]),
+        "unreconciled_bank_transactions": sum(c["work_queues"]["unreconciled_bank_transactions"] for c in clients),
+        "overdue_receivables": sum(c["work_queues"]["overdue_receivables"] for c in clients),
+        "payables_due_14d": sum(c["work_queues"]["payables_due_14d"] for c in clients),
+        "open_alerts": sum(c["work_queues"]["open_alerts"] for c in clients),
+        "open_tasks": sum(c["work_queues"]["open_tasks"] for c in clients),
+        "onboarding_pending": sum(c["work_queues"]["onboarding_pending"] for c in clients),
+        "action_score": sum(c["work_queues"]["action_score"] for c in clients),
+    }
+    return {"operator_org_id": current_user.organization_id, "totals": totals, "clients": clients}
+
+
+@router.post("/control/clients/{org_id}/sync", tags=["Super Admin Control"])
+async def super_admin_sync_client(
+    org_id: int,
+    entity_types: Optional[str] = Query(None),
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """Run an on-demand sync for one tenant as super admin."""
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    targets = {
+        conn.source for conn in db.query(IntegrationConnection).filter(
+            IntegrationConnection.organization_id == org_id,
+            IntegrationConnection.status == "active",
+        ).all()
+    }
+    if org_id == 1 and settings.sumit_api_key:
+        targets.add("sumit")
+
+    if not targets:
+        return {"organization_id": org_id, "synced": 0, "results": []}
+
+    types = [t.strip() for t in entity_types.split(",") if t.strip()] if entity_types else None
+    results = []
+    for source in sorted(targets):
+        connector = None
+        try:
+            connector, conn_id, resolved = get_connector_for_org(db, org_id, source)
+            engine = SyncEngine(db, connector, org_id, resolved, conn_id)
+            run = await engine.run_full_sync(entity_types=types)
+            automation = await run_post_sync_tasks(
+                db, org_id, sources=[resolved], resume_onboarding=True
+            )
+            mark_client_loop_result(
+                db,
+                organization_id=org_id,
+                source=resolved,
+                ok=run.status.value in {"completed", "partial"},
+                summary={
+                    "sync_run_id": run.id,
+                    "status": run.status.value if run.status else None,
+                    "counts": run.counts,
+                    "error_summary": run.error_summary,
+                },
+                error=run.error_summary,
+            )
+            db.commit()
+            results.append({
+                "source": resolved,
+                "sync_run_id": run.id,
+                "status": run.status.value if run.status else None,
+                "counts": run.counts,
+                "error_summary": run.error_summary,
+                "automation": automation,
+            })
+        except Exception as exc:  # noqa: BLE001 - surfaced to operator dashboard
+            results.append({"source": source, "status": "error", "error": str(exc)})
+        finally:
+            if connector is not None:
+                try:
+                    await connector.close()
+                except Exception:
+                    pass
+
+    return {
+        "organization_id": org_id,
+        "synced": sum(1 for r in results if r.get("status") in {"completed", "partial"}),
+        "results": results,
+    }
 
 
 @router.get("/organizations/{org_id}", response_model=OrganizationResponse, tags=["Organizations"])

@@ -114,6 +114,11 @@ class FetchResult:
     has_more: bool = False
     next_cursor: Optional[str] = None
     total_count: Optional[int] = None
+    error: Optional[str] = None
+    # Seconds to wait before retrying, when the connector can read a
+    # Retry-After response header on a transient failure. Honored by
+    # SyncEngine._fetch_with_retry instead of the default backoff.
+    retry_after: Optional[float] = None
 
 
 class AccountingConnector(ABC):

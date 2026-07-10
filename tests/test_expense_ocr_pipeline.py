@@ -226,3 +226,16 @@ def test_ocr_extracts_verifies_and_files(client, acc, monkeypatch):
     assert calls["filed"]["supplier"] == "שופרסל בע\"מ"
     assert calls["canceled"] == "DOC-OK"               # הטיוטה המקורית בוטלה
     assert round(calls["filed"]["vat"], 2) == round(104.90 - 104.90 / 1.18, 2)
+
+
+def test_llm_ocr_disabled_by_default_api_reserved_for_chat(monkeypatch):
+    """החלטת משתמש: מפתח ה-API משרת את עוזר ה-AI בלבד — OCR-LLM כבוי כברירת מחדל."""
+    import asyncio
+    import pytest as _pytest
+    from cfo.config import settings
+    from cfo.services.vision_extractor import extract_receipt, VisionExtractionError
+
+    assert settings.ocr_llm_enabled is False, "ברירת המחדל חייבת להיות כבוי"
+    monkeypatch.setattr(settings, "anthropic_api_key", "test-key")
+    with _pytest.raises(VisionExtractionError, match="כבוי"):
+        asyncio.run(extract_receipt(b"%PDF-1.4 fake"))

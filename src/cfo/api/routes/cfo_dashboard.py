@@ -91,7 +91,7 @@ async def get_ar_invoices(
     for inv in invoices:
         contact_name = None
         if inv.contact_id:
-            contact = db.query(Contact).get(inv.contact_id)
+            contact = db.get(Contact, inv.contact_id)
             if contact:
                 contact_name = contact.name
 

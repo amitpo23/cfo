@@ -8,11 +8,13 @@ where the withholding (102) report had no employee data source.
 """
 from __future__ import annotations
 
+import calendar
 from datetime import date, datetime
 from typing import Any, Optional
 
 from ..models import Employee, Payslip
 from .calculators import payslip_components
+from . import ledger_service
 
 
 # ---------------------------------------------------------------------- #
@@ -52,6 +54,20 @@ def run_payroll(db, organization_id: int, year: int, month: int) -> dict[str, An
             setattr(row, k, v)
         for k in totals:
             totals[k] += comp.get(k, 0)
+
+        deductions = comp["income_tax"] + comp["ni_employee"] + comp["health_tax"] + comp["pension_employee"]
+        last_day = calendar.monthrange(year, month)[1]
+        ledger_service.add_payroll_entry(
+            db, organization_id,
+            entry_date=date(year, month, last_day),
+            memo=f"שכר {emp.name} {year}-{month:02d}",
+            lines=[
+                {"account": "5100", "debit": comp["gross"], "description": "הוצאות שכר"},
+                {"account": "2300", "credit": deductions, "description": "ניכויי שכר לתשלום"},
+                {"account": "2110", "credit": comp["net"], "description": "שכר נטו לתשלום"},
+            ],
+            external_id=f"payroll:{organization_id}:{emp.id}:{year}-{month:02d}",
+        )
     db.commit()
     totals = {k: round(v, 2) for k, v in totals.items()}
     return {"year": year, "month": month, "employees": len(employees),

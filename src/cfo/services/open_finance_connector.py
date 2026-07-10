@@ -176,7 +176,7 @@ def _account_balance(item: dict[str, Any]) -> Decimal:
         first = balances[0]
         if isinstance(first, dict):
             return _decimal(first.get("amount"))
-    return _decimal(item.get("creditLimit") if item.get("creditLimit") else 0)
+    return _decimal(0)
 
 
 def _balance_currency(item: dict[str, Any]) -> Optional[str]:

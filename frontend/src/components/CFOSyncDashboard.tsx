@@ -50,9 +50,35 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
   const { data: integrationStatus } = useQuery<{
     configured: Record<string, boolean>;
     connections: Record<string, string>;
+    last_sync_errors?: Record<string, string>;
   }>({
     queryKey: ['integration-status'],
     queryFn: () => apiService.get('/integration/status'),
+  });
+
+  const sumitSyncError = integrationStatus?.last_sync_errors?.sumit;
+  const sumitHealthy = Boolean(integrationStatus?.configured?.sumit) && !sumitSyncError;
+
+  const { data: upayStatus } = useQuery<{ connected: boolean }>({
+    queryKey: ['upay-status'],
+    queryFn: () => apiService.get('/payments/upay/status'),
+    enabled: !!integrationStatus?.configured?.sumit,
+  });
+
+  const [upayEmail, setUpayEmail] = React.useState('');
+  const [upayPassword, setUpayPassword] = React.useState('');
+
+  const upaySetupMutation = useMutation({
+    mutationFn: () =>
+      apiService.post('/payments/upay/setup', {
+        email: upayEmail,
+        password: upayPassword,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['upay-status'] });
+      setUpayEmail('');
+      setUpayPassword('');
+    },
   });
 
   const [sumitKey, setSumitKey] = React.useState('');
@@ -130,7 +156,7 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
       description="מרכז הפעלה שמוודא שהמערכת מקבלת נתונים, מריצה סנכרונים, בודקת חיבורים ושומרת היסטוריית ריצות לכל ארגון בנפרד."
       icon={Database}
       metrics={[
-        { label: 'הנהלת חשבונות', value: integrationStatus?.configured?.sumit ? 'מחובר' : 'לא מוגדר', tone: integrationStatus?.configured?.sumit ? 'emerald' : 'amber' },
+        { label: 'הנהלת חשבונות', value: sumitHealthy ? 'מחובר' : (sumitSyncError ? 'שגיאת חיבור' : 'לא מוגדר'), tone: sumitHealthy ? 'emerald' : (sumitSyncError ? 'rose' : 'amber') },
         { label: 'נתוני בנק', value: integrationStatus?.configured?.open_finance ? 'מחובר' : 'לא מוגדר', tone: integrationStatus?.configured?.open_finance ? 'emerald' : 'amber' },
         { label: 'ריצות אחרונות', value: String(runs?.length || 0), tone: 'blue' },
         { label: 'מצב אבטחה', value: integrationStatus?.configured?.security ? 'תקין' : 'לבדיקה', tone: integrationStatus?.configured?.security ? 'emerald' : 'rose' },
@@ -152,9 +178,9 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
           darkMode={darkMode}
           icon={Database}
           label="מסמכים"
-          value={integrationStatus?.configured?.sumit ? 'מוכן' : 'דורש הגדרה'}
-          detail="חשבוניות, קבלות, ספקים ותשלומים"
-          tone={integrationStatus?.configured?.sumit ? 'emerald' : 'amber'}
+          value={sumitHealthy ? 'מוכן' : (sumitSyncError ? 'שגיאת חיבור' : 'דורש הגדרה')}
+          detail={sumitSyncError ? sumitSyncError : "חשבוניות, קבלות, ספקים ותשלומים"}
+          tone={sumitHealthy ? 'emerald' : (sumitSyncError ? 'rose' : 'amber')}
         />
         <MetricCard
           darkMode={darkMode}
@@ -176,9 +202,9 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
           darkMode={darkMode}
           icon={AlertTriangle}
           label="שגיאות"
-          value={String((runs || []).filter((run) => run.status === 'failed').length)}
-          detail="ריצות שנכשלו בתצוגה האחרונה"
-          tone={(runs || []).some((run) => run.status === 'failed') ? 'rose' : 'emerald'}
+          value={String((runs || []).filter((run) => run.status === 'failed' || run.status === 'partial').length)}
+          detail="ריצות שנכשלו או הושלמו חלקית בתצוגה האחרונה"
+          tone={(runs || []).some((run) => run.status === 'failed' || run.status === 'partial') ? 'rose' : 'emerald'}
         />
       </div>
 
@@ -275,6 +301,18 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
             <h2 className="text-lg font-semibold">Open Finance Credentials</h2>
             {configuredBadge(integrationStatus?.configured?.open_finance)}
           </div>
+          <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+            שלושת השדות מתקבלים ישירות מ-Open Finance במהלך תהליך ה-onboarding
+            העסקי מולם (לא דרך רצף) — פנו אליהם להשלמת ההתקשרות וקבלת הפרטים.
+            עיינו ב-<a
+              href="https://docs.open-finance.ai/reference"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              התיעוד הרשמי שלהם
+            </a> למידע נוסף.
+          </p>
           <div className="space-y-3">
             <input
               type="text"
@@ -314,6 +352,53 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
           </div>
         </FinanceCard>
       </div>
+
+      {/* Upay wallet activation — required before payment links can return a real URL */}
+      {integrationStatus?.configured?.sumit && (
+        <div className="grid grid-cols-1 gap-6">
+          <FinanceCard darkMode={darkMode}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">חשבון Upay (סליקת אשראי)</h2>
+              {configuredBadge(upayStatus?.connected)}
+            </div>
+            <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              קישור חשבון Upay קיים לחברת ה-SUMIT שלכם — נדרש כדי ש"קישור תשלום"
+              בעמוד גיול הלקוחות יחזיר עמוד תשלום אמיתי. הסיסמה מועברת ל-SUMIT
+              בלבד ואינה נשמרת ברצף.
+            </p>
+            <div className="space-y-3 max-w-md">
+              <input
+                type="email"
+                value={upayEmail}
+                onChange={(e) => setUpayEmail(e.target.value)}
+                placeholder="אימייל חשבון Upay"
+                className={inputClass}
+              />
+              <input
+                type="password"
+                value={upayPassword}
+                onChange={(e) => setUpayPassword(e.target.value)}
+                placeholder="סיסמת חשבון Upay"
+                className={inputClass}
+              />
+              <button
+                type="button"
+                onClick={() => upaySetupMutation.mutate()}
+                disabled={!upayEmail || !upayPassword || upaySetupMutation.isPending}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium disabled:opacity-50"
+              >
+                {upaySetupMutation.isPending ? 'מקשר...' : 'קשר חשבון Upay'}
+              </button>
+              {upaySetupMutation.isSuccess && (
+                <p className="text-sm text-green-600">החשבון קושר בהצלחה.</p>
+              )}
+              {upaySetupMutation.isError && (
+                <p className="text-sm text-red-600">הקישור נכשל. בדקו את הפרטים ונסו שוב.</p>
+              )}
+            </div>
+          </FinanceCard>
+        </div>
+      )}
 
       {/* Sync Runs */}
       <FinanceCard darkMode={darkMode} title="היסטוריית סנכרון" subtitle="כל ריצה מתועדת עם מקור, סוג, משך ותוצאות" icon={Clock}>

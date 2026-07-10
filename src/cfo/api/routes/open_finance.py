@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
@@ -373,7 +373,7 @@ async def set_insight_status(
         raise HTTPException(404, "Insight not found")
     row.status = status
     if status == "resolved":
-        row.resolved_at = datetime.utcnow()
+        row.resolved_at = datetime.now(timezone.utc)
     db.commit()
     return {"id": insight_id, "status": status}
 
@@ -834,7 +834,7 @@ async def webhook(
             err = event.get("connectionError")
             if isinstance(err, dict) and err.get("message"):
                 row.last_error = err["message"]
-            row.last_refresh_at = datetime.utcnow()
+            row.last_refresh_at = datetime.now(timezone.utc)
             db.commit()
 
     # --- Payment Status Change: {paymentId, paymentStatus, userId, orgId, ...}
@@ -860,8 +860,15 @@ async def webhook(
         else:
             _upsert_open_finance_payment(db, org_id, payment_id, event)
 
+    # M1b — bidirectional webhooks: also feed the event into the targeted
+    # delta-sync service (SyncEngine, scoped entity types) so a completed
+    # bank connection or payment update is reflected without waiting for the
+    # next cron poll. Never allowed to affect the ack below.
+    from ...services.webhook_delta_sync import handle_open_finance_event
+    delta_sync_result = await handle_open_finance_event(db, event)
+
     logger.info("Open Finance webhook received: keys=%s", list(event.keys()))
-    return {"received": True}
+    return {"received": True, "delta_sync": delta_sync_result}
 
 
 # ---------------------------------------------------------------------- #

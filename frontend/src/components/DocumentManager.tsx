@@ -8,11 +8,15 @@ import { format } from 'date-fns';
 import apiService from '../services/api';
 
 interface Document {
-  document_id: string;
-  document_number: string;
+  id?: number;
+  external_id?: string;
+  document_id?: string;
+  document_number?: string;
   document_type: string;
-  customer_id: string;
-  total_amount: number;
+  document_label?: string;
+  customer_id?: string;
+  total_amount?: number;
+  total?: number;
   status: string;
   issue_date: string;
   due_date?: string;
@@ -38,7 +42,8 @@ export const DocumentManager: React.FC = () => {
     queryKey: ['documents', filterType],
     queryFn: async (): Promise<Document[]> => {
       const params = filterType !== 'all' ? { document_type: filterType } : {};
-      return apiService.listDocuments(params);
+      const res: any = await apiService.listDocuments(params);
+      return res.data || res;
     },
     enabled: isSumitConfigured,
   });
@@ -132,18 +137,18 @@ export const DocumentManager: React.FC = () => {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {documents?.map((doc: Document) => (
-                <tr key={doc.document_id} className="hover:bg-gray-50">
+                <tr key={doc.id || doc.document_id || doc.external_id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                    {doc.document_number}
+                    {doc.document_number || doc.external_id || doc.id}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {doc.document_type}
+                    {doc.document_label || doc.document_type}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {format(new Date(doc.issue_date), 'MMM dd, yyyy')}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ₪{doc.total_amount.toFixed(2)}
+                    ₪{Number(doc.total ?? doc.total_amount ?? 0).toFixed(2)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span
@@ -159,7 +164,8 @@ export const DocumentManager: React.FC = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <div className="flex justify-end gap-2">
                       <button
-                        onClick={() => downloadPdf(doc.document_id)}
+                        onClick={() => downloadPdf(doc.external_id || doc.document_id || '')}
+                        disabled={!doc.external_id && !doc.document_id}
                         className="text-gray-600 hover:text-primary-600"
                         title="Download PDF"
                       >
@@ -170,7 +176,7 @@ export const DocumentManager: React.FC = () => {
                           const email = prompt('Enter email address:');
                           if (email) {
                             sendDocumentMutation.mutate({
-                              documentId: doc.document_id,
+                              documentId: String(doc.id || doc.document_id || doc.external_id),
                               email,
                             });
                           }
@@ -209,6 +215,22 @@ const DOCUMENT_TYPES: { value: string; label: string }[] = [
   { value: 'credit_note', label: 'חשבונית זיכוי' },
 ];
 
+interface CreatedDocumentResult {
+  id: number;
+  document_label?: string;
+  document_number?: string | null;
+  external_id?: string | null;
+  total?: number;
+  status?: string | null;
+  sumit?: { pdf_url?: string | null } | null;
+}
+
+interface ContactSuggestion {
+  id: number;
+  name: string;
+  email?: string | null;
+}
+
 const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [items, setItems] = useState<DocumentItem[]>([
     { description: '', quantity: 1, price: 0 },
@@ -217,11 +239,27 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [sendToSumit, setSendToSumit] = useState(true);
+  const [result, setResult] = useState<CreatedDocumentResult | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Autocomplete against existing contacts -- picking a real match avoids
+  // creating a near-duplicate customer in SUMIT on a slightly different
+  // spelling (the server also resolves-or-creates by exact name, but
+  // showing suggestions helps the user pick the right existing one).
+  const { data: contactSuggestions } = useQuery({
+    queryKey: ['contacts-search', customerName],
+    queryFn: () =>
+      apiService.get<{ data: ContactSuggestion[] }>(
+        `/contacts?query=${encodeURIComponent(customerName)}`
+      ),
+    enabled: customerName.trim().length >= 2 && showSuggestions,
+    select: (res) => res.data,
+  });
 
   const queryClient = useQueryClient();
   const createMutation = useMutation({
     mutationFn: () =>
-      apiService.post('/financial/documents', {
+      apiService.post<{ data: CreatedDocumentResult }>('/financial/documents', {
         document_type: documentType,
         customer_id: customerName,
         customer_name: customerName,
@@ -238,10 +276,9 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
             discount: 0,
           })),
       }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['documents'] });
-      alert('המסמך הופק בהצלחה');
-      onClose();
+      setResult(res.data);
     },
     onError: (err: unknown) => {
       const msg =
@@ -250,6 +287,53 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
       alert(msg);
     },
   });
+
+  const downloadResultPdf = async () => {
+    if (!result?.external_id) return;
+    const blob = await apiService.downloadDocumentPdf(result.external_id);
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${result.document_number || result.external_id}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
+
+  if (result) {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+        <div className="bg-white rounded-lg max-w-md w-full p-6 text-center">
+          <h2 className="text-2xl font-bold text-gray-800 mb-2">המסמך הופק בהצלחה</h2>
+          <p className="text-gray-600 mb-1">{result.document_label}</p>
+          {result.document_number && (
+            <p className="text-lg font-semibold text-gray-900 mb-1">#{result.document_number}</p>
+          )}
+          <p className="text-2xl font-bold text-primary-600 mb-6">₪{Number(result.total ?? 0).toFixed(2)}</p>
+          <div className="flex justify-center gap-3">
+            {(result.sumit?.pdf_url || result.external_id) && (
+              <button
+                onClick={() =>
+                  result.sumit?.pdf_url ? window.open(result.sumit.pdf_url, '_blank') : downloadResultPdf()
+                }
+                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
+              >
+                <Download size={18} />
+                הורד PDF
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+            >
+              סגור
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const canSubmit =
     customerName.trim().length > 0 &&
@@ -294,7 +378,7 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
                 ))}
               </select>
             </div>
-            <div>
+            <div className="relative">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 לקוח / ספק
               </label>
@@ -302,9 +386,33 @@ const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => 
                 type="text"
                 placeholder="שם הלקוח/ספק"
                 value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
+                onChange={(e) => {
+                  setCustomerName(e.target.value);
+                  setShowSuggestions(true);
+                }}
+                onFocus={() => setShowSuggestions(true)}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+                autoComplete="off"
               />
+              {showSuggestions && !!contactSuggestions?.length && (
+                <ul className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                  {contactSuggestions.map((c) => (
+                    <li
+                      key={c.id}
+                      className="px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm"
+                      onMouseDown={() => {
+                        setCustomerName(c.name);
+                        if (c.email) setCustomerEmail(c.email);
+                        setShowSuggestions(false);
+                      }}
+                    >
+                      {c.name}
+                      {c.email && <span className="text-gray-400"> · {c.email}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">

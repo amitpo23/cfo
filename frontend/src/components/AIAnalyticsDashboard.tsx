@@ -62,14 +62,21 @@ interface AIRecommendation {
   effort_level: string;
   time_to_implement: string;
   priority_score: number;
+  is_illustrative?: boolean;
 }
 
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
+
+function extractErrorMessage(err: unknown): string {
+  const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+  return detail || 'משהו השתבש. נסה שוב.';
+}
 
 export const AIAnalyticsDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'anomalies' | 'risks' | 'insights' | 'recommendations' | 'chat'>('insights');
   const [chatQuestion, setChatQuestion] = useState('');
   const [chatHistory, setChatHistory] = useState<Array<{role: string, content: string}>>([]);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   // Fetch anomalies
   const { data: anomalies } = useQuery({
@@ -120,11 +127,14 @@ export const AIAnalyticsDashboard: React.FC = () => {
         { role: 'assistant', content: analysis }
       ]);
       setChatQuestion('');
+      setChatError(null);
     },
+    onError: (err) => setChatError(extractErrorMessage(err)),
   });
 
   const handleAskQuestion = () => {
     if (chatQuestion.trim()) {
+      setChatError(null);
       analysisMutation.mutate(chatQuestion);
     }
   };
@@ -473,6 +483,11 @@ export const AIAnalyticsDashboard: React.FC = () => {
                       {rec.category}
                     </span>
                     <h3 className="text-lg font-bold text-gray-900">{rec.title}</h3>
+                    {rec.is_illustrative !== false && (
+                      <span className="px-2 py-1 bg-amber-100 text-amber-800 rounded text-xs font-medium">
+                        לדוגמה בלבד — לא מבוסס על נתוני העסק שלך
+                      </span>
+                    )}
                   </div>
                   <p className="text-gray-600 mt-2">{rec.description}</p>
                   
@@ -581,7 +596,13 @@ export const AIAnalyticsDashboard: React.FC = () => {
               </div>
             )}
           </div>
-          
+
+          {chatError && (
+            <div className="mx-4 mb-2 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">
+              {chatError}
+            </div>
+          )}
+
           {/* Input */}
           <div className="border-t border-gray-200 p-4">
             <div className="flex gap-4">

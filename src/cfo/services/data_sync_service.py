@@ -19,6 +19,34 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 
+class SumitNotConfiguredError(ValueError):
+    """Raised when no SUMIT credentials are available for an organization.
+
+    Subclasses ValueError so any existing `except ValueError` handling around
+    DataSyncService (CLI, client_automation_service) keeps working unchanged.
+    An app-level FastAPI handler (see cfo.api) maps this to a clean HTTP 400
+    instead of letting it fall through as a raw 500.
+    """
+
+
+class LegacySyncRetiredError(ValueError):
+    """Raised by DataSyncService's Transaction-writing methods (sync_documents/
+    sync_payments/sync_billing_transactions, and sync_all which calls all three).
+
+    These write VAT-inclusive Transaction rows into the legacy Account/Transaction
+    pipeline -- the frozen system behind the documented P0 "two parallel accounting
+    systems" finding. run_post_sync_tasks stopped calling sync_all() (commit
+    2a052d1), and their only UI trigger (DataSyncDashboard.tsx) is itself orphaned
+    (zero references anywhere in App.tsx) -- but the routes/methods themselves were
+    still live and callable directly, so the freeze held only incidentally, not by
+    enforcement. Raising here closes that gap: any direct call (script, future UI)
+    now gets a clear error instead of silently resuming writes to a table every
+    other real reader has already migrated off of. The canonical path is
+    SyncEngine (writes Invoice/Bill/Expense with real net/VAT split), reachable via
+    POST /api/office/clients/{id}/sync or /api/sync (see sync_engine.py).
+    """
+
+
 class DataSyncService:
     """
     שירות סנכרון נתונים מ-SUMIT API למסד הנתונים המקומי
@@ -42,15 +70,19 @@ class DataSyncService:
             Organization.id == self.organization_id
         ).first()
 
-        if org and org.api_credentials:
-            api_key = org.api_credentials.get('api_key') or settings.sumit_api_key
-            company_id = org.api_credentials.get('company_id') or settings.sumit_company_id
-        else:
-            api_key = settings.sumit_api_key
-            company_id = settings.sumit_company_id
+        # Environment credentials belong to the default organization only —
+        # every other tenant must configure its own SUMIT key so its requests
+        # never silently run against another org's SUMIT account. Mirrors the
+        # gate in get_sumit_integration/get_connector_for_org (dependencies.py,
+        # sync_engine.py).
+        env_allowed = self.organization_id == 1
+        creds = org.api_credentials if org and org.api_credentials else {}
+
+        api_key = creds.get('api_key') or (settings.sumit_api_key if env_allowed else None)
+        company_id = creds.get('company_id') or (settings.sumit_company_id if env_allowed else None)
 
         if not api_key:
-            raise ValueError("SUMIT API key not configured")
+            raise SumitNotConfiguredError("SUMIT API key not configured for this organization")
 
         return SumitIntegration(api_key=api_key, company_id=company_id)
 
@@ -70,15 +102,16 @@ class DataSyncService:
         סנכרון מסמכים מ-SUMIT (חשבוניות, קבלות וכו')
         Sync documents from SUMIT (invoices, receipts, etc.)
 
-        DEPRECATED (פאזה 1): נתיב זה כותב שורות Transaction עם amount=doc.total
+        RETIRED (2026-07-04): נתיב זה כתב שורות Transaction עם amount=doc.total
         (כולל מע"מ) — מקור היסטורי לספירה כפולה ולמע"מ מנופח. הנתיב הקנוני הוא
-        SyncEngine שכותב Invoice/Bill/Expense עם פיצול net/VAT. הדוחות כבר מתעלמים
-        מ-Transaction שהוא הד-מסמך (לפי external_id), כך שאין ספירה כפולה בפלט.
-        ריטייר מלא (מעבר route ה-sync ל-SyncEngine) מתוכנן לפאזה 6.
+        SyncEngine שכותב Invoice/Bill/Expense עם פיצול net/VAT. חסום כעת ב-
+        LegacySyncRetiredError; ריטייר מלא בקוד (מחיקת השיטה) מתוכנן לפאזה 6.
         """
-        logger.warning(
-            "DataSyncService.sync_documents is deprecated (writes legacy VAT-inclusive "
-            "Transaction rows). Use SyncEngine (ledger) path. Reports de-dupe echoes by external_id."
+        raise LegacySyncRetiredError(
+            "DataSyncService.sync_documents is retired — it writes legacy "
+            "VAT-inclusive Transaction rows into the frozen Account/Transaction "
+            "pipeline (P0 finding). Use SyncEngine instead: "
+            "POST /api/office/clients/{id}/sync."
         )
         sumit = await self._get_sumit()
         
@@ -163,7 +196,15 @@ class DataSyncService:
         """
         סנכרון תשלומים מ-SUMIT
         Sync payments from SUMIT
+
+        RETIRED (2026-07-04): כותב Transaction לפייפליין הקפוא — ר' התיעוד
+        המלא ב-sync_documents/LegacySyncRetiredError.
         """
+        raise LegacySyncRetiredError(
+            "DataSyncService.sync_payments is retired — it writes legacy "
+            "Transaction rows into the frozen Account/Transaction pipeline "
+            "(P0 finding). Use SyncEngine instead: POST /api/office/clients/{id}/sync."
+        )
         sumit = await self._get_sumit()
         
         if not from_date:
@@ -228,7 +269,15 @@ class DataSyncService:
         """
         סנכרון עסקאות סליקה מ-SUMIT
         Sync billing/credit card transactions from SUMIT
+
+        RETIRED (2026-07-04): כותב Transaction לפייפליין הקפוא — ר' התיעוד
+        המלא ב-sync_documents/LegacySyncRetiredError.
         """
+        raise LegacySyncRetiredError(
+            "DataSyncService.sync_billing_transactions is retired — it writes "
+            "legacy Transaction rows into the frozen Account/Transaction pipeline "
+            "(P0 finding). Use SyncEngine instead: POST /api/office/clients/{id}/sync."
+        )
         sumit = await self._get_sumit()
         
         if not from_date:
@@ -390,9 +439,21 @@ class DataSyncService:
         """
         סנכרון מלא של כל הנתונים
         Full sync of all data from SUMIT
+
+        RETIRED (2026-07-04): קורא ל-sync_documents/sync_payments/
+        sync_billing_transactions, ששלושתם כותבים לפייפליין הקפוא. חוסמים כאן
+        (במקום לתת לשלושת ה-try/except הבאים לבלוע את LegacySyncRetiredError
+        כ-'error' per-section עם 200) כדי שקורא ל-route יקבל 400 חד-משמעי, לא
+        200 עם שגיאות קבורות בתוך dict.
         """
+        raise LegacySyncRetiredError(
+            "DataSyncService.sync_all is retired — it writes legacy Transaction "
+            "rows into the frozen Account/Transaction pipeline (P0 finding). "
+            "Use SyncEngine instead: POST /api/office/clients/{id}/sync or "
+            "/api/office/sync-all."
+        )
         results = {}
-        
+
         try:
             # סנכרון מסמכים
             results['documents'] = await self.sync_documents(from_date, to_date)

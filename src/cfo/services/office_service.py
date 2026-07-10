@@ -20,9 +20,14 @@ from typing import Any, Optional
 
 from ..models import (
     Organization, IntegrationConnection, IntegrationType, SumitCompany,
+    SyncRun, User,
 )
 from .credentials_vault import encrypt_credentials, decrypt_credentials
+from .client_automation_service import (
+    enqueue_client_automation, mark_client_loop_result, run_post_sync_tasks,
+)
 from .financial_synthesis import synthesize_organization
+from .sync_engine import SyncEngine, get_connector_for_org
 
 
 OFFICE_DEFAULT_COMPANY = "__office_default__"
@@ -111,7 +116,7 @@ def register_client(
     )
 
     if existing and existing.target_organization_id:
-        client_org = db.query(Organization).get(existing.target_organization_id)
+        client_org = db.get(Organization, existing.target_organization_id)
     else:
         client_org = Organization(
             name=name,
@@ -122,6 +127,24 @@ def register_client(
         )
         db.add(client_org)
         db.flush()  # assign id
+    if not client_org:
+        client_org = Organization(
+            name=name,
+            business_type=business_type,
+            tax_id=tax_id,
+            integration_type=IntegrationType.SUMIT,
+            is_active=True,
+        )
+        db.add(client_org)
+        db.flush()
+    else:
+        client_org.name = name
+        if business_type is not None:
+            client_org.business_type = business_type
+        if tax_id is not None:
+            client_org.tax_id = tax_id
+        client_org.integration_type = IntegrationType.SUMIT
+        client_org.is_active = True
 
     # SUMIT credentials — scoped to the client tenant, encrypted.
     _upsert_integration(
@@ -149,6 +172,12 @@ def register_client(
 
     db.commit()
     db.refresh(roster)
+    automation = enqueue_client_automation(
+        db,
+        office_organization_id=office_organization_id,
+        client_company_id=roster.company_id,
+        target_organization_id=client_org.id,
+    )
     return {
         "id": roster.id,
         "company_id": roster.company_id,
@@ -156,6 +185,7 @@ def register_client(
         "target_organization_id": roster.target_organization_id,
         "has_open_finance": bool(open_finance),
         "used_office_key": used_office_key,
+        "automation": automation,
     }
 
 
@@ -168,22 +198,100 @@ def list_clients(db, office_organization_id: int) -> list[dict[str, Any]]:
     )
     out = []
     for r in rows:
-        sources = [
-            c.source for c in db.query(IntegrationConnection).filter(
+        connections = db.query(IntegrationConnection).filter(
                 IntegrationConnection.organization_id == r.target_organization_id,
-                IntegrationConnection.status == "active",
-            ).all()
-        ] if r.target_organization_id else []
+            ).all() if r.target_organization_id else []
+        sources = [c.source for c in connections if c.status == "active"]
+        connection_statuses = {c.source: c.status for c in connections}
+        onboarding = _onboarding_summary(db, r.target_organization_id)
+        last_sync = db.query(SyncRun).filter(
+            SyncRun.organization_id == r.target_organization_id,
+        ).order_by(SyncRun.created_at.desc()).first() if r.target_organization_id else None
+        users_count = db.query(User).filter(
+            User.organization_id == r.target_organization_id,
+        ).count() if r.target_organization_id else 0
         out.append({
             "id": r.id,
             "company_id": r.company_id,
             "name": r.name,
             "status": r.status,
             "target_organization_id": r.target_organization_id,
+            "organization_id": r.target_organization_id,
             "connections": sources,
+            "connection_statuses": connection_statuses,
+            "automation": (r.raw_data or {}).get("automation", {}),
+            "onboarding": onboarding,
             "last_synced_at": r.last_synced_at.isoformat() if r.last_synced_at else None,
+            "users_count": users_count,
+            "last_sync": {
+                "id": last_sync.id,
+                "source": last_sync.source,
+                "status": last_sync.status.value if last_sync.status else None,
+                "started_at": last_sync.started_at.isoformat() if last_sync.started_at else None,
+                "finished_at": last_sync.finished_at.isoformat() if last_sync.finished_at else None,
+                "error_summary": last_sync.error_summary,
+                "counts": last_sync.counts,
+            } if last_sync else None,
         })
     return out
+
+
+async def run_client_sync(
+    db, office_organization_id: int, *, client_id: int,
+    entity_types: Optional[str] = None,
+) -> dict[str, Any]:
+    """Run an on-demand sync for one client file in this office's roster —
+    the same path POST /api/office/clients/{id}/sync uses (mirrored here so
+    the AI chat office tool can reuse it directly; see ai_chat_tools.py).
+
+    `client_id` is a SumitCompany roster row id, scoped to this office —
+    never a bare organization_id, so one office can only trigger syncs for
+    client files it actually registered.
+    """
+    client = db.query(SumitCompany).filter(
+        SumitCompany.id == client_id,
+        SumitCompany.office_organization_id == office_organization_id,
+    ).first()
+    if not client or not client.target_organization_id:
+        raise ValueError(f"Client file {client_id} not found")
+
+    target_org_id = client.target_organization_id
+    # get_connector_for_org raises ValueError on its own when the client file
+    # has no active integration connection — let it propagate unchanged.
+    connector, conn_id, source = get_connector_for_org(db, target_org_id, None)
+
+    engine = SyncEngine(db, connector, target_org_id, source, conn_id)
+    types = [t.strip() for t in entity_types.split(",")] if entity_types else None
+    try:
+        sync_run = await engine.run_full_sync(entity_types=types)
+    finally:
+        await connector.close()
+
+    automation = await run_post_sync_tasks(
+        db, target_org_id, sources=[source], resume_onboarding=True
+    )
+    mark_client_loop_result(
+        db,
+        organization_id=target_org_id,
+        source=source,
+        ok=sync_run.status.value in {"completed", "partial"},
+        summary={
+            "sync_run_id": sync_run.id,
+            "status": sync_run.status.value,
+            "counts": sync_run.counts,
+            "error_summary": sync_run.error_summary,
+        },
+        error=sync_run.error_summary,
+    )
+    client.last_synced_at = datetime.now(timezone.utc)
+    db.commit()
+    return {
+        "company_id": client.company_id,
+        "sync_run_id": sync_run.id,
+        "status": sync_run.status.value,
+        "counts": sync_run.counts,
+        "automation": automation,
+    }
 
 
 def office_rollup(db, office_organization_id: int) -> dict[str, Any]:
@@ -236,6 +344,34 @@ def get_client_org_ids(db, office_organization_id: int) -> list[int]:
         SumitCompany.status == "active",
     ).all()
     return [r.target_organization_id for r in rows if r.target_organization_id]
+
+
+def _onboarding_summary(db, org_id: Optional[int]) -> dict[str, Any]:
+    if not org_id:
+        return {"complete": False, "sources": {}}
+    from ..models import OnboardingTask
+
+    rows = db.query(OnboardingTask).filter(
+        OnboardingTask.organization_id == org_id,
+    ).all()
+    by_source: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item = by_source.setdefault(row.source, {
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "running": 0,
+            "pending": 0,
+        })
+        item["total"] += 1
+        if row.status in item:
+            item[row.status] += 1
+    for item in by_source.values():
+        item["complete"] = bool(item["total"]) and item["completed"] == item["total"]
+    return {
+        "complete": bool(by_source) and all(item["complete"] for item in by_source.values()),
+        "sources": by_source,
+    }
 
 
 # ---------------------------------------------------------------------- #

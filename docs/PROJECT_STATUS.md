@@ -47,6 +47,10 @@ An Israeli-market CFO platform on FastAPI + SQLAlchemy: AR/AP, P&L, cash-flow + 
 
 ## 5. Where everything lives
 - **Status & gaps:** this file.
+- **Rezef ↔ SUMIT ↔ Open Finance completion plan:** `docs/REZEF_SUMIT_OPEN_FINANCE_COMPLETION_PLAN.md`.
+- **Rezef ↔ SUMIT ↔ Open Finance execution checklist:** `docs/REZEF_SUMIT_OPEN_FINANCE_TODO.md`.
+- **Open Finance API knowledge base (from official help center):** `docs/OPEN_FINANCE_KNOWLEDGE_BASE.md`.
+- **Master orchestration plan v2 (full capability map, Rezef as integrator):** `docs/REZEF_MASTER_ORCHESTRATION_PLAN.md`.
 - **Verified bug scan + audit-reliability lesson:** `docs/PHASE13_VERIFIED_BUG_SCAN.md`.
 - **Roadmap (all remaining work):** `docs/superpowers/plans/2026-06-25-product-completion-roadmap.md`.
 - **Plans:** `docs/superpowers/plans/` (collection-reminders, completion-sprint, prior buildouts).

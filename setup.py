@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="cfo-system",
-    version="0.1.0",
+    version="0.2.0",
     description="מערכת ניהול כספים - CFO Management System",
     author="Your Name",
     packages=find_packages(where="src"),

@@ -11,8 +11,7 @@ from sqlalchemy import (
     ForeignKey, Enum as SQLEnum, Boolean, Text, JSON,
     Index, Float, UniqueConstraint
 )
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
@@ -436,6 +435,44 @@ class SyncRun(Base):
     )
 
 
+class SyncCheckpoint(Base):
+    """Per (org, source, entity_type) sync-call-protection state (M1a).
+
+    Tracks the watermark used to compute `updated_since` for the next run,
+    a resumable cursor when a run stops early (page cap), and the
+    backoff/circuit-breaker state that keeps a broken/rate-limited provider
+    from being hammered every cron tick.
+
+    entity_type also carries a source-level sentinel row, "__source__", used
+    for state that isn't per-entity: the manual-refresh cooldown and the
+    Open-Finance daily-full-sync budget gate. Naive UTC datetimes throughout
+    (matches this file's existing `datetime.utcnow` convention) so SQLite
+    comparisons never mix naive/aware.
+    """
+    __tablename__ = "sync_checkpoints"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    source = Column(String(50), nullable=False)  # sumit, open_finance
+    entity_type = Column(String(50), nullable=False)  # invoices, bills, ... or "__source__"
+    last_success_at = Column(DateTime, nullable=True)
+    cursor = Column(String(500), nullable=True)  # resume cursor when a run stopped at the page cap
+    cooldown_until = Column(DateTime, nullable=True)  # manual-refresh cooldown (source-level row)
+    consecutive_failures = Column(Integer, default=0, nullable=False)
+    circuit_open_until = Column(DateTime, nullable=True)  # skip syncing this entity until then
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "source", "entity_type",
+            name="uq_sync_checkpoint_org_source_entity",
+        ),
+    )
+
+
 class OnboardingTask(Base):
     """One codified data-mapping step in a business's onboarding checklist.
 
@@ -635,6 +672,51 @@ class CollectionReminder(Base):
     )
 
 
+class CollectionCase(Base):
+    """מקרה גבייה ידני — מעקב אחר לקוח שלא שילם (נפרד מהתזכורות האוטומטיות ב-
+    CollectionReminder): ניסיונות (שיחה/מייל וכו') שנרשמים ידנית ע"י המשתמש, עם
+    התקדמות סטטוס open -> promised -> paid, או escalated."""
+    __tablename__ = "collection_cases"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True)
+    invoice_ids = Column(JSON, nullable=True)   # [invoice_id, ...]
+    status = Column(String(20), default="open")  # open | promised | paid | escalated
+    attempts = Column(JSON, nullable=True)       # [{"date": iso, "channel", "outcome", "notes"}]
+    promise_date = Column(Date, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_collcase_org_contact", "organization_id", "contact_id"),
+        Index("ix_collcase_org_status", "organization_id", "status"),
+    )
+
+
+class ChatMessage(Base):
+    """הודעה בשיחת הצ'אטבוט (AI, שלב 9). role='assistant' רשומות שהציעו פעולת
+    כתיבה (issue_document וכו') נושאות pending_action — הכלי לא בוצע, רק
+    הוצע; ה-executed הופך True רק דרך אישור מפורש (ai_chat_service.confirm_action),
+    שקורא בדיוק את tool/input שנשמרו כאן, לא נתון שהגיע מהלקוח."""
+    __tablename__ = "ai_chat_messages"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    session_id = Column(String(64), nullable=False)
+    role = Column(String(20), nullable=False)  # user | assistant
+    content = Column(Text, nullable=False)
+    pending_action = Column(JSON, nullable=True)  # {"tool": str, "input": dict, "description": str}
+    executed = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_aichat_org_session", "organization_id", "session_id"),
+    )
+
+
 class InventoryItem(Base):
     """Inventory / stock item — מלאי"""
     __tablename__ = "inventory_items"
@@ -687,6 +769,11 @@ class Expense(Base):
     filing_error = Column(Text, nullable=True)
     classifier_feedback = Column(JSON, nullable=True)  # learning feedback: [{"timestamp": "...", "old_category": "...", "new_category": "...", "supplier": "...", "feedback_text": "..."}]
     raw_data = Column(JSON, nullable=True)
+    # % of this expense recognized as tax-deductible (e.g. partial vehicle/phone/home
+    # office use). NULL = fully recognized (unchanged historical behavior) — never a
+    # fabricated default; real Israeli deduction rules need per-case inputs (odometer
+    # readings, use-value tables) this system doesn't have, so nothing auto-computes it.
+    deduction_percent = Column(Numeric(precision=5, scale=2), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -696,6 +783,27 @@ class Expense(Base):
     __table_args__ = (
         Index("ix_expense_org_status", "organization_id", "status"),
         Index("ix_expense_org_ext", "organization_id", "external_id", "source"),
+    )
+
+
+class ExpenseCategory(Base):
+    """קטגוריית הוצאה מותאמת אישית לארגון ("כרטיס") — משלימה את הקטגוריות
+    המובנות (VALID_CATEGORIES ב-expense_classifier.py). המשתמש פותח כרטיסים
+    לפי הצורך שלו; keywords (אופציונלי) מזינים את המסווג האוטומטי וגוברים
+    על מילות המפתח המובנות."""
+    __tablename__ = "expense_categories"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    key = Column(String(100), nullable=False)  # slug, ייחודי בתוך הארגון
+    name_he = Column(String(255), nullable=False)
+    keywords = Column(JSON, nullable=True)  # list[str], אופציונלי — לסיווג אוטומטי
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_expensecat_org_key", "organization_id", "key", unique=True),
     )
 
 
@@ -716,6 +824,10 @@ class BankTransaction(Base):
     matched_entity_type = Column(String(50), nullable=True)  # invoice, bill, payment
     matched_entity_id = Column(Integer, nullable=True)
     is_reconciled = Column(Boolean, default=False)
+    # Open Finance data is provisional/unverified until the consent journey
+    # (OPEN_FINANCE_USER_ID + real bank consent) is fully live — see the
+    # principle documented in PRODUCT_AUDIT_AND_ROADMAP.md's preamble.
+    is_provisional = Column(Boolean, default=False)
     reconciliation_dispatch_status = Column(String(30), default="not_sent")
     reconciliation_dispatched_at = Column(DateTime, nullable=True)
     external_reconciliation_id = Column(String(255), nullable=True)
@@ -950,6 +1062,51 @@ class CashflowEntry(Base):
     __table_args__ = (
         UniqueConstraint("organization_id", "entry_id", name="uq_cashflow_entry"),
     )
+
+
+class VehicleDeductionProfile(Base):
+    """Real per-vehicle, per-tax-year inputs for the Israeli vehicle-expense
+    higher-of deduction rule (תקנות מס הכנסה (ניכוי הוצאות רכב) התשנ"ה-1995).
+
+    These are facts about the vehicle/tax-year, not about any single receipt —
+    odometer readings and שווי שימוש come from the vehicle's registration and
+    the Tax Authority's own price-group table, not from any expense line-item.
+    See services/expense_deduction_service.py for the calculator that reads
+    these and never fabricates a deduction when a required field is missing.
+    """
+    __tablename__ = "vehicle_deduction_profiles"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    tax_year = Column(Integer, nullable=False)
+    vehicle_label = Column(String(100), nullable=True)  # e.g. license plate, free text
+    running_costs_annual = Column(Numeric(precision=12, scale=2), nullable=True)
+    use_value_monthly = Column(Numeric(precision=12, scale=2), nullable=True)  # שווי שימוש
+    odometer_start = Column(Numeric(precision=10, scale=1), nullable=True)
+    odometer_end = Column(Numeric(precision=10, scale=1), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "tax_year", "vehicle_label", name="uq_vehicle_deduction_profile"),
+    )
+
+
+class HomeOfficeProfile(Base):
+    """Real home-office area inputs for the proportional home-office/internet
+    deduction rule. One active profile per organization."""
+    __tablename__ = "home_office_profiles"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, unique=True)
+    office_sqm = Column(Numeric(precision=8, scale=2), nullable=False)
+    total_home_sqm = Column(Numeric(precision=8, scale=2), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
 
 
 class AlertRule(Base):
