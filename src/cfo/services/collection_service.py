@@ -1,14 +1,52 @@
-"""תכנון תזכורות גבייה מחשבוניות באיחור אמיתיות (ללא שליחה — ראו dispatch)."""
+"""תכנון תזכורות גבייה מחשבוניות אמיתיות (ללא שליחה — ראו dispatch).
+
+מודל הקצב (ספק הבעלים, 2026-07-12):
+- ``pre_due``: תזכורת אחת יום לפני מועד התשלום.
+- ``overdue``: הודעה יומית מהיום הראשון לאיחור ועד התשלום, עם מספר ימי
+  האיחור המעודכן ("אתה מאחר ב-N ימים בהתאם להסכם ותנאי התשלום").
+- תשלום שמזוהה — יתרת חשבונית שנסגרה (קבלה ב-SUMIT) או תנועת בנק נכנסת
+  שהותאמה לחשבונית (Open Finance) — עוצר את התזכורות מיידית.
+"""
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from ..models import Contact, Invoice, CollectionReminder
+from ..models import BankTransaction, Contact, Invoice, CollectionReminder
 from .ar_service import AccountsReceivableService
 
 OVERDUE_STATUSES = ["sent", "partially_paid", "overdue"]
+
+# ברירת המחדל 20 שעות: ריצת cron יומית קבועה לא תיחסם על ידי ריצה של אתמול
+# (24h מדויקות היו מדלגות על יום בגלל סטיות דקות), אבל ריצה ידנית באותו יום כן.
+DAILY_COOLDOWN_HOURS = 20
+
+_LOCAL_TEMPLATES = {
+    "pre_due": """
+שלום {customer_name},
+
+תזכורת ידידותית: מועד התשלום של חשבונית {invoice_numbers} על סך ₪{amount:,.0f} חל מחר, בהתאם להסכם ותנאי התשלום.
+
+בברכה,
+{company_name}
+""",
+    "overdue": """
+שלום {customer_name},
+
+אתה מאחר {days_phrase} בתשלום חשבונית {invoice_numbers} על סך ₪{amount:,.0f}, בהתאם להסכם ותנאי התשלום.
+נודה על הסדרת התשלום.
+
+בברכה,
+{company_name}
+""",
+}
+
+
+def _days_phrase(days: int) -> str:
+    if days == 1:
+        return "ביום אחד"
+    return f"ב-{days} ימים"
 
 
 @dataclass
@@ -24,32 +62,35 @@ class PlannedReminder:
     message: str
 
 
-def _reminder_type(days_overdue: int) -> str:
-    if days_overdue >= 30:
-        return "final"
-    if days_overdue >= 14:
-        return "second"
-    return "first"
-
-
 class CollectionService:
     def __init__(self, db: Session, org_id: int):
         self.db = db
         self.org_id = org_id
-        self._templates = AccountsReceivableService(db, org_id).reminder_templates
+        templates = dict(AccountsReceivableService(db, org_id).reminder_templates)
+        templates.update(_LOCAL_TEMPLATES)
+        self._templates = templates
 
-    def plan_reminders(self, today: date, cooldown_days: int = 7) -> List[PlannedReminder]:
+    def plan_reminders(self, today: date,
+                       cooldown_hours: int = DAILY_COOLDOWN_HOURS) -> List[PlannedReminder]:
+        planned: List[PlannedReminder] = []
+        planned += self._plan(today, "overdue", Invoice.due_date < today, cooldown_hours)
+        planned += self._plan(today, "pre_due",
+                              Invoice.due_date == today + timedelta(days=1), cooldown_hours)
+        return planned
+
+    def _plan(self, today: date, rtype: str, due_filter,
+              cooldown_hours: int) -> List[PlannedReminder]:
         rows = self.db.query(Invoice, Contact).join(
             Contact, Invoice.contact_id == Contact.id
         ).filter(
             Invoice.organization_id == self.org_id,
             Invoice.due_date.isnot(None),
-            Invoice.due_date < today,
+            due_filter,
             Invoice.status.in_(OVERDUE_STATUSES),
             Invoice.balance > 0,
         ).all()
+        rows = [(inv, c) for inv, c in rows if not self._bank_payment_detected(inv)]
 
-        # group by contact
         by_contact: dict = {}
         for inv, contact in rows:
             g = by_contact.setdefault(contact.id, {"contact": contact, "invoices": []})
@@ -59,22 +100,30 @@ class CollectionService:
         for cid, g in by_contact.items():
             contact = g["contact"]
             invoices = g["invoices"]
-            oldest_days = max((today - inv.due_date).days for inv in invoices)
-            rtype = _reminder_type(oldest_days)
-            if self._recently_sent(cid, rtype, today, cooldown_days):
+            days = max((today - inv.due_date).days for inv in invoices)
+            if self._recently_sent(cid, rtype, cooldown_hours):
                 continue
             total = float(sum(inv.balance or 0 for inv in invoices))
             numbers = [inv.invoice_number or f"#{inv.id}" for inv in invoices]
-            message = self._render(rtype, contact.name, numbers, total, oldest_days)
+            message = self._render(rtype, contact.name, numbers, total, days)
             planned.append(PlannedReminder(
                 contact_id=cid, contact_name=contact.name, email=contact.email,
                 phone=contact.phone, invoice_numbers=numbers, total_amount=total,
-                days_overdue=oldest_days, reminder_type=rtype, message=message,
+                days_overdue=max(days, 0), reminder_type=rtype, message=message,
             ))
         return planned
 
-    def _recently_sent(self, contact_id: int, rtype: str, today: date, cooldown_days: int) -> bool:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=cooldown_days)
+    def _bank_payment_detected(self, invoice: Invoice) -> bool:
+        """תקבול בבנק שהותאם לחשבונית עוצר גבייה גם לפני שהקבלה נרשמה ב-SUMIT."""
+        return self.db.query(BankTransaction.id).filter(
+            BankTransaction.organization_id == self.org_id,
+            BankTransaction.matched_entity_type == "invoice",
+            BankTransaction.matched_entity_id == invoice.id,
+            BankTransaction.amount > 0,
+        ).first() is not None
+
+    def _recently_sent(self, contact_id: int, rtype: str, cooldown_hours: int) -> bool:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)
         return self.db.query(CollectionReminder).filter(
             CollectionReminder.organization_id == self.org_id,
             CollectionReminder.contact_id == contact_id,
@@ -84,10 +133,11 @@ class CollectionService:
         ).first() is not None
 
     def _render(self, rtype, name, numbers, amount, days_overdue) -> str:
-        tmpl = self._templates.get(rtype, self._templates["first"])
+        tmpl = self._templates.get(rtype, self._templates["overdue"])
         return tmpl.format(
             customer_name=name, invoice_numbers=", ".join(numbers),
             amount=amount, days_overdue=days_overdue,
+            days_phrase=_days_phrase(days_overdue),
             due_date="", company_name=self._company_name(),
         )
 

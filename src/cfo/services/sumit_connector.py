@@ -295,6 +295,10 @@ class SumitConnector(AccountingConnector):
                     status = self._map_document_status(doc)
                     total = Decimal(str(doc.total or 0))
                     paid = Decimal(str(getattr(doc, "paid_amount", 0) or 0))
+                    if status == "paid" and paid < total:
+                        # SUMIT לא מאכלס paid_amount על מסמכים סגורים; בלי זה
+                        # balance=total וחשבונית ששולמה נראית כחוב פתוח (גבייה שגויה).
+                        paid = total
 
                     subtotal, tax = _derive_subtotal_tax(doc, total)
                     invoices.append(NormalizedInvoice(
