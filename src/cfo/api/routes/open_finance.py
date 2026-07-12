@@ -60,9 +60,14 @@ def get_open_finance_client(db: Session, org_id: int) -> OpenFinanceClient:
     if conn and conn.credentials_encrypted:
         creds = decrypt_credentials(conn.credentials_encrypted) or {}
 
+    # Platform client_id/client_secret are shared across every org (per the
+    # Open Finance auth model — one dashboard app, many userIds) so they may
+    # fall back to env for ANY org. user_id is per-user/org and only falls
+    # back to env for org 1 (the original Financy pilot signup); every other
+    # org must have its own stored user_id — see open_finance_onboarding.py.
     env_allowed = org_id == 1
-    client_id = creds.get("client_id") or (settings.open_finance_client_id if env_allowed else None)
-    client_secret = creds.get("client_secret") or (settings.open_finance_client_secret if env_allowed else None)
+    client_id = creds.get("client_id") or settings.open_finance_client_id
+    client_secret = creds.get("client_secret") or settings.open_finance_client_secret
     user_id = creds.get("user_id") or (settings.open_finance_user_id if env_allowed else None)
 
     missing = [n for n, v in {
@@ -147,6 +152,59 @@ async def create_connection(
         return {"connection_id": connection_id, "connect_url": connect_url}
     finally:
         await client.close()
+
+
+# ---------------------------------------------------------------------- #
+# ONBOARDING — self-serve multi-business Open Finance bank connection (M2c)
+# ---------------------------------------------------------------------- #
+class StartOnboardingRequest(BaseModel):
+    psu_id: Optional[str] = None
+    psu_corporate_id: Optional[str] = None
+    provider_ids: Optional[list[str]] = None
+    redirect_url: Optional[str] = None
+    language: str = "he"
+
+
+@router.post("/onboarding/start")
+async def start_onboarding(
+    body: StartOnboardingRequest,
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """Onboard this org to Open Finance and start a bank consent journey.
+
+    Ensures the org has its own OF identity (userId), then calls POST
+    /v2/connections with allowBusiness=True and returns {connection_id,
+    connect_url} for the business owner to complete the consent journey.
+    """
+    from ...services.open_finance_onboarding import start_bank_connection
+
+    try:
+        return await start_bank_connection(
+            db, org_id,
+            psu_id=body.psu_id,
+            psu_corporate_id=body.psu_corporate_id,
+            provider_ids=body.provider_ids,
+            redirect_url=body.redirect_url,
+            language=body.language,
+        )
+    except OpenFinanceError as exc:
+        raise HTTPException(status_code=exc.status_code or 502, detail=exc.message)
+
+
+@router.get("/onboarding/status/{connection_id}")
+async def onboarding_status(
+    connection_id: str,
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """Bank consent journey status for a connection started via onboarding/start."""
+    from ...services.open_finance_onboarding import get_connection_status
+
+    try:
+        return await get_connection_status(db, org_id, connection_id)
+    except OpenFinanceError as exc:
+        raise HTTPException(status_code=exc.status_code or 502, detail=exc.message)
 
 
 @router.get("/connections")
