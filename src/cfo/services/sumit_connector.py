@@ -476,43 +476,15 @@ class SumitConnector(AccountingConnector):
         cursor: Optional[str] = None,
         page_size: int = 100,
     ) -> FetchResult:
-        try:
-            client = await self._get_client()
-            async with client:
-                from ..integrations.sumit_models import BillingTransactionRequest
-
-                from_date = (
-                    updated_since.date()
-                    if updated_since
-                    else date.today() - timedelta(days=90)
-                )
-
-                request = BillingTransactionRequest(
-                    from_date=from_date,
-                    to_date=date.today(),
-                )
-                raw_txs = await client.load_billing_transactions(request)
-
-                transactions = []
-                for tx in raw_txs:
-                    transactions.append(NormalizedBankTransaction(
-                        external_id=str(tx.id),
-                        transaction_date=tx.date if isinstance(tx.date, date) else None,
-                        description=getattr(tx, "description", f"Card {getattr(tx, 'card_last_digits', 'XXXX')}"),
-                        amount=Decimal(str(tx.amount or 0)),
-                        currency=getattr(tx, "currency", "ILS") or "ILS",
-                        raw_data=tx.__dict__ if hasattr(tx, "__dict__") else {},
-                    ))
-
-                return FetchResult(items=transactions, has_more=False)
-        except Exception as e:
-            # load_billing_transactions() is permanently unsupported by the real
-            # SUMIT API (see its own docstring) -- this fails identically for
-            # every org regardless of credential validity, so it must not be
-            # treated as a credential/health signal (unlike the other fetch_*
-            # methods below, whose failures are genuinely org-specific).
-            logger.error("Failed to fetch bank transactions from SUMIT: %s", e)
-            return FetchResult(items=[], has_more=False)
+        # `load_billing_transactions()` (creditguy/billing/load) is permanently
+        # unsupported by the real SUMIT API (its own docstring says so) — it
+        # fails identically for every org regardless of credential validity.
+        # This ran a doomed network call to SUMIT on every hourly sync for every
+        # connected org, wasting API quota for zero benefit (bank transactions
+        # come from Open Finance instead — see open_finance_connector.py).
+        # Returning empty locally, without a request, is behaviourally
+        # identical to the old try/except-on-every-call path.
+        return FetchResult(items=[], has_more=False)
 
     async def fetch_journal_entries(
         self,
