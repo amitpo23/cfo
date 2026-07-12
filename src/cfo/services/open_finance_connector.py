@@ -36,6 +36,7 @@ class OpenFinanceConnector(AccountingConnector):
         api_base_url: str = "https://api.open-finance.ai/v2",
         oauth_url: str = "https://api.open-finance.ai/oauth/token",
         timeout: float = 30.0,
+        connection_id: "Optional[str]" = None,
     ):
         # Derive the host prefix from the configured v2 base so v3/loans lines up too.
         v2_base = api_base_url.rstrip("/")
@@ -50,6 +51,9 @@ class OpenFinanceConnector(AccountingConnector):
             timeout=timeout,
         )
         self.user_id = user_id
+        # כמה תיקים (orgs) חיים תחת אותו משתמש Financy — כל org חייב להסתנכרן
+        # רק מהחיבור הבנקאי שלו, אחרת תנועות של לקוח אחד מזהמות תיק של אחר.
+        self.connection_id = connection_id
 
     async def test_connection(self) -> bool:
         try:
@@ -66,7 +70,8 @@ class OpenFinanceConnector(AccountingConnector):
         page_size: int = 100,
     ) -> FetchResult:
         payload = await self.client.list_accounts(
-            next_page=cursor, limit=min(page_size, 500), include_duplicates=0, sort=-1
+            next_page=cursor, limit=min(page_size, 500), include_duplicates=0, sort=-1,
+            connection_id=self.connection_id,
         )
         items, next_page = _items_and_next(payload)
         accounts = [self._normalize_account(item) for item in items]
@@ -85,6 +90,7 @@ class OpenFinanceConnector(AccountingConnector):
             date_from=date_from,
             include_duplicates=0,
             sort=-1,
+            connection_id=self.connection_id,
         )
         items, next_page = _items_and_next(payload)
         transactions = [self._normalize_transaction(item) for item in items]

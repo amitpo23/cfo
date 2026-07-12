@@ -994,6 +994,9 @@ def get_connector_for_org(
             user_id=user_id,
             api_base_url=api_base_url,
             oauth_url=oauth_url,
+            # Optional per-org bank-connection scope: several orgs can share one
+            # Financy user; without this, one org's sync ingests another's bank.
+            connection_id=creds.get("connection_id"),
         )
         return connector, conn.id if conn else None, source
 
