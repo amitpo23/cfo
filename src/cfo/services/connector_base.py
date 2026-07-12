@@ -34,6 +34,12 @@ class NormalizedAccount:
     currency: str = "ILS"
     balance: Decimal = Decimal("0")
     raw_data: Optional[dict] = None
+    # טריות היתרה (referenceDate של רשומת ה-balance שנבחרה) — Open Finance בלבד.
+    balance_as_of: Optional[datetime] = None
+    # סוג החשבון הגולמי מהספק (CHECKING/SAVINGS/LOAN/CARD) — לפני המיפוי ל-
+    # account_type המנורמל; מאפשר להפריד LOAN מ-CARD בדשבורד למרות ששניהם
+    # ממופים לאותו account_type="liability".
+    raw_account_type: Optional[str] = None
 
 
 @dataclass

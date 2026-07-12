@@ -1,6 +1,6 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
@@ -9,28 +9,56 @@ import {
   Wallet, TrendingUp, AlertTriangle,
   FileCheck, Receipt, ArrowRight, RefreshCw, Clock,
   DollarSign, Activity, Shield, Gauge, Sparkles, Landmark, CheckCircle2,
+  FileWarning,
 } from 'lucide-react';
 import apiService from '../services/api';
-import { AgentPanel, FinanceCard, FinancePageShell, MetricCard, formatILS } from './finance-ui';
+import { AgentPanel, FinanceCard, FinancePageShell, MetricCard, NoDataYet, formatILS } from './finance-ui';
 
 interface CFOOverviewProps {
   darkMode: boolean;
 }
 
+/**
+ * Honesty contract (docs/REZEF_DATA_INTEGRITY_PLAN.md, section ד): every
+ * field is number|null (or an object|null). `null`/`undefined` means "no
+ * data yet" and must NEVER be rendered as 0. All new fields are optional so
+ * this screen keeps working while the backend half of the plan ships.
+ */
 interface DashboardOverview {
-  cash_balance: number;
-  month_revenue: number;
-  month_expenses: number;
-  month_net_profit: number;
-  runway_months: number | null;
-  ar_total: number;
-  ar_overdue: number;
-  ap_total: number;
-  ap_due_7_days: number;
-  ap_due_30_days: number;
-  alerts: Array<{ id: number; title: string; message: string; severity: string }>;
-  last_sync: string | null;
-  cash_by_account: Array<{ id: number; name: string; balance: number }>;
+  // Cash (Open Finance)
+  cash_balance?: number | null;
+  cash_as_of?: string | null;
+  savings_balance?: number | null;
+  loans_total?: number | null;
+  card_outstanding?: number | null;
+
+  // P&L (books) + bank-actual parallel track
+  month_revenue?: number | null;
+  month_expenses?: number | null;
+  month_net_profit?: number | null;
+  pnl_month?: string | null;
+  pnl_is_current_month?: boolean | null;
+  bank_month_inflow?: number | null;
+  bank_month_outflow?: number | null;
+  bank_month_net?: number | null;
+
+  runway_months?: number | null;
+
+  ar_total?: number | null;
+  ar_overdue?: number | null;
+
+  ap_total?: number | null;
+  ap_due_7_days?: number | null;
+  ap_due_30_days?: number | null;
+
+  undocumented_expenses?: { count: number; total: number; potential_vat: number } | null;
+  data_quality?: { status: string; issues_count: number; last_check_at: string | null } | null;
+
+  alerts?: Array<{ id: number; title: string; message: string; severity: string }>;
+  // Legacy shape: string|null. New contract shape: { sumit, open_finance }.
+  // Both are handled at render time so this screen survives the backend cutover.
+  last_sync?: string | { sumit: string | null; open_finance: string | null } | null;
+  cash_by_account?: Array<{ id: number; name: string; balance: number }>;
 }
 
 interface PNLDataPoint {
@@ -46,7 +74,44 @@ interface CashflowDataPoint {
   expected_outflows: number;
 }
 
+const HEBREW_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+
+function formatMonthLabel(monthStr?: string | null): string | null {
+  if (!monthStr) return null;
+  const [y, m] = monthStr.split('-');
+  const idx = Number(m) - 1;
+  if (!y || Number.isNaN(idx) || idx < 0 || idx > 11) return monthStr;
+  return `${HEBREW_MONTHS[idx]} ${y}`;
+}
+
+function formatShortDate(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit' });
+}
+
+function formatDateTime(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString('he-IL');
+}
+
+function formatTime(iso?: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+}
+
+function isSyncObject(v: unknown): v is { sumit: string | null; open_finance: string | null } {
+  return !!v && typeof v === 'object' && ('sumit' in (v as object) || 'open_finance' in (v as object));
+}
+
 const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
+  const navigate = useNavigate();
+
   const { data: overview, isLoading, refetch } = useQuery({
     queryKey: ['dashboard-overview'],
     queryFn: () => apiService.get<DashboardOverview>('/dashboard/overview'),
@@ -87,37 +152,88 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
     );
   }
 
+  // Default fallback keeps every field null (never 0) — honesty contract.
   const ov: DashboardOverview = overview || {
-    cash_balance: 0,
-    month_revenue: 0,
-    month_expenses: 0,
-    month_net_profit: 0,
+    cash_balance: null,
+    cash_as_of: null,
+    savings_balance: null,
+    loans_total: null,
+    card_outstanding: null,
+    month_revenue: null,
+    month_expenses: null,
+    month_net_profit: null,
+    pnl_month: null,
+    pnl_is_current_month: null,
+    bank_month_inflow: null,
+    bank_month_outflow: null,
+    bank_month_net: null,
     runway_months: null,
-    ar_total: 0,
-    ar_overdue: 0,
-    ap_total: 0,
-    ap_due_7_days: 0,
-    ap_due_30_days: 0,
+    ar_total: null,
+    ar_overdue: null,
+    ap_total: null,
+    ap_due_7_days: null,
+    ap_due_30_days: null,
+    undocumented_expenses: null,
+    data_quality: null,
     alerts: [],
     last_sync: null,
     cash_by_account: [],
   };
-  const cashBalance = ov.cash_balance || 0;
-  const monthRevenue = ov.month_revenue || 0;
-  const monthNetProfit = ov.month_net_profit || 0;
-  const runwayMonths = ov.runway_months;
-  const arTotal = ov.ar_total || 0;
-  const arOverdue = ov.ar_overdue || 0;
-  const apTotal = ov.ap_total || 0;
-  const apDue7 = ov.ap_due_7_days || 0;
+
+  const cashBalance = ov.cash_balance ?? null;
+  const cashAsOf = ov.cash_as_of ?? null;
+  const savingsBalance = ov.savings_balance ?? null;
+  const loansTotal = ov.loans_total ?? null;
+  const cardOutstanding = ov.card_outstanding ?? null;
+
+  const monthRevenue = ov.month_revenue ?? null;
+  const monthNetProfit = ov.month_net_profit ?? null;
+  const pnlMonth = ov.pnl_month ?? null;
+  const pnlIsCurrentMonth = ov.pnl_is_current_month ?? null;
+  const bankInflow = ov.bank_month_inflow ?? null;
+  const bankOutflow = ov.bank_month_outflow ?? null;
+  const bankNet = ov.bank_month_net ?? null;
+
+  const runwayMonths = ov.runway_months ?? null;
+
+  const arTotal = ov.ar_total ?? null;
+  const arOverdue = ov.ar_overdue ?? null;
+
+  const apTotalRaw = ov.ap_total ?? null;
+  const apTotal = apTotalRaw == null ? null : Math.max(0, apTotalRaw);
+  const apDue7 = ov.ap_due_7_days ?? null;
+
+  const undocumentedExpenses = ov.undocumented_expenses ?? null;
+  const dataQuality = ov.data_quality ?? null;
+
   const alerts = ov.alerts || [];
-  const lastSync = ov.last_sync;
+  const lastSyncRaw = ov.last_sync ?? null;
   const cashByAccount = ov.cash_by_account || [];
+
+  const sumitSyncIso = isSyncObject(lastSyncRaw) ? lastSyncRaw.sumit ?? null : null;
+  const ofSyncIso = isSyncObject(lastSyncRaw) ? lastSyncRaw.open_finance ?? null : null;
+  const legacySyncIso = typeof lastSyncRaw === 'string' ? lastSyncRaw : null;
+  const hasAnySync = Boolean(sumitSyncIso || ofSyncIso || legacySyncIso);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(n);
+  const fmtOrText = (n: number | null | undefined) => (n === null || n === undefined ? 'אין נתונים עדיין' : fmt(n));
+  const Amount = (n: number | null | undefined): React.ReactNode =>
+    n === null || n === undefined ? <NoDataYet darkMode={darkMode} /> : fmt(n);
 
   const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+
+  const pnlMonthLabel = formatMonthLabel(pnlMonth);
+  const cashFootnote = cashAsOf
+    ? `מקור: בנק · נכון ל-${formatShortDate(cashAsOf)}`
+    : (cashBalance != null ? 'מקור: בנק' : undefined);
+  const pnlFootnote = pnlMonthLabel ? `מקור: ספרים · ${pnlMonthLabel}` : (monthRevenue != null ? 'מקור: ספרים' : undefined);
+  const arApFootnote = sumitSyncIso
+    ? `מקור: ספרים (SUMIT) · עודכן ${formatTime(sumitSyncIso)}`
+    : 'מקור: ספרים (SUMIT)';
+
+  const hasBankActuals = bankInflow != null || bankOutflow != null || bankNet != null;
+  const bankVsBooksGap = bankNet != null && monthNetProfit != null ? bankNet - monthNetProfit : null;
 
   return (
     <FinancePageShell
@@ -127,9 +243,9 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
       description="תמונה יומית של הכסף: יתרות, גבייה, ספקים, רווחיות, תזרים וסיכונים. המטרה היא להחליף עבודת מעקב ידנית בפעולות מוכנות לאישור."
       icon={Gauge}
       metrics={[
-        { label: 'יתרת מזומן', value: fmt(cashBalance), tone: 'blue' },
-        { label: 'רווח נקי חודש', value: fmt(monthNetProfit), tone: monthNetProfit >= 0 ? 'emerald' : 'rose' },
-        { label: 'חובות באיחור', value: fmt(arOverdue), tone: arOverdue > 0 ? 'amber' : 'emerald' },
+        { label: 'יתרת מזומן', value: fmtOrText(cashBalance), tone: cashBalance == null ? 'slate' : 'blue' },
+        { label: 'רווח נקי חודש', value: fmtOrText(monthNetProfit), tone: monthNetProfit == null ? 'slate' : (monthNetProfit >= 0 ? 'emerald' : 'rose') },
+        { label: 'חובות באיחור', value: fmtOrText(arOverdue), tone: arOverdue == null ? 'slate' : (arOverdue > 0 ? 'amber' : 'emerald') },
         { label: 'התראות פעילות', value: String(alerts.length), tone: alerts.length ? 'rose' : 'emerald' },
       ]}
       actions={
@@ -148,45 +264,118 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-sm">
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            {lastSync ? `עדכון אחרון: ${new Date(lastSync).toLocaleString('he-IL')}` : 'עדיין אין נתוני סנכרון. הרץ סנכרון כדי לקבל תמונה מלאה.'}
+            {hasAnySync ? (
+              isSyncObject(lastSyncRaw) ? (
+                <span>
+                  סונכרן לאחרונה: SUMIT {sumitSyncIso ? formatTime(sumitSyncIso) : '—'} · בנק {ofSyncIso ? formatTime(ofSyncIso) : '—'}
+                </span>
+              ) : (
+                <span>עדכון אחרון: {formatDateTime(legacySyncIso)}</span>
+              )
+            ) : (
+              <span>עדיין אין נתוני סנכרון. הרץ סנכרון כדי לקבל תמונה מלאה.</span>
+            )}
           </div>
-          <div className="text-sm font-medium">המערכת מזהה פערים ומייצרת משימות גבייה, תשלום והתאמה.</div>
+          <div className="flex flex-wrap items-center gap-3">
+            {dataQuality?.status === 'issues' && (
+              <Link
+                to="/sync"
+                title={dataQuality.last_check_at ? `בדיקה אחרונה: ${formatDateTime(dataQuality.last_check_at)}` : undefined}
+                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${darkMode ? 'bg-amber-500/15 text-amber-200' : 'bg-amber-50 text-amber-700'}`}
+              >
+                <AlertTriangle size={12} />
+                בדיקות נתונים: {dataQuality.issues_count} ממצאים
+              </Link>
+            )}
+            {dataQuality?.status === 'ok' && (
+              <span
+                title={dataQuality.last_check_at ? `בדיקה אחרונה: ${formatDateTime(dataQuality.last_check_at)}` : undefined}
+                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${darkMode ? 'bg-emerald-500/15 text-emerald-200' : 'bg-emerald-50 text-emerald-700'}`}
+              >
+                <CheckCircle2 size={12} />
+                תקין
+              </span>
+            )}
+            <div className="text-sm font-medium">המערכת מזהה פערים ומייצרת משימות גבייה, תשלום והתאמה.</div>
+          </div>
         </div>
       </div>
 
       {/* Top KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
         <MetricCard
           darkMode={darkMode}
           icon={Wallet}
-          label="יתרה זמינה"
-          value={fmt(cashBalance)}
-          detail={runwayMonths != null ? `${runwayMonths} חודשי runway` : 'תזרים חיובי'}
+          label="יתרה זמינה (עו״ש)"
+          value={Amount(cashBalance)}
+          detail={
+            <div className="space-y-1">
+              <div>{runwayMonths != null ? `${runwayMonths} חודשי runway` : 'אין נתונים עדיין ל-runway'}</div>
+              {savingsBalance != null && <div>פיקדונות: {fmt(savingsBalance)}</div>}
+              {loansTotal != null && (
+                <div className={darkMode ? 'text-rose-300' : 'text-rose-600'}>הלוואות/מסגרות: {fmt(loansTotal)}</div>
+              )}
+              {cardOutstanding != null && <div>חוב כרטיס פתוח: {fmt(cardOutstanding)}</div>}
+            </div>
+          }
+          footnote={cashFootnote}
           tone="blue"
         />
         <MetricCard
           darkMode={darkMode}
           icon={TrendingUp}
           label="הכנסות החודש"
-          value={fmt(monthRevenue)}
-          detail={`רווח נקי: ${fmt(monthNetProfit)}`}
+          value={Amount(monthRevenue)}
+          detail={
+            <div className="space-y-1">
+              <div>רווח נקי: {Amount(monthNetProfit)}</div>
+              {pnlIsCurrentMonth === false && pnlMonthLabel && (
+                <div className={darkMode ? 'text-amber-300' : 'text-amber-700'}>
+                  מציג את {pnlMonthLabel} — החודש הסגור האחרון עם נתונים
+                </div>
+              )}
+              {hasBankActuals && (
+                <div className={darkMode ? 'text-slate-400' : 'text-slate-500'}>
+                  מהבנק בפועל: נכנס {fmtOrText(bankInflow)} · יצא {fmtOrText(bankOutflow)} · נטו {fmtOrText(bankNet)}
+                  {bankVsBooksGap != null && ` (פער: ${fmt(bankVsBooksGap)})`}
+                </div>
+              )}
+            </div>
+          }
+          footnote={pnlFootnote}
           tone="emerald"
         />
         <MetricCard
           darkMode={darkMode}
           icon={FileCheck}
           label="לקוחות חייבים"
-          value={fmt(arTotal)}
-          detail={arOverdue > 0 ? `${fmt(arOverdue)} באיחור` : 'אין איחור מהותי'}
-          tone={arOverdue > 0 ? 'rose' : 'emerald'}
+          value={Amount(arTotal)}
+          detail={arOverdue != null ? (arOverdue > 0 ? `${fmt(arOverdue)} באיחור` : 'אין איחור מהותי') : 'אין נתונים עדיין'}
+          footnote={arApFootnote}
+          tone={arOverdue != null && arOverdue > 0 ? 'rose' : 'emerald'}
         />
         <MetricCard
           darkMode={darkMode}
           icon={Receipt}
           label="ספקים לתשלום"
-          value={fmt(apTotal)}
-          detail={`${fmt(apDue7)} ל-7 ימים הקרובים`}
+          value={Amount(apTotal)}
+          detail={apDue7 != null ? `מזה לתשלום 7 ימים: ${fmt(apDue7)}` : 'אין נתונים עדיין'}
+          footnote={arApFootnote}
           tone="amber"
+        />
+        <MetricCard
+          darkMode={darkMode}
+          icon={FileWarning}
+          label="הוצאות ללא חשבונית"
+          value={undocumentedExpenses ? fmt(undocumentedExpenses.total) : 'אין נתונים עדיין'}
+          detail={
+            undocumentedExpenses
+              ? `${undocumentedExpenses.count} מסמכים · מע״מ תשומות שלא נקלט: ${fmt(undocumentedExpenses.potential_vat)}`
+              : 'לחצו כדי לבדוק ספקים חסרי חשבונית'
+          }
+          footnote="מקור: התאמת בנק×ספרים · לחצו למסך המלא"
+          tone={undocumentedExpenses && undocumentedExpenses.count > 0 ? 'rose' : 'slate'}
+          onClick={() => navigate('/suppliers-missing-invoices')}
         />
       </div>
 
@@ -332,7 +521,7 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
               ))}
               <div className={`pt-3 mt-3 border-t ${darkMode ? 'border-gray-700' : 'border-gray-200'} flex justify-between font-bold`}>
                 <span>Total</span>
-                <span>{fmt(cashBalance)}</span>
+                <span>{cashBalance != null ? fmt(cashBalance) : <NoDataYet darkMode={darkMode} />}</span>
               </div>
             </div>
           )}
@@ -344,6 +533,7 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
             {[
               { to: '/ar', label: 'מי חייב לנו', icon: <FileCheck size={18} />, color: 'text-blue-500' },
               { to: '/ap', label: 'מה אנחנו חייבים', icon: <Receipt size={18} />, color: 'text-green-500' },
+              { to: '/suppliers-missing-invoices', label: 'ספקים חסרי חשבונית', icon: <FileWarning size={18} />, color: 'text-rose-500' },
               { to: '/cashflow', label: 'תחזית תזרים', icon: <Activity size={18} />, color: 'text-purple-500' },
               { to: '/budget', label: 'תקציב מול ביצוע', icon: <DollarSign size={18} />, color: 'text-yellow-500' },
               { to: '/tasks', label: 'משימות סוכן', icon: <Clock size={18} />, color: 'text-red-500' },
@@ -372,7 +562,9 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
         insights={[
           {
             title: 'גבייה לפני תשלומי ספקים',
-            text: `${formatILS(arOverdue || arTotal)} עומדים לגבייה. הסוכן ממליץ לתעדף לקוחות באיחור לפני תשלומי השבוע.`,
+            text: (arOverdue ?? arTotal) != null
+              ? `${formatILS((arOverdue ?? arTotal) as number)} עומדים לגבייה. הסוכן ממליץ לתעדף לקוחות באיחור לפני תשלומי השבוע.`
+              : 'אין עדיין נתוני גבייה — לאחר סנכרון SUMIT תופיע כאן תעדוף לקוחות באיחור.',
           },
           {
             title: 'שמירה על runway',

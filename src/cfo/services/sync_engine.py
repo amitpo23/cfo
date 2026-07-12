@@ -558,6 +558,8 @@ class SyncEngine:
             existing.account_type = acct_type
             existing.balance = item.balance
             existing.currency = item.currency
+            existing.balance_as_of = item.balance_as_of
+            existing.raw_account_type = item.raw_account_type
             existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
@@ -569,6 +571,8 @@ class SyncEngine:
             account_type=acct_type,
             balance=item.balance,
             currency=item.currency,
+            balance_as_of=item.balance_as_of,
+            raw_account_type=item.raw_account_type,
         )
         self.db.add(account)
         return "created"

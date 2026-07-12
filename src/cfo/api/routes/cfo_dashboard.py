@@ -35,6 +35,18 @@ async def get_overview(
     return svc.get_overview()
 
 
+@router.get("/data-quality")
+async def get_data_quality(
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """בדיקות שפיות (invariants) — מקור אמת יחיד לכל מדד מוצג (ראה
+    docs/REZEF_DATA_INTEGRITY_PLAN.md סעיף ג)."""
+    from ...services.data_quality import run_checks
+
+    return run_checks(db, org_id)
+
+
 @router.get("/dashboard/cashflow")
 async def get_cashflow(
     weeks: int = Query(12, ge=1, le=52),

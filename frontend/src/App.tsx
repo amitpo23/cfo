@@ -118,6 +118,7 @@ const navigationConfig = [
       { to: '/cashflow-detail', icon: TrendingUp, label: 'תזרים — מפורט', description: 'חודשי/יומי, burn-rate ויחסי נזילות' },
       { to: '/ar', icon: Receipt, label: 'AR / Collections', description: 'Aging & follow-up' },
       { to: '/ap', icon: CreditCard, label: 'AP / Payables', description: 'Bills & payments' },
+      { to: '/suppliers-missing-invoices', icon: FileX, label: 'ספקים חסרי חשבונית', description: 'ספקים ששולם להם בבנק/אשראי בלי מסמך תואם — מע"מ תשומות שלא נקלט' },
       { to: '/budget', icon: Target, label: 'Budget', description: 'Budget vs actual' },
       { to: '/budget-entry', icon: Target, label: 'הזנת תקציב', description: 'הזנה ידנית / ייבוא Excel' },
       { to: '/year-comparison', icon: BarChart3, label: 'השוואה שנתית', description: 'מול שנה קודמת' },
@@ -153,7 +154,6 @@ const navigationConfig = [
       { to: '/payroll', icon: Users, label: 'שכר', description: 'עובדים, תלושים ודוח 102/126' },
       { to: '/ledger', icon: BookOpen, label: 'הנה"ח כפולה', description: 'מאזן בוחן, פקודות יומן וכרטסת — נגזר מהמסמכים' },
       { to: '/daily-reports', icon: TrendingUp, label: 'דוחות יומיים', description: 'רווח/הפסד מצטבר, גיול חובות וספקים תוך-חודשי' },
-      { to: '/suppliers-missing-invoices', icon: FileX, label: 'ספקים חסרי חשבונית', description: 'ספקים ששולם להם בבנק/אשראי בלי מסמך תואם — מע"מ תשומות שלא נקלט' },
       { to: '/annual-reports', icon: FileWarning, label: 'דוחות שנתיים', description: 'טיוטת 1301 (יחיד) / 1214 (חברה) — לבדיקת רו"ח' },
       { to: '/of-ops', icon: CreditCard, label: 'Open Finance תפעול', description: 'תשלומים, אשראי, לקוחות וסוחרים' },
     ]

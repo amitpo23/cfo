@@ -353,23 +353,44 @@ class SumitConnector(AccountingConnector):
 
                 bills = []
                 for doc in documents:
-                    total = Decimal(str(doc.total or 0))
-                    paid = Decimal(str(getattr(doc, "paid_amount", 0) or 0))
+                    # SUMIT מחזיר total שלילי (מוסכמת "כסף יוצא") לכל מסמכי הוצאה —
+                    # אומת חי בפרוד: 730/730 מסמכים שליליים. גוזרים subtotal/tax על
+                    # הגולמי (raw_total) כדי לכבד vat_amount מפורש אם קיים, ואז הופכים
+                    # שלושתם יחד כך ש-subtotal+tax==total תמיד נשמר גם אחרי ההיפוך.
+                    raw_total = Decimal(str(doc.total or 0))
+                    raw_subtotal, raw_tax = _derive_subtotal_tax(doc, raw_total)
+                    total = -raw_total
+                    subtotal = -raw_subtotal
+                    tax = -raw_tax
 
-                    subtotal, tax = _derive_subtotal_tax(doc, total)
+                    raw_paid = Decimal(str(getattr(doc, "paid_amount", 0) or 0))
+                    paid = -raw_paid
+
+                    doc_type = str(getattr(doc, "document_type", "") or "")
+                    if doc_type == "15":
+                        # ExpenseReceipt = חשבונית-מס-קבלה על הוצאה — שולמה מעצם
+                        # טבעה (קבלה = אישור תשלום), אף פעם לא "לתשלום" ב-AP.
+                        status = "paid"
+                        paid = total
+                        balance = Decimal("0")
+                    else:
+                        # type 16 (ExpenseInvoice) או סוג לא ידוע — פתוח עד תשלום מפורש
+                        status = "received"
+                        balance = total - paid
+
                     bills.append(NormalizedBill(
                         external_id=str(doc.id),
                         vendor_external_id=str(doc.customer_id) if doc.customer_id else None,
                         bill_number=getattr(doc, "document_number", None),
                         issue_date=doc.date if isinstance(doc.date, date) else None,
                         due_date=getattr(doc, "due_date", None),
-                        status="received",
+                        status=status,
                         currency=getattr(doc, "currency", "ILS") or "ILS",
                         subtotal=subtotal,
                         tax=tax,
                         total=total,
                         paid_amount=paid,
-                        balance=total - paid,
+                        balance=balance,
                         raw_data=doc.__dict__ if hasattr(doc, "__dict__") else {},
                     ))
 

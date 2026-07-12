@@ -67,6 +67,10 @@
     {
       "path": "/api/cron/bank-gap-scan",
       "schedule": "15 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-close",
+      "schedule": "30 6 * * *"
     }
   ]
 }

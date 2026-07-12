@@ -198,6 +198,14 @@ class Account(Base):
     # Provenance — distinguishes SUMIT synthesized accounts from real Open Finance
     # bank accounts so the two sources coexist without external_id collisions.
     source = Column(String(50), default="manual")
+    # חותמת טריות ליתרה — referenceDate של רשומת ה-balance שנבחרה מ-Open
+    # Finance (closingBooked/expected/interimAvailable, האחרון מבין הזמינים).
+    # NULL לחשבונות שלא הגיעו מ-OF (SUMIT מסונתז, ידני).
+    balance_as_of = Column(DateTime, nullable=True)
+    # סוג החשבון הגולמי מהספק (CHECKING/SAVINGS/LOAN/CARD) — נשמר בנפרד מ-
+    # account_type המנורמל כי LOAN ו-CARD שניהם ממופים ל-AccountType.LIABILITY,
+    # אבל הדשבורד צריך להציג "הלוואות" ו"חוב כרטיס" בנפרד (סעיף ד בתוכנית).
+    raw_account_type = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -469,6 +477,33 @@ class SyncCheckpoint(Base):
         UniqueConstraint(
             "organization_id", "source", "entity_type",
             name="uq_sync_checkpoint_org_source_entity",
+        ),
+    )
+
+
+class DailySnapshot(Base):
+    """תמונת-מצב יומית פר-org — נשמרת ע"י cron/daily-close (docs/
+    REZEF_DATA_INTEGRITY_PLAN.md סעיף ג2). הבסיס למגמות (מזומן/AR/AP/רווח
+    לאורך זמן) בלי לחשב מחדש היסטוריה בכל בקשה."""
+    __tablename__ = "daily_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    snapshot_date = Column(Date, nullable=False)
+    cash_balance = Column(Numeric(precision=14, scale=2), nullable=True)
+    ar_total = Column(Numeric(precision=14, scale=2), nullable=True)
+    ap_total = Column(Numeric(precision=14, scale=2), nullable=True)
+    month_net_profit = Column(Numeric(precision=14, scale=2), nullable=True)
+    undocumented_total = Column(Numeric(precision=14, scale=2), nullable=True)
+    data_quality_issues = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "snapshot_date",
+            name="uq_daily_snapshot_org_date",
         ),
     )
 

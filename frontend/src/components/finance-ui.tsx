@@ -136,18 +136,28 @@ export function MetricCard({
   value,
   detail,
   tone = 'blue',
+  footnote,
+  onClick,
 }: {
   darkMode?: boolean;
   icon: LucideIcon;
   label: string;
-  value: string;
-  detail: string;
+  value: React.ReactNode;
+  detail: React.ReactNode;
   tone?: 'blue' | 'emerald' | 'amber' | 'rose' | 'slate';
+  /** Small "source + freshness" line rendered under the detail line, e.g. "מקור: בנק · נכון ל-12/07". */
+  footnote?: React.ReactNode;
+  onClick?: () => void;
 }) {
   return (
     <div
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); } : undefined}
       className={cls(
-        'rounded-2xl border p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md',
+        'rounded-2xl border p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md w-full',
+        onClick ? 'text-right cursor-pointer' : '',
         darkMode ? 'border-slate-700 bg-slate-800' : 'border-slate-200 bg-white',
       )}
     >
@@ -159,8 +169,16 @@ export function MetricCard({
       </div>
       <div className="mt-4 text-2xl font-bold tracking-normal">{value}</div>
       <div className={cls('mt-1 text-sm leading-5', darkMode ? 'text-slate-400' : 'text-slate-500')}>{detail}</div>
+      {footnote && (
+        <div className={cls('mt-2 text-xs leading-4', darkMode ? 'text-slate-500' : 'text-slate-400')}>{footnote}</div>
+      )}
     </div>
   );
+}
+
+/** Muted placeholder for a metric that has no data yet — honesty contract: null ≠ 0. */
+export function NoDataYet({ darkMode }: { darkMode?: boolean }) {
+  return <span className={darkMode ? 'text-slate-500' : 'text-slate-400'}>אין נתונים עדיין</span>;
 }
 
 export function AgentPanel({

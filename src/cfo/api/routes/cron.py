@@ -296,6 +296,57 @@ async def run_collection_reminders(db: Session = Depends(get_db_session)):
     return {"status": "ok", "orgs": len(orgs), "summary": totals, "errors": errors}
 
 
+@router.get("/cron/daily-close", dependencies=[Depends(_verify_cron_secret)])
+def run_daily_close(db: Session = Depends(get_db_session)):
+    """יומי (06:30 UTC — אחרי sync-open-finance/05:30 ו-bank-gap-scan/06:15):
+    מריץ data_quality.run_checks ושומר תמונת-מצב יומית (daily_snapshots) לכל
+    ארגון פעיל — הבסיס למגמות ולדשבורד (docs/REZEF_DATA_INTEGRITY_PLAN.md
+    סעיף ג2). אידמפוטנטי (UPSERT לפי org+snapshot_date). כשל בארגון אחד
+    מבודד ולא מפיל את הריצה עבור האחרים."""
+    from ...models import DailySnapshot
+    from ...services.dashboard_service import DashboardService
+    from ...services.data_quality import run_checks
+
+    today = date.today()
+    orgs = db.query(Organization).filter(Organization.is_active.is_(True)).all()
+    results = []
+    errors = []
+    for org in orgs:
+        try:
+            overview = DashboardService(db, org.id).get_overview(today=today)
+            dq = run_checks(db, org.id)
+
+            existing = db.query(DailySnapshot).filter(
+                DailySnapshot.organization_id == org.id,
+                DailySnapshot.snapshot_date == today,
+            ).first()
+            values = {
+                "cash_balance": overview["cash_balance"],
+                "ar_total": overview["ar_total"],
+                "ap_total": overview["ap_total"],
+                "month_net_profit": overview["month_net_profit"],
+                "undocumented_total": overview["undocumented_expenses"]["total"],
+                "data_quality_issues": dq["issues_count"],
+            }
+            if existing:
+                for key, value in values.items():
+                    setattr(existing, key, value)
+            else:
+                db.add(DailySnapshot(organization_id=org.id, snapshot_date=today, **values))
+            db.commit()
+            results.append({
+                "organization_id": org.id, "status": "ok",
+                "data_quality": dq["status"], "issues_count": dq["issues_count"],
+            })
+        except Exception as exc:
+            logger.error("Daily close failed for org %s: %s", org.id, exc)
+            db.rollback()
+            errors.append({"org": org.id, "error": str(exc)})
+
+    return {"status": "ok", "orgs": len(orgs), "snapshots": len(results),
+            "results": results, "errors": errors}
+
+
 @router.get("/cron/bank-gap-scan", dependencies=[Depends(_verify_cron_secret)])
 def run_bank_gap_scan(db: Session = Depends(get_db_session)):
     """יומי (06:15 UTC — אחרי sync-open-finance של 05:30): סורק לכל ארגון
