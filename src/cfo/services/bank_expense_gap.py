@@ -96,6 +96,31 @@ def _normalize_description(desc: Optional[str]) -> str:
     return re.sub(r"\s+", " ", (desc or "")).strip()
 
 
+def _transfer_purpose(txn) -> Optional[str]:
+    """"מטרת ההעברה" (purposeDescription) — ההערה שהמעביר כתב בעת ביצוע
+    ההעברה. חיה ב-raw_data.description.additionalInfo, שמגיע מהספק לעיתים
+    כמחרוזת JSON ולעיתים כאובייקט. זה לרוב המידע היחיד שמזהה את הנמען
+    בהעברות "העברה לבנק אחר" (למשל "שכ\"ד", "סייעת לגיא")."""
+    raw = getattr(txn, "raw_data", None)
+    if not isinstance(raw, dict):
+        return None
+    desc = raw.get("description")
+    if not isinstance(desc, dict):
+        return None
+    info = desc.get("additionalInfo")
+    if isinstance(info, str):
+        try:
+            import json
+            info = json.loads(info)
+        except Exception:
+            return None
+    if not isinstance(info, dict):
+        return None
+    val = info.get("purposeDescription")
+    val = val.strip() if isinstance(val, str) else None
+    return val or None
+
+
 def _is_generic_transfer(desc: Optional[str]) -> bool:
     """תיאור שהוא נוסח בנקאי גנרי ולא מזהה נמען ספציפי — ראה הערה למעלה."""
     return _contains_any(desc, GENERIC_TRANSFER_KEYWORDS)
@@ -407,6 +432,8 @@ def suppliers_missing_invoices(db, org_id: int, date_from: date, date_to: date) 
                 "date": txn_date.isoformat() if txn_date else None,
                 "description": desc,
                 "amount": amount,
+                # "מטרת ההעברה" — לרוב הרמז היחיד לזהות הנמען.
+                "purpose": _transfer_purpose(t),
             })
             continue
         else:
@@ -496,7 +523,10 @@ def scan_and_alert(db, org_id: int, lookback_days: int = 14) -> dict[str, int]:
             continue
 
         amount = abs(float(t.amount or 0))
+        purpose = _transfer_purpose(t)
         supplier = _merchant_name(t) or (t.description or "ספק לא ידוע")
+        if purpose:
+            supplier = f"{supplier} ({purpose})"
         date_str = t.transaction_date.isoformat() if t.transaction_date else ""
         title = f"הוצאה בבנק ללא חשבונית — {_money(amount)} {supplier} ({date_str})"
         message = (

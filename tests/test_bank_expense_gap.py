@@ -536,3 +536,29 @@ def test_suppliers_missing_invoices_route_default_90_days(client, fresh_org):
     body = r.json()
     names = [s["name"] for s in body["suppliers"]]
     assert "ספק ברירת מחדל" in names
+
+
+def test_unidentified_transfer_carries_purpose(fresh_org):
+    """"מטרת ההעברה" (purposeDescription מ-additionalInfo, גם כמחרוזת JSON)
+    מוצגת על העברות ללא נמען מזוהה — לרוב הרמז היחיד למי הכסף הלך."""
+    org_id = fresh_org()["org_id"]
+    from cfo.database import SessionLocal
+    db = SessionLocal()
+    try:
+        db.add(BankTransaction(
+            organization_id=org_id, external_id="tx-purpose-1", source="open_finance",
+            transaction_date=date.today(), description="העברה לבנק אחר",
+            amount=Decimal("-7000"), currency="ILS",
+            raw_data={"description": {
+                "description": "העברה לבנק אחר",
+                "additionalInfo": '{"accountNo":"12-656-1","purposeDescription":"שכ\\"ד"}',
+            }},
+        ))
+        db.commit()
+        result = svc.suppliers_missing_invoices(
+            db, org_id, date.today() - timedelta(days=7), date.today())
+        (txn,) = result["unidentified_transfers"]["transactions"]
+        assert txn["purpose"] == 'שכ"ד'
+        assert txn["amount"] == 7000.0
+    finally:
+        db.close()

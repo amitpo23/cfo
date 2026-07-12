@@ -21,6 +21,7 @@ interface UnidentifiedTransfer {
   date: string | null;
   description: string | null;
   amount: number;
+  purpose?: string | null; // "מטרת ההעברה" — ההערה שנכתבה בעת ההעברה
 }
 
 interface UnidentifiedTransfers {
@@ -165,6 +166,7 @@ export default function SuppliersMissingInvoices() {
                     <tr>
                       <th className="text-right py-2">תאריך</th>
                       <th className="text-right py-2">תיאור</th>
+                      <th className="text-right py-2">מטרת ההעברה</th>
                       <th className="text-right py-2">סכום</th>
                     </tr>
                   </thead>
@@ -173,6 +175,7 @@ export default function SuppliersMissingInvoices() {
                       <tr key={i} className="border-b last:border-0">
                         <td className="py-2 text-slate-500 whitespace-nowrap">{t.date}</td>
                         <td className="py-2">{t.description}</td>
+                        <td className="py-2 text-amber-700 font-medium">{t.purpose || '—'}</td>
                         <td className="py-2 font-medium">{fmt(t.amount)}</td>
                       </tr>
                     ))}
