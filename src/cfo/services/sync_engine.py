@@ -968,8 +968,11 @@ def get_connector_for_org(
         from .open_finance_connector import OpenFinanceConnector
         from ..config import settings
 
-        client_id = creds.get("client_id") or (settings.open_finance_client_id if env_allowed else None)
-        client_secret = creds.get("client_secret") or (settings.open_finance_client_secret if env_allowed else None)
+        # Platform client_id/client_secret are shared across every org and may
+        # fall back to env for ANY org; user_id is per-org and only falls back
+        # to env for org 1 (the original pilot) — see open_finance_onboarding.py.
+        client_id = creds.get("client_id") or settings.open_finance_client_id
+        client_secret = creds.get("client_secret") or settings.open_finance_client_secret
         user_id = creds.get("user_id") or (settings.open_finance_user_id if env_allowed else None)
         api_base_url = creds.get("api_base_url") or settings.open_finance_api_base_url
         oauth_url = creds.get("oauth_url") or settings.open_finance_oauth_url

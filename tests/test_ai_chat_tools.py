@@ -25,7 +25,7 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
     write_tools = {name for name, t in TOOLS.items() if t.category == "write"}
     assert write_tools == {
         "issue_document", "log_collection_attempt", "create_payment_link",
-        "create_bank_payment_request",
+        "create_bank_payment_request", "connect_bank_account",
         "run_client_sync", "register_office_client",
         "create_expense_category", "set_expense_category", "classify_pending_expenses",
     }

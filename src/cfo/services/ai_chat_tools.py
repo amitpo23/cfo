@@ -165,6 +165,25 @@ async def _create_bank_payment_request(
     }
 
 
+async def _connect_bank_account(
+    db,
+    org_id: int,
+    *,
+    psu_id: str | None = None,
+    psu_corporate_id: str | None = None,
+    provider_ids: list[str] | None = None,
+    **_kwargs,
+) -> dict:
+    from .open_finance_onboarding import start_bank_connection
+
+    result = await start_bank_connection(
+        db, org_id,
+        psu_id=psu_id, psu_corporate_id=psu_corporate_id, provider_ids=provider_ids,
+    )
+    result["note"] = "יש לשלוח ללקוח את הקישור (connect_url) להשלמת מסע ההסכמה מול הבנק."
+    return result
+
+
 def _parse_date_safe(value: str | None):
     """Best-effort ISO date parse for model-supplied filter args. A read tool
     executes inline in the chat loop with no surrounding try/except (unlike
@@ -549,6 +568,28 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="write",
         fn=_create_bank_payment_request,
+    ),
+    "connect_bank_account": ChatTool(
+        name="connect_bank_account",
+        description=(
+            "מתחיל מסע חיבור חשבון בנק בבנקאות פתוחה (Open Finance) ומחזיר קישור "
+            "(connect_url) שיש לשלוח ללקוח כדי שישלים את מסך אישור שיתוף המידע מול "
+            "הבנק שלו. פעולת כתיבה אמיתית — יוצרת חיבור חדש מול Open Finance — דורשת "
+            "אישור מפורש של המשתמש לפני ביצוע."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "psu_id": {"type": "string", "description": "ת.ז. בעל החשבון (אופציונלי)"},
+                "psu_corporate_id": {"type": "string", "description": "ח.פ. לחשבון עסקי (אופציונלי)"},
+                "provider_ids": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "סינון לבנק/ים ספציפיים; השמטה מציגה מסך בחירת בנק (אופציונלי)",
+                },
+            },
+        },
+        category="write",
+        fn=_connect_bank_account,
     ),
     "list_expenses": ChatTool(
         name="list_expenses",
