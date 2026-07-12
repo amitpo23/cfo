@@ -33,10 +33,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Insight types produced by the bank-intelligence engine (for listing).
+# "missing_document" is produced by services/bank_expense_gap.py (bank
+# expense-gap engine, cron/bank-gap-scan) — included here so its alerts
+# surface in this same bank-insights UI stream, not only the generic
+# CfoInsight feed (cfo_brain_service.list_insights).
 BANK_INSIGHT_TYPES = {
     "duplicate_charge", "subscription", "installment_ending", "bank_fees",
     "category_spike", "cashflow_forecast", "savings_opportunity", "anomaly",
     "risk_signal", "aggregate_balance", "portfolio_summary", "portfolio_position",
+    "missing_document",
 }
 
 

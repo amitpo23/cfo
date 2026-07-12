@@ -297,6 +297,11 @@ async def _get_missing_documents(db, org_id: int, *, date_from: str | None = Non
     return classify_missing_documents(db, org_id, date_from=date_from)
 
 
+async def _get_bank_expense_gap_alerts(db, org_id: int, **_kwargs) -> dict:
+    from .bank_expense_gap import list_open_alerts
+    return list_open_alerts(db, org_id)
+
+
 async def _rezef_help(db, org_id: int, *, topic: str | None = None, **_kwargs) -> dict:
     """Project knowledge-base lookup — "how do I / what can Rezef do / where
     is X". Ignores db/org_id (same signature as every other tool for
@@ -720,6 +725,20 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_get_missing_documents,
+    ),
+    "get_bank_expense_gap_alerts": ChatTool(
+        name="get_bank_expense_gap_alerts",
+        description=(
+            "התרעות פתוחות ('missing_document') על הוצאות בבנק ללא מסמך הנה\"ח, "
+            "שנוצרו ע\"י הסריקה היומית האוטומטית (cron/bank-gap-scan, מנוע פער "
+            "בנק-חשבוניות) — לא סיווג בזמן אמת כמו get_missing_documents, אלא "
+            "רשימת ההתרעות ששמורות כבר במערכת. שימושי לשאלה 'אילו הוצאות בלי "
+            "חשבונית' / 'מה עוד לא תויק מהבנק' כשרוצים את הרשימה הרשמית "
+            "שהתעדה נוצרה עליה."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_bank_expense_gap_alerts,
     ),
     "rezef_help": ChatTool(
         name="rezef_help",

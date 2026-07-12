@@ -82,3 +82,16 @@ def suppliers(
     db: Session = Depends(get_db_session),
 ):
     return daily_reports_service.supplier_breakdown(db, org_id, year, month)
+
+
+@router.get("/daily-reports/bank-expense-gap")
+def bank_expense_gap(
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """מנוע פער בנק-חשבוניות: לכל תנועת בנק יוצאת בחודש — האם יש כנגדה
+    מסמך הנה"ח, וסיכום הפער הכולל (ראה services/bank_expense_gap.py)."""
+    from ...services import bank_expense_gap as bank_expense_gap_service
+    return bank_expense_gap_service.gap_report(db, org_id, year, month)

@@ -294,3 +294,28 @@ async def run_collection_reminders(db: Session = Depends(get_db_session)):
             errors.append({"org": org.id, "error": str(exc)})
 
     return {"status": "ok", "orgs": len(orgs), "summary": totals, "errors": errors}
+
+
+@router.get("/cron/bank-gap-scan", dependencies=[Depends(_verify_cron_secret)])
+def run_bank_gap_scan(db: Session = Depends(get_db_session)):
+    """יומי (06:15 UTC — אחרי sync-open-finance של 05:30): סורק לכל ארגון
+    פעיל תנועות בנק יוצאות חדשות ללא מסמך הנה"ח, ויוצר CfoInsight
+    (insight_type="missing_document") לכל תנועה חדשה. כשל בארגון אחד
+    מבודד (rollback + נרשם ב-errors) ולא מפיל את הריצה עבור האחרים —
+    ראה services/bank_expense_gap.scan_and_alert."""
+    from ...services.bank_expense_gap import scan_and_alert
+
+    orgs = db.query(Organization).filter(Organization.is_active.is_(True)).all()
+    totals = {"created": 0, "skipped_existing": 0, "scanned": 0}
+    errors = []
+    for org in orgs:
+        try:
+            result = scan_and_alert(db, org.id)
+            for k in totals:
+                totals[k] += result.get(k, 0)
+        except Exception as exc:
+            logger.error("Bank gap scan failed for org %s: %s", org.id, exc)
+            db.rollback()
+            errors.append({"org": org.id, "error": str(exc)})
+
+    return {"status": "ok", "orgs": len(orgs), "summary": totals, "errors": errors}
