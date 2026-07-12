@@ -2518,3 +2518,15 @@ DECISION: do NOT force-enable expense-addition on client account — would creat
 # === SUMIT support DEFINITIVE answer on expense capture (2026-07-07) ===
 Per SUMIT support chat: (1) There is NO office-wide API key — API keys are per-business (each client separate); an accounting firm needs a key IN each client's business. (2) CRITICAL: "תיוק קבצים" (file capture) is NOT available via API AT ALL — it's a UI-only operation done inside the client file: "תיק הלקוח > קבצים > תיוק קבצים". SUMIT's OCR/AI pre-fills, the accountant completes+saves into a batch (מנה).
 CONCLUSION: The add_expense API path is dead (and was wrong anyway — addexpense != תיוק). SUMIT capture MUST be done in the UI (by the accountant's team, OCR-assisted) OR via browser automation of the תיוק form. Rezef already holds all 41 correctly (the accountant's parallel record). Offered user: team does UI תיוק (recommended) OR I browser-automate it (pilot-first).
+
+# === 2026-07-12 — תכנון "עמית פורת מקצה-לקצה" + אימות חי לדיווח מע"מ מאי-יוני ===
+User directive: org 1 (עמית פורת) full loop first, then other clients; 7 requests (expense capture check, VAT reporting command+tax-authority path, bank-vs-books reconciliation, daily/cumulative P&L with gap analysis, crons, bot queries, daily collection model by days-late).
+LIVE VERIFICATION (prod API as super_admin + Neon direct, read-only):
+- org1 expenses: May 47 docs (31 with data, VAT ₪1,817.32, 16 EMPTY drafts); June 77 docs (11 with data, VAT ₪240.87, **66 EMPTY drafts**); July 23 empty. Empty = unfiled SUMIT receipt scans (API returns zeros until תיוק) → June VAT number is fiction until captured. VAT filing due 15/07.
+- org1 sales 2026: Jan 20K/Feb 27.5K/Mar 7.5K, Apr-Jul ZERO invoices → May-June = refund report (input only), pending bank-income check.
+- org1 bank: 1,891 txns all is_provisional, 214 matched (11%); May out ₪88,616 vs ₪11,914 expense docs; synthesis: 1,677 unmatched incl. ₪23,100 inflow w/o invoice.
+- AR: 21 OVERDUE ₪440,058 open; DATA BUG: 4 invoices status=PAID with balance ₪215,400.
+- Bot: live-tested → Anthropic quota blocked until 01/08 (confirmed via /api/ai/chat).
+- Collection: opt-in False all orgs; model is first/second/final+7d cooldown — needs recalibration to user spec (T-1 pre-due + daily days-late until paid, stop on OF-detected payment).
+PLAN WRITTEN: docs/superpowers/plans/2026-07-12-amit-porat-vat-and-full-loop-plan.md (T1-T7 mapped to the 7 requests, P0 = capture 82 drafts via browser-session GUID harvest + self-vision-read, same method as org5's 41).
+Prod env re-pulled via `vercel env pull` to session scratchpad (old scratchpad path is gone).
