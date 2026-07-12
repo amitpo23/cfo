@@ -2548,3 +2548,10 @@ CODE (TDD, committed):
 - a16d9e5 collections recalibration: pre_due (T-1) + daily 'overdue' w/ days-late count (singular/plural he), 20h cooldown, stop on OF bank-matched payment; + sumit_connector paid/closed → balance 0 (kills ₪215,400 phantom AR org1; live rows fix on next sync after deploy).
 - 72b0baf OF per-org connection scoping: connection_id passed to /data/accounts+transactions; factory reads creds['connection_id']; configure route accepts it. REASON: user connected אליהב כהן's Mizrahi bank (conn 01KXAVNTTRPWY55HJYSPHY1ZSK, customerId 301105185, 1,994 txns, ACTIVE) under the SAME Financy user as org1 — without scoping, org1's nightly OF sync would ingest org2's bank. org1 keeps 01KX35DJF10AC0DYKHQNHY6XDC (hapoalim).
 - Suite 860 passed pre-scoping; full re-run in flight. PENDING: deploy, then configure org1+org2 connection_id via API, manual OF sync org2, verify isolation.
+
+# === 2026-07-12 (המשך) — deploy + org2 bank live + data fixes ===
+DEPLOYED prod (cfo-2-3hhc974wz), 16/16 smoke OK. 866 tests passed pre-deploy.
+ORG2 BANK LIVE: configured per-org connection scoping via /api/integration/open-finance/configure — org1→01KX35DJF10AC0DYKHQNHY6XDC (hapoalim), org2→01KXAVNTTRPWY55HJYSPHY1ZSK (mizrahi, customerId 301105185). Reset org2 OF checkpoints (empty-morning-run watermark cut history) → full backfill: **1,994 bank txns created in org 2** (עו"ש 602 + ויזה כאל זהב 1,188 + בינלאומי 207 + מסגרת+ניידת). Isolation VERIFIED: org1 stayed 1,891.
+DATA FIX: PAID-with-balance bug was in BOTH orgs — 11 invoices fixed (org1: 4 = ₪215,400; org2: 7 = ₪374,700 phantom AR). UPDATE paid_amount=total, balance=0, payload_hash=NULL (so next sync re-normalizes under the fixed connector). org1 open AR now: 21 OVERDUE ₪440,058 + 1 DRAFT (real collection queue).
+NOTE: SUMIT circuit breaker was open for org1 customers during the verify sync (hourly cron self-heals).
+REMAINING QUEUE: T3.1-2 bank-explain engine + missing-doc report; T5.1 daily-close cron; T1.1 Rezef row-fill after user picks תיוק path; SHAAM renewal + 05-06/26 clarification (user).
