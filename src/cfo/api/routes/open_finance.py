@@ -48,6 +48,69 @@ BANK_INSIGHT_TYPES = {
 # ---------------------------------------------------------------------- #
 # client resolution
 # ---------------------------------------------------------------------- #
+def _effective_of_user_id(db: Session, org_id: int) -> Optional[str]:
+    """The Financy ``userId`` this org's client actually authenticates as —
+    same resolution as ``get_open_finance_client`` (env fallback for org 1)."""
+    from ...models import IntegrationConnection
+
+    conn = (
+        db.query(IntegrationConnection)
+        .filter(
+            IntegrationConnection.organization_id == org_id,
+            IntegrationConnection.source == "open_finance",
+            IntegrationConnection.status == "active",
+        )
+        .first()
+    )
+    creds = decrypt_credentials(conn.credentials_encrypted) if conn and conn.credentials_encrypted else {}
+    user_id = (creds or {}).get("user_id")
+    if not user_id and org_id == 1:
+        user_id = settings.open_finance_user_id
+    return user_id
+
+
+def _has_shared_of_identity(db: Session, org_id: int) -> bool:
+    """True if another active org authenticates under the SAME Financy
+    userId as this org.
+
+    Matters only for the handful of Open Finance endpoints that are scoped
+    by userId with no connectionId filter (``get_monthly_report``,
+    ``get_extended_securities`` — confirmed against the OpenAPI spec, unlike
+    accounts/transactions which DO take a connectionId and are isolated via
+    the per-org `connection_id` credential). When several client orgs share
+    one Financy identity (e.g. all connected through the accountant's own
+    Financy login), those two endpoints return data AGGREGATED ACROSS EVERY
+    connection under that identity — there is no way to filter it client-side.
+    Serving that here would leak one client's bank totals into another
+    client's dashboard, so callers must check this first and refuse rather
+    than guess."""
+    from ...models import IntegrationConnection
+
+    my_user_id = _effective_of_user_id(db, org_id)
+    if not my_user_id:
+        return False
+    rows = (
+        db.query(IntegrationConnection)
+        .filter(
+            IntegrationConnection.source == "open_finance",
+            IntegrationConnection.status == "active",
+            IntegrationConnection.organization_id != org_id,
+        )
+        .all()
+    )
+    for conn in rows:
+        other_user_id = _effective_of_user_id(db, conn.organization_id)
+        if other_user_id and str(other_user_id) == str(my_user_id):
+            return True
+    return False
+
+
+_SHARED_IDENTITY_MESSAGE = (
+    "לא זמין: מזהה המשתמש ב-Open Finance משותף עם ארגון נוסף — הדוח המצרפי "
+    "הזה (ללא סינון פר-חיבור בממשק הספק) היה מציג נתונים משני התיקים יחד."
+)
+
+
 def get_open_finance_client(db: Session, org_id: int) -> OpenFinanceClient:
     """Build an OpenFinanceClient from org-scoped credentials (or env for org 1)."""
     from ...models import IntegrationConnection
@@ -312,6 +375,8 @@ async def list_transactions(
 
 @router.get("/monthly-report")
 async def monthly_report(org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+    if _has_shared_of_identity(db, org_id):
+        raise HTTPException(409, _SHARED_IDENTITY_MESSAGE)
     client = get_open_finance_client(db, org_id)
     try:
         return await _call(client.get_monthly_report())
@@ -321,6 +386,8 @@ async def monthly_report(org_id: int = Depends(get_current_org_id), db: Session 
 
 @router.get("/securities")
 async def securities(org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+    if _has_shared_of_identity(db, org_id):
+        raise HTTPException(409, _SHARED_IDENTITY_MESSAGE)
     client = get_open_finance_client(db, org_id)
     try:
         return await _call(client.get_extended_securities())
@@ -379,6 +446,14 @@ async def generate_insights(
     # absent or the calls fail. One client is reused for both fetches.
     monthly = None
     securities = None
+    if include_monthly_report and _has_shared_of_identity(db, org_id):
+        # ראו _has_shared_of_identity: הדוח המצרפי ייחשף רק ליוצר-הבקשה, אבל
+        # תוכנו ממוזג משני התיקים — מדלגים בכנות, לא מסננים בטעות.
+        logger.info(
+            "skipping monthly-report/securities enrichment for org %s — "
+            "shared Open Finance identity with another active org", org_id,
+        )
+        include_monthly_report = False
     if include_monthly_report:
         client = None
         try:
