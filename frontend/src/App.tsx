@@ -41,6 +41,7 @@ import {
   ChevronDown,
   ClipboardCheck,
   MessageCircle,
+  FileX,
 } from 'lucide-react';
 
 // Dashboard Components
@@ -57,6 +58,7 @@ import PayrollDashboard from './components/PayrollDashboard';
 import OpenFinanceOpsDashboard from './components/OpenFinanceOpsDashboard';
 import LedgerDashboard from './components/LedgerDashboard';
 import DailyReportsDashboard from './components/DailyReportsDashboard';
+import SuppliersMissingInvoices from './components/SuppliersMissingInvoices';
 import AnnualReportsDashboard from './components/AnnualReportsDashboard';
 import EngineDashboard from './components/EngineDashboard';
 import BusinessMenuDashboard from './components/BusinessMenuDashboard';
@@ -151,6 +153,7 @@ const navigationConfig = [
       { to: '/payroll', icon: Users, label: 'שכר', description: 'עובדים, תלושים ודוח 102/126' },
       { to: '/ledger', icon: BookOpen, label: 'הנה"ח כפולה', description: 'מאזן בוחן, פקודות יומן וכרטסת — נגזר מהמסמכים' },
       { to: '/daily-reports', icon: TrendingUp, label: 'דוחות יומיים', description: 'רווח/הפסד מצטבר, גיול חובות וספקים תוך-חודשי' },
+      { to: '/suppliers-missing-invoices', icon: FileX, label: 'ספקים חסרי חשבונית', description: 'ספקים ששולם להם בבנק/אשראי בלי מסמך תואם — מע"מ תשומות שלא נקלט' },
       { to: '/annual-reports', icon: FileWarning, label: 'דוחות שנתיים', description: 'טיוטת 1301 (יחיד) / 1214 (חברה) — לבדיקת רו"ח' },
       { to: '/of-ops', icon: CreditCard, label: 'Open Finance תפעול', description: 'תשלומים, אשראי, לקוחות וסוחרים' },
     ]
@@ -367,6 +370,7 @@ function App() {
                 <Route path="/of-ops" element={<OpenFinanceOpsDashboard />} />
                 <Route path="/ledger" element={<LedgerDashboard />} />
                 <Route path="/daily-reports" element={<DailyReportsDashboard />} />
+                <Route path="/suppliers-missing-invoices" element={<SuppliersMissingInvoices />} />
                 <Route path="/annual-reports" element={<AnnualReportsDashboard />} />
                 <Route path="/engine" element={<EngineDashboard />} />
                 <Route path="/business-menu" element={<BusinessMenuDashboard />} />

@@ -374,3 +374,165 @@ def test_classify_bank_transfer_stays_expense_candidate():
         raw_data={"category": {"main": "TRANSFER", "sub": "BANK_TRANSFER"}},
     )
     assert svc.classify_transaction(txn) == "expense_candidate"
+
+
+# --------------------------------------------------------------------- #
+# suppliers_missing_invoices
+# --------------------------------------------------------------------- #
+def test_suppliers_missing_invoices_aggregates_by_merchant_name(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        today = date.today()
+        _mk_txn(db, org_id, amount=-300, description="חיוב א", merchant="ספק הדפוס בע\"מ", days_ago=1)
+        _mk_txn(db, org_id, amount=-500, description="חיוב ב", merchant="ספק הדפוס בע\"מ", days_ago=3)
+        db.commit()
+
+        report = svc.suppliers_missing_invoices(db, org_id, today - timedelta(days=30), today)
+        names = [s["name"] for s in report["suppliers"]]
+        assert names == ["ספק הדפוס בע\"מ"]
+        supplier = report["suppliers"][0]
+        assert supplier["transactions_count"] == 2
+        assert supplier["total"] == 800.0
+        assert supplier["estimated_vat"] == round(800 * 0.18 / 1.18, 2)
+        assert len(supplier["sample_descriptions"]) <= 3
+    finally:
+        db.close()
+
+
+def test_suppliers_missing_invoices_falls_back_to_normalized_description(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        today = date.today()
+        _mk_txn(db, org_id, amount=-120, description="תשלום   לספק  שיווק   דיגיטלי", days_ago=1)
+        _mk_txn(db, org_id, amount=-80, description="  תשלום לספק שיווק דיגיטלי  ", days_ago=2)
+        db.commit()
+
+        report = svc.suppliers_missing_invoices(db, org_id, today - timedelta(days=30), today)
+        assert len(report["suppliers"]) == 1
+        supplier = report["suppliers"][0]
+        assert supplier["name"] == "תשלום לספק שיווק דיגיטלי"
+        assert supplier["transactions_count"] == 2
+        assert supplier["total"] == 200.0
+    finally:
+        db.close()
+
+
+def test_suppliers_missing_invoices_generic_transfer_goes_to_unidentified(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        today = date.today()
+        _mk_txn(db, org_id, amount=-1000, description="העברה לבנק אחר", days_ago=1)
+        _mk_txn(db, org_id, amount=-250, description="הוראת קבע", days_ago=2)
+        db.commit()
+
+        report = svc.suppliers_missing_invoices(db, org_id, today - timedelta(days=30), today)
+        assert report["suppliers"] == []
+        assert report["unidentified_transfers"]["count"] == 2
+        assert report["unidentified_transfers"]["total"] == 1250.0
+        assert len(report["unidentified_transfers"]["transactions"]) == 2
+    finally:
+        db.close()
+
+
+def test_suppliers_missing_invoices_documented_transaction_excluded(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        today = date.today()
+        _mk_bill(db, org_id, total=1180, days_ago=1)
+        _mk_txn(db, org_id, amount=-1180, description="חיוב מתועד", merchant="ספק מתועד", days_ago=0)
+        db.commit()
+
+        report = svc.suppliers_missing_invoices(db, org_id, today - timedelta(days=30), today)
+        names = [s["name"] for s in report["suppliers"]]
+        assert "ספק מתועד" not in names
+    finally:
+        db.close()
+
+
+def test_suppliers_missing_invoices_org_isolation(fresh_org):
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        today = date.today()
+        _mk_txn(db, org_a, amount=-400, description="הוצאה א", merchant="ספק א", days_ago=1)
+        _mk_txn(db, org_b, amount=-99999, description="לא שייך", merchant="ספק זר", days_ago=1)
+        db.commit()
+
+        report = svc.suppliers_missing_invoices(db, org_a, today - timedelta(days=30), today)
+        names = [s["name"] for s in report["suppliers"]]
+        assert "ספק זר" not in names
+        assert report["totals"]["total"] == 400.0
+    finally:
+        db.close()
+
+
+def test_suppliers_missing_invoices_totals_and_ordering(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        today = date.today()
+        _mk_txn(db, org_id, amount=-100, description="קטן", merchant="ספק קטן", days_ago=1)
+        _mk_txn(db, org_id, amount=-900, description="גדול", merchant="ספק גדול", days_ago=1)
+        db.commit()
+
+        report = svc.suppliers_missing_invoices(db, org_id, today - timedelta(days=30), today)
+        names = [s["name"] for s in report["suppliers"]]
+        assert names == ["ספק גדול", "ספק קטן"]  # ordered by total desc
+        assert report["totals"]["suppliers_count"] == 2
+        assert report["totals"]["total"] == 1000.0
+        assert report["totals"]["estimated_vat"] == round(1000 * 0.18 / 1.18, 2)
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------- #
+# route — suppliers-missing-invoices
+# --------------------------------------------------------------------- #
+def test_suppliers_missing_invoices_route_requires_auth(client):
+    r = client.get("/api/daily-reports/suppliers-missing-invoices")
+    assert r.status_code == 403
+
+
+def test_suppliers_missing_invoices_route_returns_expected_shape(client, fresh_org):
+    org = fresh_org()
+    db = SessionLocal()
+    try:
+        _mk_txn(db, org["org_id"], amount=-500, description="הוצאה בלי מסמך", merchant="ספק נבדק", days_ago=1)
+        db.commit()
+    finally:
+        db.close()
+
+    today = date.today()
+    date_from = (today - timedelta(days=30)).isoformat()
+    date_to = today.isoformat()
+    r = client.get(
+        f"/api/daily-reports/suppliers-missing-invoices?date_from={date_from}&date_to={date_to}",
+        headers=org["headers"],
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "suppliers" in body
+    assert "unidentified_transfers" in body
+    assert "totals" in body
+    assert "suppliers_count" in body["totals"]
+
+
+def test_suppliers_missing_invoices_route_default_90_days(client, fresh_org):
+    org = fresh_org()
+    db = SessionLocal()
+    try:
+        _mk_txn(db, org["org_id"], amount=-500, description="הוצאה בלי מסמך", merchant="ספק ברירת מחדל", days_ago=10)
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.get("/api/daily-reports/suppliers-missing-invoices", headers=org["headers"])
+    assert r.status_code == 200
+    body = r.json()
+    names = [s["name"] for s in body["suppliers"]]
+    assert "ספק ברירת מחדל" in names

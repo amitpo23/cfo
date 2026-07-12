@@ -712,3 +712,29 @@ def test_get_bank_expense_gap_alerts_tool_registered_and_org_scoped(fresh_org):
         assert result_a["alerts"][0]["title"]
     finally:
         db.close()
+
+
+def test_get_suppliers_missing_invoices_tool_registered_and_org_scoped(fresh_org):
+    """כלי בוט חדש — ספקים ששולם להם ללא מסמך תואם, מקובצים ברמת ספק
+    (לא תנועה בודדת) מעל bank_expense_gap.suppliers_missing_invoices."""
+    assert "get_suppliers_missing_invoices" in TOOLS
+    assert TOOLS["get_suppliers_missing_invoices"].category == "read"
+
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _mk_bank_txn(db, org_a, None, amount=-500, description="חיוב א",
+                     merchantName="ספק בדיקה", days_ago=1)
+        _mk_bank_txn(db, org_b, None, amount=-99999, description="לא שייך ל-א",
+                     merchantName="ספק זר", days_ago=1)
+        db.commit()
+
+        result_a = asyncio.run(TOOLS["get_suppliers_missing_invoices"].fn(db, org_a))
+        names = [s["name"] for s in result_a["suppliers"]]
+        assert "ספק בדיקה" in names
+        assert "ספק זר" not in names
+        assert "unidentified_transfers" in result_a
+        assert "totals" in result_a
+    finally:
+        db.close()

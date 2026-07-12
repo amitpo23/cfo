@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import calendar
+import re
 from datetime import date, timedelta
 from typing import Any, Optional
 
@@ -70,6 +71,34 @@ OTHER_EXCLUDED_CATEGORY_MAIN = {"CASH_WITHDRAWALS"}
 # טווח וסטיית סכום לבדיקת "יש מסמך" לפי סכום+תאריך (כשאין matched_entity_*).
 DATE_WINDOW_DAYS = 7
 AMOUNT_TOLERANCE = 1.0
+
+# --------------------------------------------------------------------- #
+# suppliers_missing_invoices — העברות גנריות ללא נמען מזוהה. רשימה נפרדת
+# מ-TRANSFER_KEYWORDS ב-bank_query_service.py בכוונה: זו לא טקסונומיית
+# סיווג (classify_transaction עדיין מחזירה expense_candidate לתנועות אלו —
+# ראה test_classify_bank_transfer_stays_expense_candidate), אלא כלל נפרד
+# שחל רק אחרי הסיווג, ורק כשאין merchantName (יש merchant -> תמיד הולך
+# לרשימת הספקים, גם אם התיאור מכיל את אחת ממילות המפתח): אם התיאור הוא
+# נוסח בנקאי גנרי ("העברה לבנק אחר" וכו') — אין לנו שם ספק לקבץ לפיו,
+# אז זה הולך ל-unidentified_transfers ולא נספר כ"ספק" בטעות. הזיהוי
+# עצמו הוא match מילות-מפתח פרגמטי (לא NLP) — פסוק ל-false positive
+# (החמצת קיבוץ ספק אמיתי) על פני false negative (העברה גנרית שנספרת
+# כספק עם שם משונה).
+GENERIC_TRANSFER_KEYWORDS = [
+    "העברה לבנק אחר", "העב' ללקוח אחר", "העברה ללקוח אחר",
+    "העברה ב bit", "העברה ב-bit", "העברה בביט",
+    "הוראת קבע", "הוראת-קבע",
+]
+
+
+def _normalize_description(desc: Optional[str]) -> str:
+    """נרמול תיאור תנועה לשימוש כשם ספק/מפתח קיבוץ: רווחים מרובים -> אחד, strip."""
+    return re.sub(r"\s+", " ", (desc or "")).strip()
+
+
+def _is_generic_transfer(desc: Optional[str]) -> bool:
+    """תיאור שהוא נוסח בנקאי גנרי ולא מזהה נמען ספציפי — ראה הערה למעלה."""
+    return _contains_any(desc, GENERIC_TRANSFER_KEYWORDS)
 
 
 def _contains_any(text: Optional[str], keywords: list[str]) -> bool:
@@ -324,6 +353,106 @@ def gap_report(db, org_id: int, year: int, month: int) -> dict[str, Any]:
         "inflows": {
             "undocumented_total": round(inflow_undocumented_total, 2),
             "undocumented_count": inflow_undocumented_count,
+        },
+    }
+
+
+# --------------------------------------------------------------------- #
+# suppliers_missing_invoices — אגרגציה ברמת ספק (לא תנועה בודדת) של הוצאות
+# בבנק/אשראי ללא מסמך תואם, לטווח תאריכים חופשי. בונה על אותו מנוע סיווג
+# ומציאת-מסמך כמו gap_report, אבל מקבץ לפי ספק כדי לענות על "מאילו ספקים
+# חסרה לי חשבונית".
+# --------------------------------------------------------------------- #
+def suppliers_missing_invoices(db, org_id: int, date_from: date, date_to: date) -> dict[str, Any]:
+    """עוברת על כל BankTransaction יוצא (amount<0) של הארגון בטווח
+    [date_from, date_to], מסננת ל-expense_candidate ללא מסמך תואם, ומקבצת
+    לפי ספק: merchantName אם קיים, אחרת description מנורמל — אלא אם
+    התיאור הוא נוסח-העברה גנרי (ראה GENERIC_TRANSFER_KEYWORDS), ואז
+    התנועה הולכת ל-unidentified_transfers (אין בו שם ספק לזהות)."""
+    from ..models import BankTransaction
+
+    rows = (
+        db.query(BankTransaction)
+        .filter(
+            BankTransaction.organization_id == org_id,
+            BankTransaction.transaction_date >= date_from,
+            BankTransaction.transaction_date <= date_to,
+            BankTransaction.amount < 0,
+        )
+        .order_by(BankTransaction.transaction_date)
+        .all()
+    )
+
+    docs = _load_docs(db, org_id)
+    groups: dict[str, dict[str, Any]] = {}
+    unidentified_total = 0.0
+    unidentified_txns: list[dict[str, Any]] = []
+
+    for t in rows:
+        if classify_transaction(t) != "expense_candidate":
+            continue
+        if _find_document_match(db, org_id, t, docs=docs) is not None:
+            continue
+
+        amount = round(abs(float(t.amount or 0)), 2)
+        txn_date = t.transaction_date
+        merchant = _merchant_name(t)
+        desc = t.description
+
+        if merchant:
+            name = merchant
+        elif _is_generic_transfer(desc):
+            unidentified_total += amount
+            unidentified_txns.append({
+                "date": txn_date.isoformat() if txn_date else None,
+                "description": desc,
+                "amount": amount,
+            })
+            continue
+        else:
+            name = _normalize_description(desc) or "ספק לא ידוע"
+
+        g = groups.setdefault(name, {
+            "name": name, "transactions_count": 0, "total": 0.0,
+            "first_date": txn_date, "last_date": txn_date, "sample_descriptions": [],
+        })
+        g["transactions_count"] += 1
+        g["total"] += amount
+        if txn_date is not None:
+            if g["first_date"] is None or txn_date < g["first_date"]:
+                g["first_date"] = txn_date
+            if g["last_date"] is None or txn_date > g["last_date"]:
+                g["last_date"] = txn_date
+        if desc and len(g["sample_descriptions"]) < 3 and desc not in g["sample_descriptions"]:
+            g["sample_descriptions"].append(desc)
+
+    suppliers = []
+    for g in groups.values():
+        total = round(g["total"], 2)
+        suppliers.append({
+            "name": g["name"],
+            "transactions_count": g["transactions_count"],
+            "total": total,
+            "estimated_vat": round(total * 0.18 / 1.18, 2),
+            "first_date": g["first_date"].isoformat() if g["first_date"] else None,
+            "last_date": g["last_date"].isoformat() if g["last_date"] else None,
+            "sample_descriptions": g["sample_descriptions"],
+        })
+    suppliers.sort(key=lambda s: s["total"], reverse=True)
+
+    total_all = round(sum(s["total"] for s in suppliers), 2)
+
+    return {
+        "suppliers": suppliers,
+        "unidentified_transfers": {
+            "count": len(unidentified_txns),
+            "total": round(unidentified_total, 2),
+            "transactions": unidentified_txns,
+        },
+        "totals": {
+            "suppliers_count": len(suppliers),
+            "total": total_all,
+            "estimated_vat": round(total_all * 0.18 / 1.18, 2),
         },
     }
 
