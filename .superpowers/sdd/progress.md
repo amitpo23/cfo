@@ -2555,3 +2555,10 @@ ORG2 BANK LIVE: configured per-org connection scoping via /api/integration/open-
 DATA FIX: PAID-with-balance bug was in BOTH orgs — 11 invoices fixed (org1: 4 = ₪215,400; org2: 7 = ₪374,700 phantom AR). UPDATE paid_amount=total, balance=0, payload_hash=NULL (so next sync re-normalizes under the fixed connector). org1 open AR now: 21 OVERDUE ₪440,058 + 1 DRAFT (real collection queue).
 NOTE: SUMIT circuit breaker was open for org1 customers during the verify sync (hourly cron self-heals).
 REMAINING QUEUE: T3.1-2 bank-explain engine + missing-doc report; T5.1 daily-close cron; T1.1 Rezef row-fill after user picks תיוק path; SHAAM renewal + 05-06/26 clarification (user).
+
+# === 2026-07-12 (המשך 3) — מנוע פער בנק-חשבוניות LIVE (T3.1-2 + חלק מ-T5.1) ===
+Built by supervised Sonnet subagent (TDD, 27 tests) + 2 controller review fixes: (1) TRANSFER category was wrongly excluded as self_transfer — supplier wires are TRANSFER/BANK_TRANSFER (regression test added); (2) per-transaction full-table document loading → preload once per report.
+Commit 0331369, suite 894 passed, deployed (cfo-2-9ibg9va0z), health 200.
+LIVE VERIFIED org1: May gap — out ₪88,616, excluded card ₪21,057 + cash ₪12,000, documented ₪3,641, UNDOCUMENTED ₪51,919 (128 txns, potential VAT ₪7,920), inflows w/o invoice ₪59,550; June — out ₪44,163, undocumented ₪16,779 (88), potential VAT ₪2,560, inflows w/o invoice ₪33,029.
+CRON /api/cron/bank-gap-scan run live: 4 orgs, 109 alerts created (14d lookback incl. org2's fresh mizrahi data), second run 0 created/109 skipped — dedup proven. Daily schedule 06:15 UTC in vercel.json. Bot tool get_bank_expense_gap_alerts ready (bot itself still quota-blocked until 01/08).
+NOTE: May "undocumented" includes ~₪34K bank transfers that may be private/self — user refinement loop is the next calibration; filing the 200 pending SUMIT files will flip many rows to documented.
