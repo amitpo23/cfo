@@ -22,6 +22,16 @@ from .connector_base import (
 logger = logging.getLogger(__name__)
 
 
+# SUMIT מחזיר לעיתים קוד מטבע מספרי במקום ISO (אומת חי: 20 מסמכים עם "1"/"2";
+# "1" על מסמכי ₪ רגילים, "2" על חיובי $99/$202 — מנויים דולריים).
+_SUMIT_CURRENCY_CODES = {"1": "ILS", "2": "USD", "3": "EUR"}
+
+
+def _normalize_currency(value) -> str:
+    v = str(value or "ILS").strip()
+    return _SUMIT_CURRENCY_CODES.get(v, v or "ILS")
+
+
 def _derive_subtotal_tax(doc, total: Decimal) -> tuple[Decimal, Decimal]:
     """Derive (subtotal, tax) for a SUMIT document.
 
@@ -309,7 +319,7 @@ class SumitConnector(AccountingConnector):
                         issue_date=doc.date if isinstance(doc.date, date) else None,
                         due_date=getattr(doc, "due_date", None),
                         status=status,
-                        currency=getattr(doc, "currency", "ILS") or "ILS",
+                        currency=_normalize_currency(getattr(doc, "currency", None)),
                         subtotal=subtotal,
                         tax=tax,
                         total=total,
@@ -385,7 +395,7 @@ class SumitConnector(AccountingConnector):
                         issue_date=doc.date if isinstance(doc.date, date) else None,
                         due_date=getattr(doc, "due_date", None),
                         status=status,
-                        currency=getattr(doc, "currency", "ILS") or "ILS",
+                        currency=_normalize_currency(getattr(doc, "currency", None)),
                         subtotal=subtotal,
                         tax=tax,
                         total=total,
@@ -449,7 +459,7 @@ class SumitConnector(AccountingConnector):
                         contact_external_id=str(doc.customer_id) if doc.customer_id else None,
                         payment_date=doc.date if isinstance(doc.date, date) else None,
                         amount=amount,
-                        currency=getattr(doc, "currency", "ILS") or "ILS",
+                        currency=_normalize_currency(getattr(doc, "currency", None)),
                         method="receipt",
                         reference=getattr(doc, "document_number", None),
                         raw_data=doc.__dict__ if hasattr(doc, "__dict__") else {},

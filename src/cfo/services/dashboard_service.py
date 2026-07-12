@@ -157,11 +157,13 @@ class DashboardService:
 
     def _month_has_books(self, start: date, end: date) -> bool:
         """יש "ספרים" לחודש אם יש בו לפחות מסמך אחד (invoice/bill/expense) שאינו
-        טיוטה/מבוטל — בלי קשר לסטטוס תשלום."""
+        טיוטה/מבוטל **ובסכום שאינו אפס** — טיוטות סריקה ריקות (total=0) שסונכרנו
+        לפני תיקון draft-skip נספרות אחרת כ"נתונים" ומציגות חודש-אפסים שקרי."""
         has_invoice = self.db.query(Invoice.id).filter(
             Invoice.organization_id == self.org_id,
             Invoice.issue_date >= start, Invoice.issue_date <= end,
             Invoice.status.notin_([InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED]),
+            Invoice.total != 0,
         ).first() is not None
         if has_invoice:
             return True
@@ -169,12 +171,14 @@ class DashboardService:
             Bill.organization_id == self.org_id,
             Bill.issue_date >= start, Bill.issue_date <= end,
             Bill.status.notin_([BillStatus.DRAFT, BillStatus.VOID]),
+            Bill.total != 0,
         ).first() is not None
         if has_bill:
             return True
         return self.db.query(Expense.id).filter(
             Expense.organization_id == self.org_id,
             Expense.expense_date >= start, Expense.expense_date <= end,
+            Expense.total != 0,
         ).first() is not None
 
     def _resolve_pnl_period(self, today: date, lookback_months: int = 24) -> dict:

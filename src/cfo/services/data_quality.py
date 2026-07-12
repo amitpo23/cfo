@@ -94,9 +94,13 @@ def _of_balance_freshness(db, org_id: int) -> dict[str, Any]:
         return {"name": "of_balance_freshness", "passed": True, "details": "אין חשבונות Open Finance"}
 
     now = datetime.utcnow()
+    # טריות = מתי *אנחנו* סנכרנו לאחרונה (updated_at), לא referenceDate של
+    # הבנק: יתרת הלוואה מתעדכנת אצל הבנק אחת לתקופה, וזה תקין — הבעיה שהבדיקה
+    # תופסת היא סנכרון שלנו שהפסיק לרוץ.
     stale = [
         a for a in of_accounts
-        if not a.balance_as_of or (now - a.balance_as_of) > _STALE_AFTER
+        if not (a.updated_at or a.balance_as_of)
+        or (now - (a.updated_at or a.balance_as_of)) > _STALE_AFTER
     ]
     return {
         "name": "of_balance_freshness",

@@ -196,3 +196,14 @@ def test_type_15_paid_bill_still_counts_in_input_vat(monkeypatch, fresh_org):
         assert pos["input_vat"] == 180.0  # ה-VAT של ה-bill ה-PAID עדיין נספר
     finally:
         db.close()
+
+
+def test_numeric_currency_codes_map_to_iso():
+    """SUMIT מחזיר לעיתים קוד מטבע מספרי — "1"=ILS (מסמכי ₪ רגילים),
+    "2"=USD (מנויים דולריים). אומת חי: 20 מסמכים בפרוד."""
+    from cfo.services.sumit_connector import _normalize_currency
+    assert _normalize_currency("1") == "ILS"
+    assert _normalize_currency("2") == "USD"
+    assert _normalize_currency("ILS") == "ILS"
+    assert _normalize_currency(None) == "ILS"
+    assert _normalize_currency("EUR") == "EUR"

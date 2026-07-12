@@ -139,6 +139,10 @@ def test_of_balance_freshness_fails_on_stale_balance(fresh_org):
                        balance=1000, currency="ILS", source="open_finance",
                        balance_as_of=datetime.utcnow() - timedelta(hours=72)))
         db.commit()
+        # הסמנטיקה: טריות הסנכרון שלנו — מיישנים גם את updated_at
+        db.query(Account).filter(Account.organization_id == org_id).update(
+            {"updated_at": datetime.utcnow() - timedelta(hours=72)})
+        db.commit()
 
         result = run_checks(db, org_id)
         check = next(c for c in result["checks"] if c["name"] == "of_balance_freshness")
@@ -232,5 +236,30 @@ def test_org_isolation(fresh_org):
 
         result_clean = run_checks(db, org_clean)
         assert result_clean["status"] == "ok"
+    finally:
+        db.close()
+
+
+def test_of_balance_freshness_uses_sync_time_not_bank_reference_date(fresh_org):
+    """יתרת הלוואה עם referenceDate ישן אצל הבנק אינה בעיה כשסנכרנו הרגע —
+    הבדיקה מודדת את טריות הסנכרון שלנו (updated_at)."""
+    from datetime import datetime, timedelta
+    from cfo.database import SessionLocal
+    from cfo.models import Account, AccountType
+    from cfo.services.data_quality import run_checks
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Account(
+            organization_id=org_id, source="open_finance", external_id="of:loan1",
+            name="הלוואה", account_type=AccountType.LIABILITY, currency="ILS",
+            balance=10000, balance_as_of=datetime.utcnow() - timedelta(days=90),
+            updated_at=datetime.utcnow(),
+        ))
+        db.commit()
+        result = run_checks(db, org_id)
+        check = next(c for c in result["checks"] if c["name"] == "of_balance_freshness")
+        assert check["passed"] is True
     finally:
         db.close()
