@@ -110,7 +110,7 @@ def test_stale_sync_produces_warning_in_completeness_check(fresh_org):
         assert result["status"] == "warn"
         c3 = result["checks"][2]
         assert c3["passed"] is None
-        assert "סנכרון SUMIT אחרון" in c3["details"]
+        assert "משיכת מסמכי SUMIT אחרונה" in c3["details"]
         assert "אין להגיש בלי רענון" in c3["details"]
     finally:
         db.close()
@@ -130,5 +130,55 @@ def test_no_successful_sync_ever_produces_stronger_warning(fresh_org):
         c3 = result["checks"][2]
         assert c3["passed"] is None
         assert "מעולם לא בוצע סנכרון" in c3["details"]
+    finally:
+        db.close()
+
+
+def test_freshness_gate_uses_checkpoints_not_run_status(fresh_org):
+    """ריצת סנכרון COMPLETED שדילגה על הכול (circuit open) לא נחשבת טרייה —
+    האמת היא SyncCheckpoint.last_success_at (ממצא חי 13/07: org1 עם ריצות
+    'מוצלחות' בזמן חסימת obligo וללא משיכה אמיתית)."""
+    from datetime import datetime, timedelta
+    from cfo.database import SessionLocal
+    from cfo.models import SyncRun, SyncStatus, SyncCheckpoint
+    from cfo.services import filing_verification as fv
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed(db, org_id)
+        # ריצה "מוצלחת" טרייה — אבל ה-checkpoint מעיד שאין משיכה אמיתית
+        db.add(SyncRun(organization_id=org_id, source="sumit",
+                       status=SyncStatus.COMPLETED, sync_type="full",
+                       started_at=datetime.utcnow(), finished_at=datetime.utcnow()))
+        db.add(SyncCheckpoint(organization_id=org_id, source="sumit",
+                              entity_type="invoices", last_success_at=None,
+                              circuit_open_until=datetime.utcnow() + timedelta(hours=5)))
+        db.add(SyncCheckpoint(organization_id=org_id, source="sumit",
+                              entity_type="bills", last_success_at=None))
+        db.commit()
+        result = fv.verify_filing(db, org_id, 2026, 5, months=1, basis="document")
+        c3 = result["checks"][2]
+        assert c3["passed"] is None  # אזהרה
+        assert "מעולם לא הצליחה" in c3["details"] or "אין להגיש" in c3["details"]
+    finally:
+        db.close()
+
+
+def test_freshness_gate_fresh_checkpoint_passes(fresh_org):
+    from datetime import datetime
+    from cfo.database import SessionLocal
+    from cfo.models import SyncCheckpoint
+    from cfo.services import filing_verification as fv
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed(db, org_id)
+        db.add(SyncCheckpoint(organization_id=org_id, source="sumit",
+                              entity_type="invoices", last_success_at=datetime.utcnow()))
+        db.commit()
+        result = fv.verify_filing(db, org_id, 2026, 5, months=1, basis="document")
+        assert result["checks"][2]["passed"] is True
     finally:
         db.close()
