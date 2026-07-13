@@ -137,46 +137,88 @@ def ap_aging(db, organization_id: int, as_of: Optional[date] = None) -> dict[str
     return _aging_buckets(rows, "balance", as_of)
 
 
-def vat_report(db, organization_id: int, year: int, month: int) -> dict[str, Any]:
-    """דוח מע"מ תקופתי — output/input from the canonical VAT position + counts.
+def vat_report_period(db, organization_id: int, year: int, month: int, *,
+                      months: int = 1, basis: str = "document") -> dict[str, Any]:
+    """דוח מע"מ תקופתי — חודשי (months=1) או דו-חודשי (months=2), לפי בסיס
+    מסמך (basis="document", ברירת מחדל) או בסיס קליטה (basis="captured").
 
-    Uses the single canonical source (financial_synthesis.compute_vat_position) so it
-    never diverges from the synthesis dashboard. Period-scoped to the month.
+    Uses the single canonical document selection (financial_synthesis.
+    select_vat_documents) so this never diverges from compute_vat_position or from
+    pcn874.build_pcn874 run with the same parameters. Returns a per-month breakdown
+    within the period plus the full list of included documents (for the UI to render
+    a drill-down).
+
+    בסיס קליטה משפיע רק על צד התשומות (bills/expenses לפי created_at) — עסקאות
+    (invoices) תמיד מדווחות לפי תאריך המסמך, כנדרש רגולטורית.
     """
     from . import financial_synthesis
-    from ..models import Invoice, Bill, Expense, InvoiceStatus, BillStatus
 
-    start, end = _month_bounds(year, month)
-    pos = financial_synthesis.compute_vat_position(db, organization_id, start=start, end=end)
+    pb = financial_synthesis.period_bounds(year, month, months)
+    start, end = pb["start"], pb["end"]
+    sel = financial_synthesis.select_vat_documents(db, organization_id, start=start, end=end,
+                                                    basis=basis)
 
-    def _count(rows, date_fn, skip):
-        return sum(1 for r in rows
-                   if getattr(r, "status", None) not in skip
-                   and (d := date_fn(r)) and start <= d <= end)
+    output_vat = round(sum(r["vat"] for r in sel["sales"]), 2)
+    input_vat = round(sum(r["vat"] for r in sel["inputs"]), 2)
+    net_vat = round(output_vat - input_vat, 2)
 
-    inv = db.query(Invoice).filter(Invoice.organization_id == organization_id).all()
-    bills = db.query(Bill).filter(Bill.organization_id == organization_id).all()
-    exps = db.query(Expense).filter(Expense.organization_id == organization_id).all()
-    sales_docs = _count(inv, _doc_date, {InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED})
-    purchase_docs = (_count(bills, _doc_date, {BillStatus.DRAFT, BillStatus.VOID})
-                     + sum(1 for e in exps if (d := getattr(e, "expense_date", None))
-                           and start <= d <= end
-                           and str(getattr(e, "status", "") or "").lower() != "error"))
+    def _bucket_month(rec, is_sale: bool) -> Optional[int]:
+        if is_sale or basis == "document":
+            d = rec["doc_date"]
+        else:
+            d = rec["captured_date"] or rec["doc_date"]
+        return d.month if d else None
 
-    due_day = date(year + (1 if month == 12 else 0), 1 if month == 12 else month + 1, 15)
+    breakdown = []
+    for m in pb["months"]:
+        m_sales = [r for r in sel["sales"] if _bucket_month(r, True) == m]
+        m_inputs = [r for r in sel["inputs"] if _bucket_month(r, False) == m]
+        m_out = round(sum(r["vat"] for r in m_sales), 2)
+        m_in = round(sum(r["vat"] for r in m_inputs), 2)
+        breakdown.append({
+            "period": f"{year}-{m:02d}",
+            "output_vat": m_out, "input_vat": m_in, "net_vat": round(m_out - m_in, 2),
+            "sales_documents": len(m_sales), "purchase_documents": len(m_inputs),
+        })
+
+    def _doc_out(r: dict) -> dict[str, Any]:
+        return {
+            "type": r["type"], "number": r["number"],
+            "doc_date": r["doc_date"].isoformat() if r["doc_date"] else None,
+            "captured_date": r["captured_date"].isoformat() if r["captured_date"] else None,
+            "counterparty": r["counterparty"],
+            "amount": round(r["subtotal"], 2), "vat": round(r["vat"], 2),
+        }
+
+    documents = [_doc_out(r) for r in sel["sales"]] + [_doc_out(r) for r in sel["inputs"]]
+
+    period_label = (f"{year}-{pb['anchor_month']:02d}" if months == 1 else
+                    f"{year}-{pb['anchor_month']:02d}_{year}-{pb['end_month']:02d}")
+
     return {
-        "period": f"{year}-{month:02d}",
-        "due_date": due_day.isoformat(),
-        "output_vat": pos["output_vat"],
-        "input_vat": pos["input_vat"],
-        "net_vat": pos["net_vat"],
-        "direction": pos["direction"],
-        "amount_to_report": abs(pos["net_vat"]),
-        "sales_documents": sales_docs,
-        "purchase_documents": purchase_docs,
+        "period": period_label,
+        "months": months,
+        "basis": basis,
+        "due_date": pb["due_date"].isoformat(),
+        "output_vat": output_vat,
+        "input_vat": input_vat,
+        "net_vat": net_vat,
+        "direction": "לתשלום" if net_vat >= 0 else "להחזר",
+        "amount_to_report": abs(net_vat),
+        "sales_documents": len(sel["sales"]),
+        "purchase_documents": len(sel["inputs"]),
+        "breakdown": breakdown,
+        "documents": documents,
         "derived": True,
         "disclaimer": DISCLAIMER,
     }
+
+
+def vat_report(db, organization_id: int, year: int, month: int) -> dict[str, Any]:
+    """דוח מע"מ חודשי — עטיפה דקה מעל vat_report_period (months=1, basis=document)
+    לתאימות לאחור עם צרכנים קיימים. להרחבות (דו-חודשי / בסיס קליטה) קרא
+    ל-vat_report_period ישירות."""
+    return vat_report_period(db, organization_id, year, month, months=1, basis="document")
 
 
 def supplier_breakdown(db, organization_id: int, year: int, month: int) -> dict[str, Any]:

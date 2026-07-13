@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { FileX, Loader2, AlertTriangle } from 'lucide-react';
 import api from '../services/api';
+import ExportButtons, { ExportSheet } from './ExportButtons';
 
 interface Supplier {
   name: string;
@@ -69,6 +70,54 @@ export default function SuppliersMissingInvoices() {
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
+  const exportSheets: ExportSheet[] = report ? [
+    {
+      name: 'ספקים',
+      columns: [
+        { key: 'name', label: 'ספק' },
+        { key: 'transactions_count', label: "מס' תשלומים" },
+        { key: 'total', label: 'סה"כ ששולם' },
+        { key: 'estimated_vat', label: 'מע"מ משוער אבוד' },
+        { key: 'first_date', label: 'מתאריך' },
+        { key: 'last_date', label: 'עד תאריך' },
+        { key: 'sample_descriptions', label: 'דוגמאות' },
+      ],
+      rows: report.suppliers.map((s) => ({
+        name: s.name,
+        transactions_count: s.transactions_count,
+        total: s.total,
+        estimated_vat: s.estimated_vat,
+        first_date: s.first_date || '',
+        last_date: s.last_date || '',
+        sample_descriptions: s.sample_descriptions.join('; '),
+      })),
+      summary: [
+        { label: 'ספקים', value: String(report.totals.suppliers_count) },
+        { label: 'סה"כ ששולם ללא חשבונית', value: fmt(report.totals.total) },
+        { label: 'מע"מ משוער אבוד', value: fmt(report.totals.estimated_vat) },
+      ],
+    },
+    {
+      name: 'העברות ללא זיהוי נמען',
+      columns: [
+        { key: 'date', label: 'תאריך' },
+        { key: 'description', label: 'תיאור' },
+        { key: 'purpose', label: 'מטרת ההעברה' },
+        { key: 'amount', label: 'סכום' },
+      ],
+      rows: report.unidentified_transfers.transactions.map((t) => ({
+        date: t.date || '',
+        description: t.description || '',
+        purpose: t.purpose || '',
+        amount: t.amount,
+      })),
+      summary: [
+        { label: 'מס\' תנועות', value: String(report.unidentified_transfers.count) },
+        { label: 'סה"כ', value: fmt(report.unidentified_transfers.total) },
+      ],
+    },
+  ] : [];
+
   return (
     <div className="p-6 max-w-6xl mx-auto" dir="rtl">
       <div className="flex items-center justify-between flex-wrap gap-3 mb-2">
@@ -91,6 +140,15 @@ export default function SuppliersMissingInvoices() {
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
             רענן
           </button>
+          {report && (
+            <div className="mt-4">
+              <ExportButtons
+                title="ספקים חסרי חשבונית"
+                meta={`טווח: ${dateFrom} — ${dateTo}`}
+                sheets={exportSheets}
+              />
+            </div>
+          )}
         </div>
       </div>
       <p className="text-xs text-slate-400 mb-5">

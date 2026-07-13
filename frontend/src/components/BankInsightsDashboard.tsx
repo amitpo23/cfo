@@ -11,6 +11,7 @@ import {
   Scale, LineChart, Briefcase, Send, FileCheck2,
 } from 'lucide-react';
 import api from '../services/api';
+import ExportButtons from './ExportButtons';
 
 interface Insight {
   id: number;
@@ -206,7 +207,28 @@ export default function BankInsightsDashboard() {
             ניתוח דפי הבנק — חיובים כפולים, מנויים, עמלות, חריגות, מאזן חודשי ותיק השקעות.
           </p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-start">
+          {insights.length > 0 && (
+            <ExportButtons
+              title="תובנות בנק"
+              columns={[
+                { key: 'severity', label: 'חומרה' },
+                { key: 'title', label: 'כותרת' },
+                { key: 'message', label: 'תיאור' },
+                { key: 'recommended_action', label: 'המלצה' },
+                { key: 'status', label: 'סטטוס' },
+                { key: 'created_at', label: 'נוצר בתאריך' },
+              ]}
+              rows={insights.map((ins) => ({
+                severity: SEVERITY_LABEL[ins.severity] || ins.severity,
+                title: ins.title,
+                message: ins.message,
+                recommended_action: ins.recommended_action || '',
+                status: ins.status,
+                created_at: ins.created_at || '',
+              }))}
+            />
+          )}
           <button onClick={connectBank} disabled={!!busy}
             className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 disabled:opacity-50">
             {busy === 'connect' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}

@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { AgentPanel, FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
+import ExportButtons, { ExportSheet } from './ExportButtons';
 
 const COLORS = ['#10B981', '#EF4444', '#3B82F6', '#F59E0B', '#8B5CF6', '#EC4899'];
 
@@ -133,6 +134,48 @@ const CashFlowDashboard: React.FC = () => {
       }))
     : [];
 
+  const cashFlowExportSheets: ExportSheet[] = [
+    {
+      name: 'תזרים חודשי',
+      columns: [
+        { key: 'month_name', label: 'חודש' },
+        { key: 'inflows', label: 'כניסות' },
+        { key: 'outflows', label: 'יציאות' },
+        { key: 'net_flow', label: 'תזרים נקי' },
+        { key: 'cumulative', label: 'מצטבר' },
+      ],
+      rows: (monthlyCashFlow || []).map((m) => ({
+        month_name: m.month_name,
+        inflows: m.inflows,
+        outflows: m.outflows,
+        net_flow: m.net_flow,
+        cumulative: m.cumulative,
+      })),
+      summary: [
+        { label: 'כניסות', value: formatCurrency(totalInflows) },
+        { label: 'יציאות', value: formatCurrency(totalOutflows) },
+        { label: 'תזרים נקי', value: formatCurrency(netCashFlow) },
+      ],
+    },
+    {
+      name: 'מצב מזומנים יומי',
+      columns: [
+        { key: 'date', label: 'תאריך' },
+        { key: 'inflows', label: 'כניסות' },
+        { key: 'outflows', label: 'יציאות' },
+        { key: 'net_flow', label: 'תזרים נקי' },
+        { key: 'closing_balance', label: 'יתרת סגירה' },
+      ],
+      rows: (dailyCashPosition || []).map((d) => ({
+        date: d.date,
+        inflows: d.inflows,
+        outflows: d.outflows,
+        net_flow: d.net_flow,
+        closing_balance: d.closing_balance,
+      })),
+    },
+  ];
+
   return (
     <FinancePageShell
       eyebrow="Cash Flow"
@@ -160,6 +203,7 @@ const CashFlowDashboard: React.FC = () => {
             <RefreshCw size={18} />
             רענון
           </button>
+          <ExportButtons title="תזרים מזומנים" meta={`${timeRange} חודשים אחרונים`} sheets={cashFlowExportSheets} />
         </>
       }
     >

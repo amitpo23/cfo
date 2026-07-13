@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
@@ -55,23 +55,97 @@ def ap_aging(
 def vat_report(
     year: int = Query(...),
     month: int = Query(..., ge=1, le=12),
+    months: int = Query(1, ge=1, le=2, description="1=חודשי, 2=דו-חודשי (מאי-יוני וכו')"),
+    basis: Literal["document", "captured"] = Query(
+        "document", description="document=תאריך מסמך (ברירת מחדל), captured=מועד קליטה לתשומות"),
     org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
-    return daily_reports_service.vat_report(db, org_id, year, month)
+    return daily_reports_service.vat_report_period(db, org_id, year, month,
+                                                    months=months, basis=basis)
 
 
 @router.get("/daily-reports/pcn874")
 def pcn874_file(
     year: int = Query(...),
     month: int = Query(..., ge=1, le=12),
+    months: int = Query(1, ge=1, le=2),
+    basis: Literal["document", "captured"] = Query("document"),
     company_vat_id: str = Query("000000000"),
     org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
-    """PCN874 detailed-VAT file (fixed-width draft) for the period."""
+    """PCN874 detailed-VAT file (fixed-width draft) for the period, as JSON."""
     from ...services import pcn874
-    return pcn874.build_pcn874(db, org_id, year, month, company_vat_id=company_vat_id)
+    return pcn874.build_pcn874(db, org_id, year, month, months=months, basis=basis,
+                               company_vat_id=company_vat_id)
+
+
+@router.get("/daily-reports/pcn874/file")
+def pcn874_download(
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+    months: int = Query(1, ge=1, le=2),
+    basis: Literal["document", "captured"] = Query("document"),
+    company_vat_id: str = Query("000000000"),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """PCN874 detailed-VAT file as a downloadable attachment (text/plain).
+
+    DRAFT — see pcn874.DISCLAIMER: field layout needs verification against the Tax
+    Authority's current spec before submission.
+    """
+    from fastapi.responses import PlainTextResponse
+    from ...services import pcn874
+
+    out = pcn874.build_pcn874(db, org_id, year, month, months=months, basis=basis,
+                              company_vat_id=company_vat_id)
+    return PlainTextResponse(
+        content=out["content"],
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{out["filename"]}"'},
+    )
+
+
+@router.get("/daily-reports/openfrmt")
+def openfrmt_export(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """יצוא 'מבנה אחיד' (INI.TXT + BKMVDATA.TXT) כ-ZIP להורדה — לחשבשבת/תוכנות
+    הנה"ח אחרות. DRAFT — ראה openfrmt.DISCLAIMER."""
+    import io
+    import zipfile
+
+    from fastapi import Response
+    from ...services import openfrmt
+
+    d_from = _parse_as_of(date_from)
+    d_to = _parse_as_of(date_to)
+    if not d_from or not d_to:
+        raise HTTPException(status_code=400, detail="date_from/date_to נדרשים בפורמט YYYY-MM-DD")
+
+    out = openfrmt.build_openfrmt(db, org_id, d_from, d_to)
+    ini_bytes, _ = openfrmt.encode_openfrmt_text(out["ini"])
+    bkm_bytes, bkm_encoding = openfrmt.encode_openfrmt_text(out["bkmvdata"])
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("INI.TXT", ini_bytes)
+        zf.writestr("BKMVDATA.TXT", bkm_bytes)
+
+    filename = f"OPENFRMT-{org_id}-{d_from.isoformat()}_{d_to.isoformat()}.zip"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Openfrmt-Encoding": bkm_encoding,
+        },
+    )
 
 
 @router.get("/daily-reports/suppliers")

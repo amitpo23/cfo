@@ -59,6 +59,7 @@ import OpenFinanceOpsDashboard from './components/OpenFinanceOpsDashboard';
 import LedgerDashboard from './components/LedgerDashboard';
 import DailyReportsDashboard from './components/DailyReportsDashboard';
 import SuppliersMissingInvoices from './components/SuppliersMissingInvoices';
+import VatReportScreen from './components/VatReportScreen';
 import AnnualReportsDashboard from './components/AnnualReportsDashboard';
 import EngineDashboard from './components/EngineDashboard';
 import BusinessMenuDashboard from './components/BusinessMenuDashboard';
@@ -119,6 +120,7 @@ const navigationConfig = [
       { to: '/ar', icon: Receipt, label: 'AR / Collections', description: 'Aging & follow-up' },
       { to: '/ap', icon: CreditCard, label: 'AP / Payables', description: 'Bills & payments' },
       { to: '/suppliers-missing-invoices', icon: FileX, label: 'ספקים חסרי חשבונית', description: 'ספקים ששולם להם בבנק/אשראי בלי מסמך תואם — מע"מ תשומות שלא נקלט' },
+      { to: '/vat-report', icon: Landmark, label: 'דיווח מע"מ', description: 'דוח תקופתי לפי בסיס מסמך/קליטה, קובץ PCN874 ומבנה אחיד' },
       { to: '/budget', icon: Target, label: 'Budget', description: 'Budget vs actual' },
       { to: '/budget-entry', icon: Target, label: 'הזנת תקציב', description: 'הזנה ידנית / ייבוא Excel' },
       { to: '/year-comparison', icon: BarChart3, label: 'השוואה שנתית', description: 'מול שנה קודמת' },
@@ -371,6 +373,7 @@ function App() {
                 <Route path="/ledger" element={<LedgerDashboard />} />
                 <Route path="/daily-reports" element={<DailyReportsDashboard />} />
                 <Route path="/suppliers-missing-invoices" element={<SuppliersMissingInvoices />} />
+                <Route path="/vat-report" element={<VatReportScreen />} />
                 <Route path="/annual-reports" element={<AnnualReportsDashboard />} />
                 <Route path="/engine" element={<EngineDashboard />} />
                 <Route path="/business-menu" element={<BusinessMenuDashboard />} />

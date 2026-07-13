@@ -216,8 +216,152 @@ def link_payments_organization(db, organization_id: int, *, persist: bool = True
     return result
 
 
+def _in_vat_period(d, start, end) -> bool:
+    if d is None:
+        return start is None and end is None  # undated rows only count all-time
+    if start is not None and d < start:
+        return False
+    if end is not None and d > end:
+        return False
+    return True
+
+
+def select_vat_documents(
+    db, organization_id: int, *, start=None, end=None, basis: str = "document"
+) -> dict[str, list[dict[str, Any]]]:
+    """Select+dedup the documents behind the canonical VAT position.
+
+    Single source of truth for *which* documents count as sales/inputs for a period —
+    shared by `compute_vat_position`, `daily_reports_service.vat_report_period`, and
+    `pcn874.build_pcn874` so all three engines always reconcile.
+
+    `basis`:
+      - "document" (default, existing behavior): both sides use the document date
+        (issue_date/due_date for invoices/bills, expense_date for expenses).
+      - "captured": regulatory rule — עסקאות (מכירות) מדווחות תמיד לפי תאריך המסמך;
+        רק תשומות (bills/expenses) מותר לקזז לפי מועד הקליטה (created_at). So only the
+        input side switches to `created_at`; sales always use the document date.
+
+    Dedup: a document synced twice into SUMIT (as both Bill and Expense, same
+    external_id) counts once — the Bill is canonical, the twin Expense is skipped.
+    """
+    from ..models import Invoice, Bill, Expense
+    from .vat_utils import invoice_counts, bill_counts, expense_counts
+
+    def _f(v) -> float:
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _captured(r):
+        ca = getattr(r, "created_at", None)
+        return ca.date() if ca else None
+
+    inv_rows = db.query(Invoice).filter(Invoice.organization_id == organization_id).all()
+    bill_rows = db.query(Bill).filter(Bill.organization_id == organization_id).all()
+    exp_rows = db.query(Expense).filter(Expense.organization_id == organization_id).all()
+
+    sales: list[dict[str, Any]] = []
+    for r in inv_rows:
+        if not invoice_counts(r.status):
+            continue
+        doc_date = getattr(r, "issue_date", None) or getattr(r, "due_date", None)
+        if not _in_vat_period(doc_date, start, end):  # always document-basis for sales
+            continue
+        cname = getattr(getattr(r, "contact", None), "name", None)
+        sales.append({
+            "type": "invoice", "id": r.id, "number": r.invoice_number,
+            "doc_date": doc_date, "captured_date": _captured(r),
+            "counterparty": cname or "", "subtotal": abs(_f(r.subtotal)),
+            "vat": abs(_f(r.tax)), "allocation_number": getattr(r, "allocation_number", None),
+            "external_id": r.external_id,
+        })
+
+    # מסמך SUMIT מסונכרן פעמיים — כ-Bill (ספר AP) וגם כ-Expense (טבלת עבודה) — עם
+    # אותו external_id. ה-Bill קנוני לתשומות; Expense עם תאום-Bill מדולג, אחרת כפל
+    # תשומות (נמצא באודיט תאימות מול SUMIT: ניפוח 47.5%).
+    bill_ext_ids = {str(r.external_id) for r in bill_rows if r.external_id}
+
+    inputs: list[dict[str, Any]] = []
+    for r in bill_rows:
+        if not bill_counts(r.status):
+            continue
+        doc_date = getattr(r, "issue_date", None) or getattr(r, "due_date", None)
+        captured_date = _captured(r)
+        select_date = captured_date if basis == "captured" else doc_date
+        if not _in_vat_period(select_date, start, end):
+            continue
+        vname = getattr(getattr(r, "vendor", None), "name", None)
+        inputs.append({
+            "type": "bill", "id": r.id, "number": r.bill_number,
+            "doc_date": doc_date, "captured_date": captured_date,
+            "counterparty": vname or "", "subtotal": abs(_f(r.subtotal)),
+            "vat": abs(_f(r.tax)), "vat_id": None, "external_id": r.external_id,
+        })
+    for r in exp_rows:
+        if not expense_counts(getattr(r, "status", None)):
+            continue
+        if r.external_id and str(r.external_id) in bill_ext_ids:
+            continue  # דה-דופ: כבר נספר כ-Bill
+        doc_date = getattr(r, "expense_date", None)
+        captured_date = _captured(r)
+        select_date = captured_date if basis == "captured" else doc_date
+        if not _in_vat_period(select_date, start, end):
+            continue
+        inputs.append({
+            "type": "expense", "id": r.id, "number": getattr(r, "invoice_number", None),
+            "doc_date": doc_date, "captured_date": captured_date,
+            "counterparty": r.supplier_name or "", "subtotal": abs(_f(r.amount)),
+            "vat": abs(_f(r.vat_amount)), "vat_id": getattr(r, "supplier_tax_id", None),
+            "external_id": r.external_id,
+        })
+
+    return {"sales": sales, "inputs": inputs}
+
+
+def period_bounds(year: int, month: int, months: int = 1) -> dict[str, Any]:
+    """Period window for VAT reporting: monthly (months=1) or bimonthly (months=2).
+
+    Bimonthly periods follow the Israeli VAT pairing (Jan-Feb, Mar-Apr, ..., Nov-Dec).
+    `month` is normally the anchor (first, odd) month of the pair; if an even month is
+    passed with months=2 it's normalized down to the preceding odd anchor (so passing
+    either month of a pair gives the same period). `due_date` = the 15th of the month
+    after the period ends (standard PCN874/VAT filing deadline).
+    """
+    from calendar import monthrange
+
+    if months not in (1, 2):
+        raise ValueError("months must be 1 or 2")
+    if not (1 <= month <= 12):
+        raise ValueError("month must be 1-12")
+
+    if months == 1:
+        anchor = month
+        end_month = month
+    else:
+        anchor = month if month % 2 == 1 else month - 1
+        if anchor < 1:
+            raise ValueError("invalid month for a bimonthly period")
+        end_month = anchor + 1
+
+    start = date(year, anchor, 1)
+    end = date(year, end_month, monthrange(year, end_month)[1])
+
+    due_month, due_year = end_month + 1, year
+    if due_month > 12:
+        due_month, due_year = 1, year + 1
+    due_date = date(due_year, due_month, 15)
+
+    return {
+        "start": start, "end": end, "anchor_month": anchor, "end_month": end_month,
+        "months": [anchor] if months == 1 else [anchor, end_month],
+        "due_date": due_date,
+    }
+
+
 def compute_vat_position(
-    db, organization_id: int, *, start=None, end=None
+    db, organization_id: int, *, start=None, end=None, basis: str = "document"
 ) -> dict[str, Any]:
     """Canonical VAT position from the books (document-actual tax fields).
 
@@ -225,46 +369,16 @@ def compute_vat_position(
     fields on Invoice/Bill/Expense (more accurate than estimating amount×rate on the
     generic Transaction table). Optional [start, end] bounds make it period-scoped;
     omit both for the all-time running position used by the synthesis dashboard.
+    `basis="captured"` switches the input (tashumot) side to the receipt/sync date
+    (created_at) — see `select_vat_documents`.
     """
-    from ..models import Invoice, Bill, Expense
-    from .vat_utils import invoice_counts, bill_counts, expense_counts
-
-    def _in_period(d) -> bool:
-        if d is None:
-            return start is None and end is None  # undated rows only count all-time
-        if start is not None and d < start:
-            return False
-        if end is not None and d > end:
-            return False
-        return True
-
-    inv = db.query(Invoice).filter(Invoice.organization_id == organization_id).all()
-    bills = db.query(Bill).filter(Bill.organization_id == organization_id).all()
-    exps = db.query(Expense).filter(Expense.organization_id == organization_id).all()
-
-    # abs(): מסמכים נשמרים לעיתים בסימן שלילי (מוסכמת 'כסף יוצא', בעיקר bills).
-    # מע"מ עסקאות/תשומות הם תמיד גדלים חיוביים. מיישר קו עם tax_service.generate_vat_report
-    # כך ששני המנועים מסכימים (מקור אמת אחד) — אומת מול cfo.db (org 2).
-    output_vat = sum(abs(float(r.tax or 0)) for r in inv
-                     if invoice_counts(r.status)
-                     and _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
-    # מסמך SUMIT מסונכרן פעמיים — כ-Bill (ספר AP) וגם כ-Expense (טבלת עבודה) — עם
-    # אותו external_id. ה-Bill קנוני לתשומות; Expense עם תאום-Bill מדולג, אחרת כפל
-    # תשומות (נמצא באודיט תאימות מול SUMIT: ניפוח 47.5%).
-    bill_ext_ids = {str(r.external_id) for r in bills if r.external_id}
-    input_vat = (
-        sum(abs(float(r.tax or 0)) for r in bills
-            if bill_counts(r.status)
-            and _in_period(getattr(r, "issue_date", None) or getattr(r, "due_date", None)))
-        + sum(abs(float(getattr(r, "vat_amount", 0) or 0)) for r in exps
-              if expense_counts(getattr(r, "status", None))
-              and _in_period(getattr(r, "expense_date", None))
-              and (not r.external_id or str(r.external_id) not in bill_ext_ids))
-    )
+    sel = select_vat_documents(db, organization_id, start=start, end=end, basis=basis)
+    output_vat = round(sum(r["vat"] for r in sel["sales"]), 2)
+    input_vat = round(sum(r["vat"] for r in sel["inputs"]), 2)
     net = round(output_vat - input_vat, 2)
     return {
-        "output_vat": round(output_vat, 2),
-        "input_vat": round(input_vat, 2),
+        "output_vat": output_vat,
+        "input_vat": input_vat,
         "net_vat": net,
         "direction": "לתשלום" if net >= 0 else "להחזר",
     }

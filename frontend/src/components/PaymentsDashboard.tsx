@@ -18,6 +18,7 @@ import {
   FileText
 } from 'lucide-react';
 import api from '../services/api';
+import ExportButtons, { ExportSheet } from './ExportButtons';
 
 // Types
 interface PaymentRequest {
@@ -662,6 +663,76 @@ const PaymentsDashboard: React.FC = () => {
       .reduce((sum: number, o: StandingOrder) => sum + o.amount, 0)
   };
 
+  const paymentsExportSheets: ExportSheet[] = [
+    {
+      name: 'בקשות תשלום',
+      columns: [
+        { key: 'customer_name', label: 'לקוח' },
+        { key: 'amount', label: 'סכום' },
+        { key: 'description', label: 'תיאור' },
+        { key: 'status', label: 'סטטוס' },
+        { key: 'created_at', label: 'נוצר בתאריך' },
+        { key: 'expires_at', label: 'תוקף עד' },
+      ],
+      rows: paymentRequests.map((r: PaymentRequest) => ({
+        customer_name: r.customer_name,
+        amount: r.amount,
+        description: r.description,
+        status: r.status,
+        created_at: r.created_at,
+        expires_at: r.expires_at,
+      })),
+      summary: [
+        { label: 'סה"כ בקשות', value: String(stats.totalRequests) },
+        { label: 'סכום ממתין', value: `₪${stats.pendingAmount.toLocaleString('he-IL')}` },
+      ],
+    },
+    {
+      name: 'הוראות קבע',
+      columns: [
+        { key: 'customer_name', label: 'לקוח' },
+        { key: 'amount', label: 'סכום' },
+        { key: 'frequency', label: 'תדירות' },
+        { key: 'next_charge_date', label: 'חיוב הבא' },
+        { key: 'status', label: 'סטטוס' },
+        { key: 'total_charged', label: 'סה"כ שחויב' },
+        { key: 'charge_count', label: 'מס\' חיובים' },
+      ],
+      rows: standingOrders.map((o: StandingOrder) => ({
+        customer_name: o.customer_name,
+        amount: o.amount,
+        frequency: o.frequency,
+        next_charge_date: o.next_charge_date,
+        status: o.status,
+        total_charged: o.total_charged,
+        charge_count: o.charge_count,
+      })),
+      summary: [
+        { label: 'הוראות פעילות', value: String(stats.activeOrders) },
+        { label: 'הכנסה חוזרת חודשית', value: `₪${stats.monthlyRecurring.toLocaleString('he-IL')}` },
+      ],
+    },
+    {
+      name: 'דרישות תשלום',
+      columns: [
+        { key: 'customer_name', label: 'לקוח' },
+        { key: 'amount', label: 'סכום' },
+        { key: 'due_date', label: 'תאריך לפרעון' },
+        { key: 'description', label: 'תיאור' },
+        { key: 'status', label: 'סטטוס' },
+        { key: 'reminder_count', label: 'מס\' תזכורות' },
+      ],
+      rows: paymentDemands.map((d: PaymentDemand) => ({
+        customer_name: d.customer_name,
+        amount: d.amount,
+        due_date: d.due_date,
+        description: d.description,
+        status: d.status,
+        reminder_count: d.reminder_count,
+      })),
+    },
+  ];
+
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
@@ -670,7 +741,8 @@ const PaymentsDashboard: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-800">ניהול תשלומים</h1>
           <p className="text-gray-600">בקשות תשלום, הוראות קבע ודרישות</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
+          <ExportButtons title="תשלומים" sheets={paymentsExportSheets} />
           <button
             onClick={() => runScheduledMutation.mutate()}
             disabled={runScheduledMutation.isPending}

@@ -16,6 +16,7 @@ import {
   Legend,
 } from 'recharts';
 import api from '../services/api';
+import ExportButtons from './ExportButtons';
 
 interface KPI {
   kpi_id?: string;
@@ -208,9 +209,27 @@ export const KPIDashboard: React.FC = () => {
               </option>
             ))}
           </select>
-          <button className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
-            ייצא דוח
-          </button>
+          <ExportButtons
+            title="דשבורד KPI"
+            columns={[
+              { key: 'name', label: 'מדד' },
+              { key: 'category', label: 'קטגוריה' },
+              { key: 'value', label: 'ערך נוכחי' },
+              { key: 'target', label: 'יעד' },
+              { key: 'target_ratio', label: '% מיעד' },
+              { key: 'trend', label: 'מגמה' },
+              { key: 'status', label: 'סטטוס' },
+            ]}
+            rows={kpis.map((kpi: KPI) => ({
+              name: kpiName(kpi),
+              category: KPI_CATEGORIES.find((c) => c.id === kpi.category)?.name || kpi.category,
+              value: formatKpiValue(kpi),
+              target: formatKpiTarget(kpi),
+              target_ratio: `${targetRatio(kpi).toFixed(0)}%`,
+              trend: kpi.trend,
+              status: getStatusLabel(kpi.status),
+            }))}
+          />
         </div>
       </div>
 
