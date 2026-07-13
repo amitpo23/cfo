@@ -2594,3 +2594,14 @@ VAT FILING: select_vat_documents/period_bounds canonical selection (sales by doc
 LIVE VERIFIED org1: May document-basis input_vat=1817.32 EXACT (regression); May-June bi-monthly=2058.19 refund w/ correct breakdown; PCN874 file O..X records w/ proper attachment filename; OPENFRMT zip = 250 records (124 C100+124 D110+A100+Z900).
 CAVEAT surfaced to user: captured-basis currently inflated (854 docs/₪141K) because the whole history was backfilled into Rezef in June-July → created_at≈capture-into-Rezef, includes docs already claimed in past filings. Meaningful going forward; a "not-yet-claimed" refinement (tracking reported periods) is the future fix.
 EXPORT: ExportButtons.tsx (SheetJS dynamic-import 417KB separate chunk, RTL, multi-sheet; PDF via Blob-URL print window, full escaping) wired into 13 screens (Executive skipped — no tabular state). xlsx npm audit flags parse-path CVEs — write-only usage, not exposed.
+
+# === 2026-07-13 (המשך) — זיכויים בשרשרת המכירות + אימות משולש מחייב ===
+USER found un-captured invoices via SUMIT UI. Investigation cascade:
+1. org2 finals (חשבונית ותשלום לספק) — VERIFIED captured 7/7 w/ VAT; the "missing" ones are unfiled drafts (16 org2), same as org1's queue.
+2. CREDIT INVOICES: SUMIT type 5=CreditInvoice PROVEN by 3 independent evidences (swagger enum Receipt=2/CreditInvoice=5; books pairs 20002/+23,600↔2002/-23,600; the 14 legacy "payments" = exactly the 4 credited invoices' 215,400 at org1 + 493,358 at org2). Old "5=receipt" comment was wrong; 974527677 is a real credit note (the old delete recommendation was WRONG — never executed, good).
+3. Fixes (ebf0f48, 994 tests, deployed cpsuxhib7, smoke 16/16): fetch_invoices 0/1/5/6 w/ negative credit normalization; fetch_payments receipts=type 2; signed input sums (abs() removed — supplier credit was about to INFLATE input VAT = illegal direction); tax_service unified onto select_vat_documents (true single source, incl dedup); receipts excluded from sales; PCN874 signed + O-line net; OPENFRMT credit=330; dq bills check → sign-consistency.
+4. TRIPLE VERIFICATION (owner's standing rule): filing_verification.py + /daily-reports/vat/verify + panel on /vat-report. LIVE: May-June org1 = reconciliation ✓, independent recompute ✓, completeness ⚠️ 82 pending drafts flagged. May regression 1,817.32 exact.
+PENDING (user/system):
+- Delete 14 fake payments rows (credit invoices misread as receipts; org1 4=215,400, org2 9=493,358, org5 1) — DESTRUCTIVE, needs owner approval; until then D120/cashflow consumers see them (mostly outside current filing ranges).
+- Historical credit-invoice backfill for all orgs: blocked on SUMIT ActionsBilling obligo (API quota exceeded account-wide, found 13/07 ~10:00; circuit breaker correctly open). When quota returns: reset sumit/invoices checkpoints per org + one manual sync each; real receipts (type 2) will also backfill into payments.
+- SUMIT obligo itself = user billing action.
