@@ -13,6 +13,7 @@ import {
   CreditCard,
   Database,
   FileCheck2,
+  FileSearch,
   Landmark,
   Layers3,
   LineChart,
@@ -21,6 +22,7 @@ import {
   ShieldCheck,
   Sparkles,
   TrendingUp,
+  Users,
   UserPlus,
   Workflow,
   type LucideIcon,
@@ -107,13 +109,13 @@ const paymentTemplates = [
   { id: 'bank_transfer', label: 'העברה בנקאית', note: 'חשבונית לתשלום ידני' },
 ];
 
-const trustItems = ['הנה"ח כפולה', 'התאמות בנק', 'רווח והפסד יומי', 'תזרים', 'הכנה למאזן', 'סוכן CFO AI'];
+const trustItems = ['איתור חשבוניות חסרות', 'התאמות בנק', 'בקרה של יועצים', 'תזרים', 'תכנון מס (בטא)', 'סוכן CFO AI'];
 
 const painBullets = [
-  'לא מחכים לסוף חודש כדי להבין רווחיות',
-  'לא רודפים אחרי אקסלים והתאמות ידניות',
-  'לא מגלים טעויות אחרי שהנזק כבר קרה',
-  'לא משלמים אלפי שקלים על עבודה חוזרת שאפשר לאוטומט',
+  'תשלום שירד בבנק בלי חשבונית שנקלטה',
+  'חיוב אשראי עסקי שלא הגיע להנהלת החשבונות',
+  'הוצאה מוכרת שנשארה מחוץ לדיווח',
+  'פער שמתגלה רק בסוף החודש או בסוף השנה',
 ];
 
 const solutionCards = [
@@ -124,7 +126,7 @@ const solutionCards = [
   },
   {
     title: 'התאמות בנק ובקרה',
-    text: 'קליטת תנועות, התאמה למסמכים, זיהוי פערים, עמלות ופעולות חריגות.',
+    text: 'קליטת תנועות, התאמה למסמכים והצפה של כל תשלום שאין מולו חשבונית שנקלטה.',
     icon: Landmark,
   },
   {
@@ -146,6 +148,39 @@ const solutionCards = [
     title: 'הכנה למאזן ולרו"ח',
     text: 'חומר מסודר, דוחות, מאזן בוחן וחבילת עבודה שנתית.',
     icon: FileCheck2,
+  },
+];
+
+const missingExpenseSteps = [
+  {
+    title: 'רצף רואה את התשלום',
+    text: 'תנועות מחשבון הבנק ומכרטיסי האשראי נאספות לתמונה פיננסית אחת.',
+    icon: CreditCard,
+  },
+  {
+    title: 'רצף מחפשת את החשבונית',
+    text: 'כל תשלום נבדק מול המסמכים שנקלטו ומול נתוני הנהלת החשבונות.',
+    icon: FileSearch,
+  },
+  {
+    title: 'מה שחסר קופץ לטיפול',
+    text: 'מקבלים רשימה ברורה של הוצאות בלי חשבונית, במקום לגלות אותן מאוחר מדי.',
+    icon: AlertTriangle,
+  },
+];
+
+const betaServices = [
+  {
+    title: 'דוח אישי מרצף',
+    price: '₪500',
+    text: 'דוח פיננסי אישי שמרכז את מצב העסק, החריגות, המגמות והפעולות המומלצות.',
+    icon: BarChart3,
+  },
+  {
+    title: 'תכנון מס עם רצף',
+    price: 'בתיאום',
+    text: 'תמונת מס מבוססת נתונים והיערכות מוקדמת לצעדים שכדאי לבדוק לפני סוף התקופה.',
+    icon: CircleDollarSign,
   },
 ];
 
@@ -237,7 +272,7 @@ const comparisonRows = [
   ['בדיקה מדגמית', 'בודקת כל פעולה'],
   ['דוחות בסוף חודש', 'רווח והפסד יומי'],
   ['מציג מספרים', 'מסבירה מה לעשות'],
-  ['עולה אלפי שקלים בחודש', 'החל מ-₪750 לחודש'],
+  ['עולה אלפי שקלים בחודש', 'מסלול לעוסק מורשה החל מ-₪300 לחודש'],
 ];
 
 const commandMetrics = [
@@ -496,6 +531,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           </div>
           <nav className="hidden items-center gap-6 text-sm text-slate-300 lg:flex">
             <a href="#pain" className="hover:text-white">הכאב</a>
+            <a href="#missing-expenses" className="hover:text-white">חשבוניות חסרות</a>
             <a href="#solution" className="hover:text-white">הפתרון</a>
             <a href="#capabilities" className="hover:text-white">יכולות</a>
             <a href="#command-center" className="hover:text-white">Command Center</a>
@@ -517,14 +553,14 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
                 רצף היא לא עוד תוכנת הנהלת חשבונות
               </div>
               <h1 className="text-4xl font-bold leading-tight tracking-normal text-white md:text-6xl">
-                CFO דיגיטלי שמנהל את הכסף של החברה — החל מ-₪750 לחודש
+                רצף מוצאת את ההוצאות ששילמת — אבל החשבונית שלהן לא נקלטה
               </h1>
               <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-300">
-                רצף מחליפה תהליך הנהלת חשבונות ידני ויקר במערכת אוטומטית שמבצעת הנהלת חשבונות כפולה,
-                התאמות בנק, דוחות, גבייה, תזרים ותובנות AI בזמן אמת.
+                רצף מחברת בין הבנק, כרטיסי האשראי והנהלת החשבונות, מציפה הוצאות שחסרה להן חשבונית
+                ועוזרת להחזיר לתמונה כסף שעלול להישאר מחוץ לספרים ולדיווח.
               </p>
               <div className="mt-5 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-lg font-semibold text-blue-100">
-                מנהל חשבונות רושם את העבר. רצף עוזרת לנהל את העתיד.
+                פחות חשבוניות שנופלות בין הכיסאות. יותר הוצאות מתועדות. תמונה אמינה יותר של העסק.
               </div>
               <div className="mt-8 flex flex-wrap gap-3">
                 <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-3 font-semibold text-white shadow-sm hover:bg-blue-400">
@@ -551,8 +587,8 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           <div className="mx-auto grid max-w-7xl gap-8 px-5 py-16 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
             <SectionHeading
               eyebrow="הכאב"
-              title="למה לשלם אלפי שקלים בחודש ועדיין לא לדעת מה קורה בעסק?"
-              text="ברוב החברות הנהלת החשבונות מתבצעת בדיעבד. בסוף החודש מקבלים דוחות, אבל הבעיות כבר קרו: לקוחות שלא שילמו, הוצאות חריגות, חיובים כפולים, טעויות התאמה ולחץ תזרימי."
+              title="שילמתם על ההוצאה. אבל האם החשבונית באמת נקלטה?"
+              text="כשהבנק, כרטיסי האשראי והחשבוניות לא נבדקים זה מול זה ברצף, הוצאות עסקיות נשארות ללא מסמך. המשמעות יכולה להיות ספרים לא שלמים, תמונת רווח מטעה והוצאות שלא נכנסו לדיווח."
             />
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-blue-700">
@@ -562,6 +598,46 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               <div className="grid gap-3 sm:grid-cols-2">
                 {painBullets.map((item) => (
                   <Bullet key={item} text={item} />
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="missing-expenses" className="border-b border-slate-200 bg-emerald-950 text-white">
+          <div className="mx-auto max-w-7xl px-5 py-16">
+            <div className="grid gap-10 lg:grid-cols-[0.82fr_1.18fr] lg:items-start">
+              <div>
+                <div className="text-sm font-semibold text-emerald-300">הכסף שלא אמור ללכת לאיבוד</div>
+                <h2 className="mt-2 text-3xl font-bold leading-tight md:text-5xl">
+                  רצף מראה בדיוק אילו חשבוניות חסרות לכם
+                </h2>
+                <p className="mt-4 max-w-2xl leading-8 text-emerald-50/80">
+                  במקום לנחש מה לא הועבר לרואה החשבון, רצף בודקת את התשלומים מול המסמכים ומרכזת את הפערים לטיפול.
+                  בעסק עם פעילות שוטפת, איתור הוצאות שלא נקלטו עשוי להצטבר לחיסכון של אלפי ואף עשרות אלפי שקלים.
+                </p>
+                <div className="mt-6 flex items-start gap-3 rounded-lg border border-emerald-300/20 bg-white/10 p-4">
+                  <Users className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />
+                  <div>
+                    <div className="font-bold">טכנולוגיה עם גב מקצועי</div>
+                    <p className="mt-1 text-sm leading-6 text-emerald-50/75">
+                      מאחורי רצף פועלים יועצים שעוברים על התיק, בוחנים חריגים ועוזרים להפוך את המידע לפעולות נכונות.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="grid gap-4 md:grid-cols-3">
+                {missingExpenseSteps.map(({ title, text, icon: Icon }, index) => (
+                  <div key={title} className="rounded-lg border border-white/10 bg-white/5 p-5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-emerald-300 text-emerald-950">
+                        <Icon className="h-5 w-5" />
+                      </div>
+                      <span className="text-3xl font-bold text-white/15">0{index + 1}</span>
+                    </div>
+                    <h3 className="mt-5 text-lg font-bold">{title}</h3>
+                    <p className="mt-2 text-sm leading-6 text-emerald-50/70">{text}</p>
+                  </div>
                 ))}
               </div>
             </div>
@@ -726,14 +802,36 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
             <div className="flex flex-wrap items-end justify-between gap-4">
               <SectionHeading
                 eyebrow="תמחור"
-                title="מחיר של תוכנה. עבודה של מחלקת כספים."
-                text="מתחילים במחיר ברור, מקבלים הנהלת חשבונות כפולה, התאמות בנק, רווח והפסד יומי, תזרים וסוכן CFO AI."
+                title="מסלול שמתאים גם לעוסק מורשה וגם לחברה"
+                text="מתחילים במחיר ברור ומקבלים חיבור בין התנועות, המסמכים, ההתאמות והתמונה הפיננסית של העסק."
               />
               <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600">
                 דוח שנתי: החל מ-₪3,000
               </div>
             </div>
-            <div className="mt-8 grid gap-4 lg:grid-cols-3">
+            <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-lg border-2 border-emerald-500 bg-emerald-50 p-6 text-right shadow-xl shadow-emerald-100">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-2xl font-bold">עוסק מורשה</h3>
+                  <span className="rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white">מסלול חדש</span>
+                </div>
+                <p className="mt-2 min-h-[40px] text-sm leading-5 text-slate-600">עד 2.5 מיליון ש״ח מחזור שנתי</p>
+                <div className="mt-5 flex items-end gap-2">
+                  <span className="text-4xl font-bold">₪300</span>
+                  <span className="pb-1 text-sm text-slate-500">לחודש</span>
+                </div>
+                <ul className="mt-5 space-y-2 text-sm text-slate-600">
+                  {['איתור חשבוניות חסרות', 'התאמות בנק', 'תזרים ותובנות', 'בקרה של יועצים'].map((feature) => (
+                    <li key={feature} className="flex gap-2">
+                      <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                      <span>{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-5 rounded-lg bg-white px-3 py-2 text-xs leading-5 text-emerald-800">
+                  ההצטרפות למסלול תיפתח בקרוב. פרטי המסלול מוצגים כעת בפרסום בלבד.
+                </div>
+              </div>
               {plans.map((plan) => (
                 <PlanCard key={plan.id} plan={plan} selected={selectedPlan === plan.id} onSelect={() => setSelectedPlan(plan.id)} />
               ))}
@@ -748,6 +846,34 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               לבין הגורם המבצע את המאזן והדוח השנתי. המחיר המופחת מתאפשר כאשר הנהלת החשבונות מנוהלת באופן שוטף ומסודר
               ברצף, כך שחבילת העבודה השנתית מגיעה מוכנה, מתועדת ונוחה לבדיקה מקצועית.
             </p>
+
+            <div className="mt-12 border-t border-slate-200 pt-10">
+              <SectionHeading
+                eyebrow="שירותים חדשים · בטא"
+                title="לא רק דוחות. תשובות ופעולות שמותאמות לעסק שלכם."
+                text="שירותי הבטא משלבים את נתוני רצף עם מעבר מקצועי, כדי להפוך את המספרים לתמונה אישית ולתכנון קדימה."
+              />
+              <div className="mt-7 grid gap-4 lg:grid-cols-2">
+                {betaServices.map(({ title, price, text, icon: Icon }) => (
+                  <div key={title} className="rounded-lg border border-violet-200 bg-violet-50 p-6">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-violet-600 text-white">
+                          <Icon className="h-5 w-5" />
+                        </div>
+                        <h3 className="text-xl font-bold">{title}</h3>
+                      </div>
+                      <span className="rounded-full bg-violet-600 px-3 py-1 text-xs font-bold text-white">בטא</span>
+                    </div>
+                    <div className="mt-5 text-3xl font-bold text-violet-950">{price}</div>
+                    <p className="mt-2 text-sm leading-6 text-slate-700">{text}</p>
+                    <p className="mt-4 text-xs leading-5 text-violet-800">
+                      השירות נמצא בתקופת בטא, ניתן בכפוף להתאמה ולבדיקה מקצועית ואינו מחליף ייעוץ מס מוסמך.
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </section>
 
@@ -760,7 +886,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               </div>
               <h2 className="text-4xl font-bold leading-tight">תפסיקו לנהל את הכסף בדיעבד</h2>
               <p className="mt-4 max-w-2xl leading-8 text-white/70">
-                רצף נותנת לחברה שלך הנהלת חשבונות, בקרה, תזרים ותובנות בזמן אמת — במחיר שמתחיל מ-₪750 לחודש.
+                רצף מחברת את התשלומים למסמכים, מוצאת חשבוניות חסרות ונותנת לעסק בקרה, תזרים ותובנות — החל מ-₪300 לחודש לעוסק מורשה.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-3 font-semibold text-white hover:bg-blue-400">

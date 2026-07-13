@@ -81,6 +81,20 @@ def pcn874_file(
                                company_vat_id=company_vat_id)
 
 
+@router.get("/daily-reports/vat/verify")
+def vat_verification(
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+    months: int = Query(1, ge=1, le=2),
+    basis: Literal["document", "captured"] = Query("document"),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """אימות משולש לדיווח — כלל שלוש הבדיקות (ראה services/filing_verification)."""
+    from ...services import filing_verification
+    return filing_verification.verify_filing(db, org_id, year, month, months=months, basis=basis)
+
+
 @router.get("/daily-reports/pcn874/file")
 def pcn874_download(
     year: int = Query(...),

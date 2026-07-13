@@ -607,70 +607,39 @@ class TaxComplianceService:
             }
     
     def _get_vat_transactions(self, start_date: date, end_date: date) -> List[Dict]:
-        """עסקאות מע"מ ממסמכי ה-ledger עם שדות נטו+מע"מ אמיתיים.
+        """עסקאות מע"מ — נגזרות ישירות מהבורר הקנוני
+        financial_synthesis.select_vat_documents, אותו בורר שמזין את
+        compute_vat_position / vat_report_period / pcn874. כך שלושת המנועים
+        באמת מקור אמת אחד: אותו דה-דופ Bill↔Expense, אותה החרגת קבלות בצד
+        העסקאות, ואותם סימנים חתומים (זיכוי שלילי מקטין — לא abs() שמנפח
+        קיזוז ביתר, הכיוון האסור בחוק).
 
-        מקור אמת אחד עם financial_synthesis.compute_vat_position — קורא את
-        Invoice.tax / Bill.tax / Expense.vat_amount במקום לאמוד 18% שטוח על
-        טבלת Transaction המנופחת. סיווג: מע"מ>0 ⇒ חייב; מע"מ=0 ⇒ פטור.
-
-        סייג: ללא דגל פטור/אפס מפורש מהמקור, מסמך ללא מע"מ מסווג 'פטור' (לא 'אפס').
+        סיווג: מע"מ≠0 ⇒ חייב; מע"מ=0 ⇒ פטור (ללא דגל מפורש מהמקור אין
+        להבחין 'אפס' מ'פטור').
         """
-        from ..models import Invoice, Bill, Expense
-        from .vat_utils import invoice_counts, bill_counts, expense_counts
+        from . import financial_synthesis
 
-        def _in_period(d) -> bool:
-            return d is not None and start_date <= d <= end_date
-
-        def _net(row, net_attr, gross_attr, tax_attr) -> float:
-            net = getattr(row, net_attr, None)
-            if net is not None:
-                return float(net)
-            return float(getattr(row, gross_attr, 0) or 0) - float(getattr(row, tax_attr, 0) or 0)
-
-        org = self.organization_id
+        sel = financial_synthesis.select_vat_documents(
+            self.db, self.organization_id, start=start_date, end=end_date,
+        )
         transactions: List[Dict] = []
-
-        for r in self.db.query(Invoice).filter(Invoice.organization_id == org).all():
-            d = getattr(r, "issue_date", None) or getattr(r, "due_date", None)
-            if not _in_period(d) or not invoice_counts(r.status):
-                continue
-            vat = float(r.tax or 0)
+        for r in sel["sales"]:
             transactions.append({
-                'id': str(r.id), 'date': d.isoformat(),
-                'type': 'sale', 'description': r.invoice_number or 'מכירה',
-                'amount': abs(_net(r, 'subtotal', 'total', 'tax')),
-                'vat_amount': abs(vat),
-                'vat_type': 'taxable' if vat else 'exempt',
+                'id': str(r.get("id")), 'date': (r.get("doc_date").isoformat() if r.get("doc_date") else None),
+                'type': 'sale', 'description': r.get("number") or r.get("counterparty") or 'מכירה',
+                'amount': float(r.get("subtotal") or 0),
+                'vat_amount': float(r.get("vat") or 0),
+                'vat_type': 'taxable' if r.get("vat") else 'exempt',
             })
-
-        for r in self.db.query(Bill).filter(Bill.organization_id == org).all():
-            d = getattr(r, "issue_date", None) or getattr(r, "due_date", None)
-            if not _in_period(d) or not bill_counts(r.status):
-                continue
-            vat = float(r.tax or 0)
+        for r in sel["inputs"]:
             transactions.append({
-                'id': str(r.id), 'date': d.isoformat(),
-                'type': 'purchase', 'description': r.bill_number or 'רכישה',
-                'amount': abs(_net(r, 'subtotal', 'total', 'tax')),
-                'vat_amount': abs(vat),
-                'vat_type': 'taxable' if vat else 'exempt',
+                'id': str(r.get("id")), 'date': (r.get("doc_date").isoformat() if r.get("doc_date") else None),
+                'type': 'purchase', 'description': r.get("number") or r.get("counterparty") or 'רכישה',
+                'amount': float(r.get("subtotal") or 0),
+                'vat_amount': float(r.get("vat") or 0),
+                'vat_type': 'taxable' if r.get("vat") else 'exempt',
                 'is_fixed_asset': False,
             })
-
-        for r in self.db.query(Expense).filter(Expense.organization_id == org).all():
-            d = getattr(r, "expense_date", None)
-            if not _in_period(d) or not expense_counts(getattr(r, "status", None)):
-                continue
-            vat = float(r.vat_amount or 0)
-            transactions.append({
-                'id': str(r.id), 'date': d.isoformat(),
-                'type': 'purchase', 'description': r.description or r.supplier_name or 'הוצאה',
-                'amount': abs(_net(r, 'amount', 'total', 'vat_amount')),
-                'vat_amount': abs(vat),
-                'vat_type': 'taxable' if vat else 'exempt',
-                'is_fixed_asset': False,
-            })
-
         return transactions
 
     def _get_annual_profit_estimate(self, year: int) -> float:

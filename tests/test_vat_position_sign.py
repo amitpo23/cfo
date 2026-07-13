@@ -1,5 +1,7 @@
-"""compute_vat_position חייב להחזיר מע"מ תשומות חיובי גם כש-bills/expenses
-שמורים בסימן שלילי (מוסכמת 'כסף יוצא'). מקור אמת אחד עם tax_service.generate_vat_report.
+"""סימני מע"מ אחרי נרמול הסימנים (12-13/07/2026): מסמך הוצאה רגיל שמור
+חיובי; **שלילי = זיכוי ספק** שמקטין תשומות (לא abs() — קיזוז ביתר אסור בחוק).
+מקור אמת אחד: tax_service.generate_vat_report נגזר מאותו select_vat_documents
+כמו compute_vat_position/pcn874, כולל דה-דופ והחרגת קבלות.
 """
 from datetime import date
 
@@ -22,18 +24,24 @@ def org_with_negative_bill(fresh_org):
                        issue_date=date(2026, 5, 5), due_date=date(2026, 6, 5),
                        subtotal=1000, tax=180, total=1180, paid_amount=0, balance=1180,
                        status=InvoiceStatus.SENT))
-        # ספק שמור שלילי (כסף יוצא) — tax=-72
+        # מסמך הוצאה רגיל — מנורמל חיובי (tax=+72)
         db.add(Bill(organization_id=org_id, vendor_id=vend.id, bill_number="B1",
                     issue_date=date(2026, 5, 3), due_date=date(2026, 6, 3),
-                    subtotal=-400, tax=-72, total=-472, paid_amount=0, balance=-472,
-                    status=BillStatus.APPROVED))
+                    subtotal=400, tax=72, total=472, paid_amount=472, balance=0,
+                    status=BillStatus.PAID))
+        # זיכוי ספק — שלילי, מקטין תשומות
+        db.add(Bill(organization_id=org_id, vendor_id=vend.id, bill_number="B1-CR",
+                    issue_date=date(2026, 5, 8), due_date=None,
+                    subtotal=-100, tax=-18, total=-118, paid_amount=-118, balance=0,
+                    status=BillStatus.PAID))
         db.commit()
         return {"org_id": org_id}
     finally:
         db.close()
 
 
-def test_input_vat_is_positive_for_negative_bill(org_with_negative_bill):
+def test_supplier_credit_reduces_input_vat_signed(org_with_negative_bill):
+    """72 (מסמך רגיל) − 18 (זיכוי ספק) = 54. זיכוי לעולם לא מגדיל תשומות."""
     from cfo.database import SessionLocal
     from cfo.services.financial_synthesis import compute_vat_position
 
@@ -42,8 +50,8 @@ def test_input_vat_is_positive_for_negative_bill(org_with_negative_bill):
         pos = compute_vat_position(db, org_with_negative_bill["org_id"],
                                    start=date(2026, 5, 1), end=date(2026, 5, 31))
         assert pos["output_vat"] == 180.0
-        assert pos["input_vat"] == 72.0      # חיובי, לא -72
-        assert pos["net_vat"] == 108.0       # 180 - 72
+        assert pos["input_vat"] == 54.0      # 72 − 18, לא 90
+        assert pos["net_vat"] == 126.0       # 180 − 54
     finally:
         db.close()
 

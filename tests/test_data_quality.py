@@ -29,7 +29,8 @@ def test_run_checks_all_pass_on_clean_org(fresh_org):
         db.close()
 
 
-def test_bills_nonnegative_fails_on_negative_total(fresh_org):
+def test_bills_sign_consistency(fresh_org):
+    """שלילי-עקבי (זיכוי ספק) תקין; סימן total מנוגד לסימן tax = זיהום."""
     from cfo.database import SessionLocal
     from cfo.models import Contact, ContactType, Bill, BillStatus
     from cfo.services.data_quality import run_checks
@@ -40,16 +41,24 @@ def test_bills_nonnegative_fails_on_negative_total(fresh_org):
         vend = Contact(organization_id=org_id, contact_type=ContactType.VENDOR, name="ספק")
         db.add(vend)
         db.flush()
-        db.add(Bill(organization_id=org_id, vendor_id=vend.id, bill_number="B1",
+        # זיכוי ספק לגיטימי — שלילי עקבי: לא נחשב בעיה.
+        db.add(Bill(organization_id=org_id, vendor_id=vend.id, bill_number="CR",
                     issue_date=date(2026, 5, 1), subtotal=-100, tax=-18, total=-118,
-                    paid_amount=0, balance=-118, status=BillStatus.RECEIVED))
+                    paid_amount=-118, balance=0, status=BillStatus.PAID))
         db.commit()
+        result = run_checks(db, org_id)
+        check = next(c for c in result["checks"] if c["name"] == "bills_nonnegative")
+        assert check["passed"] is True
 
+        # סימן מנוגד (total חיובי, tax שלילי) — זיהום אמיתי: נכשל.
+        db.add(Bill(organization_id=org_id, vendor_id=vend.id, bill_number="BAD",
+                    issue_date=date(2026, 5, 2), subtotal=100, tax=-18, total=118,
+                    paid_amount=0, balance=118, status=BillStatus.RECEIVED))
+        db.commit()
         result = run_checks(db, org_id)
         check = next(c for c in result["checks"] if c["name"] == "bills_nonnegative")
         assert check["passed"] is False
         assert result["status"] == "issues"
-        assert result["issues_count"] >= 1
     finally:
         db.close()
 

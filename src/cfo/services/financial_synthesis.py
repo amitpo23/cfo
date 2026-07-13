@@ -226,6 +226,20 @@ def _in_vat_period(d, start, end) -> bool:
     return True
 
 
+# סוגי מסמכים בצד ההכנסות שאינם מסמכי מע"מ — מוחרגים מצד העסקאות של הדוח.
+# '5' — שורות legacy שסונכרנו לפני הנרמול עם קוד ה-Type הגולמי של SUMIT: המקרה החי
+# external_id=974527677 (total=-23600) תויג באודיט 2026-07-05 כקבלה; לפי ה-swagger
+# (Accounting_Typed_DocumentType) קוד 5 הוא דווקא CreditInvoice — הסתירה מתועדת,
+# ובשני המקרים שורת legacy כזו אינה ניתנת לאימוץ כמסמך מע"מ בלי סנכרון מחדש
+# (זיכוי שמסונכרן כהלכה נושא document_type='credit_note' ולכן לא מוחרג).
+# '2'/'receipt' — קבלה לפי ה-swagger/שם: אישור תשלום, לא מסמך מע"מ.
+_NON_VAT_SALES_DOC_TYPES = {"5", "2", "receipt"}
+
+# זיכוי מנורמל (מסונכרן ע"י fetch_invoices החדש או הוזן ידנית) — נספר בעסקאות
+# בסימן שלילי: מקטין את מע"מ העסקאות (output_vat) ואת סך המכירות.
+_CREDIT_SALES_DOC_TYPES = {"credit_note", "credit_invoice"}
+
+
 def select_vat_documents(
     db, organization_id: int, *, start=None, end=None, basis: str = "document"
 ) -> dict[str, list[dict[str, Any]]]:
@@ -266,15 +280,22 @@ def select_vat_documents(
     for r in inv_rows:
         if not invoice_counts(r.status):
             continue
+        raw_doc_type = str(((getattr(r, "raw_data", None) or {}).get("document_type")) or "").lower()
+        if raw_doc_type in _NON_VAT_SALES_DOC_TYPES:
+            continue  # קבלה / שורת legacy קוד-גולמי — לא מסמך מע"מ בצד העסקאות
+        is_credit = raw_doc_type in _CREDIT_SALES_DOC_TYPES
         doc_date = getattr(r, "issue_date", None) or getattr(r, "due_date", None)
         if not _in_vat_period(doc_date, start, end):  # always document-basis for sales
             continue
         cname = getattr(getattr(r, "contact", None), "name", None)
+        # זיכוי תורם בשלילי (גם אם נשמר בחיובי ביבוא ישן/ידני — הסיווג קובע);
+        # כל השאר נשארים abs() כמו קודם.
+        sign = -1.0 if is_credit else 1.0
         sales.append({
             "type": "invoice", "id": r.id, "number": r.invoice_number,
             "doc_date": doc_date, "captured_date": _captured(r),
-            "counterparty": cname or "", "subtotal": abs(_f(r.subtotal)),
-            "vat": abs(_f(r.tax)), "allocation_number": getattr(r, "allocation_number", None),
+            "counterparty": cname or "", "subtotal": sign * abs(_f(r.subtotal)),
+            "vat": sign * abs(_f(r.tax)), "allocation_number": getattr(r, "allocation_number", None),
             "external_id": r.external_id,
         })
 
@@ -296,8 +317,12 @@ def select_vat_documents(
         inputs.append({
             "type": "bill", "id": r.id, "number": r.bill_number,
             "doc_date": doc_date, "captured_date": captured_date,
-            "counterparty": vname or "", "subtotal": abs(_f(r.subtotal)),
-            "vat": abs(_f(r.tax)), "vat_id": None, "external_id": r.external_id,
+            # סימן חתום, לא abs(): אחרי נרמול הסימן (12/07) מסמך רגיל חיובי
+            # וזיכוי ספק שלילי — abs() היה הופך זיכוי להגדלת תשומות (קיזוז
+            # ביתר, הכיוון האסור בחוק). ה-abs ההיסטורי פיצה על סימן שלילי גורף
+            # שכבר לא קיים.
+            "counterparty": vname or "", "subtotal": _f(r.subtotal),
+            "vat": _f(r.tax), "vat_id": None, "external_id": r.external_id,
         })
     for r in exp_rows:
         if not expense_counts(getattr(r, "status", None)):
@@ -312,8 +337,9 @@ def select_vat_documents(
         inputs.append({
             "type": "expense", "id": r.id, "number": getattr(r, "invoice_number", None),
             "doc_date": doc_date, "captured_date": captured_date,
-            "counterparty": r.supplier_name or "", "subtotal": abs(_f(r.amount)),
-            "vat": abs(_f(r.vat_amount)), "vat_id": getattr(r, "supplier_tax_id", None),
+            # כנ"ל — זיכוי ספק שנקלט כהוצאה שלילית (למשל org5) חייב להקטין תשומות.
+            "counterparty": r.supplier_name or "", "subtotal": _f(r.amount),
+            "vat": _f(r.vat_amount), "vat_id": getattr(r, "supplier_tax_id", None),
             "external_id": r.external_id,
         })
 

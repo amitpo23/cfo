@@ -32,6 +32,11 @@ SOFTWARE_VERSION = "0001"
 # מיפוי גס (לא מאומת) של סוג מסמך ל-C100.document_type_code.
 DOC_TYPE_SALE = "100"      # חשבונית מס (מכירה) — הערכה, ראה summary.approximate_mappings
 DOC_TYPE_PURCHASE = "405"  # חשבון/חשבונית ספק (רכש) — הערכה, ראה summary.approximate_mappings
+DOC_TYPE_CREDIT = "330"    # חשבונית זיכוי (מבנה אחיד) — הערכה, ראה summary.approximate_mappings
+
+# סיווגי raw_data.document_type שמסמנים חשבונית זיכוי (ראה sumit_connector /
+# financial_synthesis) — סכומיה נשארים שליליים כמו שהם בשורת C100.
+CREDIT_DOC_TYPES = {"credit_note", "credit_invoice"}
 
 PLACEHOLDER_FIELDS = {
     "A100": ["street", "city", "zip_code", "fax", "software_house_vat_id",
@@ -65,6 +70,16 @@ def _num(value, width: int) -> str:
     """Zero-padded non-negative integer, agorot (2 decimal digits folded in)."""
     n = int(round(abs(_f(value)) * 100))
     return str(n).rjust(width, "0")[:width]
+
+
+def _num_signed(value, width: int) -> str:
+    """כמו _num אך משמר סימן שלילי (חשבונית זיכוי): '-' תופס את תו הריפוד הראשון,
+    כך שרוחב השדה נשמר וערכים אי-שליליים זהים לפלט _num. placeholder לאימות מול
+    המפרט הרשמי (כמו שאר ה-DISCLAIMER)."""
+    n = int(round(_f(value) * 100))
+    if n >= 0:
+        return str(n).rjust(width, "0")[:width]
+    return ("-" + str(abs(n)).rjust(width - 1, "0")[:width - 1])[:width]
 
 
 def _signed_num(value, width: int) -> str:
@@ -131,12 +146,18 @@ def build_openfrmt(db, organization_id: int, date_from: date, date_to: date) -> 
         if not _in_range(d):
             continue
         contact = getattr(inv, "contact", None)
+        # חשבונית זיכוי (לפי הסיווג המנורמל ב-raw_data) — קוד סוג 330 וסכומים
+        # שליליים כמו שהם; שאר החשבוניות נשארות abs() כמו קודם.
+        raw_doc_type = str(((getattr(inv, "raw_data", None) or {}).get("document_type")) or "").lower()
+        is_credit = raw_doc_type in CREDIT_DOC_TYPES
+        sign = -1.0 if is_credit else 1.0
         docs.append({
-            "doc_type": DOC_TYPE_SALE, "number": inv.invoice_number, "date": d,
+            "doc_type": DOC_TYPE_CREDIT if is_credit else DOC_TYPE_SALE,
+            "number": inv.invoice_number, "date": d,
             "cp_vat": _digits(getattr(contact, "tax_id", None), 9),
             "cp_name": _txt(getattr(contact, "name", None), 30),
-            "subtotal": abs(_f(inv.subtotal)), "vat": abs(_f(inv.tax)),
-            "total": abs(_f(inv.total)) or (abs(_f(inv.subtotal)) + abs(_f(inv.tax))),
+            "subtotal": sign * abs(_f(inv.subtotal)), "vat": sign * abs(_f(inv.tax)),
+            "total": (sign * abs(_f(inv.total))) or (sign * (abs(_f(inv.subtotal)) + abs(_f(inv.tax)))),
             "line_items": inv.line_items,
         })
 
@@ -162,7 +183,7 @@ def build_openfrmt(db, organization_id: int, date_from: date, date_to: date) -> 
         c100_lines.append(
             "C100" + org_vat + _txt(doc["doc_type"], 3) + _txt(doc["number"], 20)
             + _yyyymmdd(doc["date"]) + doc["cp_vat"] + doc["cp_name"]
-            + _signed_num(doc["total"], 13) + _num(doc["vat"], 11)
+            + _signed_num(doc["total"], 13) + _num_signed(doc["vat"], 11)
             + _txt("ILS", 3) + _zeros(3)  # currency, branch id — branch is placeholder
         )
         items = doc["line_items"] if isinstance(doc["line_items"], list) and doc["line_items"] else None
@@ -271,7 +292,8 @@ def build_openfrmt(db, organization_id: int, date_from: date, date_to: date) -> 
             "placeholder_fields": PLACEHOLDER_FIELDS,
             "approximate_mappings": {
                 "C100.document_type_code": (
-                    f"{DOC_TYPE_SALE}=מכירה (חשבונית), {DOC_TYPE_PURCHASE}=רכש (חשבון ספק) — "
+                    f"{DOC_TYPE_SALE}=מכירה (חשבונית), {DOC_TYPE_PURCHASE}=רכש (חשבון ספק), "
+                    f"{DOC_TYPE_CREDIT}=חשבונית זיכוי (סכומים שליליים כמו שהם) — "
                     "מיפוי גס, לא מאומת מול טבלת הקודים הרשמית של רשות המסים"
                 ),
             },

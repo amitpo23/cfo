@@ -15,15 +15,21 @@ _STALE_AFTER = timedelta(hours=48)
 
 
 def _bills_nonnegative(db, org_id: int) -> dict[str, Any]:
+    """עקביות סימנים ב-bills: total שלילי לגיטימי (זיכוי ספק, מ-13/07) —
+    אות הזיהום הוא חוסר-עקביות בין סימן ה-total לסימן ה-tax."""
     from ..models import Bill
 
-    count = db.query(Bill.id).filter(
-        Bill.organization_id == org_id, Bill.total < 0,
-    ).count()
+    count = 0
+    for b in db.query(Bill).filter(Bill.organization_id == org_id).all():
+        total = float(b.total or 0)
+        tax = float(b.tax or 0)
+        if total != 0 and tax != 0 and (total > 0) != (tax > 0):
+            count += 1
     return {
         "name": "bills_nonnegative",
         "passed": count == 0,
-        "details": "כל ה-bills עם total>=0" if count == 0 else f"{count} bills עם total שלילי",
+        "details": ("סימני total/tax עקביים בכל ה-bills (שלילי = זיכוי ספק)" if count == 0
+                    else f"{count} bills עם סימן total מנוגד לסימן tax"),
     }
 
 

@@ -282,16 +282,31 @@ class SumitConnector(AccountingConnector):
         try:
             client = await self._get_client()
             async with client:
-                # SUMIT income documents live under TWO numeric DocumentType codes:
-                # 0 = Invoice (חשבונית מס) and 1 = InvoiceAndReceipt (חשבונית מס קבלה).
-                # Both are VAT-bearing revenue documents. Live finding (2026-07-06, org
-                # 439... / Omer-Oded): a 0-only filter silently dropped ₪124,605 of type-1
-                # income. Fetch both, skip drafts, dedupe by document id.
+                # SUMIT income documents live under FOUR numeric DocumentType codes:
+                # 0 = Invoice (חשבונית מס), 1 = InvoiceAndReceipt (חשבונית מס קבלה),
+                # 5 = CreditInvoice (חשבונית זיכוי), 6 = CreditInvoiceAndReceipt
+                # (חשבונית זיכוי-קבלה). Live finding (2026-07-06, org 439... /
+                # Omer-Oded): a 0-only filter silently dropped ₪124,605 of type-1
+                # income. Fetch all four, skip drafts, dedupe by document id.
+                #
+                # סמנטיקת סוג 5 (זיכוי, לא "קבלה") הוכחה בשלוש ראיות בלתי-תלויות
+                # (13/07/2026): (א) ה-enum הרשמי Accounting_Typed_DocumentType ב-swagger
+                # (Receipt=2, CreditInvoice=5); (ב) זוגות חשבונית+זיכוי בספרי SUMIT
+                # (20002/+23,600 מול 2002/-23,600); (ג) 14 ה"תקבולים" שסונכרנו בעבר
+                # כסוג 5 הסתכמו אצל org1 בדיוק ב-215,400 — ארבע החשבוניות שזוכו.
+                # (האמונה הישנה "5=קבלה" נבעה מהערת קוד לא-מאומתת מ-2026-06-23.)
                 docs_0 = await self._list_documents_all(client, "0", updated_since)
                 docs_1 = await self._list_documents_all(client, "1", updated_since)
+                docs_credit_5 = await self._list_documents_all(client, "5", updated_since)
+                docs_credit_6 = await self._list_documents_all(client, "6", updated_since)
+                docs_credit = docs_credit_5 + docs_credit_6
+                credit_type_by_id = {str(getattr(d, "id", "") or ""): code
+                                     for code, batch in (("5", docs_credit_5), ("6", docs_credit_6))
+                                     for d in batch}
+                credit_ids = set(credit_type_by_id)
                 seen_ids: set = set()
                 documents = []
-                for doc in docs_0 + docs_1:
+                for doc in docs_0 + docs_1 + docs_credit:
                     did = str(getattr(doc, "id", "") or "")
                     if did and did in seen_ids:
                         continue
@@ -302,8 +317,48 @@ class SumitConnector(AccountingConnector):
 
                 invoices = []
                 for doc in documents:
+                    is_credit = str(getattr(doc, "id", "") or "") in credit_ids
                     status = self._map_document_status(doc)
                     total = Decimal(str(doc.total or 0))
+
+                    if is_credit:
+                        # נרמול זיכוי: SUMIT שומר מסמכי "כסף יוצא" בשלילי (אומת חי
+                        # על מסמכי הוצאה 730/730, ועל מסמך סוג-5 בפרוד: total=-23600).
+                        # אם יוחזר חיובי — הופכים סימן: זיכוי תמיד מקטין הכנסות/מע"מ.
+                        if total > 0:
+                            total = -total
+                        subtotal, tax = _derive_subtotal_tax(doc, total)  # שומר סימן
+                        if tax > 0 > total:
+                            # vat_amount מפורש חיובי מול total שלילי — מיישרים סימן
+                            tax = -tax
+                            subtotal = total - tax
+                        # זיכוי אינו חוב לגבייה: balance=0 (עיצוב: אפס, לא שלילי —
+                        # כך שום גיול/AR לא סופר אותו), status=paid גם אם "open" ב-SUMIT.
+                        status = "paid"
+                        paid = total
+                        raw = dict(doc.__dict__) if hasattr(doc, "__dict__") else {}
+                        # סיווג מנורמל שמבדיל זיכוי-שסונכרן-כהלכה משורות legacy
+                        # שנשאו קוד גולמי '5' (ראה select_vat_documents).
+                        raw["document_type"] = "credit_note"
+                        raw["sumit_type_code"] = credit_type_by_id.get(str(doc.id), "5")
+                        invoices.append(NormalizedInvoice(
+                            external_id=str(doc.id),
+                            contact_external_id=str(doc.customer_id) if doc.customer_id else None,
+                            invoice_number=getattr(doc, "document_number", None),
+                            allocation_number=getattr(doc, "allocation_number", None),
+                            issue_date=doc.date if isinstance(doc.date, date) else None,
+                            due_date=getattr(doc, "due_date", None),
+                            status=status,
+                            currency=_normalize_currency(getattr(doc, "currency", None)),
+                            subtotal=subtotal,
+                            tax=tax,
+                            total=total,
+                            paid_amount=paid,
+                            balance=Decimal("0"),
+                            raw_data=raw,
+                        ))
+                        continue
+
                     paid = Decimal(str(getattr(doc, "paid_amount", 0) or 0))
                     if status == "paid" and paid < total:
                         # SUMIT לא מאכלס paid_amount על מסמכים סגורים; בלי זה
@@ -446,10 +501,12 @@ class SumitConnector(AccountingConnector):
                 except Exception as e:
                     logger.warning("list_payments unavailable, continuing: %s", e)
 
-                # (b) Receipt documents (SUMIT numeric DocumentType 5 = Receipt / קבלה):
-                # collection events that close invoices. Stored negative; the payment
-                # amount is the absolute value. Captured for AR/collection visibility.
-                receipts = await self._list_documents_all(client, "5", updated_since)
+                # (b) Receipt documents — SUMIT DocumentType 2 = Receipt (קבלה),
+                # per the swagger enum Accounting_Typed_DocumentType. האמונה הישנה
+                # ש"5=קבלה" הופרכה חיה (13/07/2026): כל 14 ה"תקבולים" שנמשכו כסוג 5
+                # היו חשבוניות זיכוי (אצל org1 — בדיוק ₪215,400, ארבע החשבוניות
+                # שזוכו). CreditReceipt (7) — החזר כספי ללקוח — לא נמשך עדיין; מתועד.
+                receipts = await self._list_documents_all(client, "2", updated_since)
                 for doc in receipts:
                     amount = abs(Decimal(str(doc.total or 0)))
                     if amount == 0:

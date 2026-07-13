@@ -32,6 +32,21 @@ def _num(value, width: int) -> str:
     return str(n).rjust(width, "0")[:width]
 
 
+def _signed_num(value, width: int) -> str:
+    """כמו _num אך משמר סימן שלילי (חשבונית זיכוי): '-' תופס את תו הריפוד הראשון,
+    כך שרוחב השדה נשמר וערכים אי-שליליים נראים בדיוק כמו ב-_num.
+
+    PLACEHOLDER לאימות (כמו שאר ה-DISCLAIMER): במבנה PCN874 האמיתי זיכויים מיוצגים
+    בסכום שלילי עם ייצוג סימן בשדה — הייצוג המדויק (מיקום/תו הסימן) טעון אימות מול
+    המפרט הרשמי לפני הגשה. הנתון עצמו (הנטו כולל הזיכוי) נכון ומתואם 1:1 מול
+    vat_report_period.
+    """
+    n = int(round(float(value or 0)))
+    if n >= 0:
+        return str(n).rjust(width, "0")[:width]
+    return ("-" + str(abs(n)).rjust(width - 1, "0")[:width - 1])[:width]
+
+
 def _txt(value, width: int) -> str:
     return (str(value or "")[:width]).ljust(width)
 
@@ -62,6 +77,8 @@ def build_pcn874(db, organization_id: int, year: int, month: int, *,
     sel = financial_synthesis.select_vat_documents(
         db, organization_id, start=start, end=pb["end"], basis=basis)
 
+    # שורות מכירה: _signed_num ולא _num — חשבונית זיכוי מגיעה מ-select_vat_documents
+    # בסכומים שליליים וחייבת לשאת את הסימן בשורת ה-S1 (ולא להיבלע ב-abs).
     sale_lines, total_sales, total_output_vat = [], 0.0, 0.0
     for r in sel["sales"]:
         total_sales += r["subtotal"]
@@ -71,7 +88,7 @@ def build_pcn874(db, organization_id: int, year: int, month: int, *,
             + _vat_id(r.get("allocation_number"))
             + _yyyymmdd(r["doc_date"])
             + _txt(r["number"], 9)
-            + _num(r["subtotal"], 11) + _num(r["vat"], 9)
+            + _signed_num(r["subtotal"], 11) + _signed_num(r["vat"], 9)
         )
 
     # שורת התשומה נושאת את תאריך הקליטה כש-basis=captured (עקבי עם הבחירה עצמה),
@@ -86,10 +103,12 @@ def build_pcn874(db, organization_id: int, year: int, month: int, *,
             + _num(r["subtotal"], 11) + _num(r["vat"], 9)
         )
 
+    # שורת ה-O משקפת את הנטו כולל זיכויים (total_sales/total_output_vat כבר מסוכמים
+    # בסימן); _signed_num מגן גם על מקרה קצה של נטו שלילי בתקופה.
     header = (
         REC_HEADER + _vat_id(company_vat_id) + f"{year}{pb['anchor_month']:02d}"
         + _yyyymmdd(gen_date or start)
-        + _num(total_sales, 11) + _num(total_output_vat, 9)
+        + _signed_num(total_sales, 11) + _signed_num(total_output_vat, 9)
         + _num(total_inputs, 11) + _num(total_input_vat, 9)
     )
     detail = sale_lines + input_lines

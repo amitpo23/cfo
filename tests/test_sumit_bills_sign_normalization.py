@@ -135,24 +135,15 @@ def test_vat_report_input_vat_unchanged_after_sign_normalization(monkeypatch, fr
     (normalized_bill,) = result.items
     assert float(normalized_bill.tax) > 0  # מנורמל חיובי
 
-    org_before = fresh_org()["org_id"]
     org_after = fresh_org()["org_id"]
     db = SessionLocal()
     try:
-        vend = Contact(organization_id=org_before, contact_type=ContactType.VENDOR, name="ספק")
-        db.add(vend)
-        db.flush()
-        # "לפני" — סימן ישן (שלילי), כפי שהיה נשמר לפני התיקון
-        db.add(Bill(
-            organization_id=org_before, vendor_id=vend.id, bill_number="OLD",
-            issue_date=date(2026, 5, 10), subtotal=-847.46, tax=-152.54, total=-1000.0,
-            paid_amount=0, balance=-1000.0, status=BillStatus.RECEIVED,
-        ))
-
         vend2 = Contact(organization_id=org_after, contact_type=ContactType.VENDOR, name="ספק")
         db.add(vend2)
         db.flush()
-        # "אחרי" — הערכים המנורמלים בפועל מ-fetch_bills המתוקן
+        # הערכים המנורמלים בפועל מ-fetch_bills המתוקן — חיוביים, נספרים כתשומות.
+        # (שורות "סימן ישן" שליליות כבר לא נתמכות: הן הוסבו במיגרציית הדאטה
+        # scripts/fix_bills_sign_status.py; שלילי מעתה = זיכוי ספק, שמקטין.)
         db.add(Bill(
             organization_id=org_after, vendor_id=vend2.id, bill_number="NEW",
             issue_date=date(2026, 5, 10), subtotal=normalized_bill.subtotal,
@@ -162,9 +153,8 @@ def test_vat_report_input_vat_unchanged_after_sign_normalization(monkeypatch, fr
         ))
         db.commit()
 
-        pos_before = compute_vat_position(db, org_before, start=date(2026, 5, 1), end=date(2026, 5, 31))
         pos_after = compute_vat_position(db, org_after, start=date(2026, 5, 1), end=date(2026, 5, 31))
-        assert pos_before["input_vat"] == pos_after["input_vat"] == 152.54
+        assert pos_after["input_vat"] == 152.54
     finally:
         db.close()
 

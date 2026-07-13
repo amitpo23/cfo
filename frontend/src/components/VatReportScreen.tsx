@@ -28,6 +28,19 @@ interface VatDocument {
   vat: number;
 }
 
+interface VerificationCheck {
+  name: string;
+  label: string;
+  passed: boolean | null; // null = אזהרה
+  details: string;
+  pending_drafts?: number;
+}
+
+interface Verification {
+  status: 'pass' | 'warn' | 'fail';
+  checks: VerificationCheck[];
+}
+
 interface VatReport {
   period: string;
   months: number;
@@ -82,6 +95,7 @@ export default function VatReportScreen() {
   const [basis, setBasis] = useState<'document' | 'captured'>('document');
   const [vatId, setVatId] = useState(() => localStorage.getItem('vat_report_company_vat_id') || '');
   const [report, setReport] = useState<VatReport | null>(null);
+  const [verification, setVerification] = useState<Verification | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -94,6 +108,14 @@ export default function VatReportScreen() {
         `/api/daily-reports/vat?year=${year}&month=${month}&months=${months}&basis=${basis}`
       );
       setReport(res);
+      // אימות משולש — כלל מחייב: שלוש בדיקות בלתי-תלויות לכל פלט דיווח.
+      setVerification(null);
+      api.get<Verification>(
+        `/api/daily-reports/vat/verify?year=${year}&month=${month}&months=${months}&basis=${basis}`
+      ).then(setVerification).catch(() => setVerification({
+        status: 'fail',
+        checks: [{ name: 'error', label: 'אימות', passed: false, details: 'הרצת האימות נכשלה — אין להגיש ללא אימות.' }],
+      }));
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'שגיאה בטעינת דוח המע"מ');
     } finally {
@@ -286,6 +308,36 @@ export default function VatReportScreen() {
                 />
               )}
             </div>
+          </div>
+
+          <div className={`border rounded-xl p-4 mb-4 ${
+            !verification ? 'bg-slate-50' :
+            verification.status === 'pass' ? 'bg-emerald-50/60 border-emerald-200' :
+            verification.status === 'warn' ? 'bg-amber-50/60 border-amber-300' :
+            'bg-red-50/70 border-red-300'
+          }`}>
+            <h2 className="font-semibold mb-2 text-sm">
+              אימות משולש לפני הגשה
+              {!verification ? ' — רץ...' :
+                verification.status === 'pass' ? ' — כל הבדיקות עברו ✓' :
+                verification.status === 'warn' ? ' — עבר עם אזהרות ⚠️' :
+                ' — נכשל! אין להגיש ✗'}
+            </h2>
+            {verification && (
+              <ul className="space-y-1.5 text-xs">
+                {verification.checks.map((c) => (
+                  <li key={c.name} className="flex gap-2 items-start">
+                    <span className={
+                      c.passed === true ? 'text-emerald-600 font-bold' :
+                      c.passed === null ? 'text-amber-600 font-bold' : 'text-red-600 font-bold'
+                    }>
+                      {c.passed === true ? '✓' : c.passed === null ? '⚠️' : '✗'}
+                    </span>
+                    <span><strong>{c.label}:</strong> {c.details}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
           <div className="flex items-center gap-2 mb-5">
