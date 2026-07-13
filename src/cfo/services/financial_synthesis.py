@@ -313,6 +313,13 @@ def select_vat_documents(
         select_date = captured_date if basis == "captured" else doc_date
         if not _in_vat_period(select_date, start, end):
             continue
+        subtotal, tax = _f(r.subtotal), _f(r.tax)
+        if subtotal == 0 and tax == 0:
+            # טיוטה ריקה (צילום קבלה שסונכרן/נשמר בלי סכום — טרם תויקה) —
+            # ממצא אודיט אליהב 2026-07-13 (ממצא 5): שורות כאלה יוצאות ב-PCN874
+            # כשורת L באפס — פסולה בקובץ רגולטורי, ואינה תורמת דבר לחישוב ממילא.
+            # עדיין נספרת בנפרד ב-filing_verification._pending_drafts (שלמות קליטה).
+            continue
         vname = getattr(getattr(r, "vendor", None), "name", None)
         inputs.append({
             "type": "bill", "id": r.id, "number": r.bill_number,
@@ -321,8 +328,8 @@ def select_vat_documents(
             # וזיכוי ספק שלילי — abs() היה הופך זיכוי להגדלת תשומות (קיזוז
             # ביתר, הכיוון האסור בחוק). ה-abs ההיסטורי פיצה על סימן שלילי גורף
             # שכבר לא קיים.
-            "counterparty": vname or "", "subtotal": _f(r.subtotal),
-            "vat": _f(r.tax), "vat_id": None, "external_id": r.external_id,
+            "counterparty": vname or "", "subtotal": subtotal,
+            "vat": tax, "vat_id": _bill_vendor_tax_id(r), "external_id": r.external_id,
         })
     for r in exp_rows:
         if not expense_counts(getattr(r, "status", None)):
@@ -334,16 +341,46 @@ def select_vat_documents(
         select_date = captured_date if basis == "captured" else doc_date
         if not _in_vat_period(select_date, start, end):
             continue
+        subtotal, tax = _f(r.amount), _f(r.vat_amount)
+        if subtotal == 0 and tax == 0:
+            continue  # טיוטה ריקה — ראו הערה מקבילה בלולאת ה-Bill למעלה.
         inputs.append({
             "type": "expense", "id": r.id, "number": getattr(r, "invoice_number", None),
             "doc_date": doc_date, "captured_date": captured_date,
             # כנ"ל — זיכוי ספק שנקלט כהוצאה שלילית (למשל org5) חייב להקטין תשומות.
-            "counterparty": r.supplier_name or "", "subtotal": _f(r.amount),
-            "vat": _f(r.vat_amount), "vat_id": getattr(r, "supplier_tax_id", None),
+            "counterparty": r.supplier_name or "", "subtotal": subtotal,
+            "vat": tax, "vat_id": getattr(r, "supplier_tax_id", None),
             "external_id": r.external_id,
         })
 
     return {"sales": sales, "inputs": inputs}
+
+
+_BILL_TAX_ID_RAW_KEYS = (
+    # מפתחות משוערים בלבד להגנה עתידית: DocumentResponse הנוכחי של SUMIT
+    # (src/cfo/integrations/sumit_models.py) אינו חושף שום שדה ח.פ-לקוח/ספק על
+    # מסמך הוצאה, כך שבפועל נתיב זה יחזיר תמיד None עד שהמקור יתעשר — אין כאן
+    # נתון מומצא, רק גיבוי בטוח למקרה שמפתח כזה יתווסף מתישהו.
+    "customer_tax_id", "vendor_tax_id", "CustomerTaxId", "VendorTaxId",
+    "VatNumber", "vat_number", "CompanyNumber", "company_number",
+)
+
+
+def _bill_vendor_tax_id(bill_row) -> Optional[str]:
+    """ח.פ ספק לשורת L של PCN874: קודם Contact.tax_id של ה-vendor המקושר
+    (המקור האמין שקיים כבר במודל), אחרת ניסיון גיבוי מ-raw_data (ראו
+    _BILL_TAX_ID_RAW_KEYS), אחרת None — לא ממציאים, pcn874._vat_id ישאיר
+    9 אפסים כברירת המחדל הקיימת."""
+    vendor = getattr(bill_row, "vendor", None)
+    tax_id = getattr(vendor, "tax_id", None) if vendor is not None else None
+    if tax_id:
+        return tax_id
+    raw = bill_row.raw_data if isinstance(getattr(bill_row, "raw_data", None), dict) else {}
+    for key in _BILL_TAX_ID_RAW_KEYS:
+        value = raw.get(key)
+        if value:
+            return str(value)
+    return None
 
 
 def period_bounds(year: int, month: int, months: int = 1) -> dict[str, Any]:

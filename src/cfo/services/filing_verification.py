@@ -16,12 +16,17 @@
 """
 from __future__ import annotations
 
-from datetime import date
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Optional
 
 # תקרת שיעור מע"מ פר-מסמך לבדיקת שפיות: השיעור החוקי (18% נכון ל-2025-2026)
 # + מרווח עיגול. מסמך שחורג — דגל אדום (נתון שגוי או פיצול לא נכון).
 MAX_VAT_RATE = 0.185
+
+# שער טריות סנכרון (ממצא אודיט אליהב 2026-07-13, ממצא 5): מעל כמות שעות זו
+# מאז הסנכרון המוצלח האחרון של SUMIT — הדוח נגזר מנתונים ישנים בלי אזהרה.
+# 26 שעות = מרווח סביר מעבר ל-24 (כדי לא להתריע שווא על ריצה יומית שגרתית).
+STALE_SYNC_HOURS = 26
 
 
 def _independent_sums(db, org_id: int, start: date, end: date, basis: str) -> dict[str, float]:
@@ -87,6 +92,45 @@ def _sanity_issues(report: dict[str, Any]) -> list[str]:
     return issues
 
 
+def _sync_freshness(db, org_id: int) -> dict[str, Any]:
+    """מועד הסנכרון המוצלח האחרון של SUMIT לארגון — כדי לחסום/להתריע על הפקת
+    דוח רגולטורי מנתונים ישנים (ראו dashboard_service._get_last_sync_by_source
+    לשימוש קיים דומה בטבלת SyncRun)."""
+    from ..models import SyncRun, SyncStatus
+
+    succeeded = [SyncStatus.COMPLETED, SyncStatus.PARTIAL]
+    last_run = db.query(SyncRun).filter(
+        SyncRun.organization_id == org_id,
+        SyncRun.source == "sumit",
+        SyncRun.status.in_(succeeded),
+        SyncRun.finished_at.isnot(None),
+    ).order_by(SyncRun.finished_at.desc()).first()
+
+    if not last_run or not last_run.finished_at:
+        return {
+            "stale": True, "last_sync_at": None, "hours_since": None,
+            "message": (
+                "⚠️ אזהרה חמורה: מעולם לא בוצע סנכרון SUMIT מוצלח לארגון זה — "
+                "אין להגיש דיווח על בסיס נתונים שלא סונכרנו מעולם."
+            ),
+        }
+
+    hours = (datetime.utcnow() - last_run.finished_at).total_seconds() / 3600.0
+    last_sync_iso = last_run.finished_at.isoformat()
+    if hours <= STALE_SYNC_HOURS:
+        return {"stale": False, "last_sync_at": last_sync_iso,
+                "hours_since": round(hours, 1), "message": None}
+
+    age = f"{hours / 24:.1f} ימים" if hours >= 48 else f"{hours:.1f} שעות"
+    return {
+        "stale": True, "last_sync_at": last_sync_iso, "hours_since": round(hours, 1),
+        "message": (
+            f"⚠️ הנתונים בני {age} — סנכרון SUMIT אחרון: "
+            f"{last_run.finished_at.date().isoformat()}; אין להגיש בלי רענון."
+        ),
+    }
+
+
 def _pending_drafts(db, org_id: int, start: date, end: date) -> int:
     """קבלות שהועלו ל-SUMIT וטרם תויקו — סונכרנו כרשומות הוצאה בסכום 0.
     המע"מ שלהן לא כלול בשום דוח עד תיוק."""
@@ -146,16 +190,22 @@ def verify_filing(db, org_id: int, year: int, month: int, *,
 
     # --- בדיקה 3: שלמות והצלבה חיצונית ---
     drafts = _pending_drafts(db, org_id, start, end)
+    freshness = _sync_freshness(db, org_id)
+    # אזהרה (לא כשל) כשיש טיוטות ממתינות ו/או כשהסנכרון האחרון ישן/לא קיים —
+    # הדוח נכון למה שקלוט, אבל ייתכן שהוא חסר/מיושן. ראו ממצא אודיט אליהב
+    # 2026-07-13 (ממצא 5): PCN הופק מנתונים בני 3 שבועות בלי שום אזהרה.
     checks.append({
         "name": "completeness_and_cross_source",
         "label": "שלמות קליטה והצלבה חיצונית",
-        # אזהרה (לא כשל) כשיש טיוטות: הדוח נכון למה שקלוט, אבל חסר.
-        "passed": None if drafts > 0 else True,
+        "passed": None if (drafts > 0 or freshness["stale"]) else True,
         "details": (
             (f"⚠️ {drafts} קבלות ממתינות לתיוק בתקופה — המע\"מ שלהן אינו כלול בדוח. " if drafts else "אין קבלות ממתינות לתיוק בתקופה. ")
+            + (freshness["message"] + " " if freshness["message"] else "")
             + "הצלבה מול ספרי SUMIT (מסך דיווח מע\"מ בתיק ההנה\"ח) — ידנית; ודא התאמה לפני שידור."
         ),
         "pending_drafts": drafts,
+        "last_sync_sumit": freshness["last_sync_at"],
+        "sync_age_hours": freshness["hours_since"],
     })
 
     failed = any(c["passed"] is False for c in checks)

@@ -195,10 +195,20 @@ def vat_report_period(db, organization_id: int, year: int, month: int, *,
     period_label = (f"{year}-{pb['anchor_month']:02d}" if months == 1 else
                     f"{year}-{pb['anchor_month']:02d}_{year}-{pb['end_month']:02d}")
 
+    # כנות בסיס-קליטה (ממצא אודיט אליהב 2026-07-13, ממצא 4): "captured" משתמש
+    # ב-created_at המקומי — אצל ארגון שסונכרן רטרואקטיבית (batch sync) הוא מציין
+    # את מועד הסנכרון לרצף, לא את מועד הקליטה האמיתי ב-SUMIT. אין נתון טוב יותר
+    # בלי API, אז לא משנים לוגיקה — רק חושפים את המגבלה במפורש במקום לשתוק.
+    basis_note = (
+        "מועד הקליטה = מועד הקליטה ברצף; בארגון שסונכרן רטרואקטיבית ייתכן פער "
+        "מול מועד הקליטה ב-SUMIT." if basis == "captured" else None
+    )
+
     return {
         "period": period_label,
         "months": months,
         "basis": basis,
+        "basis_note": basis_note,
         "due_date": pb["due_date"].isoformat(),
         "output_vat": output_vat,
         "input_vat": input_vat,

@@ -109,13 +109,13 @@ const paymentTemplates = [
   { id: 'bank_transfer', label: 'העברה בנקאית', note: 'חשבונית לתשלום ידני' },
 ];
 
-const trustItems = ['איתור חשבוניות חסרות', 'התאמות בנק', 'בקרה של יועצים', 'תזרים', 'תכנון מס (בטא)', 'סוכן CFO AI'];
+const trustItems = ['הנהלת חשבונות', 'מנהל כספים AI', 'גבייה ותזכורות', 'דיווחים', 'דוחות לבנק', 'רנטגן עסקי בזמן אמת', 'איתור חשבוניות חסרות'];
 
 const painBullets = [
-  'תשלום שירד בבנק בלי חשבונית שנקלטה',
-  'חיוב אשראי עסקי שלא הגיע להנהלת החשבונות',
-  'הוצאה מוכרת שנשארה מחוץ לדיווח',
-  'פער שמתגלה רק בסוף החודש או בסוף השנה',
+  'משלמים בכל חודש — ומקבלים תמונת מצב כשכבר מאוחר',
+  'הגבייה, המסמכים והתשלומים עדיין תלויים במרדף ידני',
+  'הכסף בבנק, הנתונים באקסל והתשובות מפוזרים בין אנשים',
+  'כל דוח מתחיל מחדש באיסוף, ניקוי ובדיקה של הנתונים',
 ];
 
 const solutionCards = [
@@ -238,20 +238,46 @@ const platformProof = [
 
 const marketingMessages = [
   {
-    title: 'למנכ״ל',
-    text: 'לדעת בכל יום אם החברה מרוויחה, מי חייב כסף, מה עומד לצאת ומה הסיכון התזרימי הקרוב.',
+    title: 'להפסיק לשלם על עבודה שחוזרת על עצמה',
+    text: 'מחליפה עבודה ידנית ומפוצלת שעשויה לעלות לעסק אלפי ואף עשרות אלפי שקלים בשנה.',
   },
   {
-    title: 'לבעל העסק',
-    text: 'להחליף עבודה ידנית, אקסלים ושיחות חוזרות במערכת אחת שמבצעת, בודקת ומסבירה.',
+    title: 'לקבל CFO — בלי לגייס CFO',
+    text: 'מנתחת תזרים, רווחיות וסיכונים ומסבירה מה השתנה, למה זה קרה ומה כדאי לבדוק עכשיו.',
   },
   {
-    title: 'ל-CFO',
-    text: 'לקבל שכבת בקרה, תחזיות, KPI, חריגות, תקציב מול בפועל ודוחות מוכנים לדיון.',
+    title: 'לתת למשימות לרוץ — לא לרדוף אחריהן',
+    text: 'מטפלת בגבייה, תזכורות, התאמות, מסמכים, דיווחים ומעקב תשלומים במקום לרדוף ידנית.',
   },
   {
-    title: 'למשרד מייצג',
-    text: 'לנהל הרבה לקוחות בתצוגת על, עם הרשאות, סטטוסים, משימות ודוחות עבודה מסודרים.',
+    title: 'לדעת מה קורה. ולהבין למה.',
+    text: 'נותנת תשובות ברורות על מצב העסק, הלקוחות, ההוצאות, התזרים והפעולות שדורשות תשומת לב.',
+  },
+  {
+    title: 'להגיע לבנק עם תשובות, לא עם הסברים',
+    text: 'מייצרת תמונת מצב ודוחות מוכנים לשיתוף, כדי להגיע לשיחה על אשראי עם נתונים ברורים ועדכניים.',
+  },
+  {
+    title: 'לראות את כל העסק — עכשיו',
+    text: 'רנטגן של רווחיות, תקציב מול ביצוע ותזרים, בכל שנייה ומכל מקום — בלי לחכות לסוף החודש.',
+  },
+];
+
+const fitProfiles = [
+  {
+    title: 'עוסק מורשה שעובד עם רואה חשבון',
+    text: 'רצף מנהלת את הכסף לאורך השנה, כדי שרואה החשבון יקבל תיק מסודר — ואתם תקבלו שליטה עוד לפני הדוח השנתי.',
+    icon: ClipboardCheck,
+  },
+  {
+    title: 'חברה שמשלמת אלפי שקלים על הנהלת חשבונות',
+    text: 'מפסיקים לשלם על הקלדות, מרדפים ובדיקות חוזרות. רצף מבצעת, בודקת ומעדכנת את הנתונים באופן שוטף.',
+    icon: BookOpen,
+  },
+  {
+    title: 'חברה פעילה עד ₪10 מיליון מחזור בשנה',
+    text: 'מקבלים הנהלת חשבונות, גבייה, תזרים ודוחות ניהול — בלי העלות והמורכבות של מחלקת כספים מלאה.',
+    icon: TrendingUp,
   },
 ];
 
@@ -539,7 +565,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
             <a href="#signup" className="hover:text-white">הרשמה</a>
           </nav>
           <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-400">
-            להתחיל עם רצף <ArrowLeft className="h-4 w-4" />
+            לבדוק התאמה <ArrowLeft className="h-4 w-4" />
           </a>
         </div>
       </header>
@@ -550,24 +576,24 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
             <div className="max-w-3xl">
               <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-sm font-medium text-emerald-200">
                 <Sparkles className="h-4 w-4" />
-                רצף היא לא עוד תוכנת הנהלת חשבונות
+                כל מחלקת הכספים שלכם. ברצף אחד.
               </div>
               <h1 className="text-4xl font-bold leading-tight tracking-normal text-white md:text-6xl">
-                רצף מוצאת את ההוצאות ששילמת — אבל החשבונית שלהן לא נקלטה
+                גם הנהלת החשבונות. גם מנהל הכספים. מערכת אחת שעובדת בשביל העסק.
               </h1>
               <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-300">
-                רצף מחברת בין הבנק, כרטיסי האשראי והנהלת החשבונות, מציפה הוצאות שחסרה להן חשבונית
-                ועוזרת להחזיר לתמונה כסף שעלול להישאר מחוץ לספרים ולדיווח.
+                רצף מחליפה את העבודה השוטפת של מנהל החשבונות, מוסיפה מנהל כספים AI ומטפלת בספרים,
+                בבנק, בגבייה, בתזכורות, בדיווחים ובדוחות — החל מ־₪300 לחודש.
               </p>
               <div className="mt-5 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-lg font-semibold text-blue-100">
-                פחות חשבוניות שנופלות בין הכיסאות. יותר הוצאות מתועדות. תמונה אמינה יותר של העסק.
+                פחות עלויות. פחות מרדפים. יותר כסף בשליטה.
               </div>
               <div className="mt-8 flex flex-wrap gap-3">
                 <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-3 font-semibold text-white shadow-sm hover:bg-blue-400">
-                  להתחיל עם רצף <UserPlus className="h-4 w-4" />
+                  לבדוק איך רצף מתאימה לעסק שלי <UserPlus className="h-4 w-4" />
                 </a>
                 <a href="#command-center" className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/5 px-5 py-3 font-semibold text-white hover:bg-white/10">
-                  לראות את המערכת <BarChart3 className="h-4 w-4 text-emerald-300" />
+                  לראות את רצף בפעולה <BarChart3 className="h-4 w-4 text-emerald-300" />
                 </a>
               </div>
               <div className="mt-8 flex flex-wrap gap-2 text-sm text-slate-300">
@@ -586,14 +612,14 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
         <section id="pain" className="border-b border-slate-200 bg-white">
           <div className="mx-auto grid max-w-7xl gap-8 px-5 py-16 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
             <SectionHeading
-              eyebrow="הכאב"
-              title="שילמתם על ההוצאה. אבל האם החשבונית באמת נקלטה?"
-              text="כשהבנק, כרטיסי האשראי והחשבוניות לא נבדקים זה מול זה ברצף, הוצאות עסקיות נשארות ללא מסמך. המשמעות יכולה להיות ספרים לא שלמים, תמונת רווח מטעה והוצאות שלא נכנסו לדיווח."
+              eyebrow="הבעיה"
+              title="כל המספרים קיימים. אז למה אף אחד לא יודע מה באמת קורה בעסק?"
+              text="כי הכסף בבנק, המסמכים במייל, המעקב באקסל והתמונה אצל רואה החשבון. בינתיים אתם רודפים אחרי גבייה, מכינים דוחות ידנית ומקבלים תשובות באיחור."
             />
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-blue-700">
                 <Workflow className="h-4 w-4" />
-                רצף הופכת את התהליך ליומי, אוטומטי וחכם
+                רצף אוספת את כל החלקים — והופכת אותם לעבודה אחת רציפה
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 {painBullets.map((item) => (
@@ -608,12 +634,12 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           <div className="mx-auto max-w-7xl px-5 py-16">
             <div className="grid gap-10 lg:grid-cols-[0.82fr_1.18fr] lg:items-start">
               <div>
-                <div className="text-sm font-semibold text-emerald-300">הכסף שלא אמור ללכת לאיבוד</div>
+                <div className="text-sm font-semibold text-emerald-300">חשבוניות לא אמורות להיעלם בדרך</div>
                 <h2 className="mt-2 text-3xl font-bold leading-tight md:text-5xl">
-                  רצף מראה בדיוק אילו חשבוניות חסרות לכם
+                  הכסף יצא. החשבונית לא נקלטה. רצף מוצאת את הפער.
                 </h2>
                 <p className="mt-4 max-w-2xl leading-8 text-emerald-50/80">
-                  במקום לנחש מה לא הועבר לרואה החשבון, רצף בודקת את התשלומים מול המסמכים ומרכזת את הפערים לטיפול.
+                  רצף מראה בדיוק אילו חשבוניות חסרות: היא בודקת את התשלומים מול המסמכים ומרכזת את הפערים לטיפול.
                   בעסק עם פעילות שוטפת, איתור הוצאות שלא נקלטו עשוי להצטבר לחיסכון של אלפי ואף עשרות אלפי שקלים.
                 </p>
                 <div className="mt-6 flex items-start gap-3 rounded-lg border border-emerald-300/20 bg-white/10 p-4">
@@ -646,9 +672,9 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
 
         <section id="solution" className="mx-auto max-w-7xl px-5 py-16">
           <SectionHeading
-            eyebrow="הפתרון"
-            title="רצף לא רק מנהלת ספרים. היא מנהלת את הכסף."
-            text="המערכת קולטת תנועות בנק, חשבוניות, קבלות, ספקים, לקוחות והוצאות — ומחברת הכול לתמונה פיננסית אחת. היא מבצעת התאמות, יוצרת פקודות יומן, בודקת חריגות, מנהלת גבייה ומכינה חומר מסודר לרו״ח ולמאזן."
+            eyebrow="רצף עובדת. לא רק מציגה."
+            title="לא עוד מערכת שמחכה שתנהלו אותה. מערכת שמנהלת את הכסף."
+            text="המערכת קולטת את הנתונים, מבצעת התאמות, מטפלת במשימות, בודקת חריגות ומתרגמת את המספרים לפעולות — כך שהנהלת החשבונות והניהול הפיננסי נשארים תמיד מחוברים."
           />
           <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {solutionCards.map((card) => (
@@ -663,7 +689,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               <div>
                 <SectionHeading
                   eyebrow="היכולות"
-                  title="מערכת כספים מלאה, לא מסך דוחות יפה"
+                  title="כל מה שמחלקת כספים עושה. מחובר למערכת אחת."
                   text="רצף בנויה כמערכת תפעול פיננסית מקצה לקצה: הנהלת חשבונות, בנק, גבייה, תשלומים, ספקים, שכר, מלאי, דוחות, תחזיות ובקרה. כל פעולה נכנסת לאותו רצף מספרים, וכל מספר נבדק מול המספרים האחרים."
                 />
                 <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-5">
@@ -707,11 +733,11 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
 
         <section className="mx-auto max-w-7xl px-5 py-16">
           <SectionHeading
-            eyebrow="מסר לפרסום"
-            title="לא עוד דוח בסוף החודש. מערכת שמנהלת את הכסף בזמן אמת."
-            text="הפרסום של רצף צריך לדבר על תוצאה עסקית: פחות עבודה ידנית, פחות עלויות הנהלת חשבונות, יותר שליטה, יותר בקרה, ויותר החלטות בזמן."
+            eyebrow="חמש סיבות לעבור לרצף"
+            title="פחות זמן על ניהול הכסף. יותר זמן לנהל את העסק."
+            text="התוצאה ברורה: רצף מצמצמת עלויות ועבודה ידנית, מבצעת את משימות הכספים ונותנת תשובות שאפשר לפעול לפיהן."
           />
-          <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {marketingMessages.map((message) => (
               <div key={message.title} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="text-sm font-semibold text-blue-600">{message.title}</div>
@@ -721,11 +747,11 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           </div>
           <div className="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-5">
             <div className="text-lg font-bold text-emerald-950">
-              רצף מחליפה את העבודה הידנית סביב הנהלת החשבונות ומוסיפה שכבת CFO שלא הייתה קיימת לעסק.
+              הנהלת חשבונות, מנהל כספים AI, גבייה, דיווחים ודוחות לבנק — ברצף אחד.
             </div>
             <p className="mt-2 text-sm leading-7 text-emerald-900">
-              במקום להסתכל אחורה על מה שכבר קרה, רצף עוזרת להבין מה קורה עכשיו:
-              רווחיות, גבייה, תזרים, תשלומים, חריגות, תקציב, דוחות והמלצות פעולה.
+              רואה החשבון נשאר הגורם המקצועי לביקורת, לייצוג ולחתימה במקומות הנדרשים.
+              רצף מחליפה את העבודה השוטפת והידנית ומוסיפה לעסק יכולת ניהול פיננסי יומיומית.
             </p>
           </div>
         </section>
@@ -776,9 +802,9 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
         <section id="command-center" className="border-y border-slate-200 bg-white">
           <div className="mx-auto grid max-w-7xl gap-8 px-5 py-16 lg:grid-cols-[0.85fr_1.15fr] lg:items-center">
             <SectionHeading
-              eyebrow="Command Center"
-              title="תמונת מצב פיננסית אחת לכל החברה"
-              text="במקום לפזר נתונים בין בנק, חשבוניות, אקסלים, רו״ח ומיילים — רצף מרכזת את כל המספרים במקום אחד."
+              eyebrow="הרנטגן של העסק"
+              title="רווחיות, תקציב ותזרים — בכל שנייה, מכל מקום"
+              text="לא מחכים לסוף החודש ולא מבקשים שמישהו יכין דוח. רצף מחברת את הבנק, החשבוניות, הגבייה והתקציב לתמונה אחת חיה שמראה מה קורה בעסק עכשיו."
             />
             <CommandCenterPanel />
           </div>
@@ -797,13 +823,39 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
           </div>
         </section>
 
+        <section className="border-y border-slate-200 bg-slate-950 text-white">
+          <div className="mx-auto max-w-7xl px-5 py-16">
+            <div className="max-w-3xl">
+              <div className="text-sm font-semibold text-emerald-300">למי רצף מתאימה?</div>
+              <h2 className="mt-2 text-3xl font-bold leading-tight md:text-4xl">
+                לעסקים שגדלו מעבר לאקסל — ועדיין לא צריכים מחלקת כספים יקרה
+              </h2>
+              <p className="mt-3 leading-7 text-slate-300">
+                לעוסק מורשה שעובד עם רואה חשבון, לחברה שמוציאה אלפי שקלים על הנהלת חשבונות
+                ולחברה פעילה עד ₪10 מיליון מחזור שכבר צריכה שליטה פיננסית אמיתית.
+              </p>
+            </div>
+            <div className="mt-8 grid gap-4 lg:grid-cols-3">
+              {fitProfiles.map(({ title, text, icon: Icon }) => (
+                <div key={title} className="rounded-lg border border-white/10 bg-white/5 p-6">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-emerald-400 text-slate-950">
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <h3 className="mt-5 text-xl font-bold">{title}</h3>
+                  <p className="mt-3 text-sm leading-7 text-slate-300">{text}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
         <section id="plans" className="border-y border-slate-200 bg-white">
           <div className="mx-auto max-w-7xl px-5 py-16">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <SectionHeading
                 eyebrow="תמחור"
-                title="מסלול שמתאים גם לעוסק מורשה וגם לחברה"
-                text="מתחילים במחיר ברור ומקבלים חיבור בין התנועות, המסמכים, ההתאמות והתמונה הפיננסית של העסק."
+                title="כל מחלקת הכספים. החל מ־₪300 לחודש."
+                text="בוחרים מסלול לפי סוג העסק והמחזור ומקבלים מערכת אחת שמחברת בין התנועות, המסמכים, המשימות והתמונה הניהולית."
               />
               <div className="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600">
                 דוח שנתי: החל מ-₪3,000
@@ -884,13 +936,13 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
                 <ShieldCheck className="h-4 w-4" />
                 CFO דיגיטלי לחברה שעובדת בזמן אמת
               </div>
-              <h2 className="text-4xl font-bold leading-tight">תפסיקו לנהל את הכסף בדיעבד</h2>
+              <h2 className="text-4xl font-bold leading-tight">תנו לרצף לנהל את העבודה. אתם תנהלו את העסק.</h2>
               <p className="mt-4 max-w-2xl leading-8 text-white/70">
-                רצף מחברת את התשלומים למסמכים, מוצאת חשבוניות חסרות ונותנת לעסק בקרה, תזרים ותובנות — החל מ-₪300 לחודש לעוסק מורשה.
+                הנהלת חשבונות שוטפת, מנהל כספים AI, גבייה, דיווחים, דוחות ותובנות — במערכת אחת שמתחילה לעבוד בכל יום, לא רק בסוף החודש.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <a href="#signup" className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-3 font-semibold text-white hover:bg-blue-400">
-                  להתחיל עכשיו <ArrowLeft className="h-4 w-4" />
+                  לבדוק איך רצף מתאימה לי <ArrowLeft className="h-4 w-4" />
                 </a>
                 <a href="#signup" className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/5 px-5 py-3 font-semibold text-white hover:bg-white/10">
                   לקבוע הדגמה <ClipboardCheck className="h-4 w-4" />
@@ -900,7 +952,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
                 <SignupPoint icon={BuildingIcon} text="ארגון נפרד לכל חברה או לקוח" />
                 <SignupPoint icon={Database} text="נתונים והרשאות מופרדים" />
                 <SignupPoint icon={Landmark} text="קליטת נתונים פיננסיים לאחר הכניסה" />
-                <SignupPoint icon={TrendingUp} text="תזרים ותובנות בזמן אמת" />
+                <SignupPoint icon={TrendingUp} text="רנטגן של רווחיות, תקציב ותזרים בזמן אמת" />
               </div>
             </div>
 
