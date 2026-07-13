@@ -24,6 +24,7 @@ from ...services.client_automation_service import (
 )
 from ...services.collection_service import CollectionService, dispatch_reminders
 from ...services.email_sender import send_email_smtp
+from ...services.shaam_reminder import ensure_shaam_renewal_reminder
 from ..dependencies import sumit_for_org
 from ...integrations.sumit_models import SMSRequest
 
@@ -342,6 +343,15 @@ def run_daily_close(db: Session = Depends(get_db_session)):
             logger.error("Daily close failed for org %s: %s", org.id, exc)
             db.rollback()
             errors.append({"org": org.id, "error": str(exc)})
+
+        # תזכורת מחזורית לחידוש חיבור רשות המסים (שע"מ פג כל 3 חודשים) —
+        # מבודדת בנפרד: כשל כאן לא אמור לפגוע ב-daily_snapshot שכבר נשמר
+        # למעלה, ולא להפיל את הריצה עבור ארגונים אחרים.
+        try:
+            ensure_shaam_renewal_reminder(db, org.id, today=today)
+        except Exception as exc:
+            logger.warning("Shaam reminder failed for org %s: %s", org.id, exc)
+            db.rollback()
 
     return {"status": "ok", "orgs": len(orgs), "snapshots": len(results),
             "results": results, "errors": errors}

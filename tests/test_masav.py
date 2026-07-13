@@ -15,6 +15,8 @@ from cfo.services.masav_service import (
     build_records,
     build_masav_file,
     summarize,
+    is_valid_account,
+    is_valid_branch,
     is_valid_israeli_id,
     is_valid_bank_code,
     RECORD_LENGTH,
@@ -247,3 +249,32 @@ def test_is_valid_bank_code_rejects_unknown_code():
     assert is_valid_bank_code("") is False
     assert is_valid_bank_code("abc") is False
     assert is_valid_bank_code("123") is False  # 3 ספרות — עדיין לא בתוקף (המעבר טרם נכנס לתוקף)
+
+
+# ---------- ולידציית סניף/חשבון (בדיקת שפיות מינימלית לפני שידור) ----------
+
+def test_is_valid_branch_accepts_1_to_3_digits():
+    assert is_valid_branch("1") is True
+    assert is_valid_branch("12") is True
+    assert is_valid_branch("345") is True
+
+
+def test_is_valid_branch_rejects_bad_input():
+    assert is_valid_branch("") is False
+    assert is_valid_branch("1234") is False    # 4 ספרות — ארוך מדי לסניף
+    assert is_valid_branch("12a") is False
+    assert is_valid_branch("12-3") is False
+
+
+def test_is_valid_account_accepts_4_to_9_digits():
+    assert is_valid_account("1234") is True
+    assert is_valid_account("123456789") is True
+    assert is_valid_account("000123456") is True
+
+
+def test_is_valid_account_rejects_bad_input():
+    assert is_valid_account("") is False
+    assert is_valid_account("123") is False       # קצר מדי (3 ספרות)
+    assert is_valid_account("1234567890") is False  # ארוך מדי (10 ספרות)
+    assert is_valid_account("12-34") is False
+    assert is_valid_account("abcd") is False

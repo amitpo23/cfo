@@ -28,12 +28,22 @@ interface VatDocument {
   vat: number;
 }
 
+interface CrosscheckInfo {
+  present: boolean;
+  recorded_at?: string;
+  books_input_vat?: number;
+  books_output_vat?: number | null;
+  diff_input_vat?: number;
+  diff_output_vat?: number | null;
+}
+
 interface VerificationCheck {
   name: string;
   label: string;
   passed: boolean | null; // null = אזהרה
   details: string;
   pending_drafts?: number;
+  crosscheck?: CrosscheckInfo;
 }
 
 interface Verification {
@@ -99,6 +109,10 @@ export default function VatReportScreen() {
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [crosscheckInput, setCrosscheckInput] = useState('');
+  const [crosschecking, setCrosschecking] = useState(false);
+
+  const verifyUrl = `/api/daily-reports/vat/verify?year=${year}&month=${month}&months=${months}&basis=${basis}`;
 
   const load = async () => {
     setLoading(true);
@@ -110,9 +124,7 @@ export default function VatReportScreen() {
       setReport(res);
       // אימות משולש — כלל מחייב: שלוש בדיקות בלתי-תלויות לכל פלט דיווח.
       setVerification(null);
-      api.get<Verification>(
-        `/api/daily-reports/vat/verify?year=${year}&month=${month}&months=${months}&basis=${basis}`
-      ).then(setVerification).catch(() => setVerification({
+      api.get<Verification>(verifyUrl).then(setVerification).catch(() => setVerification({
         status: 'fail',
         checks: [{ name: 'error', label: 'אימות', passed: false, details: 'הרצת האימות נכשלה — אין להגיש ללא אימות.' }],
       }));
@@ -124,6 +136,26 @@ export default function VatReportScreen() {
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [year, month, months, basis]);
+
+  // הרגל שלישי של האימות המשולש: הצלבה מוקלטת מול ספרי SUMIT (תיק ההנה"ח),
+  // במקום "הצלבה ידנית" סתמית. שולח את הערך שהוקלד ומרענן את האימות בלבד.
+  const submitCrosscheck = async () => {
+    const value = parseFloat(crosscheckInput);
+    if (Number.isNaN(value)) return;
+    setCrosschecking(true);
+    try {
+      await api.post('/api/daily-reports/vat/crosscheck', {
+        year, month, months, basis, books_input_vat: value,
+      });
+      setCrosscheckInput('');
+      const v = await api.get<Verification>(verifyUrl);
+      setVerification(v);
+    } catch (e: any) {
+      setError('הצלבה מול ספרי SUMIT נכשלה');
+    } finally {
+      setCrosschecking(false);
+    }
+  };
 
   const saveVatId = (v: string) => {
     setVatId(v);
@@ -338,6 +370,45 @@ export default function VatReportScreen() {
                 ))}
               </ul>
             )}
+            {verification && (() => {
+              const c3 = verification.checks.find((c) => c.name === 'completeness_and_cross_source');
+              if (!c3) return null;
+              if (c3.crosscheck?.present) {
+                return (
+                  <div className="mt-2 text-xs text-slate-600 bg-white/60 rounded-lg p-2 border border-slate-200">
+                    <div>
+                      מע"מ תשומות בספרי SUMIT: {fmt(c3.crosscheck.books_input_vat ?? 0)}
+                      {' '}(פער {fmt(c3.crosscheck.diff_input_vat ?? 0)})
+                    </div>
+                    {c3.crosscheck.books_output_vat != null && (
+                      <div>
+                        מע"מ עסקאות בספרי SUMIT: {fmt(c3.crosscheck.books_output_vat)}
+                        {' '}(פער {fmt(c3.crosscheck.diff_output_vat ?? 0)})
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+              return (
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                  <label className="text-xs text-slate-500">מע"מ תשומות בספרי SUMIT:</label>
+                  <input
+                    value={crosscheckInput}
+                    onChange={(e) => setCrosscheckInput(e.target.value)}
+                    type="number" step="0.01" placeholder="סכום בש״ח"
+                    className="border rounded-lg px-2 py-1 text-sm w-28" dir="ltr"
+                  />
+                  <button
+                    onClick={submitCrosscheck}
+                    disabled={crosschecking || !crosscheckInput}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {crosschecking && <Loader2 className="w-3 h-3 animate-spin" />}
+                    הצלב
+                  </button>
+                </div>
+              );
+            })()}
           </div>
 
           <div className="flex items-center gap-2 mb-5">

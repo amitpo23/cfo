@@ -192,8 +192,7 @@ def vat_report_period(db, organization_id: int, year: int, month: int, *,
 
     documents = [_doc_out(r) for r in sel["sales"]] + [_doc_out(r) for r in sel["inputs"]]
 
-    period_label = (f"{year}-{pb['anchor_month']:02d}" if months == 1 else
-                    f"{year}-{pb['anchor_month']:02d}_{year}-{pb['end_month']:02d}")
+    period_label = financial_synthesis.period_label(year, month, months)
 
     # כנות בסיס-קליטה (ממצא אודיט אליהב 2026-07-13, ממצא 4): "captured" משתמש
     # ב-created_at המקומי — אצל ארגון שסונכרן רטרואקטיבית (batch sync) הוא מציין

@@ -1210,6 +1210,36 @@ class CfoInsight(Base):
     )
 
 
+class FilingCrosscheck(Base):
+    """הקלדת ערכי מע"מ (תשומות/עסקאות) מתוך ספרי SUMIT (תיק ההנה"ח בפורטל
+    המשרד) לתקופת דיווח נתונה — ההרגל השלישי של האימות המשולש: הצלבה
+    *מוקלטת* מול המקור החיצוני האמיתי, במקום "הצלבה ידנית" סתמית שאינה
+    נבדקת בפועל (ראה docs/audits/2026-07-13-eliav-pcn-three-way-reconciliation.md,
+    ממצא 6 — הפער בין דוח 1,966 ל-37,884 בתיק לא היה מתגלה בלי הצלבה חיצונית).
+
+    ייחודי פר (ארגון, תקופה, בסיס) — הקלדה חוזרת לאותה תקופה מעדכנת (upsert),
+    לא יוצרת שורה כפולה.
+    """
+    __tablename__ = "filing_crosschecks"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    period = Column(String(20), nullable=False)   # לדוגמה "2026-05" או "2026-05_2026-06"
+    basis = Column(String(20), nullable=False)    # "document" | "captured"
+    books_input_vat = Column(Numeric(precision=12, scale=2), nullable=False)
+    books_output_vat = Column(Numeric(precision=12, scale=2), nullable=True)
+    source = Column(String(50), default="manual")  # מקור ההקלדה (ידני כרגע; API עתידי)
+    noted_by = Column(String(255), nullable=True)  # מי הקליד (שם/מייל חופשי)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "period", "basis",
+                          name="uq_filing_crosscheck_period_basis"),
+    )
+
+
 # Pydantic Models for API
 
 # ============= Organization Models =============

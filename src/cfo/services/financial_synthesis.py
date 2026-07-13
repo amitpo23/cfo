@@ -423,6 +423,17 @@ def period_bounds(year: int, month: int, months: int = 1) -> dict[str, Any]:
     }
 
 
+def period_label(year: int, month: int, months: int = 1) -> str:
+    """מחרוזת התקופה הקנונית (למשל "2026-05" או "2026-05_2026-06") — מקור אמת
+    יחיד שמשמש גם את דוח המע"מ (daily_reports_service.vat_report_period) וגם
+    את ההצלבה המוקלטת (FilingCrosscheck), כדי שלעולם לא ייווצר פער בין
+    הפורמטים שיחביא רשומת הצלבה מ-filing_verification.verify_filing."""
+    pb = period_bounds(year, month, months)
+    if months == 1:
+        return f"{year}-{pb['anchor_month']:02d}"
+    return f"{year}-{pb['anchor_month']:02d}_{year}-{pb['end_month']:02d}"
+
+
 def compute_vat_position(
     db, organization_id: int, *, start=None, end=None, basis: str = "document"
 ) -> dict[str, Any]:

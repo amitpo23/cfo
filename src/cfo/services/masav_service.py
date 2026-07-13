@@ -156,6 +156,19 @@ def is_valid_bank_code(bank_code: str) -> bool:
     return text.zfill(2) in MASAV_PARTICIPANT_BANK_CODES
 
 
+def is_valid_branch(branch: str) -> bool:
+    """מספר סניף: ספרות בלבד, 1-3 ספרות (מיקום 20-22 ברשומת התנועה)."""
+    text = str(branch).strip()
+    return text.isdigit() and 1 <= len(text) <= 3
+
+
+def is_valid_account(account_number: str) -> bool:
+    """מספר חשבון: ספרות בלבד, 4-9 ספרות (השדה מרופד ל-9 ברשומת התנועה;
+    חשבון קצר מ-4 ספרות או ארוך מ-9 הוא כמעט תמיד השחתת נתונים)."""
+    text = str(account_number).strip()
+    return text.isdigit() and 4 <= len(text) <= 9
+
+
 def is_valid_israeli_id(id_number: str) -> bool:
     """ביקורת ספרה (אלגוריתם Luhn) לת.ז/ח.פ ישראלי בן 9 ספרות.
 

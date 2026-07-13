@@ -180,6 +180,20 @@ def _pending_drafts(db, org_id: int, start: date, end: date) -> int:
     return n
 
 
+def _find_crosscheck(db, org_id: int, period: str, basis: str):
+    """שליפת רשומת ההצלבה המוקלטת (FilingCrosscheck) לתקופה+בסיס נתונים,
+    אם קיימת. ``period`` חייב להיות בפורמט הקנוני מ-financial_synthesis.
+    period_label -- אותו מקור בדיוק שמייצר routes/daily_reports.py בעת
+    ה-upsert -- אחרת ההצלבה "נעלמת" בשקט (ראה advisor: סיכון פורמט כפול)."""
+    from ..models import FilingCrosscheck
+
+    return db.query(FilingCrosscheck).filter(
+        FilingCrosscheck.organization_id == org_id,
+        FilingCrosscheck.period == period,
+        FilingCrosscheck.basis == basis,
+    ).first()
+
+
 def verify_filing(db, org_id: int, year: int, month: int, *,
                   months: int = 1, basis: str = "document") -> dict[str, Any]:
     """מריץ את שלוש הבדיקות ומחזיר תוצאה מפורטת + סטטוס כולל."""
@@ -224,21 +238,65 @@ def verify_filing(db, org_id: int, year: int, month: int, *,
     # --- בדיקה 3: שלמות והצלבה חיצונית ---
     drafts = _pending_drafts(db, org_id, start, end)
     freshness = _sync_freshness(db, org_id)
+    crosscheck = _find_crosscheck(db, org_id, report["period"], basis)
     # אזהרה (לא כשל) כשיש טיוטות ממתינות ו/או כשהסנכרון האחרון ישן/לא קיים —
     # הדוח נכון למה שקלוט, אבל ייתכן שהוא חסר/מיושן. ראו ממצא אודיט אליהב
     # 2026-07-13 (ממצא 5): PCN הופק מנתונים בני 3 שבועות בלי שום אזהרה.
+    #
+    # כשקיימת רשומת FilingCrosscheck (הרגל שלישי: הצלבה *מוקלטת* מול ספרי
+    # SUMIT, ולא סתם הנחיה) — ההצלבה עצמה קובעת את passed: פער ≤ ₪1 = ✓,
+    # פער גדול = ✗ עם הפער בש"ח. בלי רשומה — ההתנהגות הקיימת (אין כשל, רק
+    # אזהרה אם יש טיוטות/סנכרון ישן, עם הנחיה ידנית).
+    crosscheck_info = None
+    if crosscheck is not None:
+        diff_in = abs(float(crosscheck.books_input_vat) - float(report["input_vat"]))
+        diff_out = None
+        if crosscheck.books_output_vat is not None:
+            diff_out = abs(float(crosscheck.books_output_vat) - float(report["output_vat"]))
+        max_diff = diff_in if diff_out is None else max(diff_in, diff_out)
+        passed3 = max_diff <= 1.0
+        if passed3:
+            cross_sentence = (
+                f"הוצלב מול ספרי SUMIT (הוקלד ב-{crosscheck.created_at.date().isoformat()}) "
+                "— התאמה."
+            )
+        else:
+            gap_parts = [f"תשומות ₪{diff_in:.2f}"]
+            if diff_out is not None:
+                gap_parts.append(f"עסקאות ₪{diff_out:.2f}")
+            cross_sentence = (
+                f"⚠️ פער מול ספרי SUMIT (הוקלד ב-{crosscheck.created_at.date().isoformat()}): "
+                + "; ".join(gap_parts)
+            )
+        crosscheck_info = {
+            "present": True,
+            "recorded_at": crosscheck.created_at.isoformat(),
+            "books_input_vat": float(crosscheck.books_input_vat),
+            "books_output_vat": (float(crosscheck.books_output_vat)
+                                 if crosscheck.books_output_vat is not None else None),
+            "diff_input_vat": round(diff_in, 2),
+            "diff_output_vat": round(diff_out, 2) if diff_out is not None else None,
+        }
+    else:
+        passed3 = None if (drafts > 0 or freshness["stale"]) else True
+        cross_sentence = (
+            "הצלבה מול ספרי SUMIT (מסך דיווח מע\"מ בתיק ההנה\"ח) — ידנית; ודא התאמה לפני שידור."
+        )
+        crosscheck_info = {"present": False}
+
     checks.append({
         "name": "completeness_and_cross_source",
         "label": "שלמות קליטה והצלבה חיצונית",
-        "passed": None if (drafts > 0 or freshness["stale"]) else True,
+        "passed": passed3,
         "details": (
             (f"⚠️ {drafts} קבלות ממתינות לתיוק בתקופה — המע\"מ שלהן אינו כלול בדוח. " if drafts else "אין קבלות ממתינות לתיוק בתקופה. ")
             + (freshness["message"] + " " if freshness["message"] else "")
-            + "הצלבה מול ספרי SUMIT (מסך דיווח מע\"מ בתיק ההנה\"ח) — ידנית; ודא התאמה לפני שידור."
+            + cross_sentence
         ),
         "pending_drafts": drafts,
         "last_sync_sumit": freshness["last_sync_at"],
         "sync_age_hours": freshness["hours_since"],
+        "crosscheck": crosscheck_info,
     })
 
     failed = any(c["passed"] is False for c in checks)

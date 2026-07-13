@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
@@ -93,6 +94,89 @@ def vat_verification(
     """אימות משולש לדיווח — כלל שלוש הבדיקות (ראה services/filing_verification)."""
     from ...services import filing_verification
     return filing_verification.verify_filing(db, org_id, year, month, months=months, basis=basis)
+
+
+class VatCrosscheckRequest(BaseModel):
+    """הקלדת ערכי מע\"מ תשומות/עסקאות מספרי SUMIT (תיק ההנה\"ח בפורטל המשרד)
+    לתקופה נתונה — ההרגל השלישי של האימות המשולש (ר' services/filing_verification)."""
+    year: int
+    month: int
+    months: int = 1
+    basis: Literal["document", "captured"] = "document"
+    books_input_vat: float
+    books_output_vat: Optional[float] = None
+    noted_by: Optional[str] = None
+
+
+def _crosscheck_out(row) -> dict:
+    return {
+        "exists": True,
+        "period": row.period,
+        "basis": row.basis,
+        "books_input_vat": float(row.books_input_vat),
+        "books_output_vat": float(row.books_output_vat) if row.books_output_vat is not None else None,
+        "source": row.source,
+        "noted_by": row.noted_by,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+@router.post("/daily-reports/vat/crosscheck")
+def upsert_vat_crosscheck(
+    body: VatCrosscheckRequest,
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """הקלדת/עדכון (upsert) ערכי המע\"מ מספרי SUMIT לתקופה — ללא זה, בדיקה 3
+    של האימות המשולש נשארת הנחיה ידנית בלבד; עם רשומה — היא הופכת להשוואה
+    אמיתית מול הדוח (ראה filing_verification.verify_filing)."""
+    from ...models import FilingCrosscheck
+    from ...services import financial_synthesis
+
+    period = financial_synthesis.period_label(body.year, body.month, body.months)
+    row = db.query(FilingCrosscheck).filter(
+        FilingCrosscheck.organization_id == org_id,
+        FilingCrosscheck.period == period,
+        FilingCrosscheck.basis == body.basis,
+    ).first()
+    if row:
+        row.books_input_vat = body.books_input_vat
+        row.books_output_vat = body.books_output_vat
+        row.noted_by = body.noted_by
+    else:
+        row = FilingCrosscheck(
+            organization_id=org_id, period=period, basis=body.basis,
+            books_input_vat=body.books_input_vat, books_output_vat=body.books_output_vat,
+            noted_by=body.noted_by, source="manual",
+        )
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _crosscheck_out(row)
+
+
+@router.get("/daily-reports/vat/crosscheck")
+def get_vat_crosscheck(
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+    months: int = Query(1, ge=1, le=2),
+    basis: Literal["document", "captured"] = Query("document"),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """שליפת רשומת ההצלבה המוקלטת לתקופה+בסיס, אם קיימת."""
+    from ...models import FilingCrosscheck
+    from ...services import financial_synthesis
+
+    period = financial_synthesis.period_label(year, month, months)
+    row = db.query(FilingCrosscheck).filter(
+        FilingCrosscheck.organization_id == org_id,
+        FilingCrosscheck.period == period,
+        FilingCrosscheck.basis == basis,
+    ).first()
+    if not row:
+        return {"exists": False, "period": period, "basis": basis}
+    return _crosscheck_out(row)
 
 
 @router.get("/daily-reports/pcn874/file")
