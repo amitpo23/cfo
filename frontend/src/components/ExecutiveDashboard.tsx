@@ -34,6 +34,18 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
   const bank = panels.bank_reconciliation?.data || {};
   const budget = panels.budget_vs_actual?.data || {};
   const fees = panels.fees?.data || {};
+  // ה-API מחזיר unreconciled_bank_transactions; שומרים fallback לשם הישן ליתר ביטחון.
+  const unreconciledCount = (v: any) => v?.unreconciled_bank_transactions ?? v?.unreconciled_count ?? 0;
+
+  const period = data?.period;
+  const formatDate = (iso?: string) => {
+    if (!iso) return null;
+    const [y, m, d] = iso.split('-');
+    return d && m && y ? `${d}/${m}/${y}` : iso;
+  };
+  const periodLabel = period?.start && period?.end
+    ? `תקופה: ${formatDate(period.start)}–${formatDate(period.end)} (מתחילת שנה)`
+    : null;
 
   const Card: React.FC<{ icon: any; title: string; panel?: Panel; children: (d: any) => React.ReactNode }> =
     ({ icon: Icon, title, panel, children }) => (
@@ -64,11 +76,20 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
       darkMode={darkMode}
       eyebrow="Executive Control"
       title="דשבורד מנהלים"
-      description="מסך הנהלה שמחליף דוח סטטי: רווח והפסד, התאמות בנק, תקציב, עמלות, חריגות והמלצות פעולה בזמן אמת."
+      description={
+        <>
+          מסך הנהלה שמחליף דוח סטטי: רווח והפסד, התאמות בנק, תקציב, עמלות, חריגות והמלצות פעולה בזמן אמת.
+          {periodLabel && (
+            <span className={darkMode ? 'mt-1 block text-slate-400' : 'mt-1 block text-slate-500'}>
+              {periodLabel}
+            </span>
+          )}
+        </>
+      }
       icon={Gauge}
       metrics={[
         { label: 'רווח נקי', value: fmt(profitLoss.net_income || 0), tone: (profitLoss.net_income || 0) >= 0 ? 'emerald' : 'rose' },
-        { label: 'תנועות לא מותאמות', value: String(bank.unreconciled_count ?? 0), tone: (bank.unreconciled_count ?? 0) > 0 ? 'amber' : 'emerald' },
+        { label: 'תנועות לא מותאמות', value: String(unreconciledCount(bank)), tone: unreconciledCount(bank) > 0 ? 'amber' : 'emerald' },
         { label: 'סטיית תקציב', value: `${(budget.variance_percentage || 0).toFixed(1)}%`, tone: (budget.variance_percentage || 0) < -5 ? 'rose' : 'blue' },
         { label: 'עמלות', value: fmt(fees.total_fees || 0), tone: 'slate' },
       ]}
@@ -86,9 +107,9 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
           darkMode={darkMode}
           icon={Building2}
           label="התאמות"
-          value={String(bank.unreconciled_count ?? 0)}
+          value={String(unreconciledCount(bank))}
           detail={`חשבוניות באיחור: ${fmt(bank.overdue_invoices_amount || 0)}`}
-          tone={(bank.unreconciled_count ?? 0) > 0 ? 'amber' : 'emerald'}
+          tone={unreconciledCount(bank) > 0 ? 'amber' : 'emerald'}
         />
         <MetricCard
           darkMode={darkMode}
@@ -115,15 +136,15 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
             <Row label="הכנסות" value={fmt(d.total_revenue)} />
             <Row label="הוצאות" value={fmt(d.total_expenses)} />
             <Row label="רווח נקי" value={fmt(d.net_income)} warn={d.net_income < 0} />
-            <Row label="שולי רווח נקי" value={pct(d.net_margin)} />
+            <Row label="שולי רווח נקי" value={pct((d.net_margin || 0) / 100)} />
           </>)}
         </Card>
 
         {/* 2. פערי התאמת בנקים */}
         <Card icon={Building2} title="2. פערי התאמת בנקים" panel={panels.bank_reconciliation}>
           {(d) => (<>
-            <Row label="תנועות לא מותאמות" value={String(d.unreconciled_count ?? 0)}
-              warn={(d.unreconciled_count ?? 0) > 0} />
+            <Row label="תנועות לא מותאמות" value={String(unreconciledCount(d))}
+              warn={unreconciledCount(d) > 0} />
             <Row label="חשבוניות באיחור" value={fmt(d.overdue_invoices_amount ?? 0)} />
             <Row label="תשלומים קרובים (14 י')" value={fmt(d.upcoming_bills_amount_14d ?? 0)} />
           </>)}

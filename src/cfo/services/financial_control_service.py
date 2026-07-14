@@ -20,6 +20,7 @@ from ..models import (
     BankTransaction,
     Bill,
     Invoice,
+    InvoiceStatus,
     Payment,
     Transaction,
     TransactionType,
@@ -393,10 +394,12 @@ class FinancialControlService:
         return inflow, outflow
 
     def _overdue_invoice_total(self, today: date) -> Decimal:
+        # מחריגים טיוטה/מבוטלת — מסמך שאינו סופי אינו חוב אמיתי (ראה vat_utils.invoice_counts).
         total = self.db.query(func.sum(Invoice.balance)).filter(
             Invoice.organization_id == self.organization_id,
             Invoice.due_date < today,
             Invoice.balance > 0,
+            Invoice.status.notin_([InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED]),
         ).scalar()
         return Decimal(total or 0)
 

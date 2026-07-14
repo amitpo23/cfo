@@ -14,7 +14,7 @@ interface PageShellProps {
   darkMode?: boolean;
   eyebrow: string;
   title: string;
-  description: string;
+  description: React.ReactNode;
   icon: LucideIcon;
   actions?: React.ReactNode;
   metrics?: Array<{ label: string; value: string; tone?: 'blue' | 'emerald' | 'amber' | 'rose' | 'slate' }>;
