@@ -2621,3 +2621,7 @@ FABLE browser audit: Amit's real filing queue = 262 files (200-cap bypassed via 
 SONNET P1 bundle (67075ad, 1035 tests, deployed, migration d3e4f5a6b7c8 applied to prod): shaam_reminder quarterly insight in daily-close; FilingCrosscheck model+routes — books VAT figure recorded per period+basis, verification check 3 compares (<=1 pass / >1 FAIL with gap) + inline input in VAT screen; Masav preview validations (branch 1-3 digits, account 4-9, unknown bank codes, explicit non-positive-balance warnings on explicit selections).
 LIVE VERIFIED: daily-close ran 4 orgs ok; crosscheck POST for org1 May-June (books=3,265) → verify now FAILS honestly: 82 pending drafts + frozen pulls + ₪~1,207 gap vs books (Rezef 2,058 vs books 3,265) — the Eliav-class divergence now auto-surfaces for Amit too. Vercel bot-checkpoint on curl cleared on its own.
 PLAN STATUS: P0+P1 complete. Remaining: owner actions (obligo payment, ×4 cleanup at Eliav, filing decision for 262+16 files, SHAAM renewal, fake-payments delete approval, main merge) + P2 replication wave.
+
+# === 2026-07-14 — תיעוד וסגירת סשן ===
+/doctor run: CLI 2.1.63→2.1.209, defaultMode=auto, 23 unused plugins disabled (backup ~/.claude/settings.json.doctor-backup-20260714), duplicate nvm install removed.
+FULL HANDOFF written: docs/superpowers/plans/2026-07-14-session-handoff.md — doctrines, shipped table w/ commits, live data state per org, owner actions (7), engineering queue, work environment incl. Vercel bot-checkpoint workaround. Memory: work-log-2026-07-12-14.
