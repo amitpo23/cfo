@@ -121,6 +121,7 @@ def find_duplicate_candidates(
     doc_date: Any = None,
     exclude_id: Optional[int] = None,
     exclude_source: Optional[str] = None,
+    external_id: Optional[str] = None,
 ) -> list[dict]:
     """מחפש מועמדי-כפילות למסמך (ח.פ/אסמכתא/סכום/תאריך נתונים) מול Bill+Expense
     של הארגון.
@@ -138,6 +139,13 @@ def find_duplicate_candidates(
     (למשל bill#7 שהוא הכפילות האמיתית של expense#7 שעומד להיות מתויק —
     בדיוק תרחיש כפל-הספירה חוצה-הטבלאות שהשער הזה נועד לתפוס). ללא
     exclude_source, exclude_id מתעלם (לא מסנן דבר) — בטוח בברירת מחדל.
+
+    external_id: המזהה החיצוני (SUMIT) של המסמך הנבדק. שורה עם אותו
+    external_id (לא-ריק) היא *תאום סנכרון* — אותו מסמך SUMIT שמסונכרן
+    פעמיים, כ-Bill וגם כ-Expense (התנהגות סטנדרטית של ה-sync, מדודפת כבר
+    ב-financial_synthesis/dashboard/_independent_sums) — לא כפילות, ולכן
+    מוחרגת. ההחרגה חלה רק על שוויון מלא של external_id לא-ריק: external_id
+    שונה/חסר עם אותו ח.פ+אסמכתא הוא עדיין כפילות אמיתית.
     """
     from ..models import Bill, Expense
 
@@ -151,6 +159,9 @@ def find_duplicate_candidates(
         for row in rows:
             if exclude_id is not None and exclude_source == source and row.id == exclude_id:
                 continue
+            row_ext = getattr(row, "external_id", None)
+            if external_id and row_ext and str(row_ext) == str(external_id):
+                continue  # תאום סנכרון (אותו מסמך SUMIT) — לא כפילות
             row_tax_id = _row_supplier_tax_id(row, source)
             row_ref = _row_reference(row, source)
             row_amount = _row_amount(row)

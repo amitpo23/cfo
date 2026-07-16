@@ -199,8 +199,8 @@ def _pending_drafts(db, org_id: int, start: date, end: date) -> int:
 def _period_documents(db, org_id: int, start: date, end: date, basis: str,
                       *, filed_expenses_only: bool = False) -> list[tuple]:
     """כל מסמכי Bill+Expense (לא-בטלים) של הארגון בתקופת הדיווח, כ-tuples
-    (source, id, tax_id, reference, amount, doc_date) — קלט משותף לבדיקת
-    כפילויות וליחס המע"מ.
+    (source, id, tax_id, reference, amount, doc_date, external_id) — קלט
+    משותף לבדיקת כפילויות וליחס המע"מ.
 
     filed_expenses_only: ברירת מחדל False (כולל pending/review/duplicate) —
     כך שער הכפילויות תופס גם כפילות שעדיין לא תויקה. יחס המע"מ חייב True:
@@ -219,7 +219,8 @@ def _period_documents(db, org_id: int, start: date, end: date, basis: str,
         if not sel or not (start <= sel <= end):
             continue
         tax_id = b.vendor.tax_id if b.vendor else None
-        items.append(("bill", b.id, tax_id, b.bill_number, float(b.total or 0), doc_d))
+        items.append(("bill", b.id, tax_id, b.bill_number, float(b.total or 0), doc_d,
+                      b.external_id))
     for e in db.query(Expense).filter(Expense.organization_id == org_id).all():
         status = getattr(e, "status", None)
         if str(status or "").lower() == "error":
@@ -231,7 +232,7 @@ def _period_documents(db, org_id: int, start: date, end: date, basis: str,
         if not sel or not (start <= sel <= end):
             continue
         items.append(("expense", e.id, e.supplier_tax_id, e.invoice_number,
-                      float(e.total or 0), doc_d))
+                      float(e.total or 0), doc_d, e.external_id))
     return items
 
 
@@ -245,10 +246,11 @@ def _duplicate_high_pairs(db, org_id: int, start: date, end: date, basis: str) -
     items = _period_documents(db, org_id, start, end, basis)
     seen_pairs: set[frozenset] = set()
     pairs: list[dict] = []
-    for source, id_, tax_id, ref, amount, doc_date in items:
+    for source, id_, tax_id, ref, amount, doc_date, ext_id in items:
         candidates = find_duplicate_candidates(
             db, org_id, supplier_tax_id=tax_id, reference=ref,
             amount=amount, doc_date=doc_date, exclude_id=id_, exclude_source=source,
+            external_id=ext_id,
         )
         for c in candidates:
             if c["confidence"] != "HIGH":
@@ -279,7 +281,7 @@ def _vat_ratio_warning(db, org_id: int, start: date, end: date, basis: str,
     ממתינה לתיוק (ולא "מפתח ללא מע\"מ")."""
     items = _period_documents(db, org_id, start, end, basis, filed_expenses_only=True)
     doc_count = len(items)
-    total_amount = sum(amount for *_rest, amount, _d in items)
+    total_amount = sum(amount for _src, _id, _tax, _ref, amount, _d, _ext in items)
     if doc_count < MIN_DOCS_FOR_VAT_RATIO_CHECK or total_amount <= 0:
         return None
     ratio = input_vat / total_amount

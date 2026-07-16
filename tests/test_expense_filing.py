@@ -337,6 +337,51 @@ def test_filing_clean_expense_still_files_normally(client, fresh_org, monkeypatc
     assert data["sumit_expense_id"] == "OK-1"
 
 
+def test_filing_external_id_twin_bill_does_not_block_filing(client, fresh_org, monkeypatch):
+    """תאום סנכרון: אותו מסמך SUMIT קיים גם כ-Bill עם אותו external_id
+    (התבנית הסטנדרטית של ה-sync) — אסור שהשער יחסום את התיוק כ-review/duplicate."""
+    org = fresh_org()
+    from cfo.database import SessionLocal
+    from cfo.models import Bill, BillStatus, Expense
+
+    # total = amount + vat = 1180 — זהה ל-total של ה-Bill התאום (תנאי SUSPECT)
+    r = client.post("/api/expenses", json={
+        "supplier_name": "ספק תאום", "amount": 1000, "vat_amount": 180,
+        "expense_date": date(2026, 5, 12).isoformat(), "invoice_number": "DOC-TWIN",
+    }, headers=org["headers"])
+    eid = r.json()["data"]["id"]
+
+    db = SessionLocal()
+    try:
+        e = db.query(Expense).filter(Expense.id == eid).first()
+        e.external_id = "SUMIT-TWIN-77"
+        # ה-Bill התאום: אותו מסמך, אותו external_id, אותו סכום+תאריך
+        db.add(Bill(
+            organization_id=org["org_id"], source="sumit",
+            bill_number="DOC-TWIN", issue_date=date(2026, 5, 12),
+            status=BillStatus.APPROVED,
+            subtotal=1000, tax=180, total=1180,
+            external_id="SUMIT-TWIN-77",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    class FakeConnector:
+        async def add_expense(self, request):
+            return {"expense_id": "TWIN-OK"}
+
+    import cfo.services.sync_engine as se
+    monkeypatch.setattr(se, "get_connector_for_org",
+                        lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
+
+    f = client.post(f"/api/expenses/{eid}/file", headers=org["headers"])
+    assert f.status_code == 200, f.text
+    data = f.json()["data"]
+    assert data["status"] == "filed", data
+    assert data["sumit_expense_id"] == "TWIN-OK"
+
+
 def test_file_all_pending_does_not_count_duplicates_as_filed(client, fresh_org, monkeypatch):
     """באג-אמת: לפני התיקון, file_all_pending היה סופר הוצאה שדולגה כ-duplicate
     כ-'filed' (החזרה 200 בלי חריגה) — מסתיר שכפילויות דולגו מריצה גורפת."""

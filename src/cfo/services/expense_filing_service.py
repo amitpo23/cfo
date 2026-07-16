@@ -369,6 +369,7 @@ class ExpenseFilingService:
             doc_date=exp.expense_date,
             exclude_id=exp.id,
             exclude_source="expense",
+            external_id=exp.external_id,
         )
         high = [c for c in dup_candidates if c["confidence"] == "HIGH"]
         suspect = [c for c in dup_candidates if c["confidence"] == "SUSPECT"]

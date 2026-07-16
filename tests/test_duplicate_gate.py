@@ -215,6 +215,71 @@ def test_bill_excluded_by_matching_exclude_source_not_by_id_alone(fresh_org):
         db.close()
 
 
+def test_same_external_id_twin_is_not_a_candidate(fresh_org):
+    """תבנית ה"תאום" המתועדת: מסמך SUMIT אחד מסונכרן פעמיים — כ-Bill וגם
+    כ-Expense עם אותו external_id. זה לא כפילות אמיתית (financial_synthesis
+    ו-_independent_sums כבר מדדפים לפיו) — אסור שהשער יסמן אותו HIGH/SUSPECT
+    ויחסום תיוק לגיטימי."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        vendor = Contact(
+            organization_id=org_id, name="ספק תאום", contact_type=ContactType.VENDOR,
+            tax_id="514999000",
+        )
+        db.add(vendor)
+        db.flush()
+        db.add(Bill(
+            organization_id=org_id, source="sumit", vendor_id=vendor.id,
+            bill_number="DOC-9000", issue_date=date(2026, 5, 12), status=BillStatus.APPROVED,
+            subtotal=Decimal("1000"), tax=Decimal("180"), total=Decimal("1180"),
+            external_id="SUMIT-DOC-9000",
+        ))
+        db.commit()
+
+        # ה-Expense התאום של אותו מסמך: אותו external_id => לא מועמד בכלל
+        candidates = dg.find_duplicate_candidates(
+            db, org_id,
+            supplier_tax_id="514999000", reference="DOC-9000",
+            amount=1180, doc_date=date(2026, 5, 12),
+            external_id="SUMIT-DOC-9000",
+        )
+        assert candidates == []
+    finally:
+        db.close()
+
+
+def test_different_external_id_same_key_is_still_high(fresh_org):
+    """הגנת-נגד: external_id שונה (או חסר) עם אותו ח.פ+אסמכתא הוא עדיין
+    כפילות אמיתית — ההחרגה חלה רק על תאום עם אותו external_id."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        vendor = Contact(
+            organization_id=org_id, name="ספק לא-תאום", contact_type=ContactType.VENDOR,
+            tax_id="515111222",
+        )
+        db.add(vendor)
+        db.flush()
+        db.add(Bill(
+            organization_id=org_id, source="sumit", vendor_id=vendor.id,
+            bill_number="DOC-8000", issue_date=date(2026, 5, 12), status=BillStatus.APPROVED,
+            subtotal=Decimal("1000"), tax=Decimal("180"), total=Decimal("1180"),
+            external_id="SUMIT-DOC-8000",
+        ))
+        db.commit()
+
+        candidates = dg.find_duplicate_candidates(
+            db, org_id,
+            supplier_tax_id="515111222", reference="DOC-8000",
+            amount=1180, doc_date=date(2026, 5, 12),
+            external_id="SUMIT-DOC-8001",  # מזהה חיצוני אחר => מסמך אחר => כפילות
+        )
+        assert any(c["confidence"] == "HIGH" for c in candidates)
+    finally:
+        db.close()
+
+
 def test_batch_overlap_scenario_150k(fresh_org):
     """סימולציה: מנה 4 חפפה 14 שורות למנה 2 הסגורה — אותו ח.פ+אסמכתא, סכום גדול."""
     org_id = fresh_org()["org_id"]

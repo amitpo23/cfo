@@ -214,6 +214,35 @@ def test_no_duplicates_clean_period_still_passes(fresh_org):
         db.close()
 
 
+def test_external_id_twin_pair_is_not_flagged_as_duplicate(fresh_org):
+    """תאום סנכרון (אותו מסמך SUMIT כ-Bill וגם כ-Expense עם אותו external_id)
+    הוא התנהגות סטנדרטית של ה-sync, לא כפילות — בדיקה 3 חייבת לעבור נקי,
+    אחרת כל תקופה רגילה תוצג באדום וההפעלה תלמד להתעלם מהכשל."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed(db, org_id)
+        vendor = Contact(organization_id=org_id, name="ספק תאום",
+                         contact_type=ContactType.VENDOR, tax_id="514999000")
+        db.add(vendor); db.flush()
+        db.add(Bill(organization_id=org_id, external_id="SUMIT-TWIN-9", source="sumit",
+                    vendor_id=vendor.id, bill_number="DOC-9000",
+                    issue_date=date(2026, 5, 12), status=BillStatus.APPROVED,
+                    subtotal=Decimal("1000"), tax=Decimal("180"), total=Decimal("1180")))
+        db.add(Expense(organization_id=org_id, source="sumit", supplier_name="ספק תאום",
+                       supplier_tax_id="514999000", invoice_number="DOC-9000",
+                       external_id="SUMIT-TWIN-9",
+                       amount=Decimal("1000"), vat_amount=Decimal("180"), total=Decimal("1180"),
+                       expense_date=date(2026, 5, 12), status="filed"))
+        db.commit()
+        result = fv.verify_filing(db, org_id, 2026, 5, months=1, basis="document")
+        c3 = result["checks"][2]
+        assert c3["duplicate_candidates"] == []
+        assert c3["passed"] is not False
+    finally:
+        db.close()
+
+
 def test_vat_ratio_below_threshold_warns_missing_vat_splits(fresh_org):
     """ממצא עומר ועודד: ₪6.7K מתוך ₪731K = 0.9% — מפתחות שהוזנו ללא מע"מ.
     69 מסמכים (>=10) עם יחס תשומות/סך-הוצאות מתחת ל-3% => אזהרה.
