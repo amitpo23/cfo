@@ -302,16 +302,30 @@ class ExpenseFilingService:
                 Expense.status != "filed",
             ).all()
         )
-        filed, failed = 0, 0
+        filed, failed, duplicate, review = 0, 0, 0, 0
         errors = []
         for exp in pending:
             try:
-                await self.file_to_sumit(exp.id)
-                filed += 1
+                result = await self.file_to_sumit(exp.id)
+                # שער כפילויות: file_to_sumit יכול להחזיר 200 בלי לתייק בפועל
+                # (status "duplicate"/"review") — לא לספור את אלה כ"filed",
+                # אחרת דיווח ריצה גורפת "filed: 50" מסתיר 10 כפילויות שדולגו.
+                status = result.get("status")
+                if status == "filed":
+                    filed += 1
+                elif status == "duplicate":
+                    duplicate += 1
+                elif status == "review":
+                    review += 1
+                else:
+                    filed += 1  # ברירת מחדל שמרנית — לא אמור לקרות
             except ValueError as e:
                 failed += 1
                 errors.append({"expense_id": exp.id, "error": str(e)})
-        return {"filed": filed, "failed": failed, "errors": errors[:20]}
+        return {
+            "filed": filed, "failed": failed, "duplicate": duplicate, "review": review,
+            "errors": errors[:20],
+        }
 
 
     async def file_to_sumit(self, expense_id: int) -> Dict:
@@ -339,6 +353,50 @@ class ExpenseFilingService:
 
         if not hasattr(connector, "add_expense"):
             raise ValueError("הקונקטור אינו תומך ביצירת הוצאה")
+
+        # שער כפילויות (P0, 2026-07): לפני יצירת מסמך חדש ב-SUMIT — בודקים
+        # אם ההוצאה הזו כבר קיימת (Bill/Expense) בארגון. HIGH (ח.פ+אסמכתא
+        # זהים) => לא מתייקים בכלל, מסומן כ-duplicate. SUSPECT (סכום+תאריך
+        # קרובים בלבד, בלי ח.פ+אסמכתא תואמים) => לא מתייקים אוטומטית, מסומן
+        # ל-review (טעון הכרעת אדם — למשל שתי נסיעות זהות באותו יום לגיטימיות).
+        from .duplicate_gate import find_duplicate_candidates
+
+        dup_candidates = find_duplicate_candidates(
+            self.db, self.organization_id,
+            supplier_tax_id=exp.supplier_tax_id,
+            reference=exp.invoice_number,
+            amount=exp.total,
+            doc_date=exp.expense_date,
+            exclude_id=exp.id,
+            exclude_source="expense",
+        )
+        high = [c for c in dup_candidates if c["confidence"] == "HIGH"]
+        suspect = [c for c in dup_candidates if c["confidence"] == "SUSPECT"]
+        if high:
+            exp.status = "duplicate"
+            exp.filing_error = (
+                "כפילות מזוהה (ח.פ+אסמכתא תואמים) מול "
+                + ", ".join(f"{c['source']} #{c['id']}" for c in high)
+                + " — לא תויק. יש לבדוק ידנית לפני תיוק."
+            )
+            self.db.commit()
+            self.db.refresh(exp)
+            result = self._serialize(exp)
+            result["duplicate_check"] = {"confidence": "HIGH", "candidates": high}
+            return result
+        if suspect:
+            exp.status = "review"
+            exp.filing_error = (
+                "חשד לכפילות (סכום+תאריך קרובים) מול "
+                + ", ".join(f"{c['source']} #{c['id']}" for c in suspect)
+                + " — לא תויק אוטומטית. טעון הכרעת אדם (למשל שתי נסיעות זהות "
+                "באותו יום הן לגיטימיות)."
+            )
+            self.db.commit()
+            self.db.refresh(exp)
+            result = self._serialize(exp)
+            result["duplicate_check"] = {"confidence": "SUSPECT", "candidates": suspect}
+            return result
 
         # יוצרים תמיד מסמך הוצאה עם הקטגוריה שלנו — כך הסיווג נכנס ל-SUMIT
         # (ל-SUMIT אין API לעדכון קטגוריה של טיוטה קיימת).

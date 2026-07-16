@@ -218,6 +218,188 @@ def test_update_expense_rejects_unknown_category_key(client, acc):
     assert u.status_code == 400, u.text
 
 
+def test_filing_high_duplicate_is_skipped_not_filed(client, fresh_org, monkeypatch):
+    """שער כפילויות P0: ח.פ+אסמכתא זהים לרשומה קיימת => לא מתייקים, מסומן duplicate,
+    ולא נקראת SUMIT בכלל (משמעת עלות קריאות API)."""
+    org = fresh_org()
+    from cfo.database import SessionLocal
+    from cfo.models import Expense
+
+    db = SessionLocal()
+    try:
+        db.add(Expense(
+            organization_id=org["org_id"], source="manual", supplier_name="ספק כפול",
+            supplier_tax_id="512345678", invoice_number="DUP-1",
+            amount=150000, vat_amount=0, total=150000,
+            expense_date=date(2026, 4, 20), status="filed",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.post("/api/expenses", json={
+        "supplier_name": "ספק כפול", "amount": 150000,
+        "expense_date": date(2026, 5, 18).isoformat(), "invoice_number": "DUP-1",
+    }, headers=org["headers"])
+    eid = r.json()["data"]["id"]
+    db = SessionLocal()
+    try:
+        e = db.query(Expense).filter(Expense.id == eid).first()
+        e.supplier_tax_id = "512345678"
+        db.commit()
+    finally:
+        db.close()
+
+    calls = {"added": 0}
+
+    class FakeConnector:
+        async def add_expense(self, request):
+            calls["added"] += 1
+            return {"expense_id": "SHOULD-NOT-HAPPEN"}
+
+    import cfo.services.sync_engine as se
+    monkeypatch.setattr(se, "get_connector_for_org",
+                        lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
+
+    f = client.post(f"/api/expenses/{eid}/file", headers=org["headers"])
+    assert f.status_code == 200, f.text
+    data = f.json()["data"]
+    assert data["status"] == "duplicate"
+    assert calls["added"] == 0  # add_expense never called — no wasted SUMIT API call
+    assert data.get("duplicate_check", {}).get("confidence") == "HIGH"
+
+
+def test_filing_suspect_duplicate_held_for_review(client, fresh_org, monkeypatch):
+    """סכום+תאריך קרובים בלבד (בלי ח.פ+אסמכתא תואמים) => SUSPECT, לא מתויק
+    אוטומטית, טעון הכרעת אדם."""
+    org = fresh_org()
+    from cfo.database import SessionLocal
+    from cfo.models import Expense
+
+    db = SessionLocal()
+    try:
+        db.add(Expense(
+            organization_id=org["org_id"], source="manual", supplier_name="מונית",
+            supplier_tax_id=None, invoice_number="RIDE-A",
+            amount=45, vat_amount=0, total=45,
+            expense_date=date(2026, 5, 10), status="filed",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.post("/api/expenses", json={
+        "supplier_name": "מונית", "amount": 45,
+        "expense_date": date(2026, 5, 10).isoformat(), "invoice_number": "RIDE-B",
+    }, headers=org["headers"])
+    eid = r.json()["data"]["id"]
+
+    calls = {"added": 0}
+
+    class FakeConnector:
+        async def add_expense(self, request):
+            calls["added"] += 1
+            return {"expense_id": "SHOULD-NOT-HAPPEN"}
+
+    import cfo.services.sync_engine as se
+    monkeypatch.setattr(se, "get_connector_for_org",
+                        lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
+
+    f = client.post(f"/api/expenses/{eid}/file", headers=org["headers"])
+    assert f.status_code == 200, f.text
+    data = f.json()["data"]
+    assert data["status"] == "review"
+    assert calls["added"] == 0
+    assert data.get("duplicate_check", {}).get("confidence") == "SUSPECT"
+
+
+def test_filing_clean_expense_still_files_normally(client, fresh_org, monkeypatch):
+    """ודא שהשער לא חוסם תיוק לגיטימי כשאין כפילות."""
+    org = fresh_org()
+    r = client.post("/api/expenses", json={
+        "supplier_name": "ספק נקי", "amount": 321, "vat_amount": 0,
+        "expense_date": date.today().isoformat(), "invoice_number": "CLEAN-1",
+    }, headers=org["headers"])
+    eid = r.json()["data"]["id"]
+
+    class FakeConnector:
+        async def add_expense(self, request):
+            return {"expense_id": "OK-1"}
+
+    import cfo.services.sync_engine as se
+    monkeypatch.setattr(se, "get_connector_for_org",
+                        lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
+
+    f = client.post(f"/api/expenses/{eid}/file", headers=org["headers"])
+    assert f.status_code == 200, f.text
+    data = f.json()["data"]
+    assert data["status"] == "filed"
+    assert data["sumit_expense_id"] == "OK-1"
+
+
+def test_file_all_pending_does_not_count_duplicates_as_filed(client, fresh_org, monkeypatch):
+    """באג-אמת: לפני התיקון, file_all_pending היה סופר הוצאה שדולגה כ-duplicate
+    כ-'filed' (החזרה 200 בלי חריגה) — מסתיר שכפילויות דולגו מריצה גורפת."""
+    org = fresh_org()
+    from cfo.database import SessionLocal
+    from cfo.models import Expense
+
+    db = SessionLocal()
+    try:
+        db.add(Expense(
+            organization_id=org["org_id"], source="manual", supplier_name="ספק כפול גורף",
+            supplier_tax_id="533221100", invoice_number="BULK-DUP",
+            amount=200, vat_amount=0, total=200,
+            expense_date=date(2026, 5, 1), status="filed",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    # הוצאה 1: כפילות (אותו ח.פ+אסמכתא)
+    r1 = client.post("/api/expenses", json={
+        "supplier_name": "ספק כפול גורף", "amount": 200,
+        "expense_date": date(2026, 5, 2).isoformat(), "invoice_number": "BULK-DUP",
+    }, headers=org["headers"])
+    eid1 = r1.json()["data"]["id"]
+    db = SessionLocal()
+    try:
+        e1 = db.query(Expense).filter(Expense.id == eid1).first()
+        e1.supplier_tax_id = "533221100"
+        db.commit()
+    finally:
+        db.close()
+
+    # הוצאה 2: נקייה, אמורה להיות מתויקת בפועל
+    client.post("/api/expenses", json={
+        "supplier_name": "ספק נקי גורף", "amount": 999,
+        "expense_date": date(2026, 5, 3).isoformat(), "invoice_number": "BULK-CLEAN",
+    }, headers=org["headers"])
+
+    class FakeConnector:
+        async def add_expense(self, request):
+            return {"expense_id": "BULK-OK"}
+
+    import cfo.services.sync_engine as se
+    monkeypatch.setattr(se, "get_connector_for_org",
+                        lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
+
+    from cfo.services.expense_filing_service import ExpenseFilingService
+    import asyncio
+
+    db = SessionLocal()
+    try:
+        svc = ExpenseFilingService(db, organization_id=org["org_id"])
+        outcome = asyncio.run(svc.file_all_pending())
+    finally:
+        db.close()
+
+    assert outcome["filed"] == 1
+    assert outcome["duplicate"] == 1
+    assert outcome["review"] == 0
+    assert outcome["failed"] == 0
+
+
 def test_pcn874_readiness(client, acc):
     """דוח מוכנות PCN874 — מסמן הוצאות מתויקות ללא ח.פ/מע"מ."""
     from datetime import date

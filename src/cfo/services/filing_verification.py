@@ -9,7 +9,10 @@
    פר-מסמך, אין external_id כפול, סימני זיכוי עקביים.
 3. completeness_and_cross_source — כנות: קבלות שממתינות לתיוק בתקופה (המע"מ
    שלהן לא כלול!), והנחיה להצלבה מול ספרי SUMIT (שאינה אוטומטית — נאמר
-   במפורש במקום לשתוק).
+   במפורש במקום לשתוק). כולל גם (P0 2026-07): מועמדי-כפילות ברמת ודאות
+   גבוהה (duplicate_gate, ח.פ+אסמכתא זהים) בתקופה — כשל אם נמצאו; ואזהרת
+   יחס מע"מ (input_vat/סך-הוצאות מתחת ל-3% עם 10+ מסמכים — חשד למפתחות
+   שהוזנו ללא פיצול מע"מ).
 
 סטטוס כולל: pass / warn / fail. כשל אינו חוסם הורדה טכנית אך ה-UI מציג
 אותו באדום ליד כפתורי ההפקה — לעולם לא הפקה שקטה.
@@ -27,6 +30,12 @@ MAX_VAT_RATE = 0.185
 # מאז הסנכרון המוצלח האחרון של SUMIT — הדוח נגזר מנתונים ישנים בלי אזהרה.
 # 26 שעות = מרווח סביר מעבר ל-24 (כדי לא להתריע שווא על ריצה יומית שגרתית).
 STALE_SYNC_HOURS = 26
+
+# שער יחס מע"מ (ממצא עומר ועודד): 6.7K מתוך 731K = 0.9% — סימן ברור למפתחות
+# הוצאה שהוזנו ללא פיצול מע"מ (VAT=0 בטעות). 3% הוא סף שפיות גס, לא שיעור
+# מע"מ תקני — נועד רק לתפוס מקרי קיצון בבירור לא-סבירים, לא לאמת את השיעור.
+MIN_SANE_VAT_RATIO = 0.03
+MIN_DOCS_FOR_VAT_RATIO_CHECK = 10
 
 
 def _independent_sums(db, org_id: int, start: date, end: date, basis: str) -> dict[str, float]:
@@ -61,8 +70,15 @@ def _independent_sums(db, org_id: int, start: date, end: date, basis: str) -> di
         if b.external_id:
             bill_ext_ids.add(str(b.external_id))
         input_vat += float(b.tax or 0)
+    from .vat_utils import expense_counts
+
     for e in db.query(Expense).filter(Expense.organization_id == org_id).all():
-        if str(getattr(e, "status", "") or "").lower() == "error":
+        # יישור לקריטריון הקנוני של הדוח (select_vat_documents): רק הוצאות
+        # "filed" נספרות. תיקון תואם P0 2026-07: לפני שער הכפילויות, "error"
+        # היה היוצא-מן-הכלל היחיד — כעת "pending"/"duplicate"/"review" גם הן
+        # לא-סופיות ובלי התיקון היו מנופחות בחישוב העצמאי בזמן שהדוח (שמסתמך
+        # על expense_counts) מדלג עליהן, ומייצרות פער-שווא שמפיל בדיקה 2.
+        if not expense_counts(getattr(e, "status", None)):
             continue
         if e.external_id and str(e.external_id) in bill_ext_ids:
             continue
@@ -180,6 +196,103 @@ def _pending_drafts(db, org_id: int, start: date, end: date) -> int:
     return n
 
 
+def _period_documents(db, org_id: int, start: date, end: date, basis: str,
+                      *, filed_expenses_only: bool = False) -> list[tuple]:
+    """כל מסמכי Bill+Expense (לא-בטלים) של הארגון בתקופת הדיווח, כ-tuples
+    (source, id, tax_id, reference, amount, doc_date) — קלט משותף לבדיקת
+    כפילויות וליחס המע"מ.
+
+    filed_expenses_only: ברירת מחדל False (כולל pending/review/duplicate) —
+    כך שער הכפילויות תופס גם כפילות שעדיין לא תויקה. יחס המע"מ חייב True:
+    report["input_vat"] (המונה) סופר רק expenses "filed" (expense_counts) —
+    לכלול גם לא-סופיות במכנה (סך-ההוצאות) מייצר יחס-שווא נמוך מדי ומאבחן לא
+    נכון "מפתחות ללא מע\"מ" כשההסבר האמיתי הוא סתם "עוד לא תויק"."""
+    from ..models import Bill, BillStatus, Expense
+    from .vat_utils import expense_counts
+
+    items: list[tuple] = []
+    for b in db.query(Bill).filter(Bill.organization_id == org_id).all():
+        if b.status in (BillStatus.DRAFT, BillStatus.VOID):
+            continue
+        doc_d = b.issue_date or b.due_date
+        sel = (b.created_at.date() if (basis == "captured" and b.created_at) else doc_d)
+        if not sel or not (start <= sel <= end):
+            continue
+        tax_id = b.vendor.tax_id if b.vendor else None
+        items.append(("bill", b.id, tax_id, b.bill_number, float(b.total or 0), doc_d))
+    for e in db.query(Expense).filter(Expense.organization_id == org_id).all():
+        status = getattr(e, "status", None)
+        if str(status or "").lower() == "error":
+            continue
+        if filed_expenses_only and not expense_counts(status):
+            continue
+        doc_d = e.expense_date
+        sel = (e.created_at.date() if (basis == "captured" and e.created_at) else doc_d)
+        if not sel or not (start <= sel <= end):
+            continue
+        items.append(("expense", e.id, e.supplier_tax_id, e.invoice_number,
+                      float(e.total or 0), doc_d))
+    return items
+
+
+def _duplicate_high_pairs(db, org_id: int, start: date, end: date, basis: str) -> list[dict]:
+    """מפעיל את שער הכפילויות (duplicate_gate) על כל מסמך בתקופת הדיווח מול
+    *כלל* מסמכי הארגון (משני הצדדים — Bill+Expense, גם מול מסמכים מחוץ
+    לתקופה — זו בדיוק תבנית הכפילות שנתפסה: מנה שנסגרה חופפת למנה שנפתחה
+    בתקופה מאוחרת יותר). מחזיר זוגות HIGH ייחודיים (בלי כפילות דיווח פר-זוג)."""
+    from .duplicate_gate import find_duplicate_candidates
+
+    items = _period_documents(db, org_id, start, end, basis)
+    seen_pairs: set[frozenset] = set()
+    pairs: list[dict] = []
+    for source, id_, tax_id, ref, amount, doc_date in items:
+        candidates = find_duplicate_candidates(
+            db, org_id, supplier_tax_id=tax_id, reference=ref,
+            amount=amount, doc_date=doc_date, exclude_id=id_, exclude_source=source,
+        )
+        for c in candidates:
+            if c["confidence"] != "HIGH":
+                continue
+            if c["source"] == source and c["id"] == id_:
+                continue  # self-match guard
+            key = frozenset({(source, id_), (c["source"], c["id"])})
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            pairs.append({
+                "a": {"source": source, "id": id_},
+                "b": {"source": c["source"], "id": c["id"]},
+                "reference": ref,
+                "amount": amount,
+            })
+    return pairs
+
+
+def _vat_ratio_warning(db, org_id: int, start: date, end: date, basis: str,
+                       input_vat: float) -> Optional[dict[str, Any]]:
+    """יחס input_vat/סך-הוצאות התקופה מתחת ל-3% עם 10+ מסמכים -> חשד למפתחות
+    שהוזנו ללא פיצול מע"מ (ממצא עומר ועודד: ₪6.7K מתוך ₪731K = 0.9%).
+
+    filed_expenses_only=True: המונה (input_vat) סופר רק expenses "filed" —
+    המכנה (סך-ההוצאות) חייב לספור אותה אוכלוסייה בדיוק, אחרת הוצאות
+    שטרם תויקו מנפחות את המכנה ומדליפות אזהרה שגויה על תקופה שבאמת רק
+    ממתינה לתיוק (ולא "מפתח ללא מע\"מ")."""
+    items = _period_documents(db, org_id, start, end, basis, filed_expenses_only=True)
+    doc_count = len(items)
+    total_amount = sum(amount for *_rest, amount, _d in items)
+    if doc_count < MIN_DOCS_FOR_VAT_RATIO_CHECK or total_amount <= 0:
+        return None
+    ratio = input_vat / total_amount
+    if ratio >= MIN_SANE_VAT_RATIO:
+        return None
+    return {
+        "ratio": round(ratio, 4),
+        "doc_count": doc_count,
+        "total_amount": round(total_amount, 2),
+        "input_vat": round(input_vat, 2),
+    }
+
+
 def _find_crosscheck(db, org_id: int, period: str, basis: str):
     """שליפת רשומת ההצלבה המוקלטת (FilingCrosscheck) לתקופה+בסיס נתונים,
     אם קיימת. ``period`` חייב להיות בפורמט הקנוני מ-financial_synthesis.
@@ -284,6 +397,36 @@ def verify_filing(db, org_id: int, year: int, month: int, *,
         )
         crosscheck_info = {"present": False}
 
+    # --- שער כפילויות (P0, 2026-07): מועמדי-כפילות HIGH בתקופת הדיווח ---
+    # ממצא: מנה 4 חפפה 14 שורות למנה 2 הסגורה, כמעט כפל-ספירה של ₪150K. אם
+    # נמצא זוג HIGH — הבדיקה נכשלת (לא אזהרה): אסור להגיש דיווח שיכול לכלול
+    # ספירה כפולה.
+    dup_pairs = _duplicate_high_pairs(db, org_id, start, end, basis)
+    dup_details = None
+    if dup_pairs:
+        passed3 = False
+        parts = [f"{p['a']['source']} #{p['a']['id']} ↔ {p['b']['source']} #{p['b']['id']} (₪{p['amount']:.2f})"
+                 for p in dup_pairs[:10]]
+        dup_details = (
+            f"⚠️ נמצאו {len(dup_pairs)} מועמדי-כפילות ברמת ודאות גבוהה (ח.פ+אסמכתא תואמים) "
+            f"בתקופת הדיווח: " + "; ".join(parts)
+        )
+
+    # --- שער יחס מע"מ: אזהרה על מפתחות ללא מע"מ (ממצא עומר ועודד) ---
+    # ₪6.7K מתוך ₪731K = 0.9% — סימן ברור להוצאות שהוזנו עם VAT=0 בטעות.
+    # אזהרה בלבד (לא כשל) — אלא אם כן כבר נכשל בגלל כפילויות.
+    vat_ratio = _vat_ratio_warning(db, org_id, start, end, basis, float(report["input_vat"]))
+    vat_ratio_details = None
+    if vat_ratio is not None:
+        vat_ratio_details = (
+            f"⚠️ חשד למפתחות ללא מע\"מ: יחס תשומות/סך-הוצאות בתקופה "
+            f"{vat_ratio['ratio']*100:.1f}% (₪{vat_ratio['input_vat']:.2f} מתוך "
+            f"₪{vat_ratio['total_amount']:.2f} על {vat_ratio['doc_count']} מסמכים) — "
+            f"נמוך משמעותית מ-{MIN_SANE_VAT_RATIO*100:.0f}% הצפוי."
+        )
+        if passed3 is True:  # כשל בכפילויות גובר; אזהרה לא מורידה כשל, רק True->None
+            passed3 = None
+
     checks.append({
         "name": "completeness_and_cross_source",
         "label": "שלמות קליטה והצלבה חיצונית",
@@ -292,11 +435,15 @@ def verify_filing(db, org_id: int, year: int, month: int, *,
             (f"⚠️ {drafts} קבלות ממתינות לתיוק בתקופה — המע\"מ שלהן אינו כלול בדוח. " if drafts else "אין קבלות ממתינות לתיוק בתקופה. ")
             + (freshness["message"] + " " if freshness["message"] else "")
             + cross_sentence
+            + (" " + dup_details if dup_details else "")
+            + (" " + vat_ratio_details if vat_ratio_details else "")
         ),
         "pending_drafts": drafts,
         "last_sync_sumit": freshness["last_sync_at"],
         "sync_age_hours": freshness["hours_since"],
         "crosscheck": crosscheck_info,
+        "duplicate_candidates": dup_pairs,
+        "vat_ratio_warning": vat_ratio,
     })
 
     failed = any(c["passed"] is False for c in checks)
