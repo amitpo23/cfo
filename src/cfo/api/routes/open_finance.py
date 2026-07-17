@@ -22,12 +22,15 @@ from ...database import get_db_session
 from ..dependencies import get_current_org_id
 from ...config import settings
 from ...models import (
-    BankConnection, BankTransaction, CfoInsight, IntegrationConnection,
+    Account, BankConnection, BankTransaction, CfoInsight, IntegrationConnection,
     OpenFinancePayment,
 )
 from ...services.open_finance_client import OpenFinanceClient, OpenFinanceError
 from ...services.credentials_vault import decrypt_credentials
 from ...services import bank_insights, bank_reconciliation, reconciliation_dispatch
+from ...services import bank_query_service
+from ...services import of_snapshot_service
+from ...services.of_snapshot_service import OfSnapshotRefreshCooldown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -178,6 +181,32 @@ async def _run(db, org_id, fn):
         await client.close()
 
 
+async def _cached_get(
+    db: Session, org_id: int, resource: str, client_fn, *,
+    refresh: bool = False, max_age_hours: float = 20,
+):
+    """RSF-030 — GET routes that used to proxy LIVE to Open Finance on every
+    view now go through `of_snapshot_service`: fresh cache is served with no
+    client built at all; stale/missing triggers exactly one live call and an
+    upsert; `refresh=True` forces a live re-fetch but is cooldown-gated (429).
+    `_run` (build/call/close, single client) is the factory — it's only
+    actually invoked by `get_or_fetch` on the non-cache-hit path."""
+    try:
+        return await of_snapshot_service.get_or_fetch(
+            db, org_id, resource,
+            lambda: _run(db, org_id, client_fn),
+            max_age_hours=max_age_hours,
+            force_refresh=refresh,
+        )
+    except OfSnapshotRefreshCooldown as exc:
+        raise HTTPException(status_code=429, detail={
+            "error": "manual_refresh_cooldown",
+            "detail": "A refresh for this resource was requested too recently. Please wait before retrying.",
+            "retry_after_seconds": exc.retry_after_seconds,
+            "cooldown_until": exc.cooldown_until.isoformat(),
+        })
+
+
 # ====================================================================== #
 # CONNECTIONS — consent journey
 # ====================================================================== #
@@ -277,16 +306,18 @@ async def onboarding_status(
 
 @router.get("/connections")
 async def list_connections(
-    live: bool = Query(False, description="Fetch live from Open Finance instead of local cache"),
+    live: bool = Query(False, description="Force a live refresh from Open Finance instead of the local cache (cooldown-gated)"),
     org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
+    """Default path (RSF-030): read `BankConnection` — a first-class local
+    model already kept fresh by webhooks and `create_connection`, so there is
+    no live Open Finance call on a normal page view at all. `live=True` is
+    the explicit user-triggered refresh path and goes through the snapshot
+    cache purely for its cooldown gate (force_refresh=True — every `live=True`
+    call is a genuine refresh attempt, just rate-limited)."""
     if live:
-        client = get_open_finance_client(db, org_id)
-        try:
-            return await _call(client.list_connections())
-        finally:
-            await client.close()
+        return await _cached_get(db, org_id, "connections_live", lambda c: c.list_connections(), refresh=True)
     rows = (
         db.query(BankConnection)
         .filter(BankConnection.organization_id == org_id)
@@ -298,11 +329,13 @@ async def list_connections(
 
 @router.get("/connections/{connection_id}")
 async def get_connection(connection_id: str, org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.get_connection(connection_id))
-    finally:
-        await client.close()
+    """Onboarding-status polling stays live (consent journeys change fast),
+    but RSF-030 puts a 60s per-org+connection floor under it via the same
+    cache mechanism so a tight poll loop can't hammer the provider."""
+    return await _cached_get(
+        db, org_id, f"connection:{connection_id}", lambda c: c.get_connection(connection_id),
+        max_age_hours=60 / 3600,
+    )
 
 
 @router.delete("/connections/{connection_id}")
@@ -340,20 +373,37 @@ async def list_accounts(
     connection_id: Optional[str] = None,
     org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
 ):
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.list_accounts(connection_id=connection_id))
-    finally:
-        await client.close()
+    """RSF-030: served entirely from OUR DB — Open Finance accounts land here
+    daily via the sync engine (`Account.source == "open_finance"`,
+    `external_id` prefixed `open_finance:`). No Open Finance client is built
+    for this route at all. `connection_id` isn't stored on `Account` today so
+    it can't be honoured as a filter; it's accepted but ignored rather than
+    silently misfiltering."""
+    rows = (
+        db.query(Account)
+        .filter(Account.organization_id == org_id, Account.source == "open_finance")
+        .order_by(Account.id)
+        .all()
+    )
+    return {"items": [_account_dict(r) for r in rows], "count": len(rows)}
 
 
 @router.get("/accounts/{account_id}")
 async def get_account(account_id: str, org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.get_account(account_id))
-    finally:
-        await client.close()
+    """RSF-030: DB-only, matched by the synced `external_id` (bare id or the
+    stored `open_finance:<id>` form)."""
+    row = (
+        db.query(Account)
+        .filter(
+            Account.organization_id == org_id,
+            Account.source == "open_finance",
+            Account.external_id.in_([account_id, f"open_finance:{account_id}"]),
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(404, "Account not found")
+    return _account_dict(row)
 
 
 @router.get("/transactions")
@@ -364,53 +414,78 @@ async def list_transactions(
     next_page: Optional[str] = None,
     org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
 ):
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.list_transactions(
-            account_id=account_id, date_from=date_from, date_to=date_to, next_page=next_page,
-        ))
-    finally:
-        await client.close()
+    """RSF-030: served from OUR DB (`BankTransaction.source == "open_finance"`)
+    via `bank_query_service`. No Open Finance client is built for this route.
+    `next_page` has no meaning against a local table (there is no provider
+    pagination cursor to resume) and is accepted-but-ignored rather than
+    faked."""
+    local_account_id = None
+    if account_id:
+        acc = (
+            db.query(Account)
+            .filter(
+                Account.organization_id == org_id,
+                Account.source == "open_finance",
+                Account.external_id.in_([account_id, f"open_finance:{account_id}"]),
+            )
+            .first()
+        )
+        local_account_id = acc.id if acc else -1  # no match -> filter to nothing, don't ignore the param
+    result = bank_query_service.query_bank_transactions(
+        db, org_id,
+        date_from=date_from, date_to=date_to,
+        source="open_finance", account_id=local_account_id,
+        limit=500,
+    )
+    return {"items": result["transactions"], "count": result["count"], "total_amount": result["total_amount"]}
 
 
 @router.get("/monthly-report")
-async def monthly_report(org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+async def monthly_report(
+    refresh: bool = Query(False),
+    org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
+):
+    # Cross-org leak guard must fire regardless of cache state -- a cached
+    # aggregate payload is still cross-org-contaminated if it was ever fetched
+    # while the identity was shared, so this check stays ahead of the cache.
     if _has_shared_of_identity(db, org_id):
         raise HTTPException(409, _SHARED_IDENTITY_MESSAGE)
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.get_monthly_report())
-    finally:
-        await client.close()
+    return await _cached_get(db, org_id, "monthly_report", lambda c: c.get_monthly_report(), refresh=refresh)
 
 
 @router.get("/securities")
-async def securities(org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+async def securities(
+    refresh: bool = Query(False),
+    org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
+):
     if _has_shared_of_identity(db, org_id):
         raise HTTPException(409, _SHARED_IDENTITY_MESSAGE)
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.get_extended_securities())
-    finally:
-        await client.close()
+    return await _cached_get(db, org_id, "securities", lambda c: c.get_extended_securities(), refresh=refresh)
 
 
 @router.get("/providers")
-async def providers(include_fake: bool = False, org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.list_providers(include_fake_providers=include_fake or None))
-    finally:
-        await client.close()
+async def providers(
+    include_fake: bool = False, refresh: bool = Query(False),
+    org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
+):
+    resource = f"providers:{'fake' if include_fake else 'default'}"
+    return await _cached_get(
+        db, org_id, resource,
+        lambda c: c.list_providers(include_fake_providers=include_fake or None),
+        refresh=refresh,
+    )
 
 
 @router.get("/bank-branches")
-async def bank_branches(bank_code: str = Query(...), org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.list_bank_branches(bank_code))
-    finally:
-        await client.close()
+async def bank_branches(
+    bank_code: str = Query(...), refresh: bool = Query(False),
+    org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
+):
+    return await _cached_get(
+        db, org_id, f"bank-branches:{bank_code}",
+        lambda c: c.list_bank_branches(bank_code),
+        refresh=refresh,
+    )
 
 
 # ====================================================================== #
@@ -552,12 +627,11 @@ async def create_payment(body: dict = Body(...), org_id: int = Depends(get_curre
 
 
 @router.get("/payments")
-async def list_payments(org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.list_payments())
-    finally:
-        await client.close()
+async def list_payments(
+    refresh: bool = Query(False),
+    org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
+):
+    return await _cached_get(db, org_id, "payments", lambda c: c.list_payments(), refresh=refresh)
 
 
 @router.get("/payments/{payment_id}")
@@ -650,12 +724,13 @@ async def create_credit_session(body: dict = Body(...), org_id: int = Depends(ge
 
 
 @router.get("/credit-sessions")
-async def list_credit_sessions(scope: str = "user", org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.list_credit_sessions(scope))
-    finally:
-        await client.close()
+async def list_credit_sessions(
+    scope: str = "user", refresh: bool = Query(False),
+    org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
+):
+    return await _cached_get(
+        db, org_id, f"credit-sessions:{scope}", lambda c: c.list_credit_sessions(scope), refresh=refresh,
+    )
 
 
 @router.get("/credit-sessions/{session_id}")
@@ -689,12 +764,11 @@ async def get_decision(job_id: str, org_id: int = Depends(get_current_org_id), d
 # CUSTOMERS (C - CRM)
 # ====================================================================== #
 @router.get("/customers")
-async def list_customers(org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.list_customers())
-    finally:
-        await client.close()
+async def list_customers(
+    refresh: bool = Query(False),
+    org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
+):
+    return await _cached_get(db, org_id, "customers", lambda c: c.list_customers(), refresh=refresh)
 
 
 @router.post("/customers")
@@ -719,12 +793,11 @@ async def get_customer(customer_id: str, org_id: int = Depends(get_current_org_i
 # MERCHANTS (C)
 # ====================================================================== #
 @router.get("/merchants")
-async def list_merchants(org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
-    client = get_open_finance_client(db, org_id)
-    try:
-        return await _call(client.list_merchants())
-    finally:
-        await client.close()
+async def list_merchants(
+    refresh: bool = Query(False),
+    org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
+):
+    return await _cached_get(db, org_id, "merchants", lambda c: c.list_merchants(), refresh=refresh)
 
 
 @router.post("/merchants")
@@ -1115,6 +1188,20 @@ def _insight_dict(r: CfoInsight) -> dict:
         "title": r.title, "message": r.message, "evidence": r.evidence,
         "recommended_action": r.recommended_action, "status": r.status,
         "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+def _account_dict(r: Account) -> dict:
+    return {
+        "id": r.id,
+        "external_id": r.external_id,
+        "name": r.name,
+        "account_type": getattr(r.account_type, "value", r.account_type),
+        "raw_account_type": r.raw_account_type,
+        "balance": float(r.balance) if r.balance is not None else None,
+        "currency": r.currency,
+        "balance_as_of": r.balance_as_of.isoformat() if r.balance_as_of else None,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }
 
 

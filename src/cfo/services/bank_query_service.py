@@ -128,12 +128,18 @@ def query_bank_transactions(
     direction: str | None = None,
     only_unmatched: bool = False,
     limit: int = 50,
+    source: str | None = None,
+    account_id: int | None = None,
 ) -> dict[str, Any]:
     """Filterable list of bank/card transactions for one organization.
 
     Mirrors `_list_expenses`: `count`/`total_amount` are computed over the
     FULL filtered set, `rows` is capped at `limit` (default 50, most recent
     first by transaction_date).
+
+    `source`/`account_id` (RSF-030) let a caller narrow to one provenance
+    (e.g. "open_finance") and/or one local `Account.id` — both optional and
+    additive, so existing callers (AI chat tools) are unaffected.
     """
     q = db.query(BankTransaction).filter(BankTransaction.organization_id == org_id)
 
@@ -151,6 +157,10 @@ def query_bank_transactions(
         q = q.filter(BankTransaction.amount < 0)
     if only_unmatched:
         q = q.filter(BankTransaction.is_reconciled.is_(False))
+    if source:
+        q = q.filter(BankTransaction.source == source)
+    if account_id is not None:
+        q = q.filter(BankTransaction.account_id == account_id)
 
     # txn_type ("CHECKING"/"CARD") lives inside raw_data JSON — not every
     # backend supports indexing into JSON in SQL, so filter in Python after
