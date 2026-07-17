@@ -118,11 +118,20 @@ async def _run_sync_targets(db: Session, targets: set) -> list:
     return results
 
 
-def _of_budget_gate(db: Session, org_id: int, source: str) -> Optional[dict]:
+def _daily_budget_gate(db: Session, org_id: int, source: str) -> Optional[dict]:
     """Return a skip-result dict if this org/source already had a successful
-    full sync within the configured interval (RSF-025: Open Finance's monthly
-    call budget means scheduled syncs must be daily-capped, not hourly), else
-    None to proceed."""
+    full sync within the configured interval, else None to proceed.
+
+    Hard cost protection (owner directive 2026-07-17): BOTH providers are
+    code-gated to one successful full sync per org per ~day — Open Finance
+    because of its ~500/month call budget (RSF-025), SUMIT because API
+    overage is billed to the client company's own payment method (the
+    ILS 62.23/day incident). The cron schedule alone is not a guarantee."""
+    interval_hours = (
+        settings.sumit_sync_min_interval_hours
+        if source == "sumit"
+        else settings.of_sync_min_interval_hours
+    )
     cp = db.query(SyncCheckpoint).filter(
         SyncCheckpoint.organization_id == org_id,
         SyncCheckpoint.source == source,
@@ -130,16 +139,20 @@ def _of_budget_gate(db: Session, org_id: int, source: str) -> Optional[dict]:
     ).first()
     if not cp or not cp.last_success_at:
         return None
-    next_eligible = cp.last_success_at + timedelta(hours=settings.of_sync_min_interval_hours)
+    next_eligible = cp.last_success_at + timedelta(hours=interval_hours)
     if datetime.utcnow() < next_eligible:
         return {
             "organization_id": org_id,
             "source": source,
-            "skipped": "of_daily_budget",
+            "skipped": "daily_budget",
             "last_success_at": cp.last_success_at.isoformat(),
             "next_eligible_at": next_eligible.isoformat(),
         }
     return None
+
+
+# Backward-compatible alias (existing tests/callers).
+_of_budget_gate = _daily_budget_gate
 
 
 @router.get("/cron/sync-sumit", dependencies=[Depends(_verify_cron_secret)])
@@ -161,7 +174,18 @@ async def scheduled_sync_sumit(db: Session = Depends(get_db_session)):
     if settings.sumit_api_key:
         targets.add((1, "sumit"))
 
-    results = await _run_sync_targets(db, targets)
+    # Hard daily budget (owner directive 2026-07-17): SUMIT API overage is
+    # billed to the client's own card — gate in code, not just in the schedule.
+    results = []
+    to_run = set()
+    for org_id, source in sorted(targets):
+        gated = _daily_budget_gate(db, org_id, source)
+        if gated:
+            results.append(gated)
+        else:
+            to_run.add((org_id, source))
+
+    results.extend(await _run_sync_targets(db, to_run))
     return {"synced": len(results), "repaired_roster": repaired_roster, "results": results}
 
 

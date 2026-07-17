@@ -392,7 +392,7 @@ def test_of_daily_budget_gate_skips_within_interval_and_allows_after():
 
         gated = _of_budget_gate(db, org_id, "open_finance")
         assert gated is not None
-        assert gated["skipped"] == "of_daily_budget"
+        assert gated["skipped"] == "daily_budget"
 
         cp = _get_checkpoint(db, org_id, "open_finance", SOURCE_CHECKPOINT_ENTITY)
         cp.last_success_at = datetime.utcnow() - timedelta(hours=settings.of_sync_min_interval_hours + 1)
@@ -535,3 +535,51 @@ def test_run_full_sync_returns_skipped_when_postgres_lock_not_acquired(monkeypat
     assert result.locked is True
     assert result.id is None
     assert connector.calls == 0  # never even reached the connector
+
+
+# --------------------------------------------------------------------------- #
+# Hard cost-protection settings (owner directive 2026-07-17 after real SUMIT
+# API-overage charges billed to a client company): daily sync only, never
+# exceed quota — enforced in CODE, not just in the cron schedule.
+# --------------------------------------------------------------------------- #
+
+def test_sumit_budget_gate_skips_within_interval():
+    """SUMIT scheduled syncs must be code-gated to one successful full sync
+    per org per interval — the cron schedule alone is not a hard guarantee."""
+    from cfo.api.routes.cron import _daily_budget_gate
+
+    db = SessionLocal()
+    try:
+        org_id = _make_org(db, "SUMIT Budget Co").id
+        db.add(SyncCheckpoint(
+            organization_id=org_id, source="sumit", entity_type=SOURCE_CHECKPOINT_ENTITY,
+            last_success_at=datetime.utcnow() - timedelta(hours=1),
+        ))
+        db.commit()
+
+        gated = _daily_budget_gate(db, org_id, "sumit")
+        assert gated is not None
+        assert gated["skipped"] == "daily_budget"
+
+        cp = _get_checkpoint(db, org_id, "sumit", SOURCE_CHECKPOINT_ENTITY)
+        cp.last_success_at = datetime.utcnow() - timedelta(hours=settings.sumit_sync_min_interval_hours + 1)
+        db.commit()
+
+        assert _daily_budget_gate(db, org_id, "sumit") is None
+    finally:
+        db.close()
+
+
+def test_cost_protection_settings_have_hard_floors():
+    """Env misconfiguration must not be able to loosen the cost protections:
+    intervals are clamped to hard minimums at Settings construction."""
+    from cfo.config import Settings
+
+    s = Settings(
+        of_sync_min_interval_hours=1,
+        sumit_sync_min_interval_hours=0,
+        manual_refresh_cooldown_minutes=1,
+    )
+    assert s.of_sync_min_interval_hours >= 20
+    assert s.sumit_sync_min_interval_hours >= 20
+    assert s.manual_refresh_cooldown_minutes >= 15

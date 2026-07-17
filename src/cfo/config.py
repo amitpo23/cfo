@@ -133,6 +133,12 @@ class Settings(BaseSettings):
     # OF syncs are capped to at most one *successful full* sync per org per
     # this many hours (daily-ish, not hourly).
     of_sync_min_interval_hours: int = 20
+    # SUMIT bills API overage to the CLIENT company's own payment method
+    # (incident 2026-07-17: daily ILS 62.23 invoices to org 2's business).
+    # Scheduled SUMIT syncs are therefore code-gated to one successful full
+    # sync per org per this many hours — the cron schedule alone is not a
+    # guarantee.
+    sumit_sync_min_interval_hours: int = 20
     # Minimum time between manually-triggered (POST /sync/run) syncs for the
     # same org/source, to stop a user/UI from hammering the provider.
     manual_refresh_cooldown_minutes: int = 15
@@ -160,6 +166,20 @@ class Settings(BaseSettings):
             for origin in self.cors_allowed_origins.split(",")
             if origin.strip()
         ]
+
+    @model_validator(mode="after")
+    def enforce_cost_protection_floors(self):
+        """Hard floors (owner directive 2026-07-17, after real SUMIT API-overage
+        charges hit a client's card): daily sync only, never exceed provider
+        quotas. Env/config mistakes must not be able to loosen these — values
+        below the floor are clamped up, silently and unconditionally."""
+        if self.of_sync_min_interval_hours < 20:
+            self.of_sync_min_interval_hours = 20
+        if self.sumit_sync_min_interval_hours < 20:
+            self.sumit_sync_min_interval_hours = 20
+        if self.manual_refresh_cooldown_minutes < 15:
+            self.manual_refresh_cooldown_minutes = 15
+        return self
 
     @model_validator(mode="after")
     def validate_production_settings(self):
