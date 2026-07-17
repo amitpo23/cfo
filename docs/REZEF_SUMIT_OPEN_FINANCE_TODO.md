@@ -38,7 +38,7 @@
 - [x] **RSF-027** Do not retry SUMIT authorization, billing-obligo, quota or IP-block failures. — *`_classify_error`: 401/403/quota/obligo/IP-block = breaking, zero retries.*
 - [ ] **RSF-028** Reduce enrichment to new/changed unresolved documents in small batches. — *deferred; enrichment cron unchanged.*
 - [x] **RSF-029** Add manual-refresh cooldown. — *POST /sync/run → 429 JSON + retry_after_seconds within 15 min.*
-- [ ] **RSF-030** Prevent dashboards/chat/reports from triggering external calls. — *to verify separately (read paths audit).*
+- [x] **RSF-030** Prevent dashboards/chat/reports from triggering external calls. — *2026-07-17 (PR #7, deployed, migration e4f5a6b7c8d9): GET /accounts+/transactions fully DB-backed (proven no OF client construction); list GETs (payments/customers/merchants/credit-sessions/monthly-report/securities/providers/bank-branches) snapshot-cached (OfSnapshotCache, 20h freshness, 15-min refresh cooldown → 429, stale-fallback on live failure); onboarding connection polling floored at 60s. Chat tools already DB-only. Context: same-day incident — SUMIT hourly polling billed ₪62.23/day API-overage to org 2's business; SUMIT cron dropped to daily 02:00 (PR #6) and org 2 SUMIT connection paused.*
 - [x] **RSF-031** Mark `PARTIAL`/`FAILED` runs and roster state honestly. — *page-cap → PARTIAL; SyncSkipped never recorded as a healthy run.*
 - [x] **RSF-032** Test watermarks, page caps, locks, budgets and circuit state. — *tests/test_sync_call_protection.py (14) + tests/test_webhook_delta_sync.py (20).*
 
