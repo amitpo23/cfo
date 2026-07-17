@@ -87,3 +87,30 @@ def test_vat_report_period(fresh_org):
         assert rep["due_date"] == "2026-07-15"
     finally:
         db.close()
+
+
+def test_vat_report_period_captured_basis_carries_disclosure_note(fresh_org):
+    """ממצא אודיט אליהב 2026-07-13 (ממצא 4): basis='captured' משתמש ב-created_at
+    המקומי — שאצל ארגון שסונכרן רטרואקטיבית מציין את מועד הסנכרון לרצף, לא את
+    מועד הקליטה האמיתי ב-SUMIT. חובה לחשוף הערת כנות בשדה basis_note."""
+    org_id = fresh_org()["org_id"]
+    _seed(org_id)
+    db = SessionLocal()
+    try:
+        rep = daily_reports_service.vat_report_period(db, org_id, 2026, 6, basis="captured")
+        assert rep.get("basis_note")
+        assert "מועד הקליטה" in rep["basis_note"]
+    finally:
+        db.close()
+
+
+def test_vat_report_period_document_basis_has_no_basis_note(fresh_org):
+    """בסיס document אינו תלוי-מועד-קליטה — אין הערת כנות להצגה."""
+    org_id = fresh_org()["org_id"]
+    _seed(org_id)
+    db = SessionLocal()
+    try:
+        rep = daily_reports_service.vat_report_period(db, org_id, 2026, 6, basis="document")
+        assert not rep.get("basis_note")
+    finally:
+        db.close()

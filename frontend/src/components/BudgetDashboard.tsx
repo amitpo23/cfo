@@ -14,6 +14,7 @@ import {
   Legend,
 } from 'recharts';
 import api from '../services/api';
+import ExportButtons from './ExportButtons';
 
 interface BudgetComparison {
   category: string;
@@ -160,6 +161,30 @@ export const BudgetDashboard: React.FC = () => {
           >
             ניתוח תרחישים
           </button>
+          <ExportButtons
+            title="ניהול תקציב"
+            columns={[
+              { key: 'category', label: 'קטגוריה' },
+              { key: 'planned', label: 'תקציב' },
+              { key: 'actual', label: 'ביצוע' },
+              { key: 'variance', label: 'סטייה' },
+              { key: 'variance_pct', label: 'אחוז סטייה' },
+              { key: 'status', label: 'סטטוס' },
+            ]}
+            rows={(budgetData || []).map((item) => ({
+              category: item.category,
+              planned: item.planned,
+              actual: item.actual,
+              variance: item.variance,
+              variance_pct: `${item.variance_pct.toFixed(1)}%`,
+              status: item.status,
+            }))}
+            summary={[
+              { label: 'תקציב מתוכנן', value: formatCurrency(totals.planned) },
+              { label: 'ביצוע בפועל', value: formatCurrency(totals.actual) },
+              { label: 'סטייה', value: formatCurrency(Math.abs(totalVariance)) },
+            ]}
+          />
         </div>
       </div>
 

@@ -7,7 +7,7 @@ Open Finance response shapes (see docs/open-finance/API_REFERENCE.md); the compl
 raw record is preserved in `raw_data` so the insights engine can read the rich fields
 (category, merchantName, installments, isDuplicate, markupFee, balancePerEndDay).
 """
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 import hashlib
@@ -36,6 +36,7 @@ class OpenFinanceConnector(AccountingConnector):
         api_base_url: str = "https://api.open-finance.ai/v2",
         oauth_url: str = "https://api.open-finance.ai/oauth/token",
         timeout: float = 30.0,
+        connection_id: "Optional[str]" = None,
     ):
         # Derive the host prefix from the configured v2 base so v3/loans lines up too.
         v2_base = api_base_url.rstrip("/")
@@ -50,6 +51,9 @@ class OpenFinanceConnector(AccountingConnector):
             timeout=timeout,
         )
         self.user_id = user_id
+        # כמה תיקים (orgs) חיים תחת אותו משתמש Financy — כל org חייב להסתנכרן
+        # רק מהחיבור הבנקאי שלו, אחרת תנועות של לקוח אחד מזהמות תיק של אחר.
+        self.connection_id = connection_id
 
     async def test_connection(self) -> bool:
         try:
@@ -66,7 +70,8 @@ class OpenFinanceConnector(AccountingConnector):
         page_size: int = 100,
     ) -> FetchResult:
         payload = await self.client.list_accounts(
-            next_page=cursor, limit=min(page_size, 500), include_duplicates=0, sort=-1
+            next_page=cursor, limit=min(page_size, 500), include_duplicates=0, sort=-1,
+            connection_id=self.connection_id,
         )
         items, next_page = _items_and_next(payload)
         accounts = [self._normalize_account(item) for item in items]
@@ -85,6 +90,7 @@ class OpenFinanceConnector(AccountingConnector):
             date_from=date_from,
             include_duplicates=0,
             sort=-1,
+            connection_id=self.connection_id,
         )
         items, next_page = _items_and_next(payload)
         transactions = [self._normalize_transaction(item) for item in items]
@@ -132,14 +138,17 @@ class OpenFinanceConnector(AccountingConnector):
             or f"Open Finance Account {external_id}"
         )
         balance = _account_balance(item)
-        currency = _first_str(item, "currency") or _balance_currency(item) or "ILS"
+        currency = _normalize_currency(_first_str(item, "currency") or _balance_currency(item) or "ILS")
+        account_type, raw_account_type = _map_account_type(item)
         return NormalizedAccount(
             external_id=f"open_finance:{external_id}",
             name=name,
-            account_type="bank",
+            account_type=account_type,
             currency=currency,
             balance=balance,
             raw_data=item,
+            balance_as_of=_account_balance_as_of(item),
+            raw_account_type=raw_account_type,
         )
 
     def _normalize_transaction(self, item: dict[str, Any]) -> NormalizedBankTransaction:
@@ -170,20 +179,96 @@ def _items_and_next(payload: Any) -> tuple[list[dict], Optional[str]]:
     return [], None
 
 
-def _account_balance(item: dict[str, Any]) -> Decimal:
+# עדיפות בין balanceType כשיש כמה רשומות יתרה לאותו חשבון (מספר קטן = עדיף).
+# closingBooked (יתרה סגורה/מאושרת) > expected (צפויה) > interimAvailable > אחר.
+_BALANCE_TYPE_PRIORITY = {"closingBooked": 0, "expected": 1, "interimAvailable": 2}
+
+
+def _select_balance_entry(item: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """בוחר רשומת balance אחת מתוך balances[] של Open Finance.
+
+    הצורה האמיתית (אומתה חי): balances[] = [{balanceType, balanceAmount:
+    {amount: "<string>", currency}, referenceDate}, ...] — לעיתים כמה רשומות
+    לאותו חשבון (למשל הלוואה עם closingBooked היסטורי וגם עדכני). בוחרים קודם
+    לפי עדיפות balanceType, ותוך קבוצת העדיפות הגבוהה ביותר — לפי referenceDate
+    המאוחר ביותר (כדי לא ליפול על יתרה ישנה בטעות).
+    """
     balances = item.get("balances")
-    if isinstance(balances, list) and balances:
-        first = balances[0]
-        if isinstance(first, dict):
-            return _decimal(first.get("amount"))
-    return _decimal(0)
+    if not isinstance(balances, list) or not balances:
+        return None
+    entries = [b for b in balances if isinstance(b, dict)]
+    if not entries:
+        return None
+
+    def _priority(entry: dict[str, Any]) -> int:
+        return _BALANCE_TYPE_PRIORITY.get(entry.get("balanceType"), 99)
+
+    best_priority = min(_priority(e) for e in entries)
+    candidates = [e for e in entries if _priority(e) == best_priority]
+
+    def _ref_date(entry: dict[str, Any]):
+        return _parse_date(entry.get("referenceDate")) or date.min
+
+    return max(candidates, key=_ref_date)
+
+
+def _account_balance(item: dict[str, Any]) -> Decimal:
+    entry = _select_balance_entry(item)
+    if entry is None:
+        return _decimal(0)
+    amount_obj = entry.get("balanceAmount")
+    if isinstance(amount_obj, dict):
+        return _decimal(amount_obj.get("amount"))
+    # תאימות עם צורה שטוחה ישנה (amount ישירות על הרשומה, לא מקונן)
+    return _decimal(entry.get("amount"))
+
+
+def _account_balance_as_of(item: dict[str, Any]) -> Optional[datetime]:
+    entry = _select_balance_entry(item)
+    if entry is None:
+        return None
+    ref_date = _parse_date(entry.get("referenceDate"))
+    if ref_date is None:
+        return None
+    return datetime.combine(ref_date, datetime.min.time())
 
 
 def _balance_currency(item: dict[str, Any]) -> Optional[str]:
-    balances = item.get("balances")
-    if isinstance(balances, list) and balances and isinstance(balances[0], dict):
-        return balances[0].get("currency")
-    return None
+    entry = _select_balance_entry(item)
+    if entry is None:
+        return None
+    amount_obj = entry.get("balanceAmount")
+    if isinstance(amount_obj, dict) and amount_obj.get("currency"):
+        return amount_obj.get("currency")
+    return entry.get("currency")
+
+
+# CHECKING (עו"ש) -> bank; SAVINGS (חיסכון/פיקדון) -> asset; LOAN/CARD
+# (הלוואה/כרטיס אשראי, שתיהן התחייבות) -> liability. אומת חי מול payload אמיתי
+# (2026-07-12). ברירת מחדל "bank" לסוגים לא ידועים (כמו קוד PSD2 גנרי CACC),
+# תואם את ההתנהגות הקודמת (account_type="bank" קבוע לכולם).
+_ACCOUNT_TYPE_MAP = {
+    "CHECKING": "bank",
+    "SAVINGS": "asset",
+    "LOAN": "liability",
+    "CARD": "liability",
+}
+
+
+def _map_account_type(item: dict[str, Any]) -> tuple[str, Optional[str]]:
+    raw = item.get("accountType")
+    if not raw:
+        return "bank", None
+    raw_type = str(raw).upper()
+    return _ACCOUNT_TYPE_MAP.get(raw_type, "bank"), raw_type
+
+
+# פגם ידוע של הספק: currency="ILY" מוחזר לפעמים במקום "ILS" (עו"ש בעיקר).
+def _normalize_currency(currency: Optional[str]) -> str:
+    if not currency:
+        return "ILS"
+    upper = str(currency).upper()
+    return "ILS" if upper == "ILY" else upper
 
 
 def _transaction_amount(item: dict[str, Any]) -> tuple[Decimal, Optional[str]]:

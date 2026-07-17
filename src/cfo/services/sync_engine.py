@@ -558,6 +558,8 @@ class SyncEngine:
             existing.account_type = acct_type
             existing.balance = item.balance
             existing.currency = item.currency
+            existing.balance_as_of = item.balance_as_of
+            existing.raw_account_type = item.raw_account_type
             existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
@@ -569,6 +571,8 @@ class SyncEngine:
             account_type=acct_type,
             balance=item.balance,
             currency=item.currency,
+            balance_as_of=item.balance_as_of,
+            raw_account_type=item.raw_account_type,
         )
         self.db.add(account)
         return "created"
@@ -994,6 +998,9 @@ def get_connector_for_org(
             user_id=user_id,
             api_base_url=api_base_url,
             oauth_url=oauth_url,
+            # Optional per-org bank-connection scope: several orgs can share one
+            # Financy user; without this, one org's sync ingests another's bank.
+            connection_id=creds.get("connection_id"),
         )
         return connector, conn.id if conn else None, source
 

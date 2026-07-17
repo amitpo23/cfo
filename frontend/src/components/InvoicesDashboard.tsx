@@ -19,6 +19,7 @@ import {
   FileMinus
 } from 'lucide-react';
 import api from '../services/api';
+import ExportButtons, { ExportSheet } from './ExportButtons';
 
 // Types
 interface InvoiceItem {
@@ -622,6 +623,52 @@ const InvoicesDashboard: React.FC = () => {
     inv.invoice_number?.includes(searchTerm)
   );
 
+  const invoiceExportSheets: ExportSheet[] = [
+    {
+      name: 'חשבוניות יוצאות',
+      columns: [
+        { key: 'document_number', label: 'מספר' },
+        { key: 'customer_name', label: 'לקוח' },
+        { key: 'issue_date', label: 'תאריך' },
+        { key: 'due_date', label: 'תאריך לפרעון' },
+        { key: 'total', label: 'סכום' },
+        { key: 'status', label: 'סטטוס' },
+      ],
+      rows: filteredInvoices.map((inv: Invoice) => ({
+        document_number: inv.document_number || inv.invoice_id,
+        customer_name: inv.customer_name,
+        issue_date: inv.issue_date,
+        due_date: inv.due_date,
+        total: inv.total,
+        status: inv.status,
+      })),
+      summary: summary ? [
+        { label: 'סה"כ חשבוניות', value: String(summary.total_invoices || 0) },
+        { label: 'הכנסות', value: `₪${(summary.total_revenue || 0).toLocaleString('he-IL')}` },
+        { label: 'ממתין לתשלום', value: `₪${(summary.total_outstanding || 0).toLocaleString('he-IL')}` },
+      ] : undefined,
+    },
+    {
+      name: 'חשבוניות נכנסות',
+      columns: [
+        { key: 'invoice_number', label: 'מספר' },
+        { key: 'vendor_name', label: 'ספק' },
+        { key: 'category', label: 'קטגוריה' },
+        { key: 'issue_date', label: 'תאריך' },
+        { key: 'total', label: 'סכום' },
+        { key: 'status', label: 'סטטוס' },
+      ],
+      rows: filteredReceived.map((inv: ReceivedInvoice) => ({
+        invoice_number: inv.invoice_number,
+        vendor_name: inv.vendor_name,
+        category: inv.category,
+        issue_date: inv.issue_date,
+        total: inv.total,
+        status: inv.status,
+      })),
+    },
+  ];
+
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
@@ -630,7 +677,8 @@ const InvoicesDashboard: React.FC = () => {
           <h1 className="text-2xl font-bold text-gray-800">ניהול חשבוניות</h1>
           <p className="text-gray-600">הפקה, קליטה וניהול חשבוניות</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
+          <ExportButtons title="חשבוניות" sheets={invoiceExportSheets} />
           <button
             onClick={() => syncInvoicesMutation.mutate()}
             disabled={syncInvoicesMutation.isPending}

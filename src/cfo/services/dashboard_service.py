@@ -18,10 +18,12 @@ from ..models import (
     Bill,
     BillStatus,
     Contact,
+    Expense,
     Invoice,
     InvoiceStatus,
     Payment,
     SyncRun,
+    SyncStatus,
     Transaction,
     TransactionType,
     Budget,
@@ -35,41 +37,48 @@ class DashboardService:
 
     # ===== Overview =====
 
-    def get_overview(self) -> dict:
-        today = date.today()
-        month_start = today.replace(day=1)
+    def get_overview(self, today: Optional[date] = None) -> dict:
+        """CFO overview לפי החוזה ב-docs/REZEF_DATA_INTEGRITY_PLAN.md סעיף ד:
+        כל מדד עם מקור-אמת מוגדר, ו-None כנה כשאין נתונים (לא אפס מומצא).
+        """
+        today = today or date.today()
 
-        cash_balance, cash_by_account = self._get_cash_balance()
-        month_revenue = self._get_month_revenue(month_start, today)
-        month_expenses = self._get_month_expenses(month_start, today)
-        month_gross_profit = month_revenue - month_expenses
-        month_net_profit = month_gross_profit  # simplified; COGS not separated yet
+        cash = self._get_of_cash_summary()
 
-        # Runway
-        avg_monthly_burn = self._get_average_monthly_burn(months=3)
-        runway_months = None
-        if avg_monthly_burn > 0:
-            runway_months = round(float(cash_balance / Decimal(str(avg_monthly_burn))), 1)
+        pnl_period = self._resolve_pnl_period(today)
+        if pnl_period["has_data"]:
+            month_revenue = self._month_revenue_accrual(pnl_period["start"], pnl_period["end"])
+            month_expenses = self._month_expenses_accrual(pnl_period["start"], pnl_period["end"])
+            month_gross_profit = month_revenue - month_expenses
+            month_net_profit = month_gross_profit  # simplified; COGS not separated yet
+        else:
+            month_revenue = month_expenses = month_gross_profit = month_net_profit = None
 
-        # AR
+        bank_flows = self._bank_month_flows(pnl_period["start"], pnl_period["end"])
+
+        runway_months = self._get_runway_months_v2(cash["cash_balance"], today)
+
+        # AR (unchanged formula — already correct after the invoice normalization fix)
         ar_total, ar_overdue = self._get_ar_summary()
 
-        # AP
-        ap_total, ap_due_7, ap_due_30 = self._get_ap_summary()
+        # AP — פתוח בלבד, לעולם לא שלילי
+        ap_total, ap_due_7, ap_due_30 = self._get_ap_open_summary(today)
 
-        # Alerts
+        undocumented_expenses = self._get_undocumented_expenses(today)
+
         alerts = self._get_active_alerts(limit=5)
 
-        # Last sync
-        last_sync = self._get_last_sync_time()
+        last_sync = self._get_last_sync_by_source()
+        data_quality = self._get_data_quality_summary()
 
         return {
-            "cash_balance": float(cash_balance),
-            "cash_by_account": cash_by_account,
-            "month_revenue": float(month_revenue),
-            "month_expenses": float(month_expenses),
-            "month_gross_profit": float(month_gross_profit),
-            "month_net_profit": float(month_net_profit),
+            # ---- legacy field names, kept for the existing UI, values corrected ----
+            "cash_balance": cash["cash_balance"],
+            "cash_by_account": cash["cash_by_account"],
+            "month_revenue": month_revenue,
+            "month_expenses": month_expenses,
+            "month_gross_profit": month_gross_profit,
+            "month_net_profit": month_net_profit,
             "runway_months": runway_months,
             "ar_total": float(ar_total),
             "ar_overdue": float(ar_overdue),
@@ -78,6 +87,262 @@ class DashboardService:
             "ap_due_30_days": float(ap_due_30),
             "alerts": alerts,
             "last_sync": last_sync,
+            # ---- new fields (section ד of the plan) ----
+            "cash_as_of": cash["cash_as_of"],
+            "savings_balance": cash["savings_balance"],
+            "loans_total": cash["loans_total"],
+            "card_outstanding": cash["card_outstanding"],
+            "pnl_month": pnl_period["pnl_month"],
+            "pnl_is_current_month": pnl_period["is_current"],
+            "bank_month_inflow": bank_flows["inflow"],
+            "bank_month_outflow": bank_flows["outflow"],
+            "bank_month_net": bank_flows["net"],
+            "undocumented_expenses": undocumented_expenses,
+            "data_quality": data_quality,
+        }
+
+    # ===== Overview v2 helpers (docs/REZEF_DATA_INTEGRITY_PLAN.md סעיף ד) =====
+    # מבודדים מהמתודות הישנות למטה (_get_cash_balance/_get_ap_summary/...) —
+    # אלה עדיין משמשות /dashboard/cashflow, /dashboard/pnl ו-alert_engine
+    # ולא היו חלק מהאבחון, כדי לא לשנות את ההתנהגות שלהן.
+
+    def _get_of_cash_summary(self) -> dict:
+        """מזומן = Σ balance של חשבונות Open Finance מסוג CHECKING (BANK) בלבד.
+        חסכונות/הלוואות/כרטיס מדווחים בנפרד. None כשאין חשבונות מהסוג המתאים —
+        לא 0 מומצא."""
+        of_accounts = self.db.query(Account).filter(
+            Account.organization_id == self.org_id,
+            Account.source == "open_finance",
+        ).all()
+
+        checking = [a for a in of_accounts if a.account_type == AccountType.BANK]
+        savings = [a for a in of_accounts if a.account_type == AccountType.ASSET]
+        loans = [a for a in of_accounts
+                 if a.account_type == AccountType.LIABILITY and a.raw_account_type == "LOAN"]
+        cards = [a for a in of_accounts
+                 if a.account_type == AccountType.LIABILITY and a.raw_account_type == "CARD"]
+
+        def _sum_or_none(accounts):
+            if not accounts:
+                return None
+            return float(sum((a.balance or Decimal("0")) for a in accounts))
+
+        cash_balance = _sum_or_none(checking)
+        cash_as_of = None
+        cash_by_account = []
+        if checking:
+            as_of_values = [a.balance_as_of for a in checking if a.balance_as_of]
+            cash_as_of = min(as_of_values).isoformat() if as_of_values else None
+            cash_by_account = [
+                {"id": a.id, "name": a.name, "balance": float(a.balance or 0), "currency": a.currency}
+                for a in checking
+            ]
+
+        return {
+            "cash_balance": cash_balance,
+            "cash_as_of": cash_as_of,
+            "cash_by_account": cash_by_account,
+            "savings_balance": _sum_or_none(savings),
+            "loans_total": _sum_or_none(loans),
+            "card_outstanding": _sum_or_none(cards),
+        }
+
+    @staticmethod
+    def _month_bounds_v2(year: int, month: int) -> tuple:
+        if month == 12:
+            end = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end = date(year, month + 1, 1) - timedelta(days=1)
+        return date(year, month, 1), end
+
+    def _month_has_books(self, start: date, end: date) -> bool:
+        """יש "ספרים" לחודש אם יש בו לפחות מסמך אחד (invoice/bill/expense) שאינו
+        טיוטה/מבוטל **ובסכום שאינו אפס** — טיוטות סריקה ריקות (total=0) שסונכרנו
+        לפני תיקון draft-skip נספרות אחרת כ"נתונים" ומציגות חודש-אפסים שקרי."""
+        has_invoice = self.db.query(Invoice.id).filter(
+            Invoice.organization_id == self.org_id,
+            Invoice.issue_date >= start, Invoice.issue_date <= end,
+            Invoice.status.notin_([InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED]),
+            Invoice.total != 0,
+        ).first() is not None
+        if has_invoice:
+            return True
+        has_bill = self.db.query(Bill.id).filter(
+            Bill.organization_id == self.org_id,
+            Bill.issue_date >= start, Bill.issue_date <= end,
+            Bill.status.notin_([BillStatus.DRAFT, BillStatus.VOID]),
+            Bill.total != 0,
+        ).first() is not None
+        if has_bill:
+            return True
+        return self.db.query(Expense.id).filter(
+            Expense.organization_id == self.org_id,
+            Expense.expense_date >= start, Expense.expense_date <= end,
+            Expense.total != 0,
+        ).first() is not None
+
+    def _resolve_pnl_period(self, today: date, lookback_months: int = 24) -> dict:
+        """בוחר את החודש שה-P&L מוצג עבורו: החודש הקלנדרי הנוכחי אם יש בו
+        ספרים, אחרת החודש הסגור האחרון עם נתונים. אם אין נתונים בכלל —
+        חוזר לחודש הנוכחי עם has_data=False (הצרכן מציג None לכל month_*)."""
+        year, month = today.year, today.month
+        cur_start, cur_end = self._month_bounds_v2(year, month)
+        if self._month_has_books(cur_start, cur_end):
+            return {
+                "year": year, "month": month, "start": cur_start, "end": cur_end,
+                "pnl_month": f"{year:04d}-{month:02d}", "is_current": True, "has_data": True,
+            }
+
+        yy, mm = year, month
+        for _ in range(lookback_months):
+            mm -= 1
+            if mm == 0:
+                mm = 12
+                yy -= 1
+            start, end = self._month_bounds_v2(yy, mm)
+            if self._month_has_books(start, end):
+                return {
+                    "year": yy, "month": mm, "start": start, "end": end,
+                    "pnl_month": f"{yy:04d}-{mm:02d}", "is_current": False, "has_data": True,
+                }
+
+        return {
+            "year": year, "month": month, "start": cur_start, "end": cur_end,
+            "pnl_month": f"{year:04d}-{month:02d}", "is_current": True, "has_data": False,
+        }
+
+    def _month_revenue_accrual(self, start: date, end: date) -> float:
+        total = self.db.query(func.sum(Invoice.total)).filter(
+            Invoice.organization_id == self.org_id,
+            Invoice.issue_date >= start, Invoice.issue_date <= end,
+            Invoice.status.notin_([InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED]),
+        ).scalar() or Decimal("0")
+        return float(total)
+
+    def _month_expenses_accrual(self, start: date, end: date) -> float:
+        bill_total = self.db.query(func.sum(Bill.total)).filter(
+            Bill.organization_id == self.org_id,
+            Bill.issue_date >= start, Bill.issue_date <= end,
+            Bill.status.notin_([BillStatus.DRAFT, BillStatus.VOID]),
+        ).scalar() or Decimal("0")
+
+        # מסמך SUMIT מסונכרן פעמיים — כ-Bill (ספר AP) וגם כ-Expense (טבלת
+        # עבודה) עם אותו external_id. ה-Bill קנוני; Expense עם תאום-Bill
+        # מדולג כדי לא לכפול הוצאות (אותה לוגיקה כמו compute_vat_position).
+        bill_ext_ids = {
+            r[0] for r in self.db.query(Bill.external_id).filter(
+                Bill.organization_id == self.org_id, Bill.external_id.isnot(None),
+            ).all()
+        }
+        exp_rows = self.db.query(Expense.total, Expense.external_id).filter(
+            Expense.organization_id == self.org_id,
+            Expense.expense_date >= start, Expense.expense_date <= end,
+            func.lower(Expense.status) != "error",
+        ).all()
+        expense_total = sum(
+            float(total or 0) for total, ext_id in exp_rows
+            if not ext_id or str(ext_id) not in bill_ext_ids
+        )
+        return float(bill_total) + expense_total
+
+    def _bank_month_flows(self, start: date, end: date) -> dict:
+        rows = self.db.query(BankTransaction.amount).filter(
+            BankTransaction.organization_id == self.org_id,
+            BankTransaction.transaction_date >= start,
+            BankTransaction.transaction_date <= end,
+        ).all()
+        inflow = sum(float(amount) for (amount,) in rows if amount and amount > 0)
+        outflow = sum(abs(float(amount)) for (amount,) in rows if amount and amount < 0)
+        return {
+            "inflow": round(inflow, 2),
+            "outflow": round(outflow, 2),
+            "net": round(inflow - outflow, 2),
+        }
+
+    def _get_runway_months_v2(self, cash_balance: Optional[float], today: date) -> Optional[float]:
+        """מזומן ÷ ממוצע burn נטו חודשי (3 חודשים קלנדריים סגורים אחרונים).
+        None כשאין מזומן, אין היסטוריית בנק, או שהעסק לא בשריפה נטו (net>=0)."""
+        if not cash_balance or cash_balance <= 0:
+            return None
+
+        year, month = today.year, today.month
+        months = []
+        yy, mm = year, month
+        for _ in range(3):
+            mm -= 1
+            if mm == 0:
+                mm = 12
+                yy -= 1
+            months.append(self._month_bounds_v2(yy, mm))
+
+        window_start, window_end = months[-1][0], months[0][1]
+        has_history = self.db.query(BankTransaction.id).filter(
+            BankTransaction.organization_id == self.org_id,
+            BankTransaction.transaction_date >= window_start,
+            BankTransaction.transaction_date <= window_end,
+        ).first() is not None
+        if not has_history:
+            return None
+
+        nets = [self._bank_month_flows(start, end)["net"] for start, end in months]
+        avg_net = sum(nets) / len(nets)
+        if avg_net >= 0:
+            return None  # לא בשריפה נטו — מושג ה-runway לא רלוונטי
+        avg_burn = -avg_net
+        return round(cash_balance / avg_burn, 1)
+
+    def _get_ap_open_summary(self, today: date) -> tuple:
+        """AP פתוח בלבד (balance>0, אחרי הנרמול) — לעולם לא שלילי."""
+        open_statuses = [
+            BillStatus.RECEIVED, BillStatus.APPROVED,
+            BillStatus.OVERDUE, BillStatus.PARTIALLY_PAID,
+        ]
+        base = self.db.query(func.sum(Bill.balance)).filter(
+            Bill.organization_id == self.org_id,
+            Bill.status.in_(open_statuses),
+            Bill.balance > 0,
+        )
+        total = base.scalar() or Decimal("0")
+
+        due_7 = base.filter(Bill.due_date.isnot(None), Bill.due_date <= today + timedelta(days=7)).scalar() or Decimal("0")
+        due_30 = base.filter(Bill.due_date.isnot(None), Bill.due_date <= today + timedelta(days=30)).scalar() or Decimal("0")
+
+        return total, due_7, due_30
+
+    def _get_undocumented_expenses(self, today: date) -> dict:
+        """הוצאות ללא חשבונית — מהמנוע הקיים (bank_expense_gap.gap_report)
+        לחודש הקלנדרי הנוכחי בלבד. לא מחשב לוגיקה מחדש."""
+        from .bank_expense_gap import gap_report
+
+        report = gap_report(self.db, self.org_id, today.year, today.month)
+        totals = report.get("totals", {})
+        return {
+            "count": totals.get("undocumented_count", 0),
+            "total": totals.get("undocumented_total", 0.0),
+            "potential_vat": totals.get("potential_vat", 0.0),
+        }
+
+    def _get_last_sync_by_source(self) -> dict:
+        result: dict = {"sumit": None, "open_finance": None}
+        succeeded = [SyncStatus.COMPLETED, SyncStatus.PARTIAL]
+        for source in result:
+            last_run = self.db.query(SyncRun).filter(
+                SyncRun.organization_id == self.org_id,
+                SyncRun.source == source,
+                SyncRun.status.in_(succeeded),
+            ).order_by(SyncRun.finished_at.desc()).first()
+            if last_run and last_run.finished_at:
+                result[source] = last_run.finished_at.isoformat()
+        return result
+
+    def _get_data_quality_summary(self) -> dict:
+        from .data_quality import run_checks
+
+        result = run_checks(self.db, self.org_id)
+        return {
+            "status": result["status"],
+            "issues_count": result["issues_count"],
+            "last_check_at": result["checked_at"],
         }
 
     # ===== Cash Balance =====

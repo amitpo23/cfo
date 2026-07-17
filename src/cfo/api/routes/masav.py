@@ -17,7 +17,9 @@ from ...services.masav_service import (
     MasavPayment,
     MasavValidationError,
     build_masav_file,
+    is_valid_account,
     is_valid_bank_code,
+    is_valid_branch,
     is_valid_israeli_id,
     summarize,
 )
@@ -59,19 +61,41 @@ def _load_settings(
 
 
 def _gather(db: Session, org_id: int, bill_ids: Optional[List[int]]):
-    """איסוף חשבוניות ספק פתוחות + פרטי הבנק; מחזיר (תנועות, מדולגות)."""
+    """איסוף חשבוניות ספק פתוחות + פרטי הבנק; מחזיר (תנועות, מדולגות).
+
+    הסריקה הכללית (בלי ``bill_ids``) עדיין מסננת ``balance != 0`` -- חשבונית
+    ששולמה במלואה (balance=0) פשוט לא רלוונטית לתשלום ואין טעם באזהרה על כל
+    חשבונית סגורה בכל תצוגה מקדימה. אבל כשהמשתמש *בחר* חשבוניות מפורשות
+    (``bill_ids``) אסור שחשבונית שנבחרה תיעלם בשקט מהתוצאה -- אז הסינון
+    מוסר ומועבר ללולאה, שם כל יתרה שאינה חיובית (שלילית *או אפס*, למשל אחרי
+    זיכוי/תשלום ביתר) מקבלת אזהרה מפורשת: מס"ב לא משדרת קובץ עם סך שלילי
+    (או אפס) ללקוח (ר' docs/SUMIT_KNOWLEDGE_BASE.md).
+    """
     query = (
         db.query(Bill, Contact)
         .outerjoin(Contact, Bill.vendor_id == Contact.id)
-        .filter(Bill.organization_id == org_id, Bill.balance > 0)
+        .filter(Bill.organization_id == org_id)
     )
     if bill_ids:
         query = query.filter(Bill.id.in_(bill_ids))
+    else:
+        query = query.filter(Bill.balance != 0)
 
     payments: List[MasavPayment] = []
     skipped: List[dict] = []
     for bill, vendor in query.all():
         name = bill.bill_number or bill.external_id or f"BILL-{bill.id}"
+        balance = bill.balance or 0
+        if balance <= 0:
+            skipped.append({
+                "bill": name,
+                "vendor": vendor.name if vendor else None,
+                "reason": (
+                    f"מס\"ב לא תשדר סך שלילי או אפס: יתרת החשבונית ({balance}) אינה חיובית "
+                    "— יש לבדוק זיכוי/תשלום ביתר מול הספק"
+                ),
+            })
+            continue
         if vendor is None:
             skipped.append({"bill": name, "reason": "אין ספק משויך"})
             continue
@@ -100,6 +124,20 @@ def _gather(db: Session, org_id: int, bill_ids: Optional[List[int]]):
                 "bill": name,
                 "vendor": vendor.name,
                 "reason": f"קוד בנק ({bank_code}) אינו ברשימת חברי מס\"ב — יש לבדוק מול הספק",
+            })
+            continue
+        if not is_valid_branch(branch):
+            skipped.append({
+                "bill": name,
+                "vendor": vendor.name,
+                "reason": f"מספר סניף ({branch}) לא תקין — נדרשות 1-3 ספרות",
+            })
+            continue
+        if not is_valid_account(account):
+            skipped.append({
+                "bill": name,
+                "vendor": vendor.name,
+                "reason": f"מספר חשבון ({account}) לא תקין — נדרשות 4-9 ספרות",
             })
             continue
         if not is_valid_israeli_id(beneficiary_id):

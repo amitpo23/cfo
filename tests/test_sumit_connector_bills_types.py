@@ -65,10 +65,13 @@ def test_fetch_bills_covers_both_expense_types_and_skips_drafts(monkeypatch):
 
 
 def test_fetch_invoices_never_pulls_receipts_or_expenses(monkeypatch):
-    """חשבוניות נמשכות רק מסוגי הכנסה (0,1) — קבלה (5) והוצאות (15/16) לעולם לא.
+    """חשבוניות נמשכות רק מסוגי הכנסה (0,1) + זיכוי (5) — קבלה (2) והוצאות (15/16)
+    לעולם לא.
 
-    מקבע את תיקון 60fb0d2; שורש ממצא H0 באודיט התאימות (שורת קבלה ישנה
-    שיובאה כחשבונית ע"י פילטר רחב מדי, לפני התיקון).
+    עדכון 2026-07-13: לפי ה-swagger הרשמי (Accounting_Typed_DocumentType) קוד 5 הוא
+    CreditInvoice (חשבונית זיכוי) — מסמך מע"מ בצד ההכנסות שחייב להימשך, אחרת מע"מ
+    העסקאות מדווח ביתר; Receipt הוא קוד 2. שורש ממצא H0 באודיט התאימות (שורת
+    legacy עם קוד גולמי '5') מטופל בהחרגה ב-select_vat_documents, לא כאן.
     """
     from cfo.services.sumit_connector import SumitConnector
 
@@ -81,10 +84,10 @@ def test_fetch_invoices_never_pulls_receipts_or_expenses(monkeypatch):
     monkeypatch.setattr(SumitConnector, "_get_client", _fake_get_client)
     asyncio.run(connector.fetch_invoices())
 
-    assert set(client.requested_types) == {"0", "1"}, (
-        f"fetch_invoices חייב לבקש רק סוגי הכנסה 0+1, ביקש: {client.requested_types}"
+    assert set(client.requested_types) == {"0", "1", "5", "6"}, (
+        f"fetch_invoices חייב לבקש סוגי הכנסה 0+1 וזיכוי 5, ביקש: {client.requested_types}"
     )
-    for forbidden in ("5", "15", "16"):
+    for forbidden in ("2", "15", "16"):
         assert forbidden not in client.requested_types, (
             f"סוג {forbidden} (קבלה/הוצאה) לא אמור להימשך כחשבונית"
         )
@@ -111,7 +114,9 @@ def test_fetch_invoices_covers_invoice_and_invoice_receipt(monkeypatch):
     monkeypatch.setattr(SumitConnector, "_get_client", _fake_get_client)
     result = asyncio.run(connector.fetch_invoices())
 
-    assert sorted(client.requested_types) == ["0", "1"], (
+    # מאז 2026-07-13 נמשך גם סוג 5 (CreditInvoice) — כאן בודקים שסוגי ההכנסה 0+1
+    # שניהם נשאלים (הזיכוי נבדק ב-tests/test_credit_invoices_chain.py).
+    assert {"0", "1"} <= set(client.requested_types), (
         f"fetch_invoices חייב לבקש סוג 0 וגם סוג 1, ביקש: {client.requested_types}"
     )
     ids = sorted(i.external_id for i in result.items)

@@ -28,6 +28,7 @@ import {
   Legend
 } from 'recharts';
 import api from '../services/api';
+import ExportButtons, { ExportSheet } from './ExportButtons';
 
 type ReportType = 'profit-loss' | 'balance-sheet' | 'cash-flow-projection';
 type ReportPeriod = 'monthly' | 'quarterly' | 'yearly' | 'custom';
@@ -847,6 +848,80 @@ export const ReportsDashboard: React.FC = () => {
     );
   };
 
+  const clientExportSheets: ExportSheet[] = (() => {
+    if (activeReport === 'profit-loss' && plReport) {
+      return [{
+        name: 'רווח והפסד',
+        columns: [
+          { key: 'section', label: 'סעיף' },
+          { key: 'category', label: 'קטגוריה' },
+          { key: 'amount', label: 'סכום' },
+        ],
+        rows: [
+          ...plReport.revenue.map((i: ProfitLossItem) => ({ section: 'הכנסות', category: i.category_hebrew, amount: i.amount })),
+          ...plReport.cost_of_goods_sold.map((i: ProfitLossItem) => ({ section: 'עלות המכר', category: i.category_hebrew, amount: i.amount })),
+          ...plReport.operating_expenses.map((i: ProfitLossItem) => ({ section: 'הוצאות תפעוליות', category: i.category_hebrew, amount: i.amount })),
+        ],
+        summary: [
+          { label: 'סה"כ הכנסות', value: formatCurrency(plReport.total_revenue) },
+          { label: 'סה"כ הוצאות', value: formatCurrency(plReport.total_expenses) },
+          { label: 'רווח גולמי', value: formatCurrency(plReport.gross_profit) },
+          { label: 'רווח תפעולי', value: formatCurrency(plReport.operating_income) },
+          { label: 'רווח נקי', value: formatCurrency(plReport.net_income) },
+        ],
+      }];
+    }
+    if (activeReport === 'balance-sheet' && bsReport) {
+      return [{
+        name: 'מאזן',
+        columns: [
+          { key: 'section', label: 'סעיף' },
+          { key: 'name', label: 'שם' },
+          { key: 'amount', label: 'סכום' },
+        ],
+        rows: [
+          ...bsReport.current_assets.map((i: BalanceSheetItem) => ({ section: 'נכסים שוטפים', name: i.name_hebrew, amount: i.amount })),
+          ...bsReport.fixed_assets.map((i: BalanceSheetItem) => ({ section: 'נכסים קבועים', name: i.name_hebrew, amount: i.amount })),
+          ...bsReport.current_liabilities.map((i: BalanceSheetItem) => ({ section: 'התחייבויות שוטפות', name: i.name_hebrew, amount: i.amount })),
+          ...bsReport.equity.map((i: BalanceSheetItem) => ({ section: 'הון עצמי', name: i.name_hebrew, amount: i.amount })),
+        ],
+        summary: [
+          { label: 'סה"כ נכסים', value: formatCurrency(bsReport.total_assets) },
+          { label: 'סה"כ התחייבויות', value: formatCurrency(bsReport.total_liabilities) },
+          { label: 'סה"כ הון עצמי', value: formatCurrency(bsReport.total_equity) },
+          { label: 'מאזן מאוזן', value: bsReport.is_balanced ? 'כן' : 'לא' },
+        ],
+      }];
+    }
+    if (activeReport === 'cash-flow-projection' && cfReport) {
+      return [{
+        name: 'תזרים חזוי',
+        columns: [
+          { key: 'month', label: 'חודש' },
+          { key: 'opening_balance', label: 'יתרת פתיחה' },
+          { key: 'inflows', label: 'כניסות' },
+          { key: 'outflows', label: 'יציאות' },
+          { key: 'net_flow', label: 'תזרים נקי' },
+          { key: 'closing_balance', label: 'יתרת סגירה' },
+        ],
+        rows: cfReport.projections.map((p: CashFlowProjectionItem) => ({
+          month: p.month,
+          opening_balance: p.opening_balance,
+          inflows: p.inflows,
+          outflows: p.outflows,
+          net_flow: p.net_flow,
+          closing_balance: p.closing_balance,
+        })),
+        summary: [
+          { label: 'סה"כ כניסות', value: formatCurrency(cfReport.total_projected_inflows) },
+          { label: 'סה"כ יציאות', value: formatCurrency(cfReport.total_projected_outflows) },
+          { label: 'יתרת סגירה', value: formatCurrency(cfReport.ending_balance) },
+        ],
+      }];
+    }
+    return [];
+  })();
+
   return (
     <div className="p-6 space-y-6 bg-gray-50 min-h-screen" dir="rtl">
       {/* Header */}
@@ -855,6 +930,9 @@ export const ReportsDashboard: React.FC = () => {
           <h1 className="text-3xl font-bold text-gray-900">דוחות כספיים</h1>
           <p className="text-gray-500 mt-1">הפקת דוחות רווח והפסד, מאזן ותזרים חזוי</p>
         </div>
+        {clientExportSheets.length > 0 && (
+          <ExportButtons title="דוחות כספיים" meta={`${startDate} — ${endDate}`} sheets={clientExportSheets} />
+        )}
       </div>
 
       {/* Tabs */}

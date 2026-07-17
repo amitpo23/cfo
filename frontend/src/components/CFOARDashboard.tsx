@@ -6,6 +6,7 @@ import {
 import { FileCheck, Download } from 'lucide-react';
 import apiService from '../services/api';
 import CollectionCasesTab from './CollectionCasesTab';
+import ExportButtons from './ExportButtons';
 
 interface Props {
   darkMode: boolean;
@@ -133,15 +134,42 @@ const CFOARDashboard: React.FC<Props> = ({ darkMode }) => {
     <div className={`p-6 space-y-6 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Accounts Receivable</h1>
-        <button
-          type="button"
-          onClick={handleExport}
-          onKeyDown={(e) => { if (e.key === 'Enter') handleExport(); }}
-          className="flex items-center gap-2 px-4 py-2 border rounded-xl hover:bg-gray-50 transition"
-        >
-          <Download size={18} />
-          Export CSV
-        </button>
+        <div className="flex items-center gap-2">
+          <ExportButtons
+            title="גיול חובות לקוחות"
+            columns={[
+              { key: 'invoice_number', label: 'חשבונית' },
+              { key: 'customer', label: 'לקוח' },
+              { key: 'amount', label: 'סכום' },
+              { key: 'balance', label: 'יתרה' },
+              { key: 'due_date', label: 'תאריך לפרעון' },
+              { key: 'days_overdue', label: 'ימי איחור' },
+              { key: 'status', label: 'סטטוס' },
+            ]}
+            rows={invoices.map((inv) => ({
+              invoice_number: inv.invoice_number || inv.id,
+              customer: inv.customer || '',
+              amount: inv.amount,
+              balance: inv.balance,
+              due_date: inv.due_date,
+              days_overdue: inv.days_overdue,
+              status: inv.status,
+            }))}
+            summary={[
+              { label: 'סה"כ פתוח', value: fmt((agingData?.total as number) || 0) },
+              { label: 'חשבוניות', value: String((agingData?.count as number) || 0) },
+            ]}
+          />
+          <button
+            type="button"
+            onClick={handleExport}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleExport(); }}
+            className="flex items-center gap-2 px-4 py-2 border rounded-xl hover:bg-gray-50 transition"
+          >
+            <Download size={18} />
+            Export CSV
+          </button>
+        </div>
       </div>
       {tabBar}
 

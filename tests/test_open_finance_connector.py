@@ -64,3 +64,73 @@ def test_items_and_next_handles_array_and_object():
     assert _items_and_next([{"a": 1}]) == ([{"a": 1}], None)
     assert _items_and_next({"items": [{"b": 2}], "nextPage": "p2"}) == ([{"b": 2}], "p2")
     assert _items_and_next(None) == ([], None)
+
+
+# --------------------------------------------------------------------------- #
+# connection scoping — multi-tenant isolation (org2 mizrahi vs org1 hapoalim)
+# --------------------------------------------------------------------------- #
+import asyncio
+
+
+class _RecordingClient:
+    """Captures the kwargs the connector sends to the Open Finance client."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def list_accounts(self, **kw):
+        self.calls.append(("accounts", kw))
+        return {"items": [], "nextPage": None}
+
+    async def list_transactions(self, **kw):
+        self.calls.append(("transactions", kw))
+        return {"items": [], "nextPage": None}
+
+    async def close(self):
+        pass
+
+
+def test_connector_scopes_fetches_to_configured_connection():
+    """שני תיקים חיים תחת אותו משתמש Financy — בלי connectionId הסנכרון של
+    org 1 היה שואב את תנועות הבנק של org 2 (זיהום חוצה-דיירים)."""
+    conn = OpenFinanceConnector("cid", "secret", "user-1",
+                                connection_id="01KXAVNTTRPWY55HJYSPHY1ZSK")
+    rec = _RecordingClient()
+    conn.client = rec
+    asyncio.run(conn.fetch_accounts())
+    asyncio.run(conn.fetch_bank_transactions())
+    assert rec.calls[0][1]["connection_id"] == "01KXAVNTTRPWY55HJYSPHY1ZSK"
+    assert rec.calls[1][1]["connection_id"] == "01KXAVNTTRPWY55HJYSPHY1ZSK"
+
+
+def test_connector_without_connection_id_sends_none():
+    conn = OpenFinanceConnector("cid", "secret", "user-1")
+    rec = _RecordingClient()
+    conn.client = rec
+    asyncio.run(conn.fetch_accounts())
+    assert rec.calls[0][1]["connection_id"] is None
+
+
+def test_factory_passes_connection_id_from_credentials(fresh_org, monkeypatch):
+    from cfo.database import SessionLocal
+    from cfo.services.sync_engine import get_connector_for_org
+    from cfo.models import IntegrationConnection
+    from cfo.services.credentials_vault import encrypt_credentials
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(IntegrationConnection(
+            organization_id=org_id, source="open_finance", status="active",
+            credentials_encrypted=encrypt_credentials({
+                "client_id": "cid", "client_secret": "sec",
+                "user_id": "u@example.com",
+                "connection_id": "01KXAVNTTRPWY55HJYSPHY1ZSK",
+            }),
+        ))
+        db.commit()
+        connector, conn_id, source = get_connector_for_org(db, org_id, "open_finance")
+        assert source == "open_finance"
+        assert connector.connection_id == "01KXAVNTTRPWY55HJYSPHY1ZSK"
+    finally:
+        db.close()

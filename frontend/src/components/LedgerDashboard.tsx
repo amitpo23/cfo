@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { BookOpen, Loader2, Scale, AlertTriangle, FileText } from 'lucide-react';
 import api from '../services/api';
+import ExportButtons, { ExportSheet } from './ExportButtons';
 
 type TabKey = 'trial' | 'journal' | 'balance';
 
@@ -61,6 +62,73 @@ export default function LedgerDashboard() {
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [tab, year, month]);
 
+  const periodLabel = `תקופה: ${month ? `${month}/${year}` : `שנת ${year}`}`;
+
+  const exportSheets: ExportSheet[] = (() => {
+    if (tab === 'trial' && tb) {
+      return [{
+        name: 'מאזן בוחן',
+        columns: [
+          { key: 'account', label: 'חשבון' },
+          { key: 'name', label: 'שם' },
+          { key: 'debit', label: 'חובה' },
+          { key: 'credit', label: 'זכות' },
+          { key: 'balance', label: 'יתרה' },
+        ],
+        rows: tb.accounts.map((a) => ({ account: a.account, name: a.name, debit: a.debit, credit: a.credit, balance: a.balance })),
+        summary: [
+          { label: 'סה"כ חובה', value: fmt(tb.total_debit) },
+          { label: 'סה"כ זכות', value: fmt(tb.total_credit) },
+          { label: 'מאוזן', value: tb.balanced ? 'כן' : 'לא' },
+        ],
+      }];
+    }
+    if (tab === 'balance' && bs) {
+      return [
+        {
+          name: 'נכסים',
+          columns: [{ key: 'name', label: 'שם' }, { key: 'balance', label: 'יתרה' }],
+          rows: bs.assets.map((a) => ({ name: a.name, balance: a.balance })),
+          summary: [{ label: 'סה"כ נכסים', value: fmt(bs.total_assets) }],
+        },
+        {
+          name: 'התחייבויות והון',
+          columns: [{ key: 'name', label: 'שם' }, { key: 'balance', label: 'יתרה' }],
+          rows: [
+            ...bs.liabilities.map((l) => ({ name: l.name, balance: l.balance })),
+            ...(bs.equity.opening_equity ? [{ name: 'הון/יתרות פתיחה', balance: bs.equity.opening_equity }] : []),
+            { name: 'עודפים (רווח/הפסד)', balance: bs.equity.retained_earnings },
+          ],
+          summary: [{ label: 'סה"כ', value: fmt(bs.total_equity_and_liabilities) }],
+        },
+      ];
+    }
+    if (tab === 'journal' && entries.length > 0) {
+      return [{
+        name: 'פקודות יומן',
+        columns: [
+          { key: 'date', label: 'תאריך' },
+          { key: 'memo', label: 'תיאור' },
+          { key: 'source_ref', label: 'מסמך מקור' },
+          { key: 'account', label: 'חשבון' },
+          { key: 'account_name', label: 'שם חשבון' },
+          { key: 'debit', label: 'חובה' },
+          { key: 'credit', label: 'זכות' },
+        ],
+        rows: entries.flatMap((e) => e.lines.map((l) => ({
+          date: e.date || '',
+          memo: e.memo,
+          source_ref: e.source_ref,
+          account: l.account,
+          account_name: l.account_name,
+          debit: l.debit,
+          credit: l.credit,
+        }))),
+      }];
+    }
+    return [];
+  })();
+
   return (
     <div className="p-6 max-w-6xl mx-auto" dir="rtl">
       <h1 className="text-2xl font-bold flex items-center gap-2 mb-2">
@@ -93,6 +161,9 @@ export default function LedgerDashboard() {
           {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
         <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value))} className="border rounded-lg px-2 py-2 text-sm w-24" />
+        {exportSheets.length > 0 && (
+          <ExportButtons title="הנהלת חשבונות כפולה" meta={periodLabel} sheets={exportSheets} />
+        )}
       </div>
 
       {error && <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-800 text-sm">{error}</div>}

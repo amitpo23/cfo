@@ -685,3 +685,56 @@ def test_bank_chat_tools_are_org_scoped(fresh_org):
         assert missing_a["missing_document"]["total"] == 10.0
     finally:
         db.close()
+
+
+def test_get_bank_expense_gap_alerts_tool_registered_and_org_scoped(fresh_org):
+    """כלי בוט חדש (מנוע פער בנק-חשבוניות) — קורא את התרעות ה-CfoInsight
+    (insight_type='missing_document') שנוצרו ע"י bank_expense_gap.scan_and_alert,
+    לא מריץ סיווג בזמן אמת (זה תפקידו של get_missing_documents)."""
+    assert "get_bank_expense_gap_alerts" in TOOLS
+    assert TOOLS["get_bank_expense_gap_alerts"].category == "read"
+
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        from cfo.services import bank_expense_gap
+
+        _mk_bank_txn(db, org_a, None, amount=-500, description="הוצאה בלי חשבונית", days_ago=1)
+        _mk_bank_txn(db, org_b, None, amount=-99999, description="לא שייך ל-א", days_ago=1)
+        db.commit()
+
+        bank_expense_gap.scan_and_alert(db, org_a, lookback_days=14)
+        bank_expense_gap.scan_and_alert(db, org_b, lookback_days=14)
+
+        result_a = asyncio.run(TOOLS["get_bank_expense_gap_alerts"].fn(db, org_a))
+        assert result_a["count"] == 1
+        assert result_a["alerts"][0]["title"]
+    finally:
+        db.close()
+
+
+def test_get_suppliers_missing_invoices_tool_registered_and_org_scoped(fresh_org):
+    """כלי בוט חדש — ספקים ששולם להם ללא מסמך תואם, מקובצים ברמת ספק
+    (לא תנועה בודדת) מעל bank_expense_gap.suppliers_missing_invoices."""
+    assert "get_suppliers_missing_invoices" in TOOLS
+    assert TOOLS["get_suppliers_missing_invoices"].category == "read"
+
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _mk_bank_txn(db, org_a, None, amount=-500, description="חיוב א",
+                     merchantName="ספק בדיקה", days_ago=1)
+        _mk_bank_txn(db, org_b, None, amount=-99999, description="לא שייך ל-א",
+                     merchantName="ספק זר", days_ago=1)
+        db.commit()
+
+        result_a = asyncio.run(TOOLS["get_suppliers_missing_invoices"].fn(db, org_a))
+        names = [s["name"] for s in result_a["suppliers"]]
+        assert "ספק בדיקה" in names
+        assert "ספק זר" not in names
+        assert "unidentified_transfers" in result_a
+        assert "totals" in result_a
+    finally:
+        db.close()

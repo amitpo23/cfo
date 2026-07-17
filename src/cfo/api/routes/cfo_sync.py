@@ -28,6 +28,9 @@ class OpenFinanceConfigRequest(BaseModel):
     user_id: str = Field(..., min_length=1)
     api_base_url: Optional[str] = None
     oauth_url: Optional[str] = None
+    # מזהה חיבור בנק ב-Open Finance: מגדר את הסנכרון של ה-org לחיבור אחד
+    # כשכמה תיקים חיים תחת אותו משתמש Financy.
+    connection_id: Optional[str] = None
 
 
 class SumitConfigRequest(BaseModel):
@@ -172,6 +175,8 @@ async def configure_open_finance(
         credentials["api_base_url"] = request.api_base_url
     if request.oauth_url:
         credentials["oauth_url"] = request.oauth_url
+    if request.connection_id:
+        credentials["connection_id"] = request.connection_id
 
     conn = _upsert_connection(db, org_id, "open_finance", credentials, ["accounts", "bank_transactions"])
     _kickoff_onboarding(db, org_id, "open_finance", background_tasks)

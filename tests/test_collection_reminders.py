@@ -45,29 +45,86 @@ def _overdue_invoice(db, org_id, days_overdue, total="1000"):
     return c.id
 
 
-def test_plan_reminders_assigns_type_by_days_overdue(fresh_org):
+def test_plan_reminders_overdue_daily_message_with_days_count(fresh_org):
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
-        _overdue_invoice(db, org_id, days_overdue=20)  # → "second"
+        _overdue_invoice(db, org_id, days_overdue=20)
         from cfo.services.collection_service import CollectionService
         planned = CollectionService(db, org_id).plan_reminders(date.today())
         assert len(planned) == 1
-        assert planned[0].reminder_type == "second"
+        assert planned[0].reminder_type == "overdue"
         assert planned[0].total_amount == 1000.0
         assert planned[0].phone == "0501234567"
+        assert "20 ימים" in planned[0].message
+        assert "בהתאם להסכם ותנאי התשלום" in planned[0].message
     finally:
         db.close()
 
 
-def test_plan_reminders_respects_cooldown(fresh_org):
+def test_plan_reminders_overdue_one_day_singular(fresh_org):
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
-        cid = _overdue_invoice(db, org_id, days_overdue=5)  # "first"
+        _overdue_invoice(db, org_id, days_overdue=1)
+        from cfo.services.collection_service import CollectionService
+        planned = CollectionService(db, org_id).plan_reminders(date.today())
+        assert len(planned) == 1
+        assert planned[0].reminder_type == "overdue"
+        assert "ביום אחד" in planned[0].message
+    finally:
+        db.close()
+
+
+def test_plan_reminders_pre_due_day_before(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _overdue_invoice(db, org_id, days_overdue=-1)  # due tomorrow
+        from cfo.services.collection_service import CollectionService
+        planned = CollectionService(db, org_id).plan_reminders(date.today())
+        assert len(planned) == 1
+        assert planned[0].reminder_type == "pre_due"
+        assert "מחר" in planned[0].message
+    finally:
+        db.close()
+
+
+def test_plan_reminders_daily_cadence_cooldown(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        cid = _overdue_invoice(db, org_id, days_overdue=5)
+        # sent one hour ago → today's run must skip
         db.add(CollectionReminder(
-            organization_id=org_id, contact_id=cid, reminder_type="first",
-            channel="sms", status="sent", sent_at=datetime.now(timezone.utc)))
+            organization_id=org_id, contact_id=cid, reminder_type="overdue",
+            channel="sms", status="sent",
+            sent_at=datetime.now(timezone.utc) - timedelta(hours=1)))
+        db.commit()
+        from cfo.services.collection_service import CollectionService
+        assert CollectionService(db, org_id).plan_reminders(date.today()) == []
+        # sent 25 hours ago → today's run must plan again (daily escalation)
+        db.query(CollectionReminder).filter_by(organization_id=org_id).update(
+            {"sent_at": datetime.now(timezone.utc) - timedelta(hours=25)})
+        db.commit()
+        planned = CollectionService(db, org_id).plan_reminders(date.today())
+        assert len(planned) == 1 and planned[0].reminder_type == "overdue"
+    finally:
+        db.close()
+
+
+def test_plan_reminders_stops_on_bank_detected_payment(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        from cfo.models import BankTransaction
+        _overdue_invoice(db, org_id, days_overdue=5)
+        inv = db.query(Invoice).filter_by(organization_id=org_id).one()
+        db.add(BankTransaction(
+            organization_id=org_id, external_id="tx-paid-1", source="open_finance",
+            transaction_date=date.today(), description="העברה מהלקוח",
+            amount=Decimal("1000"), currency="ILS",
+            matched_entity_type="invoice", matched_entity_id=inv.id))
         db.commit()
         from cfo.services.collection_service import CollectionService
         assert CollectionService(db, org_id).plan_reminders(date.today()) == []

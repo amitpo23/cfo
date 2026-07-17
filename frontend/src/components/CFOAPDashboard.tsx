@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import { FileCheck } from 'lucide-react';
 import apiService from '../services/api';
+import ExportButtons from './ExportButtons';
 
 interface Props {
   darkMode: boolean;
@@ -80,6 +81,23 @@ const CFOAPDashboard: React.FC<Props> = ({ darkMode }) => {
     <div className={`p-6 space-y-6 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">AP / ספקים — גיול חובות לתשלום</h1>
+        <ExportButtons
+          title="גיול ספקים לתשלום"
+          meta={data?.as_of ? `נכון לתאריך: ${data.as_of}` : undefined}
+          columns={[
+            { key: 'due_date', label: 'תאריך לפרעון' },
+            { key: 'balance', label: 'יתרה' },
+            { key: 'overdue_days', label: 'ימי איחור' },
+            { key: 'bucket', label: 'קבוצה' },
+          ]}
+          rows={items.map((it) => ({
+            due_date: it.due_date ?? '',
+            balance: num(it.balance),
+            overdue_days: num(it.overdue_days),
+            bucket: it.bucket,
+          }))}
+          summary={[{ label: 'סה"כ לתשלום', value: fmt(total) }]}
+        />
       </div>
       {data?.disclaimer && (
         <p className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>{data.disclaimer}</p>

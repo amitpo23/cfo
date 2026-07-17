@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { TrendingUp, Loader2, Clock, Building2, Download } from 'lucide-react';
 import api from '../services/api';
+import ExportButtons, { ExportSheet } from './ExportButtons';
 
 interface PLDay { date: string; revenue_cum: number; expense_cum: number; profit_cum: number; }
 interface PLReport { period: string; days: PLDay[]; totals: { revenue: number; expense: number; profit: number }; }
@@ -67,6 +68,52 @@ export default function DailyReportsDashboard() {
 
   const maxProfit = pl ? Math.max(1, ...pl.days.map((d) => Math.abs(d.profit_cum))) : 1;
 
+  const exportSheets: ExportSheet[] = (() => {
+    const sheets: ExportSheet[] = [];
+    if (pl) {
+      sheets.push({
+        name: 'רווח והפסד מצטבר',
+        columns: [
+          { key: 'date', label: 'תאריך' },
+          { key: 'revenue_cum', label: 'הכנסות מצטבר' },
+          { key: 'expense_cum', label: 'הוצאות מצטבר' },
+          { key: 'profit_cum', label: 'רווח מצטבר' },
+        ],
+        rows: pl.days.map((d) => ({ date: d.date, revenue_cum: d.revenue_cum, expense_cum: d.expense_cum, profit_cum: d.profit_cum })),
+        summary: [
+          { label: 'הכנסות', value: fmt(pl.totals.revenue) },
+          { label: 'הוצאות', value: fmt(pl.totals.expense) },
+          { label: 'רווח', value: fmt(pl.totals.profit) },
+        ],
+      });
+    }
+    if (ar) {
+      sheets.push({
+        name: 'גיול חובות לקוחות (AR)',
+        columns: [{ key: 'bucket', label: 'טווח' }, { key: 'amount', label: 'סכום' }],
+        rows: Object.entries(ar.buckets).map(([k, v]) => ({ bucket: BUCKET_LABELS[k] || k, amount: v })),
+        summary: [{ label: 'סה"כ', value: fmt(ar.total) }],
+      });
+    }
+    if (ap) {
+      sheets.push({
+        name: 'גיול ספקים (AP)',
+        columns: [{ key: 'bucket', label: 'טווח' }, { key: 'amount', label: 'סכום' }],
+        rows: Object.entries(ap.buckets).map(([k, v]) => ({ bucket: BUCKET_LABELS[k] || k, amount: v })),
+        summary: [{ label: 'סה"כ', value: fmt(ap.total) }],
+      });
+    }
+    if (sup && sup.suppliers.length > 0) {
+      sheets.push({
+        name: 'ספקים',
+        columns: [{ key: 'supplier', label: 'ספק' }, { key: 'total', label: 'סה"כ' }],
+        rows: sup.suppliers.map((s) => ({ supplier: s.supplier, total: s.total })),
+        summary: [{ label: 'סה"כ', value: fmt(sup.total) }],
+      });
+    }
+    return sheets;
+  })();
+
   return (
     <div className="p-6 max-w-6xl mx-auto" dir="rtl">
       <div className="flex items-center justify-between flex-wrap gap-3 mb-2">
@@ -76,6 +123,9 @@ export default function DailyReportsDashboard() {
             {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
           <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value))} className="border rounded-lg px-2 py-2 text-sm w-24" />
+          {exportSheets.length > 0 && (
+            <ExportButtons title="דוחות מצטברים-יומיים" meta={`תקופה: ${month}/${year}`} sheets={exportSheets} />
+          )}
         </div>
       </div>
       <p className="text-xs text-slate-400 mb-5">נגזר ממסמכי SUMIT — לבדיקת רו"ח.</p>

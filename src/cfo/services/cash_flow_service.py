@@ -375,19 +375,22 @@ class CashFlowService:
             )
         ).scalar() or Decimal("0")
         
-        # יתרה נוכחית
-        current_balance = self._get_current_balance(organization_id)
-        
+        # יתרה נוכחית — מיתרות Account אמיתיות (בנק/נכסים), לא מטבלת Transaction הקפואה
+        # (זו הייתה מחזירה סכום שלילי-ענק ומייצרת runway אבסורדי, ראה _get_account_cash_balance).
+        current_balance = self._get_account_cash_balance(organization_id)
+
         # חישובים
         monthly_burn = total_expenses / months if months > 0 else Decimal("0")
         monthly_income = total_income / months if months > 0 else Decimal("0")
         net_burn = monthly_burn - monthly_income
-        
+
         # חישוב runway - כמה חודשים נשארו
-        if net_burn > 0:
+        # runway שלילי הוא חסר-משמעות (אין "נשרוף את היתרה בעוד מינוס X חודשים") —
+        # רק כש-net_burn חיובי ממש ויש יתרה חיובית ממש מחשבים runway אמיתי.
+        if net_burn > 0 and current_balance > 0:
             runway_months = float(current_balance / net_burn)
         else:
-            runway_months = 999.0  # אין שריפת מזומנים (ערך סופי תקין ל-JSON)
+            runway_months = 999.0  # אין שריפת מזומנים אפקטיבית (ערך סופי תקין ל-JSON, לעולם לא שלילי)
         
         return {
             'monthly_burn_rate': float(monthly_burn),
@@ -508,6 +511,21 @@ class CashFlowService:
     def _get_current_balance(self, organization_id: int) -> Decimal:
         """יתרה נוכחית"""
         return self._get_opening_balance(organization_id, datetime.now() + timedelta(days=1))
+
+    def _get_account_cash_balance(self, organization_id: int) -> Decimal:
+        """יתרת מזומנים נוכחית מחשבונות בנק/נכסים אמיתיים (Account.balance).
+
+        מקביל ל-DashboardService._get_cash_balance — הימנעות מ-_get_current_balance
+        שסוכם היסטוריית Transaction כולה ויכול לצאת שלילי-ענק (runway אבסורדי).
+        נופל חזרה לחישוב מה-Transaction-ים רק אם אין חשבונות בנק/נכסים כלל.
+        """
+        total = self.db.query(func.sum(Account.balance)).filter(
+            Account.organization_id == organization_id,
+            Account.account_type.in_([AccountType.BANK, AccountType.ASSET]),
+        ).scalar()
+        if total is not None:
+            return Decimal(total)
+        return self._get_current_balance(organization_id)
     
     def _calculate_category_total(self, items: List[CashFlowItem]) -> Decimal:
         """חישוב סה״כ לקטגוריה"""

@@ -14,6 +14,7 @@ import {
   Legend,
 } from 'recharts';
 import api from '../services/api';
+import ExportButtons from './ExportButtons';
 
 interface CustomerAging {
   customer_id: string;
@@ -128,13 +129,34 @@ export const ARDashboard: React.FC = () => {
           <h1 className="text-3xl font-bold text-gray-900">ניהול חייבים</h1>
           <p className="text-gray-600 mt-1">גיול חובות וגבייה</p>
         </div>
-        <div className="flex gap-4">
+        <div className="flex gap-4 items-center">
           <button className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
             שלח תזכורות
           </button>
-          <button className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700">
-            ייצא דוח
-          </button>
+          <ExportButtons
+            title="גיול לקוחות"
+            columns={[
+              { key: 'customer_name', label: 'לקוח' },
+              { key: 'current', label: 'שוטף' },
+              { key: 'days_31_60', label: '31-60' },
+              { key: 'days_61_90', label: '61-90' },
+              { key: 'days_91_120', label: '91-120' },
+              { key: 'over_120', label: '120+' },
+              { key: 'total', label: 'סה"כ' },
+            ]}
+            rows={(agingData?.customers || []).map((c) => ({
+              customer_name: c.customer_name,
+              current: c.current,
+              days_31_60: c.days_31_60,
+              days_61_90: c.days_61_90,
+              days_91_120: c.days_91_120,
+              over_120: c.over_120,
+              total: c.total,
+            }))}
+            summary={[
+              { label: 'סה"כ חייבים', value: formatCurrency(agingData?.total_receivables || 0) },
+            ]}
+          />
         </div>
       </div>
 
