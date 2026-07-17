@@ -508,6 +508,41 @@ class DailySnapshot(Base):
     )
 
 
+class OfSnapshotCache(Base):
+    """Per (org, resource) cached JSON payload from a live Open Finance read
+    (RSF-030 — read paths must not trigger live Open Finance calls).
+
+    Backs `services/of_snapshot_service.get_or_fetch`: pages/routes that used
+    to proxy LIVE to Open Finance on every view now serve this row when it's
+    fresh (< max_age_hours), fetch live exactly once when it's stale/missing
+    and upsert here, and fall back to the (marked) stale row instead of
+    failing the page when a live re-fetch errors. `resource` is a free-form
+    key (e.g. "payments", "monthly_report", "connection:<id>") so unrelated
+    endpoints/sub-resources for the same org never collide.
+    """
+    __tablename__ = "of_snapshot_cache"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    # 100 not 50: BankConnection.connection_id is String(255) (opaque
+    # provider id, no documented length cap), and resource keys like
+    # "connection:<connection_id>" or "bank-branches:<bank_code>" embed it —
+    # Postgres enforces the VARCHAR bound (unlike SQLite, which silently
+    # truncates/ignores it in tests), so this must have real headroom.
+    resource = Column(String(100), nullable=False)
+    payload = Column(JSON, nullable=True)
+    fetched_at = Column(DateTime, nullable=True)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "resource",
+            name="uq_of_snapshot_cache_org_resource",
+        ),
+    )
+
+
 class OnboardingTask(Base):
     """One codified data-mapping step in a business's onboarding checklist.
 
