@@ -131,6 +131,22 @@ class Organization(Base):
     collection_reminders_enabled = Column(Boolean, default=False, nullable=False)
     collection_sms_sender = Column(String(20), nullable=True)
 
+    # --- PR5 (bookkeeper daily-cycle plan) morning-brief delivery opt-ins --- #
+    # Email is on by default (it's free); SMS costs money per message, so it
+    # stays opt-in and — per morning_brief_service — is only ever sent when
+    # the brief is red, one line, regardless of this flag being on.
+    # Nullable (like `is_active` above, unlike `collection_reminders_enabled`):
+    # a Python-side-only default= never reaches a raw SQL INSERT/ALTER TABLE
+    # backfill, so a NOT NULL column here would reject any row that doesn't
+    # set it explicitly (see tests/test_schema_sync.py's drift-simulation
+    # tests, which insert organizations rows with a minimal raw column list).
+    # morning_brief_service treats NULL the same as the column's intended
+    # default (see _deliver_email/_deliver_sms) rather than misreading it as
+    # an explicit opt-out.
+    morning_brief_email_enabled = Column(Boolean, default=True, nullable=True)
+    morning_brief_recipients = Column(String(500), nullable=True)
+    morning_brief_sms_enabled = Column(Boolean, default=False, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -522,6 +538,34 @@ class DailySnapshot(Base):
         UniqueConstraint(
             "organization_id", "snapshot_date",
             name="uq_daily_snapshot_org_date",
+        ),
+    )
+
+
+class MorningBrief(Base):
+    """PR5 of the bookkeeper daily-cycle plan — the persisted 08:00 morning
+    brief. One row per (organization, brief_date); `payload` holds the full
+    composed brief dict from morning_brief_service.compose_brief so the brief
+    can be re-rendered/re-served without recomputation, and
+    `delivered_channels` tracks per-channel delivery timestamps for
+    idempotency (a channel already delivered today is skipped unless forced).
+    """
+    __tablename__ = "morning_briefs"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    brief_date = Column(Date, nullable=False)
+    payload = Column(JSON, nullable=True)
+    status = Column(String(10), nullable=True)  # green | yellow | red
+    delivered_channels = Column(JSON, default=dict)  # {"email": "2026-07-21T05:02:11Z", ...}
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "brief_date",
+            name="uq_morning_brief_org_date",
         ),
     )
 

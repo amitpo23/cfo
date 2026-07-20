@@ -269,6 +269,65 @@ def bank_expense_gap(
     return bank_expense_gap_service.gap_report(db, org_id, year, month)
 
 
+@router.get("/daily-reports/morning-brief")
+def morning_brief(
+    as_of: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to latest available"),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """שליפת בריף הבוקר (PR5 של תוכנית מחזור-הבוקר) — הרשומה האחרונה עד
+    ותכולל את התאריך המבוקש (ברירת מחדל: היום/האחרונה הקיימת). לא מריץ
+    כלום מחדש — קורא בלבד את מה שנשמר ב-MorningBrief."""
+    from ...models import MorningBrief
+
+    query = db.query(MorningBrief).filter(MorningBrief.organization_id == org_id)
+    as_of_date = _parse_as_of(as_of)
+    if as_of_date is not None:
+        query = query.filter(MorningBrief.brief_date <= as_of_date)
+    row = query.order_by(MorningBrief.brief_date.desc()).first()
+
+    if not row:
+        return {"exists": False, "organization_id": org_id}
+
+    return {
+        "exists": True,
+        "organization_id": org_id,
+        "brief_date": row.brief_date.isoformat(),
+        "status": row.status,
+        "payload": row.payload,
+        "delivered_channels": row.delivered_channels or {},
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+@router.get("/daily-reports/morning-brief/history")
+def morning_brief_history(
+    days: int = Query(30, ge=1, le=365),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """היסטוריית בריפי-בוקר ל-N הימים האחרונים — תאריך/סטטוס/מס' אדומים
+    בלבד (לא הפיילוד המלא, לתצוגת רשימה)."""
+    from ...models import MorningBrief
+
+    cutoff = date.today() - timedelta(days=days)
+    rows = (
+        db.query(MorningBrief)
+        .filter(MorningBrief.organization_id == org_id, MorningBrief.brief_date >= cutoff)
+        .order_by(MorningBrief.brief_date.desc())
+        .all()
+    )
+    history = []
+    for row in rows:
+        reds = ((row.payload or {}).get("reds") or []) if row.payload else []
+        history.append({
+            "brief_date": row.brief_date.isoformat(),
+            "status": row.status,
+            "reds_count": len(reds),
+        })
+    return {"organization_id": org_id, "days": days, "history": history}
+
+
 @router.get("/daily-reports/suppliers-missing-invoices")
 def suppliers_missing_invoices(
     date_from: Optional[str] = Query(None),

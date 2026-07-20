@@ -413,13 +413,31 @@ def run_morning_cycle(
     )
     steps["debtors"] = _run_step(db, lambda: _step_debtors(db, organization_id, today))
 
-    return {
+    cycle_result = {
         "organization_id": organization_id,
         "date": today.isoformat(),
         "status": "ok",
         "cycle_status": cycle_status,
         "steps": steps,
     }
+    steps["morning_brief"] = _run_step(
+        db, lambda: _step_morning_brief(db, organization_id, today, cycle_result)
+    )
+
+    return cycle_result
+
+
+def _step_morning_brief(db, org_id: int, today: date, cycle_result: dict[str, Any]) -> dict[str, Any]:
+    """Step 8 (PR5): compose + persist + (best-effort) deliver the 08:00
+    morning brief from this run's own in-flight results. Lazily imported so
+    morning_brief_service (which itself does small pure-function work
+    independent of this module) never needs to be imported at module load
+    time here."""
+    from . import morning_brief_service
+
+    brief = morning_brief_service.compose_brief(db, org_id, today, cycle_result=cycle_result)
+    delivery = morning_brief_service.persist_and_deliver(db, org_id, today, brief)
+    return {"status": brief["status"], "delivery": delivery}
 
 
 def _step_debtors(db, org_id: int, today: date) -> dict[str, Any]:

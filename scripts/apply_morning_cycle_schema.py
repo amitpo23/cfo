@@ -18,6 +18,11 @@ PR4 (migration b3c4d5e6f7a8): DailySnapshot morning-cycle columns — written by
 services/morning_cycle_service.run_daily_close_step (the /cron/bookkeeper-morning
 orchestrator). All nullable/honest-null: the legacy /cron/daily-close route still
 writes the base columns only, leaving these NULL when it runs alone.
+
+PR5 (migration c4d5e6f7a8b9): morning_briefs table (persisted 08:00 morning brief,
+one row per org+brief_date) + organizations.morning_brief_email_enabled /
+morning_brief_recipients / morning_brief_sms_enabled opt-in columns. See
+services/morning_brief_service.py.
 """
 import os
 import sys
@@ -38,6 +43,20 @@ DDL = [
     "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS cycle_status VARCHAR(10)",
     "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS days_to_next_deadline INTEGER",
     "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS open_items JSON",
+    # --- PR5: morning_briefs table + org opt-in columns (migration c4d5e6f7a8b9) --- #
+    """CREATE TABLE IF NOT EXISTS morning_briefs (
+        id SERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id),
+        brief_date DATE NOT NULL,
+        payload JSON,
+        status VARCHAR(10),
+        delivered_channels JSON,
+        created_at TIMESTAMP,
+        CONSTRAINT uq_morning_brief_org_date UNIQUE (organization_id, brief_date)
+    )""",
+    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS morning_brief_email_enabled BOOLEAN NOT NULL DEFAULT TRUE",
+    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS morning_brief_recipients VARCHAR(500)",
+    "ALTER TABLE organizations ADD COLUMN IF NOT EXISTS morning_brief_sms_enabled BOOLEAN NOT NULL DEFAULT FALSE",
 ]
 
 
