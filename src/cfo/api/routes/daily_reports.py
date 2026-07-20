@@ -328,6 +328,41 @@ def morning_brief_history(
     return {"organization_id": org_id, "days": days, "history": history}
 
 
+@router.get("/daily-reports/scorecard")
+def scorecard(
+    days: int = Query(30, ge=1, le=365),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """מגמת ניקוד יומי (PR6 של תוכנית מחזור-הבוקר) — שדות המפתח של
+    DailySnapshot ל-N הימים האחרונים, org-scoped, ממוינים כרונולוגית
+    (ישן->חדש) לתצוגת מגמה. honest-null: שדה שלא מולא במחזור אף פעם
+    (למשל org שלא הריץ מעולם את מחזור-הבוקר) מוחזר None, לא 0."""
+    from ...models import DailySnapshot
+
+    cutoff = date.today() - timedelta(days=days)
+    rows = (
+        db.query(DailySnapshot)
+        .filter(DailySnapshot.organization_id == org_id, DailySnapshot.snapshot_date >= cutoff)
+        .order_by(DailySnapshot.snapshot_date.asc())
+        .all()
+    )
+    days_out = [
+        {
+            "date": row.snapshot_date.isoformat(),
+            "cycle_status": row.cycle_status,
+            "unreconciled_count": row.unreconciled_count,
+            "open_expense_drafts": row.open_expense_drafts,
+            "exceptions_over_48h": row.exceptions_over_48h,
+            "parity_status": row.parity_status,
+            "credit_headroom": float(row.credit_headroom) if row.credit_headroom is not None else None,
+            "cash_balance": float(row.cash_balance) if row.cash_balance is not None else None,
+        }
+        for row in rows
+    ]
+    return {"organization_id": org_id, "days": days, "scorecard": days_out}
+
+
 @router.get("/daily-reports/suppliers-missing-invoices")
 def suppliers_missing_invoices(
     date_from: Optional[str] = Query(None),

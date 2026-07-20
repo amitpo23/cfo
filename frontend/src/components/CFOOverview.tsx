@@ -109,6 +109,21 @@ function isSyncObject(v: unknown): v is { sumit: string | null; open_finance: st
   return !!v && typeof v === 'object' && ('sumit' in (v as object) || 'open_finance' in (v as object));
 }
 
+interface MorningBriefChip {
+  exists: boolean;
+  brief_date?: string;
+  status?: string;
+}
+
+const BRIEF_CHIP_TONE: Record<string, string> = {
+  green: 'bg-emerald-50 text-emerald-700',
+  yellow: 'bg-amber-50 text-amber-700',
+  red: 'bg-rose-50 text-rose-700',
+};
+const BRIEF_DOT_TONE: Record<string, string> = {
+  green: 'bg-emerald-500', yellow: 'bg-amber-500', red: 'bg-rose-500',
+};
+
 const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
   const navigate = useNavigate();
 
@@ -126,6 +141,12 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
   const { data: cashflowData } = useQuery({
     queryKey: ['dashboard-cashflow'],
     queryFn: () => apiService.get<CashflowDataPoint[]>('/dashboard/cashflow?weeks=8&scenario=base'),
+  });
+
+  const { data: morningBrief } = useQuery({
+    queryKey: ['morning-brief-chip'],
+    queryFn: () => apiService.get<MorningBriefChip>('/daily-reports/morning-brief'),
+    refetchInterval: 60000,
   });
 
   const handleSyncNow = async () => {
@@ -296,6 +317,24 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
                 תקין
               </span>
             )}
+            <Link
+              to="/daily-reports#morning-brief"
+              title={morningBrief?.exists ? undefined : 'אין עדיין בריף בוקר — ירוץ אוטומטית במחזור-הבוקר הבא'}
+              className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
+                morningBrief?.exists && morningBrief.status
+                  ? BRIEF_CHIP_TONE[morningBrief.status] || (darkMode ? 'bg-slate-700 text-slate-200' : 'bg-slate-100 text-slate-700')
+                  : (darkMode ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-500')
+              }`}
+            >
+              <span
+                className={`inline-block h-2 w-2 rounded-full ${
+                  morningBrief?.exists && morningBrief.status
+                    ? BRIEF_DOT_TONE[morningBrief.status] || 'bg-slate-400'
+                    : 'bg-slate-400'
+                }`}
+              />
+              בריף בוקר{morningBrief?.exists ? ` · ${formatShortDate(morningBrief.brief_date)}` : ' · —'}
+            </Link>
             <div className="text-sm font-medium">המערכת מזהה פערים ומייצרת משימות גבייה, תשלום והתאמה.</div>
           </div>
         </div>

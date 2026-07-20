@@ -1,8 +1,8 @@
 """Tests for daily-cumulative reports + aging."""
-from datetime import date
+from datetime import date, timedelta
 
 from cfo.database import SessionLocal
-from cfo.models import Invoice, Bill, InvoiceStatus, BillStatus
+from cfo.models import Invoice, Bill, InvoiceStatus, BillStatus, DailySnapshot
 from cfo.services import daily_reports_service
 
 
@@ -114,3 +114,68 @@ def test_vat_report_period_document_basis_has_no_basis_note(fresh_org):
         assert not rep.get("basis_note")
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------- #
+# scorecard — PR6 of the bookkeeper daily-cycle plan (trend strip)
+# --------------------------------------------------------------------- #
+def test_scorecard_route_returns_org_scoped_chronological_trend(client, fresh_org):
+    iso = fresh_org()
+    org_id = iso["org_id"]
+    today = date.today()
+    db = SessionLocal()
+    try:
+        db.add(DailySnapshot(
+            organization_id=org_id, snapshot_date=today - timedelta(days=1),
+            cash_balance=1000, cycle_status="green", unreconciled_count=0,
+            open_expense_drafts=2, exceptions_over_48h=0, parity_status="ok",
+            credit_headroom=5000,
+        ))
+        db.add(DailySnapshot(
+            organization_id=org_id, snapshot_date=today,
+            cash_balance=900, cycle_status="red", unreconciled_count=3,
+            open_expense_drafts=7, exceptions_over_48h=1, parity_status="mismatch",
+            credit_headroom=-100,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.get("/api/daily-reports/scorecard?days=30", headers=iso["headers"])
+    assert r.status_code == 200
+    body = r.json()
+    assert body["organization_id"] == org_id
+    rows = body["scorecard"]
+    assert len(rows) == 2
+    # chronological (old -> new)
+    assert rows[0]["date"] == (today - timedelta(days=1)).isoformat()
+    assert rows[1]["date"] == today.isoformat()
+    assert rows[0]["cycle_status"] == "green"
+    assert rows[1]["cycle_status"] == "red"
+    assert rows[1]["credit_headroom"] == -100.0
+    assert rows[1]["cash_balance"] == 900.0
+
+
+def test_scorecard_route_honest_null_when_field_never_populated(client, fresh_org):
+    """שורת snapshot שנוצרה ע"י המסלול הישן (לפני PR4) ללא שדות מחזור-הבוקר —
+    חובה להחזיר None, לא 0, לשדות שלא מולאו."""
+    iso = fresh_org()
+    org_id = iso["org_id"]
+    today = date.today()
+    db = SessionLocal()
+    try:
+        db.add(DailySnapshot(organization_id=org_id, snapshot_date=today, cash_balance=500))
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.get("/api/daily-reports/scorecard?days=7", headers=iso["headers"])
+    assert r.status_code == 200
+    row = r.json()["scorecard"][0]
+    assert row["cycle_status"] is None
+    assert row["parity_status"] is None
+    assert row["credit_headroom"] is None
+
+
+def test_scorecard_route_requires_auth(client):
+    assert client.get("/api/daily-reports/scorecard?days=7").status_code == 403

@@ -3,9 +3,11 @@
  * Derived from synced SUMIT documents.
  */
 import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { TrendingUp, Loader2, Clock, Building2, Download } from 'lucide-react';
 import api from '../services/api';
 import ExportButtons, { ExportSheet } from './ExportButtons';
+import MorningBriefPanel from './MorningBriefPanel';
 
 interface PLDay { date: string; revenue_cum: number; expense_cum: number; profit_cum: number; }
 interface PLReport { period: string; days: PLDay[]; totals: { revenue: number; expense: number; profit: number }; }
@@ -24,6 +26,7 @@ const BUCKET_LABELS: Record<string, string> = {
 };
 
 export default function DailyReportsDashboard() {
+  const location = useLocation();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [pl, setPl] = useState<PLReport | null>(null);
@@ -65,6 +68,17 @@ export default function DailyReportsDashboard() {
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [year, month]);
+
+  // Deep-link from the overview's "בריף בוקר" chip (#morning-brief) — the
+  // router doesn't auto-scroll to hashes on route change, so do it manually
+  // once the panel below has mounted.
+  useEffect(() => {
+    if (location.hash === '#morning-brief') {
+      const el = document.getElementById('morning-brief');
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.hash]);
 
   const maxProfit = pl ? Math.max(1, ...pl.days.map((d) => Math.abs(d.profit_cum))) : 1;
 
@@ -129,6 +143,8 @@ export default function DailyReportsDashboard() {
         </div>
       </div>
       <p className="text-xs text-slate-400 mb-5">נגזר ממסמכי SUMIT — לבדיקת רו"ח.</p>
+
+      <MorningBriefPanel />
 
       {error && <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-800 text-sm">{error}</div>}
       {loading ? (
