@@ -134,7 +134,8 @@ class DashboardService:
             as_of_values = [a.balance_as_of for a in checking if a.balance_as_of]
             cash_as_of = min(as_of_values).isoformat() if as_of_values else None
             cash_by_account = [
-                {"id": a.id, "name": a.name, "balance": float(a.balance or 0), "currency": a.currency}
+                {"id": a.id, "name": a.name, "balance": float(a.balance or 0), "currency": a.currency,
+                 "credit_limit": float(a.credit_limit) if a.credit_limit is not None else None}
                 for a in checking
             ]
 

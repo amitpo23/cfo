@@ -40,6 +40,11 @@ class NormalizedAccount:
     # account_type המנורמל; מאפשר להפריד LOAN מ-CARD בדשבורד למרות ששניהם
     # ממופים לאותו account_type="liability".
     raw_account_type: Optional[str] = None
+    # מסגרת אשראי בנקאית (מסגרת חח"ד/אשראי) — שדה top-level creditLimit על ה-
+    # Account object של Open Finance, קיים עבור כל סוג חשבון (גם CHECKING עם
+    # מסגרת חריגה, לא רק LOAN). None כשהספק לא מחזיר את השדה — אין לגזור
+    # ערך ממנו (למשל מ-interimAvailable, שהוא זמין-לשימוש ולא מסגרת).
+    credit_limit: Optional[Decimal] = None
 
 
 @dataclass

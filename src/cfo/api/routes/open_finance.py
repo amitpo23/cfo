@@ -1201,6 +1201,7 @@ def _account_dict(r: Account) -> dict:
         "balance": float(r.balance) if r.balance is not None else None,
         "currency": r.currency,
         "balance_as_of": r.balance_as_of.isoformat() if r.balance_as_of else None,
+        "credit_limit": float(r.credit_limit) if r.credit_limit is not None else None,
         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }
 

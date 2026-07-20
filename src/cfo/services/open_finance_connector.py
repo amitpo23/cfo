@@ -149,6 +149,7 @@ class OpenFinanceConnector(AccountingConnector):
             raw_data=item,
             balance_as_of=_account_balance_as_of(item),
             raw_account_type=raw_account_type,
+            credit_limit=_credit_limit(item),
         )
 
     def _normalize_transaction(self, item: dict[str, Any]) -> NormalizedBankTransaction:
@@ -345,6 +346,22 @@ def _decimal(value: Any) -> Decimal:
         return Decimal(str(value if value not in (None, "") else 0))
     except (InvalidOperation, ValueError):
         return Decimal("0")
+
+
+def _credit_limit(item: dict[str, Any]) -> Optional[Decimal]:
+    """מסגרת אשראי בנקאית — שדה top-level creditLimit בלבד.
+
+    לא נגזר משום שדה אחר: interimAvailable הוא זמין-לשימוש (ISO 20022 ITAV),
+    לא מסגרת ולא ניצול, ולכן לעולם לא משמש כאן. שדה חסר/ריק/לא-מספרי -> None
+    (honest-null), לעולם לא 0.
+    """
+    value = item.get("creditLimit")
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def _stable_id(item: dict[str, Any]) -> str:

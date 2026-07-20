@@ -206,6 +206,11 @@ class Account(Base):
     # account_type המנורמל כי LOAN ו-CARD שניהם ממופים ל-AccountType.LIABILITY,
     # אבל הדשבורד צריך להציג "הלוואות" ו"חוב כרטיס" בנפרד (סעיף ד בתוכנית).
     raw_account_type = Column(String(20), nullable=True)
+    # מסגרת אשראי בנקאית (מסגרת חח"ד/אשראי) — מ-creditLimit של Open Finance,
+    # שדה top-level על ה-Account שקיים לכל סוג חשבון (כולל CHECKING עם מסגרת
+    # חריגה, לא רק LOAN). NULL = לא ידוע (הספק לא החזיר את השדה) — לעולם לא
+    # נגזר מ-interimAvailable (זמין-לשימוש, לא מסגרת).
+    credit_limit = Column(Numeric(precision=14, scale=2), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -220,6 +220,7 @@ def get_bank_position(db: Session, org_id: int) -> dict[str, Any]:
             "external_id": acc.external_id,
             "balance": float(acc.balance) if acc.balance is not None else None,
             "currency": acc.currency,
+            "credit_limit": float(acc.credit_limit) if acc.credit_limit is not None else None,
             "last_transaction_date": stats["last_transaction_date"],
             "transaction_count": stats["transaction_count"],
             "has_provisional_data": stats["provisional_count"] > 0,
