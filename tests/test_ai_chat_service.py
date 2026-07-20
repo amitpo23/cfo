@@ -900,7 +900,7 @@ def test_confirm_action_executes_classify_pending_expenses_successfully(monkeypa
 
         db.expire_all()
         row = db.query(Expense).filter(Expense.id == exp["id"]).first()
-        assert row.category == "travel"
+        assert row.category == "vehicle"
     finally:
         db.close()
 

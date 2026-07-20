@@ -498,9 +498,9 @@ def test_classify_pending_expenses_tool_returns_counts_and_actually_updates_rows
 
         result = asyncio.run(TOOLS["classify_pending_expenses"].fn(db, org_id))
 
-        assert result["scanned"] == 2  # travel + rent only — not manually_set, not already_filed
+        assert result["scanned"] == 2  # vehicle (fuel) + rent only — not manually_set, not already_filed
         assert result["classified"] == 2
-        assert result["by_category"]["travel"] == 1
+        assert result["by_category"]["vehicle"] == 1
         assert result["by_category"]["rent"] == 1
 
         db.expire_all()
@@ -508,7 +508,7 @@ def test_classify_pending_expenses_tool_returns_counts_and_actually_updates_rows
         rent_row = db.query(Expense).filter(Expense.id == rent["id"]).first()
         manual_row = db.query(Expense).filter(Expense.id == manually_set["id"]).first()
         filed_row = db.query(Expense).filter(Expense.id == already_filed["id"]).first()
-        assert travel_row.category == "travel"
+        assert travel_row.category == "vehicle"
         assert rent_row.category == "rent"
         assert manual_row.category == "materials"  # untouched
         assert filed_row.category is None  # untouched — already filed

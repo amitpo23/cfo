@@ -844,6 +844,14 @@ class Expense(Base):
     # fabricated default; real Israeli deduction rules need per-case inputs (odometer
     # readings, use-value tables) this system doesn't have, so nothing auto-computes it.
     deduction_percent = Column(Numeric(precision=5, scale=2), nullable=True)
+    # מע"מ תשומות *הנתבע* בפועל, אחרי שער-המסמך (israeli_tax_rules.claimable_vat)
+    # — לעולם לא vat_amount (זה נשאר "raw", המע"מ שעל גבי המסמך, בכל שאר
+    # המערכת). NULL = טרם הוכרע (honest-null) -> תור הכרעה, לא ניחוש; רק
+    # financial_synthesis.select_vat_documents קורא את השדה הזה לצורך דיווח.
+    vat_claimable = Column(Numeric(precision=12, scale=2), nullable=True)
+    # סוג המסמך שמאחורי ההוצאה: "tax_invoice" (חשבונית מס — תשומות אפשריות),
+    # "receipt" (קבלה בלבד — 0 תשומות תמיד), "unknown"/NULL (לא הוכרע).
+    doc_kind = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -854,6 +862,25 @@ class Expense(Base):
         Index("ix_expense_org_status", "organization_id", "status"),
         Index("ix_expense_org_ext", "organization_id", "external_id", "source"),
     )
+
+
+class VehicleProfile(Base):
+    """פרופיל רכב — עיקר-השימוש הוא עובדה **פר-רכב**, לא פר-עסק (KB02 §1).
+    בלי פרופיל תואם, ניכוי מע"מ תשומות רכב חייב להישאר None (הכרעה) —
+    israeli_tax_rules.claimable_vat אינו מנחש 2/3 מול 1/4."""
+    __tablename__ = "vehicle_profiles"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    label = Column(String(120), nullable=False)  # שם/כינוי לזיהוי הרכב (מספר רישוי/דגם)
+    vehicle_kind = Column(String(20), nullable=False, default="private")
+    # private | commercial | taxi | rental | driving_school | dealer_stock — חריגי תקנה 14
+    primarily_business = Column(Boolean, nullable=True)  # None = לא ידוע -> הכרעה
+    attached_to_employee_with_use_value = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    organization = relationship("Organization")
 
 
 class ExpenseCategory(Base):

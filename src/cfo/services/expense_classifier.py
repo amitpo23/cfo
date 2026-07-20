@@ -19,8 +19,19 @@ CATEGORY_KEYWORDS = {
                       "accountant", "lawyer", "legal", "consult", "audit", "bookkeep"],
     "marketing": ["שיווק", "פרסום", "קמפיין", "גוגל", "פייסבוק", "אינסטגרם",
                    "marketing", "advertis", "google", "facebook", "instagram", "ads"],
-    "travel": ["נסיעות", "נסיעה", "דלק", "תדלוק", "חניה", "מונית", "רכבת", "טיסה", "מלון",
-                "travel", "fuel", "gas station", "parking", "taxi", "flight", "hotel", "uber"],
+    # סדר קריטי מכאן: fines/travel/vehicle_purchase נבדקים *לפני* vehicle כי
+    # "רכב" הוא substring גם של "רכבת" (רכבת=רכב+ת, לא הרכב עצמו) וגם של
+    # "רכישת רכב" (רכישה, לא הרכב עצמו), ו"חניה" הוא substring של "דוח חניה"
+    # (קנס חניה — fines, לא vehicle). בלי הסדר הזה "נסיעה ברכבת" הייתה מסווגת
+    # vehicle, ו"דוח חניה" הייתה מסווגת vehicle במקום fines.
+    "fines": ["קנס", "דוח חניה", "עיצום", "משטרה"],
+    "travel": ["נסיעות", "נסיעה", "מונית", "רכבת", "טיסה", "מלון",
+                "travel", "taxi", "flight", "hotel", "uber"],
+    "vehicle_purchase": ["רכישת רכב", "vehicle purchase"],
+    "vehicle": ["רכב", "דלק", "תדלוק", "חניה", "פז", "סונול", "דור אלון", "טסט", "ליסינג",
+                 "כביש 6", "vehicle", "fuel", "gas station", "parking"],
+    "hospitality": ["מסעדה", "בית קפה", "ארומה", "קפה גרג", "רולדין", "restaurant", "cafe"],
+    "refreshments": ["כיבוד", "קפה למשרד", "שתיה למשרד"],
     "equipment": ["ציוד", "מחשב", "מחשבים", "ריהוט", "מדפסת", "חומרה",
                    "equipment", "computer", "laptop", "furniture", "printer", "hardware"],
     "insurance": ["ביטוח", "פוליסה", "insurance", "policy"],
@@ -42,9 +53,10 @@ SUMIT_ITEM_CATEGORY_MAP = [
     ("הוצאות נסיעה", "travel"),
     ("נסיעה", "travel"),
     ("נסיעות", "travel"),
-    ("דלק", "travel"),
-    ("רכב", "travel"),
-    ("חניה", "travel"),
+    ("רכישת רכב", "vehicle_purchase"),  # לפני "רכב" — אחרת substring הופך vehicle
+    ("דלק", "vehicle"),
+    ("רכב", "vehicle"),
+    ("חניה", "vehicle"),
     ("אנרגיה", "utilities"),
     ("חשמל", "utilities"),
     ("מים", "utilities"),
@@ -79,7 +91,14 @@ SUMIT_ITEM_CATEGORY_MAP = [
     ("כללי", "other"),
 ]
 
-VALID_CATEGORIES = set(CATEGORY_KEYWORDS.keys()) | {"office", "petty_cash", "other"}
+# interest_authorities/donations/social_insurance_owner: אין להם מילות מפתח
+# אוטומטיות (סיווג-שגוי של אלה הוא יקר — PERSONAL_DEDUCTION/NONE, ר'
+# israeli_tax_rules.py) — נבחרים ידנית או דרך שם פריט SUMIT מפורש, ולכן
+# אינם ב-CATEGORY_KEYWORDS, אך כן קטגוריות תקפות לאחסון/בחירה.
+VALID_CATEGORIES = set(CATEGORY_KEYWORDS.keys()) | {
+    "office", "petty_cash", "other",
+    "interest_authorities", "donations", "social_insurance_owner",
+}
 
 # שמות תצוגה בעברית לקטגוריות המובנות — משמש את GET /expenses/categories כדי
 # להציג את הכרטיסים המובנים לצד הכרטיסים המותאמים אישית של הארגון.
@@ -89,7 +108,15 @@ CATEGORY_NAMES_HE: Dict[str, str] = {
     "utilities": "חשמל/מים/תקשורת",
     "professional": "שירותים מקצועיים",
     "marketing": "שיווק ופרסום",
-    "travel": "נסיעות ורכב",
+    "travel": "נסיעות",
+    "vehicle": "רכב",
+    "vehicle_purchase": "רכישת רכב",
+    "hospitality": "אירוח",
+    "refreshments": "כיבוד",
+    "fines": "קנסות",
+    "interest_authorities": "ריבית לרשויות",
+    "donations": "תרומות",
+    "social_insurance_owner": 'ב"ל/פנסיה בעלים',
     "equipment": "ציוד",
     "insurance": "ביטוח",
     "office": "הוצאות משרד",

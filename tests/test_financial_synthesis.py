@@ -177,3 +177,47 @@ def test_bill_without_vendor_tax_id_leaves_vat_id_blank(fresh_org):
         assert not row["vat_id"]
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------- #
+# israeli_tax_rules funnel: vat_claimable ?? vat_amount (M4)
+# ---------------------------------------------------------------------- #
+
+def test_expense_input_vat_uses_vat_claimable_when_set(fresh_org):
+    """הוצאה עם vat_claimable מוגדר (רכב 2/3) — הדוח משתמש בנתבע, לא ב-raw."""
+    from cfo.database import SessionLocal
+    from cfo.models import Expense
+    from cfo.services.financial_synthesis import select_vat_documents
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Expense(organization_id=org_id, source="manual", supplier_name="סונול",
+                       amount=100, vat_amount=18, vat_claimable=12, total=118,
+                       expense_date=date(2026, 5, 15), category="vehicle", status="filed"))
+        db.commit()
+        sel = select_vat_documents(db, org_id, start=date(2026, 5, 1), end=date(2026, 5, 31))
+        row = next(r for r in sel["inputs"] if r["counterparty"] == "סונול")
+        assert row["vat"] == 12.0  # לא 18 (raw)
+    finally:
+        db.close()
+
+
+def test_expense_input_vat_falls_back_to_raw_when_claimable_is_none(fresh_org):
+    """vat_claimable=None (טרם הוכרע) — נופל חזרה ל-vat_amount raw (התנהגות היסטורית)."""
+    from cfo.database import SessionLocal
+    from cfo.models import Expense
+    from cfo.services.financial_synthesis import select_vat_documents
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Expense(organization_id=org_id, source="manual", supplier_name="ספק רגיל",
+                       amount=100, vat_amount=18, vat_claimable=None, total=118,
+                       expense_date=date(2026, 5, 15), category="office", status="filed"))
+        db.commit()
+        sel = select_vat_documents(db, org_id, start=date(2026, 5, 1), end=date(2026, 5, 31))
+        row = next(r for r in sel["inputs"] if r["counterparty"] == "ספק רגיל")
+        assert row["vat"] == 18.0
+    finally:
+        db.close()

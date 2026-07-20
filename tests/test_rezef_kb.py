@@ -62,6 +62,24 @@ def test_alias_resolves_to_canonical_topic():
     assert get_topic("משרד") == TOPICS["office"]
 
 
+def test_tax_rules_topic_aliases_and_content():
+    assert get_topic("הוצאות מוכרות") == TOPICS["tax_rules"]
+    assert get_topic("ניכוי") == TOPICS["tax_rules"]
+    assert get_topic("מס") == TOPICS["tax_rules"]
+    assert get_topic("תקנה 18") == TOPICS["tax_rules"]
+    # תוכן חי מ-israeli_tax_rules.render_bridge_table_he — לא digest סטטי בלבד
+    from cfo.services.israeli_tax_rules import render_bridge_table_he
+
+    assert render_bridge_table_he() in TOPICS["tax_rules"]
+    assert "vehicle" in TOPICS["tax_rules"]
+
+
+def test_bookkeeper_topic_alias_and_content():
+    assert get_topic("סדר יום") == TOPICS["bookkeeper"]
+    assert "08:00" in TOPICS["bookkeeper"]
+    assert "טריות" in TOPICS["bookkeeper"]
+
+
 def test_screens_cover_all_frontend_nav_routes():
     """Locks in screen count so a future App.tsx route addition/removal is
     a deliberate KB edit, not silent drift."""

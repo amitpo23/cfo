@@ -5,10 +5,13 @@ from cfo.services import calculators as C
 
 
 def test_registry_has_all_calculators():
-    # 16 original + 3 expense-deduction calculators.
-    assert len(C.CALCULATORS) == 19
+    # 16 original + 4 expense-deduction calculators (vehicle/home-office/
+    # mobile-phone/internet — phone_internet_deduction split into two per
+    # the israeli_tax_rules engine: mobile phone has a fixed statutory
+    # disallowance floor, internet does not, so they were never one rule).
+    assert len(C.CALCULATORS) == 20
     listed = C.list_calculators()
-    assert len(listed) == 19
+    assert len(listed) == 20
     assert all("fields" in c and "title" in c for c in listed)
 
 
@@ -109,13 +112,22 @@ def test_run_unknown_calculator_raises():
 def test_deduction_calculators_registered_and_compute():
     from cfo.services import calculators
     ids = {c["id"] for c in calculators.list_calculators()}
-    assert {"vehicle_deduction", "home_office_deduction", "phone_internet_deduction"} <= ids
-    # business ratio applied: 30000 * 15000/20000 = 22500
-    veh = calculators.run("vehicle_deduction", {"annual_cost": 30000, "business_km": 15000, "total_km": 20000})
-    assert veh[-1]["value"] == 22500.0
+    assert {
+        "vehicle_deduction", "home_office_deduction", "mobile_phone_deduction", "internet_deduction",
+    } <= ids
+    # higher-of: option_a = 30000-3000=27000 (25%->27000), option_b=45%*30000=13500 -> higher = 27000
+    veh = calculators.run("vehicle_deduction", {
+        "annual_cost": 30000, "use_value_monthly": 250,
+        "odometer_start": 10000, "odometer_end": 25000,
+    })
+    assert veh[-1]["value"] == 27000.0
     # home: 60000 * 15/100 = 9000
     home = calculators.run("home_office_deduction", {"annual_home_cost": 60000, "office_area_sqm": 15, "total_area_sqm": 100})
     assert home[-1]["value"] == 9000.0
-    # phone: 6000 * 70% = 4200
-    phone = calculators.run("phone_internet_deduction", {"annual_cost": 6000, "business_pct": 70})
-    assert phone[-1]["value"] == 4200.0
+    # mobile: disallowed = min(115, 50%*1000) = 115 -> deductible 885/month -> *12
+    phone = calculators.run("mobile_phone_deduction", {"monthly_expense": 1000})
+    assert phone[-2]["value"] == 885.0
+    assert phone[-1]["value"] == 885.0 * 12
+    # internet: 6000 * 70% = 4200
+    net = calculators.run("internet_deduction", {"annual_cost": 6000, "business_pct": 70})
+    assert net[-1]["value"] == 4200.0

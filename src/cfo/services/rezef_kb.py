@@ -447,6 +447,68 @@ def _limitations_section() -> str:
     )
 
 
+def _tax_rules_section() -> str:
+    from .israeli_tax_rules import render_bridge_table_he
+
+    digest = (
+        "## חוקי מס ישראליים: הכרה במס הכנסה + ניכוי מע\"מ תשומות\n\n"
+        "מנוע `israeli_tax_rules.py` מקודד לכל קטגוריית הוצאה: איך היא "
+        "מוכרת במס הכנסה (100% / נוסחה / אחוז חלקי / לא מוכר / פחת / ניכוי "
+        "אישי), ואיזה חלק ממע\"מ התשומות ניתן לתביעה — לפני כל שבר יש **שער "
+        "מסמך**: קבלה בלבד = 0 מע\"מ (עדיין יכולה להיות מוכרת במס הכנסה), "
+        "מסמך לא ידוע = הכרעה (לא ניחוש). מקור האמת המשפטי: "
+        "`docs/bookkeeper_kb/01-income-tax-recognition.md` + "
+        "`02-vat-input-deductibility.md`; תמונת-המראה הקריאה: "
+        "`docs/bookkeeper_kb/03-classification-bridge.md`.\n\n"
+        "**רכב הוא פר-רכב, לא פר-עסק** (`VehicleProfile`): תקנה 18 (הוצאות "
+        "שוטפות) — 2/3 כשעיקר השימוש עסקי, 1/4 אחרת; בלי פרופיל תואם — "
+        "הכרעה. תקנה 14 (רכישת רכב) — 0 תמיד, חוץ ממלאי-סוחר/השכרה-"
+        "ליסינג-כעיסוק/מוניות/לימוד-נהיגה/רכב-מסחרי.\n\n"
+        "**`Expense.vat_amount`** נשאר תמיד המע\"מ הגולמי שעל גבי המסמך; "
+        "**`Expense.vat_claimable`** הוא המע\"מ *הנתבע* בפועל אחרי השער "
+        "והשבר. רק `financial_synthesis.select_vat_documents` (משפך דיווח "
+        "המע\"מ) קורא `vat_claimable ?? vat_amount` — שום מקום אחר במערכת "
+        "לא משנה משמעות ל-vat_amount.\n\n"
+        "טבלת-הגשר המלאה (קטגוריה -> כרטיס SUMIT -> מס הכנסה -> שבר מע\"מ "
+        "-> תיעוד נדרש -> בסיס חוקי), נוצרת חי מהקוד:\n\n"
+    )
+    return digest + render_bridge_table_he()
+
+
+def _bookkeeper_section() -> str:
+    return (
+        "## התפקיד וסדר היום של מנהל החשבונות\n\n"
+        "מקור: `docs/bookkeeper_kb/00-role-and-daily-order.md` (הנחיית "
+        "הבעלים, רו\"ח). העיקרון המכונן: \"ברגע שעושים את זה באופן יומי — "
+        "אין דברים פתוחים\" — כל צעד שמדולג היום הופך לחריג מחר ולחסם "
+        "דיווח ב-15 לחודש.\n\n"
+        "**סדר הבוקר המחייב** (לכל תיק, לפני 08:00) — לא נוגעים במספר לפני "
+        "שיודעים שהוא טרי ואמין:\n\n"
+        "1. **טריות + התאמה משולשת** — סנכרון SUMIT/Open Finance טרי "
+        "(≤26 שעות), יתרת בנק מול snapshot אתמול, רו\"ה פנימי בשתי דרכי "
+        "חישוב זהות.\n"
+        "2. **חריגי בנק** — שיק חוזר, הוראת קבע שנכשלה, חיוב שהוחזר.\n"
+        "3. **תיוק כל ההוצאות** — תור OCR, מה נשאר ומה נפל לחריגים "
+        "(ר' נושא `expenses`).\n"
+        "4. **התאמת בנק יומית** — כל תנועה מותאמת למסמך/חשבונית/הוצאה.\n"
+        "5. **תזרים + מסגרת אשראי** — יתרה צפויה 30 יום קדימה מול מסגרת.\n"
+        "6. **רו\"ה יומי + snapshot** — הרווח/הפסד המצטבר מתעדכן, נכתב "
+        "snapshot יומי לסטטוס המחזור.\n"
+        "7. **חייבים לפי תנאי תשלום** — מי עבר את תנאי התשלום שלו "
+        "(ר' נושא `collections`).\n"
+        "8. **\"מה פתוח\" — הבריף** — אדומים תחילה (שיק חוזר, חריגת מסגרת, "
+        "parity, דדליין ≤3 ימים, הלנת שכר), אחר כך תורים ומזומן.\n\n"
+        "**מודעות לוח-שנה קבועה**: ספירה לאחור לדדליין הקרוב (15 מע\"מ "
+        "ידני/מקדמות/102 ביטוח לאומי · 19 מע\"מ מקוון · 23 דוח מפורט); "
+        "חלון שכר 1–9 לחודש (שכר שלא שולם עד ה-9 = שכר מולן, חוק הגנת "
+        "השכר).\n\n"
+        "**גבולות התפקיד** — מנהל החשבונות רושם/מתאים/מתריע/מכין; אינו "
+        "מחליט החלטות מס שנויות במחלוקת (זה רו\"ח) ואינו משדר דיווח בלי "
+        "אישור אדם. פעולה בלתי-הפיכה (סגירת מנה, שידור דוח, תשלום) = אישור "
+        "בעלים מפורש, תמיד. ספק בסיווג = תור הכרעה + תקדים-פר-ספק, לא ניחוש."
+    )
+
+
 # key -> one-line summary (for the topic index — the model sees this BEFORE
 # fetching a full section, so it stays cheap even when unsure which topic fits).
 TOPIC_SUMMARIES: dict[str, str] = {
@@ -461,6 +523,8 @@ TOPIC_SUMMARIES: dict[str, str] = {
     "bot": "כל כלי הצ'אט הזמינים ומנגנון האישור לפעולות כתיבה",
     "integrations": "SUMIT ו-Open Finance: מה עובד ומה דורש הגדרה נוספת",
     "limitations": "מגבלות ידועות ומה עוד לא מומש",
+    "tax_rules": "חוקי מס ישראליים: הכרה במס הכנסה + ניכוי מע\"מ תשומות לפי קטגוריית הוצאה",
+    "bookkeeper": "התפקיד וסדר היום המחייב של מנהל החשבונות (8 צעדים)",
 }
 
 # Small alias map so a slightly different phrasing of the topic still hits —
@@ -479,6 +543,9 @@ _ALIASES: dict[str, str] = {
     "integration": "integrations", "sumit": "integrations", "open_finance": "integrations",
     "אינטגרציות": "integrations",
     "limitation": "limitations", "מגבלות": "limitations", "roadmap": "limitations",
+    "הוצאות מוכרות": "tax_rules", "ניכוי": "tax_rules", "מס": "tax_rules",
+    "תקנה 18": "tax_rules", "tax": "tax_rules", "taxes": "tax_rules",
+    "סדר יום": "bookkeeper", "bookkeeping_order": "bookkeeper", "מנהל חשבונות": "bookkeeper",
 }
 
 TOPICS: dict[str, str] = {
@@ -493,6 +560,8 @@ TOPICS: dict[str, str] = {
     "bot": _bot_section(),
     "integrations": _integrations_section(),
     "limitations": _limitations_section(),
+    "tax_rules": _tax_rules_section(),
+    "bookkeeper": _bookkeeper_section(),
 }
 
 

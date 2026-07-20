@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Optional
 
 # תקרת שיעור מע"מ פר-מסמך לבדיקת שפיות: השיעור החוקי (18% נכון ל-2025-2026)
@@ -86,9 +87,98 @@ def _independent_sums(db, org_id: int, start: date, end: date, basis: str) -> di
         sel = (e.created_at.date() if (basis == "captured" and e.created_at) else doc_d)
         if not sel or not (start <= sel <= end):
             continue
-        input_vat += float(e.vat_amount or 0)
+        # אותה עדיפות בדיוק כמו select_vat_documents (financial_synthesis):
+        # vat_claimable כשהוכרע, אחרת vat_amount raw. זה נתיב קוד *נפרד*
+        # (עצמאות הבדיקה) אבל אותה סמנטיקת-מע"מ — אחרת כל תביעה חלקית לגיטימית
+        # (למשל רכב 2/3) הייתה מייצרת "פער מחישוב עצמאי" ומפילה את בדיקה 2
+        # על דיווח נכון.
+        claimable = getattr(e, "vat_claimable", None)
+        input_vat += float(claimable) if claimable is not None else float(e.vat_amount or 0)
 
     return {"output_vat": round(output_vat, 2), "input_vat": round(input_vat, 2)}
+
+
+def _allowed_claimable_ceiling(db, e, rule) -> Optional[float]:
+    """התקרה המותרת לתביעת מע"מ תשומות עבור הוצאה זו, או None אם לא ניתנת
+    לקביעה סטטית (context-dependent בלי דרך לגזור אותה כאן).
+
+    vehicle/vehicle_purchase: התקרה תלוית-הקשר (פרופיל-רכב) — לא ניתן
+    לקרוא אותה מ-rule.input_vat_fraction (0/None קבועים בטבלה), אחרת שני
+    כיוונים שגויים: vehicle_purchase (baseline 0) היה מדגל בשווא תביעה
+    מלאה לגיטימית לרכב-מסחרי/מוניות/וכו', ו-vehicle (None) היה מדלג כליל
+    על חריגה אמיתית. במקום זאת מריצים מחדש את claimable_vat עם אותם
+    ארגומנטים (doc_kind בפועל + פרופיל-הרכב שנטען בזמן הכתיבה) — זו בדיוק
+    התקרה שה-engine עצמו התיר, לא ניחוש חדש."""
+    from .expense_filing_service import _load_vehicle_profile_args
+    from .israeli_tax_rules import claimable_vat
+
+    if e.category not in ("vehicle", "vehicle_purchase"):
+        if rule.input_vat_fraction is None:
+            return None
+        return float(rule.input_vat_fraction) * float(e.vat_amount or 0)
+
+    vehicle_business, vehicle_kind = _load_vehicle_profile_args(db, e.organization_id)
+    allowed = claimable_vat(
+        category=e.category, vat_on_doc=Decimal(str(e.vat_amount or 0)),
+        doc_kind=e.doc_kind or "tax_invoice",
+        vehicle_primarily_business=vehicle_business, vehicle_kind=vehicle_kind,
+    )
+    return float(allowed) if allowed is not None else None
+
+
+def _fraction_gate_issues(db, org_id: int, start: date, end: date, basis: str) -> tuple[list[str], list[str]]:
+    """שער-השבר (israeli_tax_rules, KB02): לכל הוצאה מתויקת (filed) בתקופה
+    שיש לה תקרת-ניכוי חלקית (fraction קבוע < 1, או vehicle/vehicle_purchase
+    התלויי-הקשר — ר' _allowed_claimable_ceiling):
+
+    - vat_claimable=None ויש מע"מ על המסמך -> **אזהרה** (לא כשל): "טרם הוחל
+      שער התשומות" — נתון-legacy/טרם-עובד, לא בהכרח שגיאה.
+    - vat_claimable > התקרה המותרת (+סובלנות עיגול ₪0.02) -> **ממצא אדום**
+      (כשל): נתבע מעבר למותר לפי התקנה — חובה להפסיק ולתקן לפני שידור.
+    - תקרה לא ניתנת לקביעה (None, למשל vehicle בלי פרופיל תואם) -> מדלגים
+      בשקט על בדיקת-החריגה (אי-אפשר לדעת אם זו חריגה בלי לנחש) — עדיין
+      תיתפס ע"י שער-המסמך/הפרופיל בזמן הכתיבה עצמה.
+
+    מחזיר (warnings, red_issues)."""
+    from ..models import Expense
+    from .israeli_tax_rules import TAX_RULES
+    from .vat_utils import expense_counts
+
+    warnings: list[str] = []
+    red_issues: list[str] = []
+    for e in db.query(Expense).filter(Expense.organization_id == org_id).all():
+        if not expense_counts(getattr(e, "status", None)):
+            continue
+        doc_d = e.expense_date
+        sel = (e.created_at.date() if (basis == "captured" and e.created_at) else doc_d)
+        if not sel or not (start <= sel <= end):
+            continue
+        rule = TAX_RULES.get(e.category)
+        if rule is None:
+            continue
+        if e.category not in ("vehicle", "vehicle_purchase") and (
+            rule.input_vat_fraction is None or rule.input_vat_fraction >= 1
+        ):
+            continue
+        vat_amount = float(e.vat_amount or 0)
+        claimable = getattr(e, "vat_claimable", None)
+        if claimable is None:
+            if vat_amount > 0:
+                warnings.append(
+                    f"הוצאה #{e.id} ({e.supplier_name}, {rule.name_he}) — טרם הוחל שער "
+                    f"התשומות (vat_claimable לא הוכרע); מע\"מ על המסמך ₪{vat_amount:.2f}."
+                )
+            continue
+        allowed = _allowed_claimable_ceiling(db, e, rule)
+        if allowed is None:
+            continue  # לא ניתן לקבוע תקרה סטטית (הקשר לא זמין) — לא מנחשים חריגה
+        claimed = float(claimable)
+        if claimed > allowed + 0.02:
+            red_issues.append(
+                f"הוצאה #{e.id} ({e.supplier_name}, {rule.name_he}) — נתבע ₪{claimed:.2f} "
+                f"מעבר לשבר המותר לפי {rule.citation_he}: מותר עד ₪{allowed:.2f}."
+            )
+    return warnings, red_issues
 
 
 def _sanity_issues(report: dict[str, Any]) -> list[str]:
@@ -278,7 +368,13 @@ def _vat_ratio_warning(db, org_id: int, start: date, end: date, basis: str,
     filed_expenses_only=True: המונה (input_vat) סופר רק expenses "filed" —
     המכנה (סך-ההוצאות) חייב לספור אותה אוכלוסייה בדיוק, אחרת הוצאות
     שטרם תויקו מנפחות את המכנה ומדליפות אזהרה שגויה על תקופה שבאמת רק
-    ממתינה לתיוק (ולא "מפתח ללא מע\"מ")."""
+    ממתינה לתיוק (ולא "מפתח ללא מע\"מ").
+
+    input_vat (הפרמטר, מ-report["input_vat"]) הוא כבר לאחר המשפך הרגולטורי
+    (vat_claimable ?? vat_amount, ר' select_vat_documents) — ניכוי חלקי לגיטימי
+    (רכב 2/3, כיבוד 80%...) יוריד את היחס באמת, לא רק חוסר-פיצול-שגוי. המכנה
+    (total_amount, מ-_period_documents) הוא סך-הוצאות ברוטו ואינו מושפע מהמשפך
+    — אין כאן חוסר-עקביות, רק שני מקורות שונים במתכוון (מונה=נתבע, מכנה=ברוטו)."""
     items = _period_documents(db, org_id, start, end, basis, filed_expenses_only=True)
     doc_count = len(items)
     total_amount = sum(amount for _src, _id, _tax, _ref, amount, _d, _ext in items)
@@ -333,21 +429,34 @@ def verify_filing(db, org_id: int, year: int, month: int, *,
                     else f"פער: עסקאות ₪{diff_out:.2f}, תשומות ₪{diff_in:.2f}"),
     })
 
-    # --- בדיקה 2: חישוב עצמאי + שפיות ---
+    # --- בדיקה 2: חישוב עצמאי + שפיות + שער-השבר (israeli_tax_rules) ---
     indep = _independent_sums(db, org_id, start, end, basis)
     diff_out2 = abs(indep["output_vat"] - float(report["output_vat"]))
     diff_in2 = abs(indep["input_vat"] - float(report["input_vat"]))
     sanity = _sanity_issues(report)
-    ok2 = diff_out2 <= 0.05 and diff_in2 <= 0.05 and not sanity
+    fraction_warnings, fraction_red_issues = _fraction_gate_issues(db, org_id, start, end, basis)
+    numeric_ok = diff_out2 <= 0.05 and diff_in2 <= 0.05 and not sanity and not fraction_red_issues
+    # passed: False (כשל) על חריגה מספרית/שפיות/ניכוי-מעבר-למותר; None (אזהרה)
+    # כשהמספרים תקינים אבל יש הוצאות עם ניכוי טרם-הוכרע; אחרת True.
+    if not numeric_ok:
+        ok2 = False
+    elif fraction_warnings:
+        ok2 = None
+    else:
+        ok2 = True
     details2 = []
     if diff_out2 > 0.05 or diff_in2 > 0.05:
         details2.append(f"סטייה מחישוב עצמאי: עסקאות ₪{diff_out2:.2f}, תשומות ₪{diff_in2:.2f}")
     details2 += sanity
+    details2 += fraction_red_issues
+    details2 += fraction_warnings
     checks.append({
         "name": "independent_recomputation",
         "label": "חישוב עצמאי ובדיקות שפיות",
         "passed": ok2,
-        "details": "חישוב עצמאי תואם; כל בדיקות השפיות עברו" if ok2 else "; ".join(details2),
+        "details": "חישוב עצמאי תואם; כל בדיקות השפיות עברו" if ok2 is True else "; ".join(details2),
+        "fraction_gate_warnings": fraction_warnings,
+        "fraction_gate_red_issues": fraction_red_issues,
     })
 
     # --- בדיקה 3: שלמות והצלבה חיצונית ---
