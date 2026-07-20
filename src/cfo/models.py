@@ -503,6 +503,19 @@ class DailySnapshot(Base):
     data_quality_issues = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # --- PR4 (bookkeeper morning-cycle orchestrator) additions --- #
+    # כולם nullable — honest-null: מולאים רק כשהצעד המתאים במחזור-הבוקר
+    # רץ בפועל (למשל /cron/daily-close הישן, שרץ לבדו, לא ממלא אותם).
+    unreconciled_count = Column(Integer, nullable=True)
+    open_expense_drafts = Column(Integer, nullable=True)
+    exceptions_over_48h = Column(Integer, nullable=True)
+    parity_status = Column(String(20), nullable=True)  # ok | mismatch | stale
+    credit_headroom = Column(Numeric(precision=14, scale=2), nullable=True)
+    credit_breach_date = Column(Date, nullable=True)
+    cycle_status = Column(String(10), nullable=True)  # green | yellow | red
+    days_to_next_deadline = Column(Integer, nullable=True)
+    open_items = Column(JSON, nullable=True)
+
     organization = relationship("Organization")
 
     __table_args__ = (

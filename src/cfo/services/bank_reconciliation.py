@@ -198,6 +198,27 @@ def reconcile_organization(db, organization_id: int, *, persist: bool = True) ->
     return result
 
 
+def unreconciled_bank_count(
+    db, organization_id: int, *, start_date: Optional[date] = None, end_date: Optional[date] = None
+) -> int:
+    """Count BankTransaction rows not yet reconciled (`is_reconciled` False),
+    optionally bounded to a [start_date, end_date] window. Promoted out of
+    financial_control_service._unreconciled_bank_count (PR4 — bookkeeper
+    morning-cycle orchestrator needs the same count with no date bound; that
+    method now delegates here so the two never drift)."""
+    from ..models import BankTransaction
+
+    query = db.query(BankTransaction).filter(
+        BankTransaction.organization_id == organization_id,
+        BankTransaction.is_reconciled == False,  # noqa: E712
+    )
+    if start_date is not None:
+        query = query.filter(BankTransaction.transaction_date >= start_date)
+    if end_date is not None:
+        query = query.filter(BankTransaction.transaction_date <= end_date)
+    return query.count()
+
+
 def _contact_name(invoice) -> str:
     contact = getattr(invoice, "contact", None)
     return getattr(contact, "name", "") if contact else ""

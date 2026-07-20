@@ -6,7 +6,8 @@
   "framework": "vite",
   "functions": {
     "api/**/*.py": {
-      "excludeFiles": "{.venv/**,frontend/node_modules/**,node_modules/**,.agents/**,.claude/**,tests/**,__tests__/**,**/*.test.py,**/test_*.py,*.db,*.sqlite,*.sqlite3}"
+      "excludeFiles": "{.venv/**,frontend/node_modules/**,node_modules/**,.agents/**,.claude/**,tests/**,__tests__/**,**/*.test.py,**/test_*.py,*.db,*.sqlite,*.sqlite3}",
+      "maxDuration": 300
     }
   },
   "rewrites": [
@@ -69,8 +70,12 @@
       "schedule": "15 6 * * *"
     },
     {
-      "path": "/api/cron/daily-close",
-      "schedule": "30 6 * * *"
+      "path": "/api/cron/process-ocr",
+      "schedule": "45 5 * * *"
+    },
+    {
+      "path": "/api/cron/bookkeeper-morning",
+      "schedule": "45 6 * * *"
     }
   ]
 }

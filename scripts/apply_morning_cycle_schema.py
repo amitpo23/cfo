@@ -13,6 +13,11 @@ PR1 (migration f8a9b0c1d2e3): Account.credit_limit — the bank credit framework
 (מסגרת אשראי/חח"ד) sourced from Open Finance's top-level `creditLimit` field.
 NULL = unknown (the provider didn't return the field); never derived from
 `interimAvailable` (that's available-to-use credit, not the limit).
+
+PR4 (migration b3c4d5e6f7a8): DailySnapshot morning-cycle columns — written by
+services/morning_cycle_service.run_daily_close_step (the /cron/bookkeeper-morning
+orchestrator). All nullable/honest-null: the legacy /cron/daily-close route still
+writes the base columns only, leaving these NULL when it runs alone.
 """
 import os
 import sys
@@ -23,6 +28,16 @@ ROOT = Path(__file__).resolve().parent.parent
 DDL = [
     # --- PR1: credit-limit persistence (migration f8a9b0c1d2e3) --- #
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(14,2)",
+    # --- PR4: morning-cycle DailySnapshot columns (migration b3c4d5e6f7a8) --- #
+    "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS unreconciled_count INTEGER",
+    "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS open_expense_drafts INTEGER",
+    "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS exceptions_over_48h INTEGER",
+    "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS parity_status VARCHAR(20)",
+    "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS credit_headroom NUMERIC(14,2)",
+    "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS credit_breach_date DATE",
+    "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS cycle_status VARCHAR(10)",
+    "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS days_to_next_deadline INTEGER",
+    "ALTER TABLE daily_snapshots ADD COLUMN IF NOT EXISTS open_items JSON",
 ]
 
 
