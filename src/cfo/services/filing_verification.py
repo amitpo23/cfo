@@ -201,73 +201,15 @@ def _sanity_issues(report: dict[str, Any]) -> list[str]:
 def _sync_freshness(db, org_id: int) -> dict[str, Any]:
     """מועד המשיכה המוצלחת האחרונה של מסמכי SUMIT (invoices/bills) לארגון.
 
-    מקור האמת: SyncCheckpoint.last_success_at פר-ישות — לא SyncRun. ריצה
-    שעתית נרשמת COMPLETED גם כשה-circuit breaker דילג על כל הישויות (אומת
-    חי 13/07: org 1 עם ריצות "COMPLETED" בזמן שה-checkpoints שלו ללא הצלחה
-    ובמעגל פתוח בגלל חסימת ה-obligo) — כך שסינון לפי ריצות מפספס בדיוק את
-    המצב שהשער נועד לתפוס. fallback ל-SyncRun רק כשאין checkpoints (ארגון
-    מלפני M1)."""
-    from ..models import SyncRun, SyncStatus
+    מקודם ל-parity_service.sync_freshness (PR3 — התאמה משולשת יומית-קלה):
+    זו עטיפה דקה שקוראת לשם עם ברירות המחדל (source="sumit",
+    entity_types=("invoices","bills")) — אותה בדיוק התנהגות (כולל נוסח
+    ההודעות) כמו קודם, כדי שהטסטים כאן לא יזוזו. עיינו בפונקציה שם לתיעוד
+    המלא (מקור האמת SyncCheckpoint.last_success_at, ה-fallback ל-SyncRun,
+    וממצא ה-circuit-breaker מ-13/07)."""
+    from .parity_service import sync_freshness
 
-    circuit_until = None
-    last_success = None
-    try:
-        from ..models import SyncCheckpoint
-
-        cps = db.query(SyncCheckpoint).filter(
-            SyncCheckpoint.organization_id == org_id,
-            SyncCheckpoint.source == "sumit",
-            SyncCheckpoint.entity_type.in_(["invoices", "bills"]),
-        ).all()
-        if cps:
-            successes = [cp.last_success_at for cp in cps if cp.last_success_at]
-            last_success = max(successes) if successes else None
-            opens = [cp.circuit_open_until for cp in cps
-                     if cp.circuit_open_until and cp.circuit_open_until > datetime.utcnow()]
-            circuit_until = max(opens) if opens else None
-            if last_success is None:
-                msg = ("⚠️ אזהרה חמורה: משיכת המסמכים מ-SUMIT מעולם לא הצליחה "
-                       "לארגון זה (checkpoints ללא הצלחה)")
-                if circuit_until:
-                    msg += f"; הסנכרון מושהה עד {circuit_until.isoformat()} בגלל חסימת API"
-                return {"stale": True, "last_sync_at": None, "hours_since": None,
-                        "circuit_open_until": circuit_until.isoformat() if circuit_until else None,
-                        "message": msg + " — אין להגיש בלי רענון."}
-    except Exception:  # טבלת checkpoints לא קיימת (סביבה ישנה) — fallback לריצות
-        pass
-
-    if last_success is None:
-        succeeded = [SyncStatus.COMPLETED, SyncStatus.PARTIAL]
-        last_run = db.query(SyncRun).filter(
-            SyncRun.organization_id == org_id,
-            SyncRun.source == "sumit",
-            SyncRun.status.in_(succeeded),
-            SyncRun.finished_at.isnot(None),
-        ).order_by(SyncRun.finished_at.desc()).first()
-        if not last_run or not last_run.finished_at:
-            return {
-                "stale": True, "last_sync_at": None, "hours_since": None,
-                "message": (
-                    "⚠️ אזהרה חמורה: מעולם לא בוצע סנכרון SUMIT מוצלח לארגון זה — "
-                    "אין להגיש דיווח על בסיס נתונים שלא סונכרנו מעולם."
-                ),
-            }
-        last_success = last_run.finished_at
-
-    hours = (datetime.utcnow() - last_success).total_seconds() / 3600.0
-    last_sync_iso = last_success.isoformat()
-    if hours <= STALE_SYNC_HOURS:
-        return {"stale": False, "last_sync_at": last_sync_iso,
-                "hours_since": round(hours, 1), "message": None}
-
-    age = f"{hours / 24:.1f} ימים" if hours >= 48 else f"{hours:.1f} שעות"
-    return {
-        "stale": True, "last_sync_at": last_sync_iso, "hours_since": round(hours, 1),
-        "message": (
-            f"⚠️ הנתונים בני {age} — משיכת מסמכי SUMIT אחרונה: "
-            f"{last_success.date().isoformat()}; אין להגיש בלי רענון."
-        ),
-    }
+    return sync_freshness(db, org_id)
 
 
 def _pending_drafts(db, org_id: int, start: date, end: date) -> int:
