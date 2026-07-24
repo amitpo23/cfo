@@ -14,6 +14,7 @@
 | [03-classification-bridge.md](03-classification-bridge.md) | **הגשר התפעולי** (מיוצר מהקוד): קטגוריה → כרטיס → יחס מע"מ → ראיות | **ברירת המחדל בכל תיוק** — קטן, מדויק, זול לטעינה |
 | [04-documents-and-evidence.md](04-documents-and-evidence.md) | מסמכים ואסמכתאות: חשבונית מס/קבלה, הקצאה, מד-אוץ | כשמסמך לא ברור; לפני פסילת/אישור ניכוי |
 | [05-external-references.md](05-external-references.md) | מצביעים: SUMIT KB, SOP-ים, gov.il | כשצריך את המקור המלא |
+| [06-daily-analysis-prompts.md](06-daily-analysis-prompts.md) | סט 10 שאלות הניתוח היומי (בנק, גבייה, חריגות, תזרים) | ריצת הניתוח היומית; שאילתות מוכנות לבוט |
 
 ## כללי המשמעת
 
