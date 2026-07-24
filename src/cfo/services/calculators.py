@@ -389,19 +389,34 @@ def _bool(name, label, default=False):
     return {"name": name, "label": label, "type": "boolean", "default": default}
 
 
-def vehicle_deduction(*, annual_cost: float, business_km: float, total_km: float) -> list[dict]:
-    """ניכוי הוצאות רכב — לפי שיעור השימוש העסקי (ק"מ עסקי / ק"מ כולל).
-
-    כפוף לתקנות ניכוי הוצאות רכב (מגבלות ותקרות) — לאימות מול רו"ח לשנת הדיווח.
+def vehicle_deduction(*, annual_cost: float, use_value_monthly: float,
+                      odometer_start: float, odometer_end: float) -> list[dict]:
+    """ניכוי הוצאות רכב — כלל ה-"higher-of" (תקנות מס הכנסה (ניכוי הוצאות
+    רכב) התשנ"ה-1995): MAX(אחזקה שנתית - שווי שימוש שנתי, 45% מהאחזקה
+    השנתית). הנוסחה עצמה ממומשת פעם אחת בלבד ב-expense_deduction_service —
+    כאן רק מציגים את שתי האפשרויות ואת הבחירה בגבוהה, בלי לשכפל את החישוב.
+    שיטת יחס-הק"מ בוטלה (2008) ואינה בשימוש עוד.
     """
-    ratio = (business_km / total_km) if total_km else 0.0
-    deductible = annual_cost * ratio
+    from .expense_deduction_service import calculate_vehicle_deduction_percent
+
+    pct = calculate_vehicle_deduction_percent(
+        running_costs_annual=annual_cost, use_value_monthly=use_value_monthly,
+        odometer_start=odometer_start, odometer_end=odometer_end,
+    )
+    use_value_annual = float(use_value_monthly) * 12
+    option_a = annual_cost - use_value_annual  # אחזקה פחות שווי שימוש שנתי
+    option_b = annual_cost * 0.45              # 45% קבוע מהאחזקה
+    deductible = annual_cost * float(pct) / 100
     return [
-        _row("הוצאות רכב שנתיות", annual_cost),
-        _row("ק\"מ עסקי", business_km, "ק\"מ"),
-        _row("ק\"מ כולל", total_km, "ק\"מ"),
-        _row("שיעור שימוש עסקי", round(ratio * 100, 1), "%"),
-        _row("הוצאה מוכרת (אומדן)", deductible),
+        _row("הוצאות רכב שנתיות (אחזקה)", annual_cost),
+        _row("שווי שימוש חודשי", use_value_monthly),
+        _row("ק\"מ בתחילת השנה", odometer_start, "ק\"מ"),
+        _row("ק\"מ בסוף השנה", odometer_end, "ק\"מ"),
+        _row("אפשרות א' — אחזקה פחות שווי שימוש שנתי", option_a),
+        _row("אפשרות ב' — 45% מהאחזקה השנתית", option_b),
+        _row("הגבוה מבין השתיים (נבחר)", max(option_a, option_b)),
+        _row("שיעור מוכר", float(pct), "%"),
+        _row("הוצאה מוכרת", deductible),
     ]
 
 
@@ -419,12 +434,34 @@ def home_office_deduction(*, annual_home_cost: float, office_area_sqm: float,
     ]
 
 
-def phone_internet_deduction(*, annual_cost: float, business_pct: float) -> list[dict]:
-    """ניכוי טלפון/אינטרנט — לפי אחוז השימוש העסקי שהוצהר."""
-    deductible = annual_cost * (business_pct / 100.0)
+def mobile_phone_deduction(*, monthly_expense: float) -> list[dict]:
+    """ניכוי טלפון נייד — תקנות מס הכנסה (ניכוי הוצאות מסוימות) תשל"ב-1972:
+    **לא** 80% קבוע. לא מוכר = הנמוך מבין ₪115/חודש (₪1,380/שנה) או 50%
+    מההוצאה. מאציל ל-expense_deduction_service.calculate_mobile_phone_deduction
+    (מקור-האמת היחיד לנוסחה)."""
+    from .expense_deduction_service import calculate_mobile_phone_deduction
+
+    deductible_monthly, pct = calculate_mobile_phone_deduction(monthly_expense)
     return [
-        _row("הוצאות תקשורת שנתיות", annual_cost),
-        _row("אחוז שימוש עסקי", business_pct, "%"),
+        _row("הוצאת טלפון נייד חודשית", monthly_expense),
+        _row("לא מוכר (הנמוך מבין ₪115 או 50%)", monthly_expense - float(deductible_monthly)),
+        _row("שיעור מוכר", float(pct), "%"),
+        _row("הוצאה מוכרת חודשית", float(deductible_monthly)),
+        _row("הוצאה מוכרת שנתית (אומדן)", float(deductible_monthly) * 12),
+    ]
+
+
+def internet_deduction(*, annual_cost: float, business_pct: float = 50.0) -> list[dict]:
+    """ניכוי אינטרנט — אין אחוז קבוע בפקודה; לפי חלק השימוש העסקי שהוצהר
+    (או יחס משרד-בית, ר' home_office_deduction). מאציל ל-
+    expense_deduction_service.calculate_internet_deduction_percent."""
+    from .expense_deduction_service import calculate_internet_deduction_percent
+
+    pct = calculate_internet_deduction_percent(business_use_fraction=business_pct / 100.0)
+    deductible = annual_cost * float(pct) / 100
+    return [
+        _row("הוצאות אינטרנט שנתיות", annual_cost),
+        _row("אחוז שימוש עסקי (מוצהר)", business_pct, "%"),
         _row("הוצאה מוכרת (אומדן)", deductible),
     ]
 
@@ -504,9 +541,10 @@ CALCULATORS: dict[str, dict[str, Any]] = {
     },
     "vehicle_deduction": {
         "title": "ניכוי הוצאות רכב", "category": "ניכויי הוצאה", "fn": vehicle_deduction,
-        "fields": [_num("annual_cost", "הוצאות רכב שנתיות"),
-                   _num("business_km", "ק\"מ עסקי", None, "ק\"מ"),
-                   _num("total_km", "ק\"מ כולל", None, "ק\"מ")],
+        "fields": [_num("annual_cost", "הוצאות רכב שנתיות (אחזקה)"),
+                   _num("use_value_monthly", "שווי שימוש חודשי"),
+                   _num("odometer_start", "ק\"מ בתחילת השנה", None, "ק\"מ"),
+                   _num("odometer_end", "ק\"מ בסוף השנה", None, "ק\"מ")],
     },
     "home_office_deduction": {
         "title": "ניכוי משרד-בית", "category": "ניכויי הוצאה", "fn": home_office_deduction,
@@ -514,9 +552,13 @@ CALCULATORS: dict[str, dict[str, Any]] = {
                    _num("office_area_sqm", "שטח משרד", None, "מ\"ר"),
                    _num("total_area_sqm", "שטח כולל", None, "מ\"ר")],
     },
-    "phone_internet_deduction": {
-        "title": "ניכוי טלפון/אינטרנט", "category": "ניכויי הוצאה", "fn": phone_internet_deduction,
-        "fields": [_num("annual_cost", "הוצאות תקשורת שנתיות"),
+    "mobile_phone_deduction": {
+        "title": "ניכוי טלפון נייד", "category": "ניכויי הוצאה", "fn": mobile_phone_deduction,
+        "fields": [_num("monthly_expense", "הוצאת טלפון נייד חודשית")],
+    },
+    "internet_deduction": {
+        "title": "ניכוי אינטרנט", "category": "ניכויי הוצאה", "fn": internet_deduction,
+        "fields": [_num("annual_cost", "הוצאות אינטרנט שנתיות"),
                    _num("business_pct", "אחוז שימוש עסקי", 50, "%")],
     },
 }

@@ -28,6 +28,9 @@ class ExpenseCreateRequest(BaseModel):
     description: Optional[str] = None
     invoice_number: Optional[str] = None
     supplier_id: Optional[int] = None
+    # "tax_invoice" | "receipt" | "unknown"/None — שער-המסמך של israeli_tax_rules;
+    # ללא ערך, vat_claimable נשאר None (honest-null) עד שמישהו יכריע.
+    doc_kind: Optional[str] = None
 
 
 @router.get("")
@@ -61,6 +64,7 @@ class ExpenseUpdateRequest(BaseModel):
     description: Optional[str] = None
     invoice_number: Optional[str] = None
     deduction_percent: Optional[float] = Field(default=None, ge=0, le=100)
+    doc_kind: Optional[str] = None
 
 
 @router.patch("/{expense_id}")

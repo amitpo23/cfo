@@ -1,12 +1,12 @@
 """בדיקות מסווג הוצאות + סיווג גורף + תיוק גורף."""
 from datetime import date
 import pytest
-from cfo.services.expense_classifier import classify_expense
+from cfo.services.expense_classifier import CATEGORY_NAMES_HE, VALID_CATEGORIES, classify_expense
 
 
 @pytest.mark.parametrize("supplier,desc,expected", [
     ("עו\"ד כהן", None, "professional"),
-    ("תחנת דלק פז", None, "travel"),
+    ("תחנת דלק פז", None, "vehicle"),
     ("חברת חשמל", None, "utilities"),
     ("Google Ads", None, "marketing"),
     ("השכרת משרד", "דמי שכירות חודשי", "rent"),
@@ -16,6 +16,41 @@ from cfo.services.expense_classifier import classify_expense
 ])
 def test_classify_rules(supplier, desc, expected):
     assert classify_expense(supplier, desc) == expected
+
+
+# ---------------------------------------------------------------------- #
+# קטגוריות חדשות (M4/israeli_tax_rules): רכב, אירוח, כיבוד, קנסות, רכישת רכב
+# ---------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("supplier,desc,expected", [
+    ("סונול", None, "vehicle"),
+    ("דור אלון", None, "vehicle"),
+    (None, "תשלום חניה יומי", "vehicle"),
+    (None, "טסט שנתי לרכב", "vehicle"),
+    ("מסעדה של השף", None, "hospitality"),
+    ("בית קפה ארומה", None, "hospitality"),
+    (None, "כיבוד קל למשרד", "refreshments"),
+    (None, "קנס תנועה", "fines"),
+    (None, "דוח חניה", "fines"),  # לא vehicle — למרות ש"חניה" הוא גם מילת מפתח שם
+    (None, "רכישת רכב מסחרי", "vehicle_purchase"),
+])
+def test_classify_new_categories(supplier, desc, expected):
+    assert classify_expense(supplier, desc) == expected
+
+
+def test_train_travel_not_misclassified_as_vehicle():
+    """'רכבת' מכיל את המחרוזת 'רכב' — הסדר בקוד חייב להעדיף travel."""
+    assert classify_expense(None, "נסיעה ברכבת לתל אביב") == "travel"
+
+
+def test_new_categories_have_hebrew_display_names():
+    for cat in (
+        "vehicle", "vehicle_purchase", "hospitality", "refreshments", "fines",
+        "interest_authorities", "donations", "social_insurance_owner",
+    ):
+        assert cat in VALID_CATEGORIES
+        assert cat in CATEGORY_NAMES_HE
+        assert CATEGORY_NAMES_HE[cat].strip()
 
 
 @pytest.mark.parametrize("item_name,expected", [
@@ -38,7 +73,7 @@ def test_sumit_item_name_takes_priority_over_supplier():
 
 def test_unknown_item_name_falls_back_to_supplier_keywords():
     # פריט לא מוכר -> נופלים חזרה לסיווג לפי שם ספק/תיאור
-    assert classify_expense("תחנת דלק פז", sumit_item_name="פריט לא מוכר") == "travel"
+    assert classify_expense("תחנת דלק פז", sumit_item_name="פריט לא מוכר") == "vehicle"
 
 
 # ---------------------------------------------------------------------- #
@@ -60,7 +95,7 @@ def test_org_category_keyword_wins_over_built_in_on_the_same_keyword():
 
 def test_org_category_falls_back_to_built_in_when_no_org_keyword_matches():
     org_categories = [{"key": "custom_card", "keywords": ["מילה-שלא-מופיעה-בטקסט"]}]
-    assert classify_expense("תחנת דלק פז", org_categories=org_categories) == "travel"
+    assert classify_expense("תחנת דלק פז", org_categories=org_categories) == "vehicle"
 
 
 def test_sumit_item_name_still_beats_org_category_keywords():
@@ -74,7 +109,7 @@ def test_sumit_item_name_still_beats_org_category_keywords():
 
 def test_org_categories_with_no_keywords_are_safely_ignored():
     org_categories = [{"key": "no_keywords_card", "keywords": None}]
-    assert classify_expense("תחנת דלק פז", org_categories=org_categories) == "travel"
+    assert classify_expense("תחנת דלק פז", org_categories=org_categories) == "vehicle"
 
 
 @pytest.fixture(scope="module")
@@ -90,7 +125,7 @@ def test_auto_classify_on_create(client, acc):
         "supplier_name": "תחנת דלק", "amount": 300, "expense_date": date.today().isoformat(),
     }, headers=acc["headers"])
     assert r.status_code == 200, r.text
-    assert r.json()["data"]["category"] == "travel"  # סווג אוטומטית
+    assert r.json()["data"]["category"] == "vehicle"  # סווג אוטומטית
 
 
 def test_bulk_classify_endpoint(client, acc):

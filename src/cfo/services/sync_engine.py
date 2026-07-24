@@ -560,6 +560,10 @@ class SyncEngine:
             existing.currency = item.currency
             existing.balance_as_of = item.balance_as_of
             existing.raw_account_type = item.raw_account_type
+            # רק דורסים כשיש ערך חדש — payload שלא כולל creditLimit (הספק לא
+            # תמיד מחזיר אותו) לא אמור לאפס מסגרת ידועה שכבר נשמרה.
+            if item.credit_limit is not None:
+                existing.credit_limit = item.credit_limit
             existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
@@ -573,6 +577,7 @@ class SyncEngine:
             currency=item.currency,
             balance_as_of=item.balance_as_of,
             raw_account_type=item.raw_account_type,
+            credit_limit=item.credit_limit,
         )
         self.db.add(account)
         return "created"

@@ -341,7 +341,14 @@ def select_vat_documents(
         select_date = captured_date if basis == "captured" else doc_date
         if not _in_vat_period(select_date, start, end):
             continue
-        subtotal, tax = _f(r.amount), _f(r.vat_amount)
+        # נקודת-המשפך הרגולטורית היחידה (israeli_tax_rules): vat_claimable —
+        # המע"מ *הנתבע* בפועל אחרי שער-המסמך/היחס — גובר על vat_amount ה-raw
+        # כשהוכרע (לא None). vat_amount עצמו אינו משתנה כאן ובשום מקום אחר;
+        # ledger_service, sumit outbound add_expense, sync_pending_from_sumit
+        # ממשיכים לקרוא/לשלוח vat_amount raw כרגיל.
+        claimable = getattr(r, "vat_claimable", None)
+        subtotal = _f(r.amount)
+        tax = _f(claimable) if claimable is not None else _f(r.vat_amount)
         if subtotal == 0 and tax == 0:
             continue  # טיוטה ריקה — ראו הערה מקבילה בלולאת ה-Bill למעלה.
         inputs.append({

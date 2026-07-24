@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
@@ -27,7 +27,7 @@ from ...models import (
 )
 from ...services.open_finance_client import OpenFinanceClient, OpenFinanceError
 from ...services.credentials_vault import decrypt_credentials
-from ...services import bank_insights, bank_reconciliation, reconciliation_dispatch
+from ...services import bank_anomalies, bank_insights, bank_reconciliation, credit_line_service, reconciliation_dispatch
 from ...services import bank_query_service
 from ...services import of_snapshot_service
 from ...services.of_snapshot_service import OfSnapshotRefreshCooldown
@@ -45,6 +45,10 @@ BANK_INSIGHT_TYPES = {
     "category_spike", "cashflow_forecast", "savings_opportunity", "anomaly",
     "risk_signal", "aggregate_balance", "portfolio_summary", "portfolio_position",
     "missing_document",
+    # PR2 of the bookkeeper daily-cycle plan — morning bank scan (credit-line
+    # breach detector + bank-anomaly scan), run additively at the end of
+    # POST /insights/generate (see credit_line_service.py, bank_anomalies.py).
+    "credit_line_breach", "bank_anomaly",
 }
 
 
@@ -554,8 +558,31 @@ async def generate_insights(
     # Batch-level sign sanity check — surfaces a flipped-convention provider the
     # moment real bank data flows (raw sign stays primary; we don't force it).
     sign_warning = bank_insights.validate_sign_convention(txns)
+
+    # PR2 of the bookkeeper daily-cycle plan — additive morning-scan detectors,
+    # run alongside the existing bank-intelligence engine so a single
+    # POST /insights/generate refreshes them too. Each is isolated (mirrors
+    # CFOBrainService._run_generator's doctrine: one bad detector must not
+    # break this already-shipped endpoint) — a failure surfaces as an
+    # error-shaped sub-dict instead of a 500.
+    try:
+        credit_line_result = credit_line_service.check_and_alert(db, org_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("credit_line_service.check_and_alert failed for org %s", org_id)
+        db.rollback()  # un-poison the session so the anomaly scan below can still run
+        credit_line_result = {"error": str(exc)}
+
+    try:
+        anomaly_since = date.today() - timedelta(days=14)
+        bank_anomaly_result = bank_anomalies.scan_and_alert(db, org_id, since=anomaly_since)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("bank_anomalies.scan_and_alert failed for org %s", org_id)
+        db.rollback()
+        bank_anomaly_result = {"error": str(exc)}
+
     return {"generated": len(insights), "created": created, "updated": updated,
-            "transactions_analyzed": len(txns), "sign_warning": sign_warning}
+            "transactions_analyzed": len(txns), "sign_warning": sign_warning,
+            "credit_line": credit_line_result, "bank_anomalies": bank_anomaly_result}
 
 
 @router.get("/insights")
@@ -1201,6 +1228,7 @@ def _account_dict(r: Account) -> dict:
         "balance": float(r.balance) if r.balance is not None else None,
         "currency": r.currency,
         "balance_as_of": r.balance_as_of.isoformat() if r.balance_as_of else None,
+        "credit_limit": float(r.credit_limit) if r.credit_limit is not None else None,
         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }
 

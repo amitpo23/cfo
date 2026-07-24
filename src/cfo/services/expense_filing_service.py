@@ -12,6 +12,41 @@ from sqlalchemy.orm import Session
 from ..models import Expense
 
 
+def _load_vehicle_profile_args(db: Session, organization_id: int):
+    """טוען פרופילי-רכב של הארגון ובוחר (primarily_business, vehicle_kind) —
+    ר' israeli_tax_rules.resolve_vehicle_profile_args (הלוגיקה הטהורה: פרופיל
+    יחיד -> נעשה בו שימוש, אחרת None/None). משותף בין ExpenseFilingService
+    ל-ExpenseOCRPipeline כדי לא לשכפל את שאילתת ה-DB."""
+    from .israeli_tax_rules import resolve_vehicle_profile_args
+    from ..models import VehicleProfile
+
+    rows = (
+        db.query(VehicleProfile)
+        .filter(VehicleProfile.organization_id == organization_id)
+        .all()
+    )
+    profiles = [
+        {"primarily_business": r.primarily_business, "vehicle_kind": r.vehicle_kind}
+        for r in rows
+    ]
+    return resolve_vehicle_profile_args(profiles)
+
+
+def _compute_vat_claimable(db: Session, organization_id: int, *, category: str,
+                           vat_amount, doc_kind) -> "Decimal | None":
+    """israeli_tax_rules.claimable_vat, עם פתרון פרופיל-רכב אוטומטי כשנדרש —
+    המשפך המשותף ל-create_expense/update_expense (F: 'same computation')."""
+    from .israeli_tax_rules import claimable_vat
+
+    vehicle_business, vehicle_kind = (None, None)
+    if category in ("vehicle", "vehicle_purchase"):
+        vehicle_business, vehicle_kind = _load_vehicle_profile_args(db, organization_id)
+    return claimable_vat(
+        category=category, vat_on_doc=Decimal(str(vat_amount or 0)), doc_kind=doc_kind,
+        vehicle_primarily_business=vehicle_business, vehicle_kind=vehicle_kind,
+    )
+
+
 class ExpenseFilingService:
     def __init__(self, db: Session, organization_id: int = 1):
         self.db = db
@@ -44,6 +79,7 @@ class ExpenseFilingService:
                 data.get("supplier_name"), data.get("description"), data.get("invoice_number"),
                 org_categories=org_categories,
             )
+        doc_kind = data.get("doc_kind")
         exp = Expense(
             organization_id=self.organization_id,
             source=data.get("source", "manual"),
@@ -58,6 +94,10 @@ class ExpenseFilingService:
             invoice_number=data.get("invoice_number"),
             receipt_file=data.get("receipt_file"),
             status="pending",
+            doc_kind=doc_kind,
+        )
+        exp.vat_claimable = _compute_vat_claimable(
+            self.db, self.organization_id, category=category, vat_amount=vat, doc_kind=doc_kind,
         )
         self.db.add(exp)
         self.db.commit()
@@ -84,7 +124,7 @@ class ExpenseFilingService:
             )
             if data["category"] not in valid_keys:
                 raise ValueError(f"קטגוריה לא מוכרת: {data['category']}")
-        for field in ("supplier_name", "category", "description", "invoice_number"):
+        for field in ("supplier_name", "category", "description", "invoice_number", "doc_kind"):
             if data.get(field) is not None:
                 setattr(exp, field, data[field])
         if data.get("amount") is not None:
@@ -98,6 +138,12 @@ class ExpenseFilingService:
             exp.total = Decimal(str(data["total"]))
         elif data.get("amount") is not None or data.get("vat_amount") is not None:
             exp.total = Decimal(str(exp.amount or 0)) + Decimal(str(exp.vat_amount or 0))
+        # מחשבים מחדש את ניכוי התשומות בכל עדכון (קטגוריה/מע"מ/doc_kind
+        # יכולים להשתנות) — אותו משפך כמו create_expense (F: "same computation").
+        exp.vat_claimable = _compute_vat_claimable(
+            self.db, self.organization_id, category=exp.category,
+            vat_amount=exp.vat_amount, doc_kind=exp.doc_kind,
+        )
         self.db.commit()
         self.db.refresh(exp)
         return self._serialize(exp)
@@ -544,4 +590,6 @@ class ExpenseFilingService:
             "filing_error": e.filing_error,
             "source": e.source,
             "deduction_percent": float(e.deduction_percent) if e.deduction_percent is not None else None,
+            "doc_kind": e.doc_kind,
+            "vat_claimable": float(e.vat_claimable) if e.vat_claimable is not None else None,
         }

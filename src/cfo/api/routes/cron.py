@@ -24,6 +24,11 @@ from ...services.client_automation_service import (
 )
 from ...services.collection_service import CollectionService, dispatch_reminders
 from ...services.email_sender import send_email_smtp
+# Kept as a module-level import (unused directly here now that the daily-close
+# route delegates to morning_cycle_service.run_daily_close_step) purely so
+# `cfo.api.routes.cron.ensure_shaam_renewal_reminder` still exists as an
+# attribute for tests/test_shaam_reminder.py's monkeypatch target; the actual
+# call now happens inside run_daily_close_step via its own import.
 from ...services.shaam_reminder import ensure_shaam_renewal_reminder
 from ..dependencies import sumit_for_org
 from ...integrations.sumit_models import SMSRequest
@@ -327,10 +332,16 @@ def run_daily_close(db: Session = Depends(get_db_session)):
     מריץ data_quality.run_checks ושומר תמונת-מצב יומית (daily_snapshots) לכל
     ארגון פעיל — הבסיס למגמות ולדשבורד (docs/REZEF_DATA_INTEGRITY_PLAN.md
     סעיף ג2). אידמפוטנטי (UPSERT לפי org+snapshot_date). כשל בארגון אחד
-    מבודד ולא מפיל את הריצה עבור האחרים."""
-    from ...models import DailySnapshot
-    from ...services.dashboard_service import DashboardService
-    from ...services.data_quality import run_checks
+    מבודד ולא מפיל את הריצה עבור האחרים.
+
+    PR4 (bookkeeper daily-cycle plan): thin wrapper only now — the actual
+    snapshot logic lives in morning_cycle_service.run_daily_close_step so
+    both this legacy route and the fuller /cron/bookkeeper-morning cycle
+    (06:45 UTC) share one implementation. This route calls it with no
+    parity/credit/reconcile/expense-queue inputs (honest-null: it alone has
+    no other steps' data to offer), same as before it existed as its own
+    function."""
+    from ...services.morning_cycle_service import run_daily_close_step
 
     today = date.today()
     orgs = db.query(Organization).filter(Organization.is_active.is_(True)).all()
@@ -338,47 +349,50 @@ def run_daily_close(db: Session = Depends(get_db_session)):
     errors = []
     for org in orgs:
         try:
-            overview = DashboardService(db, org.id).get_overview(today=today)
-            dq = run_checks(db, org.id)
-
-            existing = db.query(DailySnapshot).filter(
-                DailySnapshot.organization_id == org.id,
-                DailySnapshot.snapshot_date == today,
-            ).first()
-            values = {
-                "cash_balance": overview["cash_balance"],
-                "ar_total": overview["ar_total"],
-                "ap_total": overview["ap_total"],
-                "month_net_profit": overview["month_net_profit"],
-                "undocumented_total": overview["undocumented_expenses"]["total"],
-                "data_quality_issues": dq["issues_count"],
-            }
-            if existing:
-                for key, value in values.items():
-                    setattr(existing, key, value)
-            else:
-                db.add(DailySnapshot(organization_id=org.id, snapshot_date=today, **values))
-            db.commit()
+            step_result = run_daily_close_step(db, org.id, today)
             results.append({
                 "organization_id": org.id, "status": "ok",
-                "data_quality": dq["status"], "issues_count": dq["issues_count"],
+                "data_quality": step_result["data_quality"],
+                "issues_count": step_result["issues_count"],
             })
         except Exception as exc:
             logger.error("Daily close failed for org %s: %s", org.id, exc)
             db.rollback()
             errors.append({"org": org.id, "error": str(exc)})
 
-        # תזכורת מחזורית לחידוש חיבור רשות המסים (שע"מ פג כל 3 חודשים) —
-        # מבודדת בנפרד: כשל כאן לא אמור לפגוע ב-daily_snapshot שכבר נשמר
-        # למעלה, ולא להפיל את הריצה עבור ארגונים אחרים.
-        try:
-            ensure_shaam_renewal_reminder(db, org.id, today=today)
-        except Exception as exc:
-            logger.warning("Shaam reminder failed for org %s: %s", org.id, exc)
-            db.rollback()
-
     return {"status": "ok", "orgs": len(orgs), "snapshots": len(results),
             "results": results, "errors": errors}
+
+
+@router.get("/cron/bookkeeper-morning", dependencies=[Depends(_verify_cron_secret)])
+def run_bookkeeper_morning(
+    db: Session = Depends(get_db_session),
+    org_id: Optional[int] = None,
+    force: bool = False,
+):
+    """יומי (06:45 UTC — אחרי process-ocr/05:45 ו-bank-gap-scan/06:15): מחזור-
+    הבוקר המלא של מנהל החשבונות (PR4 של תוכנית מחזור-הבוקר) — parity,
+    bank_anomalies, reconcile, expense_queue, credit_line, daily_close,
+    debtors, בסדר-תלות אחד (ר' morning_cycle_service). ללא קריאות API
+    חדשות ל-SUMIT/Open Finance — קורא רק את מה שכבר סונכרן.
+
+    ?org_id=<int> מריץ ארגון בודד בלבד (לבדיקה/תיקון ידני); בלעדיו — כל
+    הארגונים הפעילים. ?force=true עוקף את שער האידמפוטנטיות (מריץ מחדש גם
+    אם המחזור כבר הושלם היום לארגון זה)."""
+    from ...services.morning_cycle_service import run_all_organizations, run_morning_cycle
+
+    today = date.today()
+    if org_id is not None:
+        try:
+            result = run_morning_cycle(db, org_id, today, force=force)
+            return {"status": "ok", "orgs": 1, "results": [result], "errors": []}
+        except Exception as exc:
+            logger.error("Bookkeeper morning cycle failed for org %s: %s", org_id, exc)
+            db.rollback()
+            return {"status": "ok", "orgs": 1, "results": [],
+                    "errors": [{"organization_id": org_id, "error": str(exc)}]}
+
+    return run_all_organizations(db, today, force=force)
 
 
 @router.get("/cron/bank-gap-scan", dependencies=[Depends(_verify_cron_secret)])

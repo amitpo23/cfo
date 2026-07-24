@@ -228,6 +228,139 @@ def test_ocr_extracts_verifies_and_files(client, acc, monkeypatch):
     assert round(calls["filed"]["vat"], 2) == round(104.90 - 104.90 / 1.18, 2)
 
 
+# ---------- israeli_tax_rules integration: doc_kind + vat_claimable ---------- #
+
+def _setup_ocr_expense(client, acc, external_id):
+    r = client.post("/api/expenses", json={
+        "supplier_name": "DOC-VAT", "amount": 0, "expense_date": date.today().isoformat(),
+    }, headers=acc["headers"])
+    eid = r.json()["data"]["id"]
+    from cfo.database import SessionLocal
+    from cfo.models import Expense
+
+    db = SessionLocal()
+    try:
+        e = db.query(Expense).filter(Expense.id == eid).first()
+        e.source = "sumit"; e.external_id = external_id; db.commit()
+    finally:
+        db.close()
+    return eid
+
+
+def _patch_connector_and_extract(monkeypatch, extract_payload):
+    import cfo.services.sync_engine as se
+    import cfo.services.vision_extractor as ve
+    import cfo.services.company_registry as cr
+
+    class FakeConnector:
+        async def get_document_pdf(self, doc_id):
+            return b"%PDF-1.6 fake"
+        async def add_expense(self, request):
+            return {"expense_id": "SUMIT-FAKE-1"}
+        async def cancel_document(self, doc_id):
+            return {"ok": True}
+
+    monkeypatch.setattr(se, "get_connector_for_org",
+                        lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
+
+    async def fake_extract(content):
+        return extract_payload
+    monkeypatch.setattr(ve, "extract_receipt", fake_extract)
+
+    # אין התאמה ברשם החברות — כדי שסיווג הקטגוריה יעבוד על שם הספק שחולץ מה-OCR
+    # (extract_payload["supplier_name"]) ולא יוחלף בשם אמיתי ממשק חי.
+    async def fake_lookup(self, tax_id):
+        return None
+    monkeypatch.setattr(cr.CompanyRegistry, "lookup", fake_lookup)
+
+
+def test_ocr_plain_tax_invoice_full_vat_path_unchanged(client, acc, monkeypatch):
+    """מסמך tax_invoice בקטגוריה עם שבר 1 (services) -> vat_claimable = כל המע\"מ, מתויק כרגיל."""
+    eid = _setup_ocr_expense(client, acc, "DOC-PLAIN")
+    _patch_connector_and_extract(monkeypatch, {
+        "supplier_name": "מנוי SaaS בע\"מ", "supplier_tax_id": "520022732",
+        "amount_total": 236.0, "vat_amount": 36.0, "net_amount": 200.0,
+        "invoice_number": "INV-1", "expense_date": date.today().isoformat(),
+        "currency": "ILS", "document_type": "invoice", "confidence": 0.95,
+        "is_readable": True, "notes": None,
+    })
+    f = client.post(f"/api/expenses/{eid}/ocr?auto_file=true", headers=acc["headers"])
+    assert f.status_code == 200, f.text
+    data = f.json()["data"]
+    assert data["status"] == "filed"
+    assert data["doc_kind"] == "tax_invoice"
+    assert data["vat_claimable"] == 36.0
+
+
+def test_ocr_hospitality_expense_vat_claimable_zero(client, acc, monkeypatch):
+    """אירוח (מסעדה) עם חשבונית מס — מוכר 0 תשומות תמיד, אך עדיין מתויק (הוכרע, לא הכרעה חסרה)."""
+    eid = _setup_ocr_expense(client, acc, "DOC-HOSP")
+    _patch_connector_and_extract(monkeypatch, {
+        "supplier_name": "מסעדה של השף", "supplier_tax_id": "520022732",
+        "amount_total": 236.0, "vat_amount": 36.0, "net_amount": 200.0,
+        "invoice_number": "INV-2", "expense_date": date.today().isoformat(),
+        "currency": "ILS", "document_type": "invoice", "confidence": 0.95,
+        "is_readable": True, "notes": None,
+    })
+    f = client.post(f"/api/expenses/{eid}/ocr?auto_file=true", headers=acc["headers"])
+    assert f.status_code == 200, f.text
+    data = f.json()["data"]
+    assert data["category"] == "hospitality"
+    assert data["status"] == "filed"
+    assert data["vat_claimable"] == 0.0
+
+
+def test_ocr_unknown_doc_kind_goes_to_review_not_auto_filed(client, acc, monkeypatch):
+    """document_type='unknown' וללא invoice_number -> doc_kind='unknown' ->
+    vat_claimable=None -> תור הכרעה, לא תיוק אוטומטי (גם כשכל שאר השדות תקינים)."""
+    eid = _setup_ocr_expense(client, acc, "DOC-UNKVAT")
+    _patch_connector_and_extract(monkeypatch, {
+        "supplier_name": "ספק כללי בע\"מ", "supplier_tax_id": "520022732",
+        "amount_total": 236.0, "vat_amount": 36.0, "net_amount": 200.0,
+        "invoice_number": None, "expense_date": date.today().isoformat(),
+        "currency": "ILS", "document_type": "unknown", "confidence": 0.95,
+        "is_readable": True, "notes": None,
+    })
+    f = client.post(f"/api/expenses/{eid}/ocr?auto_file=true", headers=acc["headers"])
+    assert f.status_code == 200, f.text
+    data = f.json()["data"]
+    assert data["status"] == "flagged"
+    assert data["doc_kind"] == "unknown"
+    assert data["vat_claimable"] is None
+    assert any("ניכוי תשומות" in r for r in data["review_reasons"])
+
+
+def test_ocr_vehicle_expense_uses_single_vehicle_profile(client, fresh_org, monkeypatch):
+    """רכב עם פרופיל-רכב יחיד (primarily_business=True) -> 2/3 מהמע\"מ נתבע."""
+    from cfo.database import SessionLocal
+    from cfo.models import VehicleProfile
+
+    org = fresh_org()
+    org_id = org["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(VehicleProfile(organization_id=org_id, label="טנדר עבודה",
+                              vehicle_kind="commercial", primarily_business=True))
+        db.commit()
+    finally:
+        db.close()
+
+    eid = _setup_ocr_expense(client, org, "DOC-VEHICLE")
+    _patch_connector_and_extract(monkeypatch, {
+        "supplier_name": "סונול", "supplier_tax_id": "520022732",
+        "amount_total": 118.0, "vat_amount": 18.0, "net_amount": 100.0,
+        "invoice_number": "INV-3", "expense_date": date.today().isoformat(),
+        "currency": "ILS", "document_type": "invoice", "confidence": 0.95,
+        "is_readable": True, "notes": None,
+    })
+    f = client.post(f"/api/expenses/{eid}/ocr?auto_file=true", headers=org["headers"])
+    assert f.status_code == 200, f.text
+    data = f.json()["data"]
+    assert data["category"] == "vehicle"
+    assert data["status"] == "filed"
+    assert round(data["vat_claimable"], 2) == round(18.0 * 2 / 3, 2)
+
+
 def test_llm_ocr_disabled_by_default_api_reserved_for_chat(monkeypatch):
     """החלטת משתמש: מפתח ה-API משרת את עוזר ה-AI בלבד — OCR-LLM כבוי כברירת מחדל."""
     import asyncio

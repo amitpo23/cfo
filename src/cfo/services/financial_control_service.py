@@ -413,12 +413,11 @@ class FinancialControlService:
         return Decimal(total or 0)
 
     def _unreconciled_bank_count(self, start_date: date, end_date: date) -> int:
-        return self.db.query(BankTransaction).filter(
-            BankTransaction.organization_id == self.organization_id,
-            BankTransaction.transaction_date >= start_date,
-            BankTransaction.transaction_date <= end_date,
-            BankTransaction.is_reconciled == False,  # noqa: E712
-        ).count()
+        from .bank_reconciliation import unreconciled_bank_count
+
+        return unreconciled_bank_count(
+            self.db, self.organization_id, start_date=start_date, end_date=end_date
+        )
 
     @staticmethod
     def _health_score(unreconciled_count: int) -> str:

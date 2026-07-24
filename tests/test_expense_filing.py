@@ -35,6 +35,51 @@ def test_create_and_list_expense(client, acc):
     assert any(e["invoice_number"] == "EXP-1" for e in lst)
 
 
+def test_manual_hospitality_create_vat_claimable_is_zero(client, acc):
+    """אירוח — 0 תשומות תמיד (תקנה 2(1)/15א), גם כשנוצר ידנית עם חשבונית מס."""
+    r = client.post("/api/expenses", json={
+        "supplier_name": "מסעדה של השף",
+        "amount": 200,
+        "vat_amount": 36,
+        "expense_date": date.today().isoformat(),
+        "category": "hospitality",
+        "doc_kind": "tax_invoice",
+        "invoice_number": "EXP-HOSP-1",
+    }, headers=acc["headers"])
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["category"] == "hospitality"
+    assert data["doc_kind"] == "tax_invoice"
+    assert data["vat_claimable"] == 0.0
+
+
+def test_manual_create_without_doc_kind_is_honest_null(client, acc):
+    """בלי doc_kind — לא ניחוש: vat_claimable נשאר None (הכרעה), גם בקטגוריה מוכרת מלאה."""
+    r = client.post("/api/expenses", json={
+        "supplier_name": "משרד עורכי דין",
+        "amount": 500,
+        "vat_amount": 90,
+        "expense_date": date.today().isoformat(),
+        "category": "professional",
+    }, headers=acc["headers"])
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["vat_claimable"] is None
+
+
+def test_manual_update_recomputes_vat_claimable_on_category_change(client, acc):
+    r = client.post("/api/expenses", json={
+        "supplier_name": "ספק כלשהו", "amount": 100, "vat_amount": 18,
+        "expense_date": date.today().isoformat(), "category": "office",
+        "doc_kind": "tax_invoice",
+    }, headers=acc["headers"])
+    eid = r.json()["data"]["id"]
+    assert r.json()["data"]["vat_claimable"] == 18.0
+
+    upd = client.patch(f"/api/expenses/{eid}", json={"category": "hospitality"}, headers=acc["headers"])
+    assert upd.status_code == 200, upd.text
+    assert upd.json()["data"]["vat_claimable"] == 0.0
+
+
 def test_expense_is_org_scoped(client, acc):
     reg2 = client.post("/api/admin/auth/register", json={
         "email": "expother@example.com", "password": "secret123", "full_name": "Other",

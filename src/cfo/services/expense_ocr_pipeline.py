@@ -133,6 +133,7 @@ class ExpenseOCRPipeline:
         self, exp: Expense, connector, auto_file: bool
     ) -> Dict[str, Any]:
         from .expense_classifier import classify_expense
+        from .israeli_tax_rules import claimable_vat
 
         # 1. צילום הקבלה
         pdf = await connector.get_document_pdf(exp.external_id)
@@ -168,10 +169,22 @@ class ExpenseOCRPipeline:
             exp.supplier_name = supplier_name
         if tax_id:
             exp.supplier_tax_id = tax_id
+        vat_claimable = None
         if total is not None:
             exp.total = Decimal(str(total))
             exp.amount = Decimal(str(net))
             exp.vat_amount = Decimal(str(vat))
+            # 5א. שער-מסמך + ניכוי תשומות (israeli_tax_rules.claimable_vat) —
+            # רק כשיש מע"מ-על-מסמך לחשב עבורו; None ("unknown") -> תור הכרעה.
+            exp.doc_kind = self._resolve_doc_kind(extract)
+            vehicle_business, vehicle_kind = (None, None)
+            if category in ("vehicle", "vehicle_purchase"):
+                vehicle_business, vehicle_kind = self._vehicle_profile_args()
+            vat_claimable = claimable_vat(
+                category=category, vat_on_doc=Decimal(str(vat)), doc_kind=exp.doc_kind,
+                vehicle_primarily_business=vehicle_business, vehicle_kind=vehicle_kind,
+            )
+            exp.vat_claimable = vat_claimable
         if extract.get("invoice_number"):
             exp.invoice_number = extract["invoice_number"]
         if exp_date:
@@ -180,6 +193,10 @@ class ExpenseOCRPipeline:
 
         # החלטת תיוק: דורש קריאות, ביטחון מספק, ח.פ, ספק וסכום
         review_reasons = self._review_reasons(extract, tax_id, supplier_name, total)
+        if total is not None and vat_claimable is None:
+            # שער-המסמך/הקטגוריה לא הכריעו את ניכוי התשומות — תור הכרעה,
+            # לא תיוק אוטומטי עם ניחוש (honest-null, KB02).
+            review_reasons.append("נדרשת הכרעה: ניכוי תשומות")
         result: Dict[str, Any] = {
             "expense_id": exp.id,
             "external_id": exp.external_id,
@@ -193,6 +210,8 @@ class ExpenseOCRPipeline:
             "category": category,
             "confidence": extract.get("confidence"),
             "expense_date": exp_date.isoformat() if exp_date else None,
+            "doc_kind": exp.doc_kind,
+            "vat_claimable": float(vat_claimable) if vat_claimable is not None else None,
         }
 
         if review_reasons:
@@ -287,6 +306,26 @@ class ExpenseOCRPipeline:
         if total is None:
             reasons.append("חסר סכום")
         return reasons
+
+    @staticmethod
+    def _resolve_doc_kind(extract: Dict[str, Any]) -> str:
+        """"tax_invoice" | "receipt" | "unknown", לפי document_type שהחזיר
+        vision_extractor (invoice/invoice_receipt -> tax_invoice, receipt ->
+        receipt). כשהחילוץ לא סיפק document_type ברור — שמרנית: מספר
+        חשבונית קיים נחשב סימן ל-tax_invoice, אחרת unknown (הכרעה, לא ניחוש)."""
+        doc_type = (extract.get("document_type") or "").strip().lower()
+        if doc_type in ("invoice", "invoice_receipt"):
+            return "tax_invoice"
+        if doc_type == "receipt":
+            return "receipt"
+        if extract.get("invoice_number"):
+            return "tax_invoice"
+        return "unknown"
+
+    def _vehicle_profile_args(self):
+        from .expense_filing_service import _load_vehicle_profile_args
+
+        return _load_vehicle_profile_args(self.db, self.organization_id)
 
     @staticmethod
     def _parse_date(value) -> Optional[date]:

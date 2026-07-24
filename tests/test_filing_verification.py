@@ -43,6 +43,125 @@ def test_all_three_checks_pass_on_clean_period(fresh_org):
         db.close()
 
 
+def test_over_claim_beyond_statutory_fraction_is_red_failure(fresh_org):
+    """אירוח (input_vat_fraction=0 קבוע, תקנה 2(1)/15א) שתובע מע\"מ בכל זאת
+    — כשל אדום, לא רק אזהרה."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed(db, org_id)
+        db.add(Expense(organization_id=org_id, source="manual", supplier_name="מסעדה של השף",
+                       amount=Decimal("100"), vat_amount=Decimal("18"), vat_claimable=Decimal("18"),
+                       total=Decimal("118"), expense_date=date(2026, 5, 20),
+                       category="hospitality", status="filed"))
+        db.commit()
+        result = fv.verify_filing(db, org_id, 2026, 5, months=1, basis="document")
+        assert result["status"] == "fail"
+        c2 = result["checks"][1]
+        assert c2["passed"] is False
+        assert c2["fraction_gate_red_issues"]
+        assert "תקנ" in c2["fraction_gate_red_issues"][0]
+    finally:
+        db.close()
+
+
+def test_vehicle_purchase_legitimate_full_claim_does_not_false_positive(fresh_org):
+    """רכב מסחרי (חריג תקנה 14) עם claimable=vat_amount (מלא, לגיטימי) —
+    שער-השבר חייב לחשב את התקרה תלוית-ההקשר דרך אותו VehicleProfile,
+    לא להשתמש בשבר הבסיס הקבוע (0) של vehicle_purchase — אחרת false
+    positive על תביעה תקינה של רכב מסחרי/מונית/השכרה/לימוד נהיגה."""
+    from cfo.models import VehicleProfile
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed(db, org_id)
+        db.add(VehicleProfile(organization_id=org_id, label="טנדר עבודה",
+                              vehicle_kind="commercial", primarily_business=True))
+        # 18% מדויק (100000+18000=118000) — לא לחצות את שער-השפיות הקיים
+        # (MAX_VAT_RATE) שאינו קשור לשער-השבר החדש הנבדק כאן.
+        db.add(Expense(organization_id=org_id, source="manual", supplier_name="סוכנות רכב",
+                       amount=Decimal("100000"), vat_amount=Decimal("18000"), vat_claimable=Decimal("18000"),
+                       total=Decimal("118000"), expense_date=date(2026, 5, 20),
+                       category="vehicle_purchase", doc_kind="tax_invoice", status="filed"))
+        db.commit()
+        result = fv.verify_filing(db, org_id, 2026, 5, months=1, basis="document")
+        assert result["status"] == "pass"
+        c2 = result["checks"][1]
+        assert c2["passed"] is True
+        assert not c2["fraction_gate_red_issues"]
+    finally:
+        db.close()
+
+
+def test_vehicle_over_claim_beyond_two_thirds_is_caught(fresh_org):
+    """רכב עם profile primarily_business=True (תקרה 2/3) שתובע 100% מהמע\"מ
+    — כשל אדום. זה בדיוק המקרה שהיה חומק דרך שער-השבר הסטטי (fraction=None
+    ל-vehicle) לפני התיקון להשתמש ב-claimable_vat תלוי-ההקשר."""
+    from cfo.models import VehicleProfile
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed(db, org_id)
+        db.add(VehicleProfile(organization_id=org_id, label="סדאן",
+                              vehicle_kind="private", primarily_business=True))
+        db.add(Expense(organization_id=org_id, source="manual", supplier_name="סונול",
+                       amount=Decimal("100"), vat_amount=Decimal("18"), vat_claimable=Decimal("18"),
+                       total=Decimal("118"), expense_date=date(2026, 5, 20),
+                       category="vehicle", doc_kind="tax_invoice", status="filed"))
+        db.commit()
+        result = fv.verify_filing(db, org_id, 2026, 5, months=1, basis="document")
+        assert result["status"] == "fail"
+        c2 = result["checks"][1]
+        assert c2["passed"] is False
+        assert c2["fraction_gate_red_issues"]
+    finally:
+        db.close()
+
+
+def test_legacy_unclaimed_zero_fraction_category_produces_warning_not_failure(fresh_org):
+    """הוצאת אירוח עם מע\"מ אבל vat_claimable=None (טרם הוחל שער התשומות —
+    נתון legacy) — אזהרה (warn), לא כשל."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed(db, org_id)
+        db.add(Expense(organization_id=org_id, source="manual", supplier_name="מסעדה של השף",
+                       amount=Decimal("100"), vat_amount=Decimal("18"), vat_claimable=None,
+                       total=Decimal("118"), expense_date=date(2026, 5, 20),
+                       category="hospitality", status="filed"))
+        db.commit()
+        result = fv.verify_filing(db, org_id, 2026, 5, months=1, basis="document")
+        assert result["status"] == "warn"
+        c2 = result["checks"][1]
+        assert c2["passed"] is None
+        assert c2["fraction_gate_warnings"]
+        assert "טרם הוחל שער התשומות" in c2["fraction_gate_warnings"][0]
+    finally:
+        db.close()
+
+
+def test_legitimate_partial_vat_claim_still_passes(fresh_org):
+    """הוצאת רכב עם ניכוי חלקי לגיטימי (2/3 מהמע\"מ) — הדוח והחישוב העצמאי
+    חייבים להסכים (שניהם קוראים vat_claimable), ולא ליפול כ'פער חישוב עצמאי'
+    רק כי vat_claimable != vat_amount."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed(db, org_id)
+        db.add(Expense(organization_id=org_id, source="manual", supplier_name="סונול",
+                       amount=Decimal("100"), vat_amount=Decimal("18"), vat_claimable=Decimal("12"),
+                       total=Decimal("118"), expense_date=date(2026, 5, 20),
+                       category="vehicle", status="filed"))
+        db.commit()
+        result = fv.verify_filing(db, org_id, 2026, 5, months=1, basis="document")
+        assert result["status"] == "pass"
+        assert result["checks"][1]["passed"] is True
+    finally:
+        db.close()
+
+
 def test_pending_drafts_produce_warning_not_silent_pass(fresh_org):
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
