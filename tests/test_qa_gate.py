@@ -13,7 +13,10 @@ qa_gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(qa_gate)
 
 
-_BASELINE_STDOUT = f"סהכ: 232 | תקין(200): 168 | אזהרה(4xx): 25 | כשל(5xx/EXC): {qa_gate.ROUTE_AUDIT_BASELINE_FAILURES}"
+_BASELINE_STDOUT = (
+    "סהכ: 248 | תקין(200): 172 | אזהרה(4xx): 39 | מוגדר-סביבה(400): 36 | "
+    f"כשל: {qa_gate.ROUTE_AUDIT_BASELINE_FAILURES}"
+)
 
 
 def _ok(code=0, stdout=_BASELINE_STDOUT):
@@ -52,10 +55,9 @@ def test_a_single_failure_fails_the_whole_gate():
 
 
 def test_route_audit_uses_documented_baseline_not_raw_exit_code():
-    """audit_routes.py always exits 1 when ANY route returns non-200/401/
-    403/404/422 — including the 39 documented, verified-correct env-gated
-    400s (SUMIT/Open Finance not configured). qa_gate must not treat that
-    baseline as a failure just because the script's own exit code is 1."""
+    """audit_routes.py יוצא 1 בכל פעם ש-route אינו 200 — כולל 36 ה-400
+    מוגדרי-הסביבה (SUMIT/Open Finance ללא קרדנשלים) שהם התנהגות נכונה.
+    qa_gate שופט לפי מספר הכשלים בשורת הסיכום, לא לפי קוד היציאה."""
     def fake_run(cmd, cwd=None):
         if _cmd_contains(cmd, "audit_routes.py"):
             return _ok(code=1, stdout=_BASELINE_STDOUT)  # script's own exit code IS 1
@@ -69,7 +71,7 @@ def test_route_audit_uses_documented_baseline_not_raw_exit_code():
 def test_route_audit_fails_when_failure_count_exceeds_baseline():
     def fake_run(cmd, cwd=None):
         if _cmd_contains(cmd, "audit_routes.py"):
-            return _ok(code=1, stdout="סהכ: 240 | תקין(200): 170 | אזהרה(4xx): 25 | כשל(5xx/EXC): 45")
+            return _ok(code=1, stdout="סהכ: 248 | תקין(200): 170 | אזהרה(4xx): 25 | מוגדר-סביבה(400): 36 | כשל: 45")
         return _ok(0)
 
     results = qa_gate.run_gate(run=fake_run)

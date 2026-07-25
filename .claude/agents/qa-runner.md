@@ -17,8 +17,8 @@ model: sonnet
 ## הרצה — בסדר הזה
 
 ```bash
-python -m pytest tests/ -q                  # בסיס: 1,318 עוברים, ~250 שנ'
-python scripts/audit_routes.py              # בסיס: 248 routes, 37 כשל(5xx/EXC)
+python -m pytest tests/ -q                  # בסיס: 1,324 עוברים, ~250 שנ'
+python scripts/audit_routes.py              # בסיס: 248 routes, 1 כשל (honest-null)
 python scripts/schema_drift_check.py        # נכשל מקומית: DB מיושן — לא רגרסיה
 python scripts/qa_gate.py                   # עוטף את כל הנ"ל + frontend
 cd frontend && npm ci --silent && npm run build
@@ -34,8 +34,8 @@ cd frontend && npm ci --silent && npm run build
 ```
 שער QA — <תאריך>  |  ענף: <branch>  |  HEAD: <sha7>
 
-pytest         PASS 1318 / FAIL 0 / דילוגים N   (Xs)   [דלתא מהבסיס: ±N]
-audit_routes   N routes, M כשלים          [דלתא מ-37: ±M]
+pytest         PASS 1324 / FAIL 0 / דילוגים N   (Xs)   [דלתא מהבסיס: ±N]
+audit_routes   N routes, M כשלים          [דלתא מ-1: ±M]
 schema_drift   דלתא מהרשימה הידועה: <אין | מה נוסף>
 qa_gate        PASS | FAIL — <שורה מכרעת>
 frontend       build PASS | FAIL          (lint שבור — לא נבדק)

@@ -50,9 +50,9 @@ python -m pytest tests/ -q
 cd frontend && npm ci && npm run build
 ```
 
-**בסיס מדוד (2026-07-25):** pytest = 1,318 עוברים, 0 נכשלים, ~250 שנ'. frontend build עובר.
+**בסיס מדוד (2026-07-25):** pytest = 1,324 עוברים, 0 נכשלים, ~250 שנ'. frontend build עובר.
 
-דווח את המספרים בדיוק. `pytest` שמחזיר מספר שונה מ-1,318 — עצור, בדוק מה נשבר, ודווח
+דווח את המספרים בדיוק. `pytest` שמחזיר מספר שונה מ-1,324 — עצור, בדוק מה נשבר, ודווח
 לפני שתמשיך. אם הסוויטה אדומה, זה הממצא היחיד שחשוב בשלב הזה.
 
 `npm run lint` **שבור מראש**: אין קובץ קונפיג של eslint ב-`frontend/`, ה-script נופל מיד,
@@ -69,19 +69,15 @@ python scripts/qa_gate.py            # עוטף את שניהם + pytest + front
 
 **בסיס מדוד (2026-07-25):**
 
-- `audit_routes`: 248 routes — 172 תקין · 39 אזהרה(4xx) · **37 כשל(5xx/EXC)**.
-  ה-baseline המתועד ב-`qa_gate.py` הוא 40; הקריטריון הוא "אפס כשלים חדשים", לא אפס כשלים.
-  מעל 37 — זו רגרסיה ויש לזהות אילו routes נוספו לרשימה.
+- `audit_routes`: 248 routes — 172 תקין · 39 אזהרה(4xx) · **36 מוגדר-סביבה(400)** · **1 כשל**.
+  ה"כשל" היחיד הוא `/api/financial/ai/predict/revenue` שמחזיר 400 "דורש היסטוריית נתונים
+  אמיתית" — תשובת honest-null נכונה. **כל כשל נוסף = רגרסיה.**
 - `schema_drift_check`: **נכשל** מול ה-SQLite המקומי — 4 טבלאות חסרות
   (`filing_crosschecks`, `morning_briefs`, `of_snapshot_cache`, `vehicle_profiles`) ועמודות
   ב-`organizations`, `accounts`, `daily_snapshots`, `expenses`. זה DB מקומי מיושן, **לא
   רגרסיה בקוד**. ממצא רק אם הרשימה גדלה.
-- `qa_gate`: **אדום בבסיס**, על שני שערים בלבד — `3a. Schema drift (local)` (אותו DB מיושן)
-  ו-`6. Tenancy-focused tests`. ששת האחרים עוברים (סוויטה מלאה 1,318, route audit, tsc,
-  build, colscan). שער 6 נכשל בגלל טסט תלוי-סדר יחיד:
-  `tests/test_auth_and_tenancy.py:319` — עובר בסוויטה המלאה, נופל תחת הסלקציה
-  `-k "isolation or org_scope or tenancy"` כי הוא מסתמך על מצב שטסט מוקדם יוצר. **כל שער
-  שלישי שנופל = רגרסיה.**
+- `qa_gate`: אדום בבסיס על שער אחד בלבד — `3a. Schema drift (local)` (אותו DB מיושן).
+  7 האחרים עוברים. **כל שער נוסף שנופל = רגרסיה.**
 
 ### שלב ג' — אודיט סטטי, לפי דוקטרינות הריפו
 
@@ -115,9 +111,9 @@ python scripts/qa_gate.py            # עוטף את שניהם + pytest + front
 ענף: <branch> · HEAD: <sha7> · Python: <גרסה>
 
 ## 1. בסיס
-pytest        עוברים N / נכשלים N / דילוגים N · <שניות> · דלתא מ-1,318: ±N
+pytest        עוברים N / נכשלים N / דילוגים N · <שניות> · דלתא מ-1,324: ±N
 frontend      build PASS/FAIL   (lint שבור מראש — לא נבדק)
-audit_routes  N routes · M כשל(5xx/EXC) · דלתא מ-37: ±M
+audit_routes  N routes · M כשל · דלתא מ-1: ±M
 schema_drift  דלתא מהרשימה הידועה: <אין / מה נוסף>
 qa_gate       PASS/FAIL — <שורה מכרעת>
 

@@ -9,11 +9,11 @@
 | --- | --- |
 | מודולי Python ב-`src/cfo/` | 152 (40 routers, 102 services) |
 | השורות הגדולות | `sumit_integration.py` 2,847 · `models.py` 1,734 · `routes/admin.py` 1,514 |
-| קבצי טסט / טסטים | 147 קבצים · **1,318 עוברים**, 0 נכשלים, ~250 שנ' |
+| קבצי טסט / טסטים | 148 קבצים · **1,324 עוברים**, 0 נכשלים, ~250 שנ' |
 | אזהרות בסוויטה | 18,696 — כמעט כולן `datetime.utcnow()` deprecation |
-| `audit_routes.py` | **248 routes**: 172 תקין · 39 אזהרה(4xx) · 37 כשל(5xx/EXC). ה-baseline ב-`qa_gate.py` = 40 → עובר |
+| `audit_routes.py` | **248 routes**: 172 תקין · 39 אזהרה(4xx) · 36 מוגדר-סביבה(400) · **1 כשל** (honest-null) |
 | `schema_drift_check.py` (מקומי) | **נכשל** — 4 טבלאות ועשרות עמודות חסרות ב-SQLite המקומי המיושן. לא רגרסיה בקוד |
-| `qa_gate.py` | **אדום בבסיס** על 2 מתוך 8 שערים: schema drift מקומי, ו-`6. Tenancy-focused tests` (טסט תלוי-סדר — ראו §5) |
+| `qa_gate.py` | אדום בבסיס על שער אחד: schema drift מקומי (DB מיושן) |
 | מסמכי `.md` בשורש (לפני) | 17 · **(אחרי) 3** — README, CLAUDE, AGENTS |
 | lint | frontend: `npm run lint` **שבור** — אין קובץ קונפיג של eslint. backend: **אין** ruff/mypy |
 | CI | `.github/workflows/ci.yml` — pytest + frontend build. lint לא רץ ב-CI, ולכן השבירה לא נתפסה |
@@ -126,7 +126,7 @@ cfo/
 | דדופ `.agents/skills` ו-`.cursor/skills` | **מוחזק** | סביר שאלה עצי ה-skills של Codex ושל Cursor. מחיקה עלולה לשבור סוכן פעיל. נדרשת הכרעת בעלים אילו מהם חיים. |
 | 18,696 אזהרות `utcnow()` | **לא נוגע** | `datetime.now(UTC)` מחזיר tz-aware; השוואה מול עמודות DB נאיביות זורקת `TypeError`. סבב גורף = שבירה. מודול-מודול, טסטים ירוקים כשער. |
 | אין lint ל-Python | פתוח | הוספת `ruff` היא שינוי מוסכמות לכל הריפו — החלטת בעלים, לא תוצר של סדר. |
-| טסט תלוי-סדר מפיל את `qa_gate` | **ממצא חדש** | `tests/test_auth_and_tenancy.py:319` (`test_cron_sync_expense_pull_failure_does_not_abort`) עובר בסוויטה המלאה ונכשל תחת `-k "isolation or org_scope or tenancy"` — הוא מסתמך על מצב שטסט מוקדם יוצר במקום על fixture משלו. התוצאה: השער `6. Tenancy-focused tests` אדום דרך קבע, ומי שמסתכל על `qa_gate` רואה אדום שאינו רגרסיה. תיקון = fixture עצמאי לטסט. לא בוצע כאן — שינוי בקוד טסט, מעבר להיקף הסדר. |
+| שער התקציב היומי הפיל טסט | **תוקן** | `/api/cron/sync` מחזיר `{"skipped": "daily_budget"}` בלי מפתחות התוצאה כשל-org יש `SyncCheckpoint` צעיר מ-20h. שני טסטי ה-cron ב-`test_auth_and_tenancy.py` לא שלטו בתנאי הזה ונשענו על מזל. נצפה כשל בודד ב-`qa_gate` שלא שוחזר ב-5 ריצות. תוקן ב-fixture `clear_sumit_sync_budget` — הטסט שולט בתנאי במקום לרדוף אחרי המזהם. |
 | `npm run lint` שבור | **ממצא חדש** | אין קובץ קונפיג של eslint ב-`frontend/`; ה-script קיים ב-`package.json` ונופל מיד. ה-CI בונה frontend אך לא מריץ lint — ולכן זה לא נתפס. תיקון = יצירת `eslint.config.js` + הוספת השלב ל-CI, ואז ניקוי מה שיצוף. לא בוצע כאן: זו החלטת מוסכמות, לא סדר. |
 | `main` מקומי 373 קומיטים מאחור | ידוע | הענף הזה נחתך מ-`origin/main`. `git checkout main && git pull` בהזדמנות. |
 | קבצים כבדים בעץ העבודה | ידוע | `cfo.db` (430KB), גיבוי `.bak` (520KB), `reports/` — כולם ב-`.gitignore`, לא במעקב. הריפו 760MB בעיקר מ-`.git` ו-`node_modules`. |
@@ -135,8 +135,8 @@ cfo/
 ## 6. איך מריצים בדיקות
 
 ```bash
-python -m pytest tests/ -q            # 1,318 עוברים, ~250 שנ'
-python scripts/audit_routes.py        # 248 routes, 37 כשלים (baseline 40)
+python -m pytest tests/ -q            # 1,324 עוברים, ~250 שנ'
+python scripts/audit_routes.py        # 248 routes, 1 כשל (honest-null)
 python scripts/schema_drift_check.py  # נכשל מקומית — DB מיושן, לא רגרסיה
 python scripts/qa_gate.py             # עוטף את כל הנ"ל + frontend
 cd frontend && npm run build          # npm run lint שבור — אין קונפיג eslint

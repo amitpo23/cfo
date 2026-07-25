@@ -31,7 +31,11 @@ RunFn = Callable[[list], "subprocess.CompletedProcess"]
 # The real qa_gate criterion (per the Step 10 plan) is "zero NEW undocumented
 # failures", not "script exit code == 0" — so we compare the reported count
 # against this documented baseline instead.
-ROUTE_AUDIT_BASELINE_FAILURES = 40
+# עודכן 2026-07-25: עד כה הסף היה 40, כי audit_routes ספר 400 מוגדרי-סביבה כ"כשל".
+# מאז ההפרדה לדליים (scripts/route_audit_report.py) הכשלים נספרים נקי, ונשאר אחד
+# בלבד: /api/financial/ai/predict/revenue מחזיר 400 "דורש היסטוריית נתונים אמיתית"
+# — תשובת honest-null נכונה, לא תקלה. כל כשל נוסף מעבר לו = רגרסיה.
+ROUTE_AUDIT_BASELINE_FAILURES = 1
 
 
 def _default_run(cmd: list, cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
@@ -45,7 +49,7 @@ def route_audit_within_baseline(stdout: str) -> bool:
     """True if the reported failure count is at or below the documented
     baseline (no NEW failures). False (fail-safe) if the summary line is
     missing/unparseable — an audit we can't verify isn't a pass."""
-    match = re.search(r"כשל\(5xx/EXC\):\s*(\d+)", stdout)
+    match = re.search(r"כשל:\s*(\d+)", stdout)
     if not match:
         return False
     return int(match.group(1)) <= ROUTE_AUDIT_BASELINE_FAILURES

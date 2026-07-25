@@ -14,6 +14,9 @@ os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.mkdtemp(prefix='audit_')}/a.d
 os.environ["CRON_SECRET"] = "audit-cron"
 os.environ.pop("REGISTRATION_SECRET", None)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from route_audit_report import classify, summary_line  # noqa: E402
 
 from datetime import date, timedelta  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -98,31 +101,40 @@ def main():
             seen.add(url)
             # router group = first two path segments
             group = "/".join(path.split("/")[:3])
+            detail = ""
             try:
                 r = c.get(url, headers=h)
                 code = r.status_code
+                if code != 200:
+                    try:
+                        body = r.json()
+                        detail = str(body.get("detail", "")) if isinstance(body, dict) else str(body)
+                    except Exception:
+                        detail = r.text[:200]
             except Exception as e:
                 code = f"EXC:{type(e).__name__}"
-            results[group].append((url, code))
+            results[group].append((url, code, detail))
 
         # report
-        total = ok = warn = bad = 0
+        total = ok = warn = config = bad = 0
+        counters = {"OK": 0, "WARN": 0, "CONFIG": 0, "FAIL": 0}
+        marks = {"OK": "OK  ", "WARN": "WARN", "CONFIG": "CONF", "FAIL": "FAIL"}
         print("=" * 70)
         print("מיפוי מלא — GET routes (על ארגון עם נתונים)")
         print("=" * 70)
         for group in sorted(results):
             print(f"\n## {group}")
-            for url, code in sorted(results[group]):
+            for url, code, detail in sorted(results[group], key=lambda t: t[0]):
                 total += 1
-                if code == 200:
-                    mark = "OK  "; ok += 1
-                elif isinstance(code, int) and code in (401, 403, 404, 422):
-                    mark = "WARN"; warn += 1
-                else:
-                    mark = "FAIL"; bad += 1
-                print(f"  [{mark}] {code} {url}")
+                kind = classify(code, detail)
+                counters[kind] += 1
+                suffix = f"  ({detail[:60]})" if kind in ("CONFIG", "FAIL") and detail else ""
+                print(f"  [{marks[kind]}] {code} {url}{suffix}")
+        ok, warn, config, bad = (counters["OK"], counters["WARN"],
+                                 counters["CONFIG"], counters["FAIL"])
         print("\n" + "=" * 70)
-        print(f"סהכ: {total} | תקין(200): {ok} | אזהרה(4xx): {warn} | כשל(5xx/EXC): {bad}")
+        print(summary_line(total=total, ok=ok, warn=warn, config=config, bad=bad))
+        print("CONF = 400 מהיעדר קרדנשלים בסביבת האודיט — התנהגות נכונה, לא ממצא.")
         print("=" * 70)
         return bad
 

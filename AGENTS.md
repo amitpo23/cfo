@@ -48,10 +48,10 @@
 
 | פקודה | בסיס מדוד |
 | --- | --- |
-| `python -m pytest tests/ -q` | **1,318 עוברים**, 0 נכשלים, ~250 שנ', 18,696 אזהרות |
-| `python scripts/audit_routes.py` | **248 routes**: 172 תקין · 39 אזהרה(4xx) · **37 כשל(5xx/EXC)** — ה-baseline המתועד ב-`qa_gate.py` הוא 40, כלומר 37 = עובר |
+| `python -m pytest tests/ -q` | **1,324 עוברים**, 0 נכשלים, ~250 שנ', 18,696 אזהרות |
+| `python scripts/audit_routes.py` | **248 routes**: 172 תקין · 39 אזהרה(4xx) · **36 מוגדר-סביבה(400)** · **1 כשל**. הכשל היחיד: `/api/financial/ai/predict/revenue` מחזיר 400 "דורש היסטוריית נתונים" — honest-null נכון. כל כשל נוסף = רגרסיה |
 | `python scripts/schema_drift_check.py` | **נכשל** על ה-DB המקומי: 4 טבלאות חסרות (`filing_crosschecks`, `morning_briefs`, `of_snapshot_cache`, `vehicle_profiles`) + עמודות ב-`organizations`/`accounts`/`daily_snapshots`/`expenses`. ה-SQLite המקומי מיושן — **לא רגרסיה** |
-| `python scripts/qa_gate.py` | **נכשל בבסיס** על 2 שערים: `3a. Schema drift (local)` (DB מקומי מיושן) ו-`6. Tenancy-focused tests` (טסט תלוי-סדר, ראו מלכודות). 6 השערים האחרים עוברים: סוויטה מלאה, route audit, tsc, build, colscan |
+| `python scripts/qa_gate.py` | נכשל בבסיס על שער אחד בלבד: `3a. Schema drift (local)` (DB מקומי מיושן). 7 השערים האחרים עוברים |
 | `cd frontend && npm ci && npm run build` | עובר (tsc + vite) |
 | `cd frontend && npm run lint` | ⚠️ **שבור** — אין קובץ קונפיג של eslint ב-`frontend/`. ה-script קיים ב-`package.json` אבל נופל מיד. ה-CI לא מריץ lint ולכן זה לא נתפס. אל תדווח על זה כרגרסיה — זה פער ידוע |
 | `python scripts/render_bookkeeper_kb.py` | מייצר את `docs/bookkeeper_kb/03-classification-bridge.md` |
@@ -77,11 +77,12 @@ scripts/               כלי תפעול; ראו טבלת החסימות למע�
 
 - **אל תריץ שתי ריצות pytest במקביל.** הסוויטה עובדת מול ה-SQLite המקומי; שתי ריצות
   בו-זמנית מייצרות כשלים מדומים. נצפה בפועל: `qa_gate.py` דיווח `FAIL — Full test suite`
-  בזמן שריצה נוספת פעלה ברקע, ועבר נקי (1,318) בריצה בודדת.
-- **טסט תלוי-סדר**: `tests/test_auth_and_tenancy.py:319`
-  (`test_cron_sync_expense_pull_failure_does_not_abort`) עובר בסוויטה המלאה ונכשל תחת
-  הסלקציה `-k "isolation or org_scope or tenancy"` — הוא מסתמך על מצב שטסט מוקדם יותר
-  יוצר, במקום על fixture משלו. זו הסיבה שהשער `6. Tenancy-focused tests` אדום.
+  בזמן שריצה נוספת פעלה ברקע, ועבר נקי בריצה בודדת.
+- **שער התקציב היומי מסתיר תוצאות cron**: אם ל-org/source יש `SyncCheckpoint` עם
+  `last_success_at` צעיר מ-20h, `/api/cron/sync` מחזיר `{"skipped": "daily_budget"}`
+  בלי מפתחות התוצאה. טסט שבודק תוצאת sync חייב לנקות את הרשומה קודם
+  (fixture `clear_sumit_sync_budget` ב-`tests/test_auth_and_tenancy.py`) — אחרת הוא
+  נכשל מסיבה שאינה קשורה למה שהוא בודק. **תוקן 2026-07-25.**
 
 - **סכימת פרוד**: `create_all` לא מוסיף עמודות. עמודה חדשה = סקריפט idempotent
   (דפוס `scripts/fix_prod_schema_drift.py`), לא alembic בלבד.
