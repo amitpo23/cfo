@@ -17,12 +17,15 @@ model: sonnet
 ## הרצה — בסדר הזה
 
 ```bash
-python -m pytest tests/ -q                  # בסיס: 1,318 עוברים, ~250 שנ' (2026-07-25)
-python scripts/qa_gate.py
-python scripts/audit_routes.py
-python scripts/schema_drift_check.py
-cd frontend && npm ci --silent && npm run build && npm run lint
+python -m pytest tests/ -q                  # בסיס: 1,318 עוברים, ~250 שנ'
+python scripts/audit_routes.py              # בסיס: 248 routes, 37 כשל(5xx/EXC)
+python scripts/schema_drift_check.py        # נכשל מקומית: DB מיושן — לא רגרסיה
+python scripts/qa_gate.py                   # עוטף את כל הנ"ל + frontend
+cd frontend && npm ci --silent && npm run build
 ```
+
+כל הבסיסים נמדדו 2026-07-25 על `1844af7`. `npm run lint` **שבור** (אין קונפיג eslint) —
+לא להריץ כשער ולא לדווח כרגרסיה.
 
 אם pytest נכשל: להריץ שוב את הכישלונות בלבד ב-`-x -vv` כדי לצלם traceback מלא, לא לנחש.
 
@@ -32,10 +35,10 @@ cd frontend && npm ci --silent && npm run build && npm run lint
 שער QA — <תאריך>  |  ענף: <branch>  |  HEAD: <sha7>
 
 pytest         PASS 1318 / FAIL 0 / דילוגים N   (Xs)   [דלתא מהבסיס: ±N]
+audit_routes   N routes, M כשלים          [דלתא מ-37: ±M]
+schema_drift   דלתא מהרשימה הידועה: <אין | מה נוסף>
 qa_gate        PASS | FAIL — <שורה מכרעת>
-audit_routes   N routes, M כשלים — <רשימה>
-schema_drift   נקי | <עמודות חסרות>
-frontend       build PASS | lint PASS (0 אזהרות)
+frontend       build PASS | FAIL          (lint שבור — לא נבדק)
 
 כישלונות (אם יש), לכל אחד: test id · שורת ה-assert · הסיבה בשורה אחת.
 מסקנה: ירוק לקומיט / חסום — <מה חוסם>.

@@ -11,9 +11,12 @@
 | השורות הגדולות | `sumit_integration.py` 2,847 · `models.py` 1,734 · `routes/admin.py` 1,514 |
 | קבצי טסט / טסטים | 147 קבצים · **1,318 עוברים**, 0 נכשלים, ~250 שנ' |
 | אזהרות בסוויטה | 18,696 — כמעט כולן `datetime.utcnow()` deprecation |
+| `audit_routes.py` | **248 routes**: 172 תקין · 39 אזהרה(4xx) · 37 כשל(5xx/EXC). ה-baseline ב-`qa_gate.py` = 40 → עובר |
+| `schema_drift_check.py` (מקומי) | **נכשל** — 4 טבלאות ועשרות עמודות חסרות ב-SQLite המקומי המיושן. לא רגרסיה בקוד |
+| `qa_gate.py` | **אדום בבסיס** על 2 מתוך 8 שערים: schema drift מקומי, ו-`6. Tenancy-focused tests` (טסט תלוי-סדר — ראו §5) |
 | מסמכי `.md` בשורש (לפני) | 17 · **(אחרי) 3** — README, CLAUDE, AGENTS |
-| lint | frontend: eslint `--max-warnings 0`. backend: **אין** ruff/mypy |
-| CI | `.github/workflows/ci.yml` — pytest + frontend build. אין lint ל-frontend ב-CI |
+| lint | frontend: `npm run lint` **שבור** — אין קובץ קונפיג של eslint. backend: **אין** ruff/mypy |
+| CI | `.github/workflows/ci.yml` — pytest + frontend build. lint לא רץ ב-CI, ולכן השבירה לא נתפסה |
 
 ## 2. שכבות ההנחיה — מה קיים ומה נוסף
 
@@ -65,8 +68,20 @@
 2. **עריכת מסמך מיוצר** — `docs/bookkeeper_kb/03-classification-bridge.md` מיוצר מ-
    `src/cfo/services/israeli_tax_rules.py`. עריכה ידנית שם נדרסת בריצת הרנדרר הבאה.
 
-ה-hook נבדק ב-6 pipe-tests (2 חסימות Bash, 1 חסימת עריכה, 3 מסלולים מותרים) — כולם עברו.
-`permissions.deny` ב-`settings.json` מכסה את אותם סקריפטים כחגורה שנייה.
+**מה נבדק:** 13 בדיקות ב-`.claude/hooks/` (חסימה בנתיב ישיר, דרך `cd`, דרך `uv run`,
+דרך `bash -c`, `--env-file`, עריכת מסמך מיוצר; ומנגד: pytest, `qa_gate` מקומי,
+`audit_routes`, `grep` על שם דומה, קומיט שמזכיר שם, עריכת קוד — עוברים). בנוסף הוא
+**הוכח חי בפועל**: ניסיון להריץ את מערך הבדיקות מהצ'אט נחסם על ידו.
+
+**גבולות שכדאי לדעת:**
+
+- ההתאמה דורשת טוקן מפעיל (`python`/`node`/`uv run`/`bash`/`./`) לפני שם הסקריפט באותו
+  מקטע פקודה. גרסה קודמת התאימה על השם בלבד וחסמה גם `grep` וקומיטים — over-block.
+- קלט לא-תקין או `jq` חסר → **fail-closed** (חוסם עם הסבר), לא מעבר שקט.
+- `permissions.deny` ב-`settings.json` מכסה רק את צורת ההפעלה המפורשת
+  (`python scripts/X.py`) ולא וריאנטים כמו `uv run` או `cd scripts &&`. **האכיפה
+  האמיתית היא ה-hook**; ה-deny הוא נוחות, לא שכבה שנייה.
+- זהו מעקה נגד פעולה בשוגג, לא גבול אבטחה מול יריב.
 
 ## 3. סדר הקבצים — מה זז
 
@@ -111,7 +126,8 @@ cfo/
 | דדופ `.agents/skills` ו-`.cursor/skills` | **מוחזק** | סביר שאלה עצי ה-skills של Codex ושל Cursor. מחיקה עלולה לשבור סוכן פעיל. נדרשת הכרעת בעלים אילו מהם חיים. |
 | 18,696 אזהרות `utcnow()` | **לא נוגע** | `datetime.now(UTC)` מחזיר tz-aware; השוואה מול עמודות DB נאיביות זורקת `TypeError`. סבב גורף = שבירה. מודול-מודול, טסטים ירוקים כשער. |
 | אין lint ל-Python | פתוח | הוספת `ruff` היא שינוי מוסכמות לכל הריפו — החלטת בעלים, לא תוצר של סדר. |
-| `npm run lint` לא ב-CI | פתוח | ה-CI בונה frontend אך לא מריץ eslint. תוספת של שורה אחת, אבל תיפול על אזהרות קיימות עד שינוקו. |
+| טסט תלוי-סדר מפיל את `qa_gate` | **ממצא חדש** | `tests/test_auth_and_tenancy.py:319` (`test_cron_sync_expense_pull_failure_does_not_abort`) עובר בסוויטה המלאה ונכשל תחת `-k "isolation or org_scope or tenancy"` — הוא מסתמך על מצב שטסט מוקדם יוצר במקום על fixture משלו. התוצאה: השער `6. Tenancy-focused tests` אדום דרך קבע, ומי שמסתכל על `qa_gate` רואה אדום שאינו רגרסיה. תיקון = fixture עצמאי לטסט. לא בוצע כאן — שינוי בקוד טסט, מעבר להיקף הסדר. |
+| `npm run lint` שבור | **ממצא חדש** | אין קובץ קונפיג של eslint ב-`frontend/`; ה-script קיים ב-`package.json` ונופל מיד. ה-CI בונה frontend אך לא מריץ lint — ולכן זה לא נתפס. תיקון = יצירת `eslint.config.js` + הוספת השלב ל-CI, ואז ניקוי מה שיצוף. לא בוצע כאן: זו החלטת מוסכמות, לא סדר. |
 | `main` מקומי 373 קומיטים מאחור | ידוע | הענף הזה נחתך מ-`origin/main`. `git checkout main && git pull` בהזדמנות. |
 | קבצים כבדים בעץ העבודה | ידוע | `cfo.db` (430KB), גיבוי `.bak` (520KB), `reports/` — כולם ב-`.gitignore`, לא במעקב. הריפו 760MB בעיקר מ-`.git` ו-`node_modules`. |
 | `models.py` 1,734 שורות / `sumit_integration.py` 2,847 | פתוח | מועמדים לפיצול, אבל פיצול בלי צורך תפעולי הוא רפקטור לשם רפקטור. |
@@ -119,12 +135,14 @@ cfo/
 ## 6. איך מריצים בדיקות
 
 ```bash
-python -m pytest tests/ -q            # 1,318 עוברים, ~250 שנ' (בסיס 2026-07-25)
-python scripts/qa_gate.py             # שער QA מקומי
-python scripts/audit_routes.py        # ~231 routes
-python scripts/schema_drift_check.py  # דריפט סכימה
-cd frontend && npm run build && npm run lint
+python -m pytest tests/ -q            # 1,318 עוברים, ~250 שנ'
+python scripts/audit_routes.py        # 248 routes, 37 כשלים (baseline 40)
+python scripts/schema_drift_check.py  # נכשל מקומית — DB מיושן, לא רגרסיה
+python scripts/qa_gate.py             # עוטף את כל הנ"ל + frontend
+cd frontend && npm run build          # npm run lint שבור — אין קונפיג eslint
 ```
+
+כל הבסיסים נמדדו 2026-07-25 על `1844af7`.
 
 - דרך Claude Code: הסוכן `qa-runner` מריץ את כל הרצף ומחזיר דוח תמציתי.
 - דרך Codex: `docs/prompts/codex-qa-run.md` — פרומפט מוכן להעתקה, עם הרשימה השחורה בפנים.
