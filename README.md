@@ -29,6 +29,20 @@ Database boundaries are documented in
 [`docs/DATABASE_MAP.md`](docs/DATABASE_MAP.md). Production data is not stored in
 the local SQLite file.
 
+## Documentation and Agent Instructions
+
+- [`docs/README.md`](docs/README.md) — documentation index: what to load for
+  which kind of work. Start here.
+- [`CLAUDE.md`](CLAUDE.md) — binding doctrines (verify-first, triple
+  verification, honest-null, zero autonomy on irreversible actions, API cost
+  discipline).
+- [`AGENTS.md`](AGENTS.md) — entry point for Codex/Cursor/Copilot: verified
+  commands and the list of scripts that are off-limits to automated agents.
+- [`docs/REPO_ORDER_AND_CONTROL_PLANE.md`](docs/REPO_ORDER_AND_CONTROL_PLANE.md)
+  — repo layout and the instruction layers (rules, skills, agents, hooks).
+- [`docs/archive/`](docs/archive/) holds historical status snapshots. They are
+  not a source of truth for the current state.
+
 ## Production Status
 
 The current production deployment has:
@@ -179,7 +193,9 @@ rezef-local-frontend:latest
 ## Production Readiness Check
 
 The read-only readiness script validates env, DB connectivity, core tables, and
-optional integration pings:
+optional integration pings. It pings SUMIT and Open Finance live, so it is
+owner-run only — automated agents must not run it (see
+[`AGENTS.md`](AGENTS.md)):
 
 ```bash
 vercel env pull /tmp/rezef-prod.env --environment=production
