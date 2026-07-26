@@ -17,7 +17,13 @@ from ...integrations.sumit_models import (
     BillingTransactionRequest, BillingTransaction,
     TokenizeCardRequest, TokenResponse
 )
-from ..dependencies import get_current_org_id, get_current_user, get_db, get_sumit_integration
+from ..dependencies import (
+    get_current_org_id,
+    get_current_user,
+    get_db,
+    get_sumit_integration,
+    require_admin,
+)
 
 router = APIRouter()
 
@@ -27,8 +33,8 @@ router = APIRouter()
 @router.post("/charge", response_model=PaymentResponse)
 async def charge_customer(
     charge: ChargeRequest,
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Charge customer"""
     async with sumit:
@@ -85,8 +91,8 @@ async def set_payment_method(
     customer_id: str = Query(...),
     payment_method_id: str = Query(...),
     is_default: bool = Query(False),
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Set customer payment method"""
     async with sumit:
@@ -97,8 +103,8 @@ async def set_payment_method(
 async def remove_payment_method(
     customer_id: str = Query(...),
     payment_method_id: str = Query(...),
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Remove customer payment method"""
     async with sumit:
@@ -113,8 +119,8 @@ async def begin_payment_redirect(
     description: str = Query(...),
     return_url: str = Query(...),
     customer_id: Optional[str] = Query(None),
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Begin payment redirect flow"""
     async with sumit:
@@ -143,8 +149,8 @@ async def list_customer_recurring(
 @router.post("/recurring/{recurring_id}/cancel")
 async def cancel_recurring(
     recurring_id: str,
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Cancel recurring payment"""
     async with sumit:
@@ -155,8 +161,8 @@ async def cancel_recurring(
 async def update_recurring(
     recurring_id: str,
     updates: RecurringPaymentRequest,
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Update recurring payment details"""
     async with sumit:
@@ -168,8 +174,8 @@ async def update_recurring(
 @router.post("/terminal/transaction", response_model=TransactionResponse)
 async def create_card_transaction(
     transaction: TransactionRequest,
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Create credit card transaction"""
     async with sumit:
@@ -191,8 +197,8 @@ async def get_transaction(
 async def begin_transaction_redirect(
     transaction_id: str = Query(...),
     return_url: str = Query(...),
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Begin redirect flow for transaction"""
     async with sumit:
@@ -205,8 +211,8 @@ async def begin_transaction_redirect(
 @router.post("/terminal/billing/load", response_model=List[BillingTransaction])
 async def load_billing_transactions(
     request: BillingTransactionRequest,
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Load billing transactions from credit card terminal"""
     async with sumit:
@@ -216,8 +222,8 @@ async def load_billing_transactions(
 @router.post("/terminal/billing/process")
 async def process_billing_transactions(
     transaction_ids: List[str],
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Process billing transactions"""
     async with sumit:
@@ -240,8 +246,8 @@ async def get_billing_status(
 @router.post("/vault/tokenize", response_model=TokenResponse)
 async def tokenize_card(
     request: TokenizeCardRequest,
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Tokenize credit card for future use"""
     async with sumit:
@@ -251,8 +257,8 @@ async def tokenize_card(
 @router.post("/vault/tokenize-single-use", response_model=TokenResponse)
 async def tokenize_single_use(
     request: TokenizeCardRequest,
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Tokenize card for single use"""
     async with sumit:
@@ -265,8 +271,8 @@ async def tokenize_single_use(
 async def open_upay_terminal(
     amount: Decimal = Query(...),
     description: str = Query(...),
+    current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
-    current_user: dict = Depends(get_current_user)
 ):
     """Open Upay terminal for payment"""
     async with sumit:
@@ -284,6 +290,7 @@ class UpayCredentialsRequest(BaseModel):
 @router.post("/upay/setup")
 async def setup_upay(
     request: UpayCredentialsRequest,
+    current_user: dict = Depends(require_admin),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
     sumit: SumitIntegration = Depends(get_sumit_integration),

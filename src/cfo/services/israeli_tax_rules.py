@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from typing import Optional
@@ -66,6 +67,46 @@ _TWO_THIRDS = Decimal("2") / Decimal("3")
 SUPPLIER_KINDS_NO_VAT: frozenset[str] = frozenset(
     {"bank", "insurance", "government", "municipality", "salary", "exempt_dealer"}
 )
+
+# סכומי חשבונית לפני מע"מ שמעליהם חלה תקרת "חשבוניות ישראל". זהו תנאי הסכום
+# בלבד; שאר התנאים (רכיב מע"מ, לקוח עוסק מורשה ודרישת הלקוח) נבדקים בנפרד.
+# מקור רשמי, אומת 2026-07-25:
+# https://www.gov.il/he/service/request-assignment-number-for-tax-invoice
+# https://www.gov.il/he/pages/minisite-israel-invoice-200324
+# לפני 2025 אין כאן טווח מאומת ולכן מוחזר None, לא סף מנוחש.
+ISRAEL_INVOICE_ALLOCATION_THRESHOLDS: tuple[tuple[date, Decimal], ...] = (
+    (date(2025, 1, 1), Decimal("20000")),
+    (date(2026, 1, 1), Decimal("10000")),
+    (date(2026, 6, 1), Decimal("5000")),
+)
+
+
+def allocation_threshold_for(invoice_date: date) -> Optional[Decimal]:
+    """Return the verified amount-before-VAT threshold effective on a date.
+
+    `None` means the date predates this module's verified timeline. It must
+    enter a decision/verification path rather than being interpreted as zero
+    or as "no allocation number required".
+    """
+    for effective_from, threshold in reversed(
+        ISRAEL_INVOICE_ALLOCATION_THRESHOLDS,
+    ):
+        if invoice_date >= effective_from:
+            return threshold
+    return None
+
+
+def allocation_amount_exceeds_threshold(
+    *,
+    invoice_date: date,
+    amount_before_vat: Decimal,
+) -> Optional[bool]:
+    """Evaluate only the dated amount condition for an allocation number."""
+    threshold = allocation_threshold_for(invoice_date)
+    if threshold is None:
+        return None
+    return Decimal(str(amount_before_vat)) > threshold
+
 
 # תקנה 14 — חריגים שבהם תשומות *רכישת* רכב כן מותרות במלואן.
 _VEHICLE_PURCHASE_FULL_KINDS: frozenset[str] = frozenset(
@@ -353,8 +394,6 @@ def resolve_vehicle_profile_args(
 # הסתמכות בדיווח. כל ⚠️ ב-KB01/KB02 חייב שורה כאן.
 # ---------------------------------------------------------------------- #
 VERIFICATION_NEEDED: list[str] = [
-    'מספרי הקצאה (חשבוניות ישראל) 2026: מקורות סותרים — ₪15,000 לפי לוח '
-    'החקיקה המקורי מול ₪10,000→₪5,000 לפי מקורות אחרים. לאמת מול gov.il לפני אכיפה בקוד.',
     'אש"ל בחו"ל: תקרות יומיות ~$97 (עם לינה נפרדת) / ~$162 — לאימות שנתי.',
     'מתנות ללקוחות: עד ₪240 למקבל לשנה בארץ, $15 לתושב חוץ — לאימות שנתי.',
     'ציוד זול הנרשם כהוצאה שוטפת: סף מקובל ~₪1,200 — לאימות.',
@@ -419,6 +458,23 @@ def render_bridge_table_he() -> str:
             f"{_fraction_display(rule.input_vat_fraction)} | {evidence} | {rule.citation_he} |"
         )
 
+    lines.append("")
+    lines.append("### עובדה רגולטורית מאומתת — מספרי הקצאה")
+    lines.append("")
+    lines.append(
+        "תנאי הסכום נבדק לפי תאריך החשבונית והסכום לפני מע״מ; "
+        "רק סכום **שמעל** הסף עובר את תנאי הסכום:"
+    )
+    lines.append("")
+    for effective_from, threshold in ISRAEL_INVOICE_ALLOCATION_THRESHOLDS:
+        lines.append(
+            f"- מ־{effective_from.isoformat()}: ₪{threshold:,.0f} "
+            "(מקור: רשות המסים, אומת 2026-07-25)."
+        )
+    lines.append(
+        "- לפני 2025 הטבלה מחזירה `null` ודורשת אימות; "
+        "אין להסיק שאין חובת הקצאה."
+    )
     lines.append("")
     lines.append("### ⚠️ VERIFICATION_NEEDED — ספים/שיעורים לאימות מול gov.il")
     lines.append("")

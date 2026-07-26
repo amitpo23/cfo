@@ -1,5 +1,10 @@
 # רצף כמתכלל — מפת יכולות מלאה ותוכנית מימוש v2
 
+> **היסטורי — לא לוח ביצוע.** סטטוס וקדימות נמצאים רק ב-
+> [`MASTER_EXECUTION_PLAN.md`](MASTER_EXECUTION_PLAN.md); החוזה היציב ומפת היכולות
+> נמצאים ב-[`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md) וב-
+> [`rezef_capabilities.json`](rezef_capabilities.json).
+
 **נבנה:** 2026-07-10. **חלק א' (מפת כיסוי) הוחלף** ב-2026-07-12 ע"י מיפוי אמפירי
 מלא ומעודכן: [REZEF_CAPABILITY_COVERAGE_2026-07-12.md](REZEF_CAPABILITY_COVERAGE_2026-07-12.md)
 (כל 84 endpoints SUMIT + כל 83 מתודות Open Finance, מסווגות לפי שימוש אמיתי

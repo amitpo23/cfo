@@ -1,5 +1,8 @@
 # Rezef ↔ SUMIT ↔ Open Finance — TODO
 
+> **Historical checklist — do not resume from here.** The only active board is
+> [`MASTER_EXECUTION_PLAN.md`](MASTER_EXECUTION_PLAN.md).
+
 **Plan:** [`REZEF_SUMIT_OPEN_FINANCE_COMPLETION_PLAN.md`](REZEF_SUMIT_OPEN_FINANCE_COMPLETION_PLAN.md)  
 **Rule:** Do not execute mutating production steps without the approval specified in the plan.  
 **Pilot:** Organization 1 — עמית פורת

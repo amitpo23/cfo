@@ -540,7 +540,14 @@ class ExpenseFilingService:
                 continue
             total = abs(Decimal(str(getattr(d, "total_amount", 0) or 0)))
             vat = abs(Decimal(str(getattr(d, "vat_amount", 0) or 0)))
-            supplier = str(getattr(d, "customer_id", "") or "").strip() or "ספק SUMIT"
+            # /documents/list already carries CustomerName. Preserve it instead
+            # of storing only the numeric ID and forcing a paid getdetails call
+            # merely to recover a name we already received.
+            supplier = (
+                str(getattr(d, "customer_name", "") or "").strip()
+                or str(getattr(d, "customer_id", "") or "").strip()
+                or "ספק SUMIT"
+            )
             invoice_no = getattr(d, "document_number", None)
             exp = Expense(
                 organization_id=self.organization_id,

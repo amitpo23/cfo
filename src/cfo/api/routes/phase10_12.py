@@ -8,8 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..dependencies import get_db, get_current_org_id
-from ...services.payment_orchestration import PaymentOrchestrationService
+from ..dependencies import get_db, get_current_org_id, require_admin
+from ...services.payment_orchestration import (
+    PaymentExecutionUnavailable,
+    PaymentOrchestrationService,
+)
 from ...services.forecasting_advanced import AdvancedForecastingService
 
 router = APIRouter(prefix="/advanced", tags=["Phase 10-12: Advanced Services"])
@@ -48,8 +51,9 @@ async def execute_payment(
     request: ExecutePaymentRequest,
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
+    _admin=Depends(require_admin),
 ):
-    """Execute or schedule a payment."""
+    """Fail closed until a real approval-aware provider adapter is wired."""
     from decimal import Decimal
     service = PaymentOrchestrationService(db, org_id)
     try:
@@ -61,6 +65,8 @@ async def execute_payment(
             request.scheduled_date,
         )
         return {"status": "success", "data": result}
+    except PaymentExecutionUnavailable as exc:
+        raise HTTPException(status_code=501, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

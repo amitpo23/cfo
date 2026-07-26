@@ -1,15 +1,90 @@
-"""POST /api/admin/db/migrate חייב להשלים גם עמודות חסרות (drift), לא רק alembic."""
+"""Gate-0 schema migration is global, explicit and fail-closed."""
+
+import pytest
 import sqlalchemy as sa
 
+from cfo.auth import create_access_token
 from cfo.database import engine
+from cfo.database import SessionLocal
+from cfo.models import User, UserRole
 
 
-def test_migrate_endpoint_reports_and_fixes_drift(client, owner):
+CONFIRMATION = "I_UNDERSTAND_SCHEMA_MIGRATION_IS_GLOBAL"
+
+
+@pytest.fixture
+def migration_super_admin(client, fresh_org):
+    actor = fresh_org()
+    db = SessionLocal()
+    try:
+        user = (
+            db.query(User)
+            .filter(User.organization_id == actor["org_id"])
+            .order_by(User.id)
+            .first()
+        )
+        user.role = UserRole.SUPER_ADMIN
+        db.commit()
+        token = create_access_token(
+            data={
+                "sub": str(user.id),
+                "role": UserRole.SUPER_ADMIN.value,
+                "org_id": user.organization_id,
+            }
+        )
+    finally:
+        db.close()
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_organization_admin_cannot_run_global_schema_migration(client, owner):
+    response = client.post(
+        "/api/admin/db/migrate",
+        json={"confirmation": CONFIRMATION},
+        headers=owner["headers"],
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Super admin access required"
+
+
+def test_super_admin_must_confirm_before_schema_mutation(
+    client,
+    migration_super_admin,
+    monkeypatch,
+):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("schema mutation reached without exact confirmation")
+
+    monkeypatch.setattr("alembic.command.upgrade", forbidden)
+    monkeypatch.setattr("alembic.command.stamp", forbidden)
+    monkeypatch.setattr("cfo.services.schema_sync.apply_additive", forbidden)
+
+    response = client.post(
+        "/api/admin/db/migrate",
+        json={"confirmation": "yes"},
+        headers=migration_super_admin,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        f"Exact confirmation required: {CONFIRMATION}"
+    )
+
+
+def test_migrate_endpoint_reports_and_fixes_drift(
+    client,
+    migration_super_admin,
+):
     """מדמים drift של עמודה ואז מוודאים שה-endpoint סוגר אותו ומדווח."""
     with engine.begin() as conn:
         conn.execute(sa.text("ALTER TABLE organizations DROP COLUMN collection_sms_sender"))
 
-    resp = client.post("/api/admin/db/migrate", headers=owner["headers"])
+    resp = client.post(
+        "/api/admin/db/migrate",
+        json={"confirmation": CONFIRMATION},
+        headers=migration_super_admin,
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert "schema_sync" in body
@@ -20,7 +95,11 @@ def test_migrate_endpoint_reports_and_fixes_drift(client, owner):
     assert "collection_sms_sender" in cols
 
 
-def test_migrate_endpoint_falls_back_to_stamp_on_already_exists_conflict(client, owner, monkeypatch):
+def test_migrate_endpoint_falls_back_to_verified_repair_on_already_exists_conflict(
+    client,
+    migration_super_admin,
+    monkeypatch,
+):
     """create_all↔alembic conflict: upgrade נכשל עם 'already exists' (DatabaseError) —
     ה-endpoint צריך ליפול חזרה ל-stamp ולדווח action=stamped_after_conflict, ולא
     להתפוצץ. מוודאים שהתפיסה מוגבלת ל-DatabaseError (ולא Exception כללי) ע"י
@@ -51,8 +130,12 @@ def test_migrate_endpoint_falls_back_to_stamp_on_already_exists_conflict(client,
     monkeypatch.setattr("alembic.command.upgrade", fake_upgrade)
     monkeypatch.setattr("alembic.command.stamp", fake_stamp)
 
-    resp = client.post("/api/admin/db/migrate", headers=owner["headers"])
+    resp = client.post(
+        "/api/admin/db/migrate",
+        json={"confirmation": CONFIRMATION},
+        headers=migration_super_admin,
+    )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["action"].startswith("stamped_after_conflict")
+    assert body["action"].startswith("reconciled_after_conflict")
     assert stamp_calls == ["head"]

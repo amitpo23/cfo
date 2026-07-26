@@ -9,9 +9,9 @@
 | --- | --- |
 | מודולי Python ב-`src/cfo/` | 152 (40 routers, 102 services) |
 | השורות הגדולות | `sumit_integration.py` 2,847 · `models.py` 1,734 · `routes/admin.py` 1,514 |
-| קבצי טסט / טסטים | 148 קבצים · **1,324 עוברים**, 0 נכשלים, ~250 שנ' |
-| אזהרות בסוויטה | 18,696 — כמעט כולן `datetime.utcnow()` deprecation |
-| `audit_routes.py` | **248 routes**: 172 תקין · 39 אזהרה(4xx) · 36 מוגדר-סביבה(400) · **1 כשל** (honest-null) |
+| קבצי טסט / טסטים | 154 קבצים · **1,401 עוברים**, 0 נכשלים, ~247 שנ' |
+| אזהרות בסוויטה | 19,948 — כמעט כולן `datetime.utcnow()` deprecation |
+| `audit_routes.py` | **250 routes**: 174 תקין · 39 אזהרה(4xx) · 36 מוגדר-סביבה(400) · **1 כשל** (honest-null) |
 | `schema_drift_check.py` (מקומי) | **נכשל** — 4 טבלאות ועשרות עמודות חסרות ב-SQLite המקומי המיושן. לא רגרסיה בקוד |
 | `qa_gate.py` | אדום בבסיס על שער אחד: schema drift מקומי (DB מיושן) |
 | מסמכי `.md` בשורש (לפני) | 17 · **(אחרי) 3** — README, CLAUDE, AGENTS |
@@ -44,12 +44,15 @@
 ה-org-scope, ו-`frontend/CLAUDE.md` עם מוסכמות ה-UI. לא נוצרו כדי לא לנפח קונטקסט לפני
 שיש תוכן שמצדיק את זה.
 
-### 2.2 שכבת skills — עודף, לא חוסר
+### 2.2 שכבת skills — נתב רזה במקום ידע כפול
 
-שלושה עצים מקבילים עם תוכן חופף: `.claude/skills/` (~30 skills, ~179 קבצים),
-`.agents/skills/`, `.cursor/skills/`. סביר ש-`.agents/` הוא של Codex ו-`.cursor/` של Cursor
-— ולכן **לא נמחק כלום**: מחיקה עלולה לשבור בדיוק את הסוכן שעומדים להריץ.
-ההמלצה: `.claude/skills/` הוא הקנוני; לגבי השניים האחרים ראו §5.
+שלושה עצים מקבילים עדיין קיימים: `.claude/skills/`, `.agents/skills/`,
+`.cursor/skills/`. אין להפוך אף אחד מהם למקור ידע חשבונאי נפרד. מקור האמת הוא
+`docs/rezef_capabilities.json` ומרכזי הידע שאליהם הוא מפנה.
+
+ב-2026-07-25 נוסף `.agents/skills/rezef-operator/` כנתב Codex רזה: הוא בוחר יכולת,
+טוען את ה-KB וה-SOP הקנוניים ומחיל את השערים. שלד `data` הריק הוסר. skills כלליים
+בעצי `.claude`/`.agents` נשארים חומר עזר בלבד ואינם רשאים לעקוף את החוזה.
 
 24 מה-skills מכובים ב-`settings.local.json` (`skillOverrides: off`). **זה לא פגם** — זה
 תקצוב קונטקסט מכוון, בדיוק מה שהאינפוגרפיקה מטיפה לו.
@@ -123,8 +126,8 @@ cfo/
 
 | נושא | מצב | למה |
 | --- | --- | --- |
-| דדופ `.agents/skills` ו-`.cursor/skills` | **מוחזק** | סביר שאלה עצי ה-skills של Codex ושל Cursor. מחיקה עלולה לשבור סוכן פעיל. נדרשת הכרעת בעלים אילו מהם חיים. |
-| 18,696 אזהרות `utcnow()` | **לא נוגע** | `datetime.now(UTC)` מחזיר tz-aware; השוואה מול עמודות DB נאיביות זורקת `TypeError`. סבב גורף = שבירה. מודול-מודול, טסטים ירוקים כשער. |
+| דדופ `.agents/skills` ו-`.cursor/skills` | **נפתר ברמת מקור האמת** | לא נמחקים עצי harness; הידע הקנוני עבר למניפסט/KB, ו-Codex משתמש בנתב `rezef-operator`. דדופ פיזי נשאר אופציונלי ואינו נדרש לעקביות. |
+| 19,948 אזהרות `utcnow()` | **לא נוגע** | `datetime.now(UTC)` מחזיר tz-aware; השוואה מול עמודות DB נאיביות זורקת `TypeError`. סבב גורף = שבירה. מודול-מודול, טסטים ירוקים כשער. |
 | אין lint ל-Python | פתוח | הוספת `ruff` היא שינוי מוסכמות לכל הריפו — החלטת בעלים, לא תוצר של סדר. |
 | שער התקציב היומי הפיל טסט | **תוקן** | `/api/cron/sync` מחזיר `{"skipped": "daily_budget"}` בלי מפתחות התוצאה כשל-org יש `SyncCheckpoint` צעיר מ-20h. שני טסטי ה-cron ב-`test_auth_and_tenancy.py` לא שלטו בתנאי הזה ונשענו על מזל. נצפה כשל בודד ב-`qa_gate` שלא שוחזר ב-5 ריצות. תוקן ב-fixture `clear_sumit_sync_budget` — הטסט שולט בתנאי במקום לרדוף אחרי המזהם. |
 | `npm run lint` שבור | **ממצא חדש** | אין קובץ קונפיג של eslint ב-`frontend/`; ה-script קיים ב-`package.json` ונופל מיד. ה-CI בונה frontend אך לא מריץ lint — ולכן זה לא נתפס. תיקון = יצירת `eslint.config.js` + הוספת השלב ל-CI, ואז ניקוי מה שיצוף. לא בוצע כאן: זו החלטת מוסכמות, לא סדר. |
@@ -135,8 +138,8 @@ cfo/
 ## 6. איך מריצים בדיקות
 
 ```bash
-python -m pytest tests/ -q            # 1,324 עוברים, ~250 שנ'
-python scripts/audit_routes.py        # 248 routes, 1 כשל (honest-null)
+python -m pytest tests/ -q            # 1,401 עוברים, ~247 שנ'
+python scripts/audit_routes.py        # 250 routes, 1 כשל (honest-null)
 python scripts/schema_drift_check.py  # נכשל מקומית — DB מיושן, לא רגרסיה
 python scripts/qa_gate.py             # עוטף את כל הנ"ל + frontend
 cd frontend && npm run build          # npm run lint שבור — אין קונפיג eslint

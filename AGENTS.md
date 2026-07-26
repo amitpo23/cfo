@@ -21,6 +21,9 @@
 - **TDD** — טסט אדום לפני מימוש. `python -m pytest tests/ -q` חייב להיות ירוק לפני commit.
 
 עבודה חשבונאית/מיסויית — לטעון קודם `docs/bookkeeper_kb/README.md`.
+בכל שאלת יכולת/ארכיטקטורה — `docs/REZEF_OPERATING_SYSTEM.md` הוא החוזה היציב,
+`docs/rezef_capabilities.json` הוא מפת המימוש והראיות, ו-
+`docs/MASTER_EXECUTION_PLAN.md` הוא לוח הסטטוס היחיד.
 
 ## ⛔ אסור להריץ — קריאות חיות / כתיבה לפרוד
 
@@ -44,12 +47,12 @@
 
 ## ✅ פקודות שאומתו כקיימות ובטוחות (offline)
 
-כל בסיס כאן **נמדד** ב-2026-07-25 על `1844af7`. סטייה מהמספר = שינוי אמיתי, לא רעש.
+כל בסיס כאן **נמדד** ב-2026-07-25 על ענף העבודה. סטייה מהמספר = שינוי אמיתי, לא רעש.
 
 | פקודה | בסיס מדוד |
 | --- | --- |
-| `python -m pytest tests/ -q` | **1,324 עוברים**, 0 נכשלים, ~250 שנ', 18,696 אזהרות |
-| `python scripts/audit_routes.py` | **248 routes**: 172 תקין · 39 אזהרה(4xx) · **36 מוגדר-סביבה(400)** · **1 כשל**. הכשל היחיד: `/api/financial/ai/predict/revenue` מחזיר 400 "דורש היסטוריית נתונים" — honest-null נכון. כל כשל נוסף = רגרסיה |
+| `python -m pytest tests/ -q` | **1,401 עוברים**, 0 נכשלים, ~247 שנ', 19,948 אזהרות |
+| `python scripts/audit_routes.py` | **250 routes**: 174 תקין · 39 אזהרה(4xx) · **36 מוגדר-סביבה(400)** · **1 כשל**. הכשל היחיד: `/api/financial/ai/predict/revenue` מחזיר 400 "דורש היסטוריית נתונים" — honest-null נכון. כל כשל נוסף = רגרסיה |
 | `python scripts/schema_drift_check.py` | **נכשל** על ה-DB המקומי: 4 טבלאות חסרות (`filing_crosschecks`, `morning_briefs`, `of_snapshot_cache`, `vehicle_profiles`) + עמודות ב-`organizations`/`accounts`/`daily_snapshots`/`expenses`. ה-SQLite המקומי מיושן — **לא רגרסיה** |
 | `python scripts/qa_gate.py` | נכשל בבסיס על שער אחד בלבד: `3a. Schema drift (local)` (DB מקומי מיושן). 7 השערים האחרים עוברים |
 | `cd frontend && npm ci && npm run build` | עובר (tsc + vite) |
@@ -66,7 +69,7 @@ src/cfo/api/routes/    40 routers של FastAPI
 src/cfo/services/      102 services — לוגיקה עסקית, מנועי מע"מ/פער/דוחות
 src/cfo/integrations/  לקוחות API חיצוניים (sumit_integration.py, 2,847 שורות)
 src/cfo/models.py      כל מודלי SQLAlchemy (1,734 שורות)
-tests/                 147 קבצי טסט
+tests/                 154 קבצי טסט
 docs/                  ראו docs/README.md — אינדקס
 docs/bookkeeper_kb/    מרכז הידע החשבונאי (חובה לפני עבודה מיסויית)
 docs/archive/          תמונות מצב היסטוריות — לא מקור אמת
@@ -84,8 +87,10 @@ scripts/               כלי תפעול; ראו טבלת החסימות למע�
   (fixture `clear_sumit_sync_budget` ב-`tests/test_auth_and_tenancy.py`) — אחרת הוא
   נכשל מסיבה שאינה קשורה למה שהוא בודק. **תוקן 2026-07-25.**
 
-- **סכימת פרוד**: `create_all` לא מוסיף עמודות. עמודה חדשה = סקריפט idempotent
-  (דפוס `scripts/fix_prod_schema_drift.py`), לא alembic בלבד.
+- **סכימת פרוד**: `create_all` לא מוסיף עמודות. שינוי סכימה נעשה רק לפי
+  `docs/GATE0_DEPLOYMENT_RUNBOOK.md`: אישור בעלים, `SUPER_ADMIN`, repair
+  additive, בדיקת drift ורק אז `stamp head`. סקריפט תיקון חלקי אינו רשאי
+  לסמן Alembic `head`.
 - **`datetime.utcnow()`**: ~18.7K אזהרות deprecation בסוויטה. אין להחליף בסוויטה גורפת ל-
   `datetime.now(UTC)` — עמודות DB נאיביות, והשוואה tz-aware מול נאיבי זורקת `TypeError`.
   מודול אחד בכל פעם, עם טסטים ירוקים כשער.

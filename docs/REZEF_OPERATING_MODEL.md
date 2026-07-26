@@ -1,6 +1,11 @@
 # רצף — מודל ההפעלה: המהות, השיטה היומית, והתכנית הרב-לקוחית
 
-**נכתב:** 2026-07-12. מסמך-העל שממנו נגזר הכול. משלים את
+> **הוחלף.** החוזה היציב עבר ל-[`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md),
+> ה-SOP המפורט ל-[`BOOKKEEPER_ARMY_OPERATING_MODEL.md`](BOOKKEEPER_ARMY_OPERATING_MODEL.md),
+> והסטטוס ל-[`MASTER_EXECUTION_PLAN.md`](MASTER_EXECUTION_PLAN.md). מסמך זה נשמר
+> כרקע היסטורי בלבד.
+
+**נכתב:** 2026-07-12. בעת כתיבתו שימש מסמך-על. הוא השלים את
 [REZEF_MASTER_ORCHESTRATION_PLAN.md](REZEF_MASTER_ORCHESTRATION_PLAN.md) (יכולות M1-M10)
 ואת [תכנית עמית פורת](superpowers/plans/2026-07-12-amit-porat-vat-and-full-loop-plan.md) (משימות P0).
 

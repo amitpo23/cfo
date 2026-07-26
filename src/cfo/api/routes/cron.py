@@ -5,16 +5,24 @@ Not behind user auth — protected by CRON_SECRET instead (Vercel sends
 "Authorization: Bearer <CRON_SECRET>" automatically when the env var is set).
 """
 import logging
+import zlib
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from datetime import date, datetime, timedelta
 
 from ...config import settings
 from ...database import get_db_session
-from ...models import IntegrationConnection, Organization, SyncCheckpoint
+from ...models import (
+    BankConnection,
+    IntegrationConnection,
+    Organization,
+    SyncCheckpoint,
+)
 from ...services.sync_engine import SOURCE_CHECKPOINT_ENTITY, SyncEngine, SyncSkipped, get_connector_for_org
 from ...services.client_automation_service import (
     mark_client_loop_result,
@@ -37,12 +45,52 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+EXPENSE_ENRICHMENT_CHECKPOINT = "expense_supplier_enrichment"
+EXPENSE_OCR_CHECKPOINT = "expense_ocr_pipeline"
+_OF_SYNCABLE_CONNECTION_STATUSES = frozenset({
+    "ACTIVE",
+    "CONNECTED",
+    "COMPLETED",
+})
+
 
 def _verify_cron_secret(authorization: str = Header(None)):
     if not settings.cron_secret:
         raise HTTPException(status_code=503, detail="CRON_SECRET is not configured")
     if authorization != f"Bearer {settings.cron_secret}":
         raise HTTPException(status_code=401, detail="Invalid cron credentials")
+
+
+def _of_consent_gate(db: Session, org_id: int) -> Optional[dict]:
+    """Fail closed when a locally tracked consent journey is not usable yet.
+
+    Organizations predating `BankConnection` keep their legacy behavior when
+    no local journey row exists. Once a journey is tracked, only an explicitly
+    usable provider status permits the daily sync. This gate runs before the
+    budget checkpoint and before a provider connector is built.
+    """
+    rows = (
+        db.query(BankConnection)
+        .filter(
+            BankConnection.organization_id == org_id,
+            BankConnection.source == "open_finance",
+        )
+        .all()
+    )
+    if not rows:
+        return None
+    statuses = sorted({
+        str(row.status or "UNKNOWN").upper()
+        for row in rows
+    })
+    if any(status in _OF_SYNCABLE_CONNECTION_STATUSES for status in statuses):
+        return None
+    return {
+        "organization_id": org_id,
+        "source": "open_finance",
+        "skipped": "consent_pending",
+        "connection_statuses": statuses,
+    }
 
 
 async def _run_sync_targets(db: Session, targets: set) -> list:
@@ -156,13 +204,109 @@ def _daily_budget_gate(db: Session, org_id: int, source: str) -> Optional[dict]:
     return None
 
 
+def _claim_periodic_provider_budget(
+    db: Session,
+    *,
+    org_id: int,
+    source: str,
+    entity_type: str,
+    interval_hours: int,
+) -> Optional[dict]:
+    """Atomically claim a provider-backed periodic operation.
+
+    Unlike ``_daily_budget_gate`` (which follows a completed full sync), this
+    gate starts its 20-hour cooldown *before* the first provider call. A failed
+    or rate-limited enrichment therefore cannot be hammered by a repeated cron
+    invocation. PostgreSQL uses a non-blocking transaction advisory lock;
+    SQLite remains a deterministic single-process path for tests.
+    """
+    now = datetime.utcnow()
+    bind = db.get_bind()
+    dialect = getattr(getattr(bind, "dialect", None), "name", "sqlite")
+    if dialect == "postgresql":
+        operation_hash = (
+            zlib.crc32(f"{source}:{entity_type}".encode("utf-8"))
+            & 0x7FFFFFFF
+        )
+        acquired = db.execute(
+            text("SELECT pg_try_advisory_xact_lock(:org_id, :operation_hash)"),
+            {"org_id": org_id, "operation_hash": operation_hash},
+        ).scalar()
+        if not acquired:
+            db.rollback()
+            return {
+                "organization_id": org_id,
+                "source": source,
+                "skipped": "locked",
+            }
+
+    checkpoint = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == org_id,
+        SyncCheckpoint.source == source,
+        SyncCheckpoint.entity_type == entity_type,
+    ).first()
+    if checkpoint and checkpoint.cooldown_until and checkpoint.cooldown_until > now:
+        db.commit()  # releases the transaction-scoped advisory lock
+        return {
+            "organization_id": org_id,
+            "source": source,
+            "skipped": "daily_budget",
+        }
+
+    if checkpoint is None:
+        checkpoint = SyncCheckpoint(
+            organization_id=org_id,
+            source=source,
+            entity_type=entity_type,
+        )
+        db.add(checkpoint)
+    checkpoint.cooldown_until = now + timedelta(hours=interval_hours)
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent first-ever claim may win the unique key between our
+        # SELECT and INSERT. Fail closed: this invocation performs no API call.
+        db.rollback()
+        return {
+            "organization_id": org_id,
+            "source": source,
+            "skipped": "locked",
+        }
+    return None
+
+
+def _finish_periodic_provider_attempt(
+    db: Session,
+    *,
+    org_id: int,
+    source: str,
+    entity_type: str,
+    success: bool,
+) -> None:
+    checkpoint = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == org_id,
+        SyncCheckpoint.source == source,
+        SyncCheckpoint.entity_type == entity_type,
+    ).first()
+    if checkpoint is None:
+        return
+    if success:
+        checkpoint.last_success_at = datetime.utcnow()
+        checkpoint.consecutive_failures = 0
+    else:
+        checkpoint.consecutive_failures = (
+            checkpoint.consecutive_failures or 0
+        ) + 1
+    db.commit()
+
+
 # Backward-compatible alias (existing tests/callers).
 _of_budget_gate = _daily_budget_gate
 
 
 @router.get("/cron/sync-sumit", dependencies=[Depends(_verify_cron_secret)])
 async def scheduled_sync_sumit(db: Session = Depends(get_db_session)):
-    """Hourly: run a sync for every organization with an active SUMIT integration.
+    """Daily: run a sync for every organization with an active SUMIT integration.
 
     Open Finance is intentionally excluded here -- see /cron/sync-open-finance,
     which enforces its own daily call budget (RSF-020/021).
@@ -212,6 +356,10 @@ async def scheduled_sync_open_finance(db: Session = Depends(get_db_session)):
     results = []
     to_run = set()
     for org_id, source in sorted(targets):
+        consent_gated = _of_consent_gate(db, org_id)
+        if consent_gated:
+            results.append(consent_gated)
+            continue
         gated = _of_budget_gate(db, org_id, source)
         if gated:
             results.append(gated)
@@ -232,10 +380,10 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
 
 @router.get("/cron/enrich-expenses", dependencies=[Depends(_verify_cron_secret)])
 async def scheduled_enrich_expenses(db: Session = Depends(get_db_session)):
-    """העשרה מתמשכת של הוצאות (שם ספק + ח.פ) מ-SUMIT, באצווה חסומת-קצב.
+    """העשרה יומית של הוצאות (שם ספק + ח.פ) מ-SUMIT, באצווה חסומת-קצב.
 
-    רץ אצווה מוגבלת בכל הפעלה ונעצר בעדינות ב-rate-limit; קריאות חוזרות
-    משלימות בהדרגה את כל ההוצאות בלי לחרוג מהמכסה של SUMIT.
+    ה-DB claim מתבצע לפני בניית הקונקטור וחוסם ניסיון נוסף ל-20 שעות, גם
+    אם הניסיון הראשון נכשל או הגיע ל-rate-limit.
     """
     from ...services.expense_filing_service import ExpenseFilingService
 
@@ -251,38 +399,137 @@ async def scheduled_enrich_expenses(db: Session = Depends(get_db_session)):
 
     results = []
     for org_id in sorted(targets):
+        if settings.sumit_enrichment_daily_action_limit == 0:
+            results.append({
+                "organization_id": org_id,
+                "source": "sumit",
+                "skipped": "disabled_by_cost_budget",
+            })
+            continue
+        gated = _claim_periodic_provider_budget(
+            db,
+            org_id=org_id,
+            source="sumit",
+            entity_type=EXPENSE_ENRICHMENT_CHECKPOINT,
+            interval_hours=settings.sumit_sync_min_interval_hours,
+        )
+        if gated:
+            results.append(gated)
+            continue
         try:
             res = await ExpenseFilingService(db, organization_id=org_id).resolve_supplier_names(
-                limit=200, delay=0.4
+                limit=settings.sumit_enrichment_daily_action_limit,
+                delay=0.4,
+            )
+            _finish_periodic_provider_attempt(
+                db,
+                org_id=org_id,
+                source="sumit",
+                entity_type=EXPENSE_ENRICHMENT_CHECKPOINT,
+                success=not bool(res.get("rate_limited")),
             )
             results.append({"organization_id": org_id, **res})
         except Exception as exc:
             logger.warning("Expense enrichment failed for org %s: %s", org_id, exc)
+            db.rollback()
+            _finish_periodic_provider_attempt(
+                db,
+                org_id=org_id,
+                source="sumit",
+                entity_type=EXPENSE_ENRICHMENT_CHECKPOINT,
+                success=False,
+            )
             results.append({"organization_id": org_id, "error": str(exc)})
     return {"enriched_orgs": len(results), "results": results}
 
 
 @router.get("/cron/process-ocr", dependencies=[Depends(_verify_cron_secret)])
 async def scheduled_process_ocr(db: Session = Depends(get_db_session)):
-    """Automatic OCR processing of pending SUMIT draft expenses.
+    """Daily OCR processing after provider sync/enrichment (02:45 UTC).
     
-    Runs for all organizations with active SUMIT, processing up to 50 drafts per org.
-    Only files expenses with confidence >= 0.7 to minimize errors.
+    Stops before SUMIT when OCR_LLM_ENABLED is false. When enabled, each org
+    claims a 20-hour provider budget before getpdf and processes at most the
+    configured OCR_DAILY_DOCUMENT_LIMIT (hard-capped at 25).
     """
     from ...services.expense_ocr_scheduler import ExpenseOCRScheduler
 
+    if not settings.ocr_llm_enabled:
+        return {
+            "status": "skipped",
+            "skipped": "ocr_llm_disabled",
+            "orgs_processed": 0,
+            "results": [],
+        }
+    if settings.ocr_daily_document_limit == 0:
+        return {
+            "status": "skipped",
+            "skipped": "disabled_by_cost_budget",
+            "orgs_processed": 0,
+            "results": [],
+        }
+
+    targets = {
+        conn.organization_id
+        for conn in db.query(IntegrationConnection).filter(
+            IntegrationConnection.status == "active",
+            IntegrationConnection.source == "sumit",
+        ).all()
+    }
     scheduler = ExpenseOCRScheduler(db)
-    try:
-        result = await scheduler.run_all_organizations(limit=50, auto_file=True)
-        logger.info(
-            "OCR scheduler: processed %s orgs, filed %s total",
-            result.get("orgs_processed", 0),
-            result.get("total_filed", 0),
+    results = []
+    totals = {"scanned": 0, "filed": 0, "flagged": 0, "errors": 0}
+    for org_id in sorted(targets):
+        gated = _claim_periodic_provider_budget(
+            db,
+            org_id=org_id,
+            source="sumit",
+            entity_type=EXPENSE_OCR_CHECKPOINT,
+            interval_hours=settings.sumit_sync_min_interval_hours,
         )
-        return result
-    except Exception as exc:
-        logger.error("OCR scheduler failed: %s", exc)
-        return {"error": str(exc)}
+        if gated:
+            results.append(gated)
+            continue
+        try:
+            org_result = await scheduler.run_scheduled_ocr(
+                org_id,
+                limit=settings.ocr_daily_document_limit,
+                auto_file=True,
+            )
+            rate_limited = any(
+                item.get("status") == "rate_limited"
+                for item in org_result.get("results", [])
+            )
+            _finish_periodic_provider_attempt(
+                db,
+                org_id=org_id,
+                source="sumit",
+                entity_type=EXPENSE_OCR_CHECKPOINT,
+                success=not rate_limited and not bool(org_result.get("errors")),
+            )
+            org_result["organization_id"] = org_id
+            results.append(org_result)
+            for key in totals:
+                totals[key] += org_result.get(key, 0)
+        except Exception as exc:
+            logger.error("Scheduled OCR failed for org %s: %s", org_id, exc)
+            db.rollback()
+            _finish_periodic_provider_attempt(
+                db,
+                org_id=org_id,
+                source="sumit",
+                entity_type=EXPENSE_OCR_CHECKPOINT,
+                success=False,
+            )
+            results.append({"organization_id": org_id, "error": str(exc)})
+
+    return {
+        "orgs_processed": len(targets),
+        "total_scanned": totals["scanned"],
+        "total_filed": totals["filed"],
+        "total_flagged": totals["flagged"],
+        "total_errors": totals["errors"],
+        "results": results,
+    }
 
 
 @router.get("/cron/collection-reminders", dependencies=[Depends(_verify_cron_secret)])
@@ -328,7 +575,8 @@ async def run_collection_reminders(db: Session = Depends(get_db_session)):
 
 @router.get("/cron/daily-close", dependencies=[Depends(_verify_cron_secret)])
 def run_daily_close(db: Session = Depends(get_db_session)):
-    """יומי (06:30 UTC — אחרי sync-open-finance/05:30 ו-bank-gap-scan/06:15):
+    """נקודת קצה ותיקה שאינה מתוזמנת בנפרד ב-vercel.json. מחזור הבוקר
+    המתוזמן ב-03:45 UTC מפעיל את אותו צעד אחרי סנכרוני הספקים וסריקת הפערים.
     מריץ data_quality.run_checks ושומר תמונת-מצב יומית (daily_snapshots) לכל
     ארגון פעיל — הבסיס למגמות ולדשבורד (docs/REZEF_DATA_INTEGRITY_PLAN.md
     סעיף ג2). אידמפוטנטי (UPSERT לפי org+snapshot_date). כשל בארגון אחד
@@ -337,7 +585,7 @@ def run_daily_close(db: Session = Depends(get_db_session)):
     PR4 (bookkeeper daily-cycle plan): thin wrapper only now — the actual
     snapshot logic lives in morning_cycle_service.run_daily_close_step so
     both this legacy route and the fuller /cron/bookkeeper-morning cycle
-    (06:45 UTC) share one implementation. This route calls it with no
+    share one implementation. This route calls it with no
     parity/credit/reconcile/expense-queue inputs (honest-null: it alone has
     no other steps' data to offer), same as before it existed as its own
     function."""
@@ -370,7 +618,7 @@ def run_bookkeeper_morning(
     org_id: Optional[int] = None,
     force: bool = False,
 ):
-    """יומי (06:45 UTC — אחרי process-ocr/05:45 ו-bank-gap-scan/06:15): מחזור-
+    """יומי (03:45 UTC — 06:45 קיץ/05:45 חורף בישראל): מחזור-
     הבוקר המלא של מנהל החשבונות (PR4 של תוכנית מחזור-הבוקר) — parity,
     bank_anomalies, reconcile, expense_queue, credit_line, daily_close,
     debtors, בסדר-תלות אחד (ר' morning_cycle_service). ללא קריאות API
@@ -397,7 +645,7 @@ def run_bookkeeper_morning(
 
 @router.get("/cron/bank-gap-scan", dependencies=[Depends(_verify_cron_secret)])
 def run_bank_gap_scan(db: Session = Depends(get_db_session)):
-    """יומי (06:15 UTC — אחרי sync-open-finance של 05:30): סורק לכל ארגון
+    """יומי (03:15 UTC — אחרי sync-open-finance של 02:00): סורק לכל ארגון
     פעיל תנועות בנק יוצאות חדשות ללא מסמך הנה"ח, ויוצר CfoInsight
     (insight_type="missing_document") לכל תנועה חדשה. כשל בארגון אחד
     מבודד (rollback + נרשם ב-errors) ולא מפיל את הריצה עבור האחרים —

@@ -8,8 +8,9 @@ not exist") — which breaks /api/admin/organizations and the super-admin org
 switcher.
 
 This applies ONLY the missing, additive pieces, every statement idempotent
-(IF NOT EXISTS), then stamps alembic to head so the version reflects reality.
-No data is modified or dropped. Run it yourself:
+(IF NOT EXISTS). It intentionally does not stamp Alembic: a partial repair
+cannot prove that the complete migration contract is at head. No data is
+modified or dropped. Run it yourself:
 
     python scripts/fix_prod_schema_drift.py            # dry-run (prints plan)
     python scripts/fix_prod_schema_drift.py --apply    # executes
@@ -82,7 +83,7 @@ def main() -> None:
         print("DRY RUN — would execute on", url.split("@")[-1].split("/")[0])
         for stmt in DDL:
             print("\n" + stmt.strip())
-        print("\nthen: alembic stamp head")
+        print("\nAlembic history is not changed by this partial repair.")
         print("\nRe-run with --apply to execute.")
         return
 
@@ -91,15 +92,7 @@ def main() -> None:
             conn.execute(text(stmt))
             print("OK:", stmt.split("\n")[0][:70])
 
-    # Stamp alembic to head so the version reflects the real schema.
-    from alembic import command as alembic_command
-    from alembic.config import Config as AlembicConfig
-
-    cfg = AlembicConfig(str(ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(ROOT / "alembic"))
-    alembic_command.stamp(cfg, "head")
-    print("OK: alembic stamped to head")
-    print("\nDone. /api/admin/organizations should now return 200.")
+    print("\nDone. Partial drift was repaired; Alembic history was not changed.")
 
 
 if __name__ == "__main__":

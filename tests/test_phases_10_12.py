@@ -6,7 +6,10 @@ import pytest
 
 from cfo.database import SessionLocal
 from cfo.models import Bill, BillStatus, Invoice, Expense
-from cfo.services.payment_orchestration import PaymentOrchestrationService
+from cfo.services.payment_orchestration import (
+    PaymentExecutionUnavailable,
+    PaymentOrchestrationService,
+)
 from cfo.services.forecasting_advanced import AdvancedForecastingService
 
 
@@ -23,50 +26,83 @@ def acc(client):
 # ==================== PHASE 10: Payment Orchestration ====================
 
 def test_suggest_payments(acc):
-    """Suggest optimal payments."""
+    """Suggestions come from real, organization-scoped unpaid bills."""
     org_id = acc["org_id"]
     db = SessionLocal()
     try:
+        bill = Bill(
+            organization_id=org_id,
+            bill_number="REAL-DUE-1",
+            due_date=date.today(),
+            status=BillStatus.APPROVED,
+            currency="ILS",
+            total=Decimal("720.00"),
+            paid_amount=Decimal("120.00"),
+            balance=Decimal("600.00"),
+            is_critical=True,
+        )
+        db.add(bill)
+        db.commit()
+        db.refresh(bill)
+
         service = PaymentOrchestrationService(db, org_id)
         result = service.suggest_payments(urgency="normal")
 
-        assert "suggested" in result
-        assert "total_amount" in result
-        assert isinstance(result["suggested"], list)
+        suggestion = next(
+            row for row in result["suggested"] if row["bill_id"] == bill.id
+        )
+        assert suggestion["amount"] == 600.0
+        assert suggestion["bill_number"] == "REAL-DUE-1"
+        assert suggestion["currency"] == "ILS"
+        assert result["as_of"] == date.today().isoformat()
     finally:
         db.close()
 
 
 def test_execute_payment(acc):
-    """Execute a payment."""
+    """A disconnected executor refuses instead of fabricating a reference."""
     org_id = acc["org_id"]
     db = SessionLocal()
     try:
         service = PaymentOrchestrationService(db, org_id)
-        result = service.execute_payment(
-            1,
-            "bank_transfer",
-            Decimal("5000"),
-        )
-
-        assert result["status"] == "pending_execution"
-        assert result["amount"] == 5000.0
-        assert result["method"] == "bank_transfer"
+        with pytest.raises(PaymentExecutionUnavailable, match="not wired"):
+            service.execute_payment(
+                1,
+                "bank_transfer",
+                Decimal("5000"),
+            )
     finally:
         db.close()
 
 
 def test_payment_status(acc):
-    """Get payment status."""
+    """Payment status is derived from a real bill and its payment rows."""
     org_id = acc["org_id"]
     db = SessionLocal()
     try:
-        service = PaymentOrchestrationService(db, org_id)
-        status = service.get_payment_status(1)
+        bill = Bill(
+            organization_id=org_id,
+            bill_number="REAL-STATUS-1",
+            due_date=date.today(),
+            status=BillStatus.PARTIALLY_PAID,
+            currency="ILS",
+            total=Decimal("1000.00"),
+            paid_amount=Decimal("250.00"),
+            balance=Decimal("750.00"),
+        )
+        db.add(bill)
+        db.commit()
+        db.refresh(bill)
 
-        assert status["bill_id"] == 1
-        assert "original_amount" in status
-        assert "remaining_balance" in status
+        service = PaymentOrchestrationService(db, org_id)
+        status = service.get_payment_status(bill.id)
+
+        assert status["bill_id"] == bill.id
+        assert status["vendor"] is None
+        assert status["original_amount"] == 1000.0
+        assert status["total_paid"] == 250.0
+        assert status["remaining_balance"] == 750.0
+        assert status["status"] == BillStatus.PARTIALLY_PAID.value
     finally:
         db.close()
 
@@ -145,6 +181,17 @@ def test_suggest_payments_api(client, acc):
     assert r.status_code == 200, r.text
     data = r.json()["data"]
     assert "suggested" in data
+
+
+def test_execute_payment_api_fails_closed_without_provider_adapter(client, acc):
+    r = client.post(
+        "/api/advanced/payments/execute",
+        json={"bill_id": 1, "method": "bank_transfer", "amount": 10},
+        headers=acc["headers"],
+    )
+
+    assert r.status_code == 501, r.text
+    assert "not wired" in r.json()["detail"]
 
 
 def test_forecast_api(client, acc):

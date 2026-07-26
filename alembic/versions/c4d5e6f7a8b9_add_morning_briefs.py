@@ -27,9 +27,11 @@ def upgrade() -> None:
         sa.Column('status', sa.String(length=10), nullable=True),
         sa.Column('delivered_channels', sa.JSON(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=True),
-    )
-    op.create_unique_constraint(
-        'uq_morning_brief_org_date', 'morning_briefs', ['organization_id', 'brief_date'],
+        sa.UniqueConstraint(
+            'organization_id',
+            'brief_date',
+            name='uq_morning_brief_org_date',
+        ),
     )
     op.add_column('organizations', sa.Column(
         'morning_brief_email_enabled', sa.Boolean(), server_default=sa.true(), nullable=False))
@@ -42,5 +44,4 @@ def downgrade() -> None:
     op.drop_column('organizations', 'morning_brief_sms_enabled')
     op.drop_column('organizations', 'morning_brief_recipients')
     op.drop_column('organizations', 'morning_brief_email_enabled')
-    op.drop_constraint('uq_morning_brief_org_date', 'morning_briefs', type_='unique')
     op.drop_table('morning_briefs')

@@ -55,9 +55,9 @@ python -m pytest tests/ -q
 cd frontend && npm ci && npm run build
 ```
 
-**בסיס מדוד (2026-07-25):** pytest = 1,324 עוברים, 0 נכשלים, ~250 שנ'. frontend build עובר.
+**בסיס מדוד (2026-07-25):** pytest = 1,401 עוברים, 0 נכשלים, ~247 שנ'. frontend build עובר.
 
-דווח את המספרים בדיוק. `pytest` שמחזיר מספר שונה מ-1,324 — עצור, בדוק מה נשבר, ודווח
+דווח את המספרים בדיוק. `pytest` שמחזיר מספר שונה מ-1,401 — עצור, בדוק מה נשבר, ודווח
 לפני שתמשיך. אם הסוויטה אדומה, זה הממצא היחיד שחשוב בשלב הזה.
 
 `npm run lint` **שבור מראש**: אין קובץ קונפיג של eslint ב-`frontend/`, ה-script נופל מיד,
@@ -74,7 +74,7 @@ python scripts/qa_gate.py            # עוטף את שניהם + pytest + front
 
 **בסיס מדוד (2026-07-25):**
 
-- `audit_routes`: 248 routes — 172 תקין · 39 אזהרה(4xx) · **36 מוגדר-סביבה(400)** · **1 כשל**.
+- `audit_routes`: 250 routes — 174 תקין · 39 אזהרה(4xx) · **36 מוגדר-סביבה(400)** · **1 כשל**.
   ה"כשל" היחיד הוא `/api/financial/ai/predict/revenue` שמחזיר 400 "דורש היסטוריית נתונים
   אמיתית" — תשובת honest-null נכונה. **כל כשל נוסף = רגרסיה.**
 - `schema_drift_check`: **נכשל** מול ה-SQLite המקומי — 4 טבלאות חסרות
@@ -116,7 +116,7 @@ python scripts/qa_gate.py            # עוטף את שניהם + pytest + front
 ענף: <branch> · HEAD: <sha7> · Python: <גרסה>
 
 ## 1. בסיס
-pytest        עוברים N / נכשלים N / דילוגים N · <שניות> · דלתא מ-1,324: ±N
+pytest        עוברים N / נכשלים N / דילוגים N · <שניות> · דלתא מ-1,401: ±N
 frontend      build PASS/FAIL   (lint שבור מראש — לא נבדק)
 audit_routes  N routes · M כשל · דלתא מ-1: ±M
 schema_drift  דלתא מהרשימה הידועה: <אין / מה נוסף>

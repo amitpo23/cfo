@@ -7,6 +7,7 @@
 
 | מתי | מה לטעון |
 | --- | --- |
+| כל משימת מוצר/יכולת | [`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md) — חוזה יציב; [`rezef_capabilities.json`](rezef_capabilities.json) — סטטוס וראיות ברי-בדיקה |
 | עבודה חשבונאית/מיסויית | [`bookkeeper_kb/README.md`](bookkeeper_kb/README.md) — הכרה בהוצאות, ניכוי תשומות, תקנה 14/18, שער-מסמך |
 | כל פעולה בפורטל/API של SUMIT | [`SUMIT_KNOWLEDGE_BASE.md`](SUMIT_KNOWLEDGE_BASE.md) — 609 מאמרי עזרה, ספר החוקים |
 | מודל התפעול היומי/חודשי | [`BOOKKEEPER_ARMY_OPERATING_MODEL.md`](BOOKKEEPER_ARMY_OPERATING_MODEL.md) — workflow + 12 SOP |
@@ -20,20 +21,27 @@
 
 ## ארכיטקטורה ותפעול
 
+- [`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md) — בעלות נתונים, תפקידים, workflow יומי, שערים וארכיטקטורת היעד
+- [`GATE0_DEPLOYMENT_RUNBOOK.md`](GATE0_DEPLOYMENT_RUNBOOK.md) — פריסה ושינוי סכימה גלובלי באישור בעלים, עם עצירה לפני `head` שקרי
+- [`IRREVERSIBLE_ACTION_CONTROL.md`](IRREVERSIBLE_ACTION_CONTROL.md) — הצעה, אישור, ביצוע יחיד ו-readback לתשלום/שידור/סגירה
+- [`rezef_capabilities.json`](rezef_capabilities.json) — חוזה היכולות המכונתי; נבדק מול קוד וטסטים
 - [`DATABASE_MAP.md`](DATABASE_MAP.md) — מודל הנתונים
 - [`PERMISSIONS.md`](PERMISSIONS.md) · [`AUTH_ROADMAP.md`](AUTH_ROADMAP.md) — הרשאות ורב-דיירות
 - [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — מצב מוכנות לפרוד
 - [`DOCKER_LOCAL.md`](DOCKER_LOCAL.md) — הרמה מקומית
 - [`REPO_ORDER_AND_CONTROL_PLANE.md`](REPO_ORDER_AND_CONTROL_PLANE.md) — סדר הריפו ושכבות ההנחיה לסוכנים
+- [`.agents/skills/rezef-operator/`](../.agents/skills/rezef-operator/) — נתב Codex למקורות האמת (אינו משכפל ידע)
 - [`guides/`](guides/) — מדריכי אינטגרציה ורב-דיירות, כיסוי מודולי SUMIT
 
 ## תוכניות ומצב
 
 - [`MASTER_EXECUTION_PLAN.md`](MASTER_EXECUTION_PLAN.md) — **לוח הביצוע הפעיל** (שערים 0-6)
-- [`PROJECT_STATUS.md`](PROJECT_STATUS.md) — מצב נוכחי
-- [`PRODUCT_AUDIT_AND_ROADMAP.md`](PRODUCT_AUDIT_AND_ROADMAP.md) · [`REZEF_CAPABILITY_COVERAGE_2026-07-12.md`](REZEF_CAPABILITY_COVERAGE_2026-07-12.md) — גריד יכולות
 - [`superpowers/plans/`](superpowers/plans/) — תוכניות סשן והעברות מקל (chronological)
 - [`audits/`](audits/) — דוחות ביקורת
+
+`PROJECT_STATUS.md`, `WORKFLOW_AUDIT.md`, `REZEF_OPERATING_MODEL.md`,
+`REZEF_MASTER_ORCHESTRATION_PLAN.md`, תוכניות ה-completion/TODO ומפות הכיסוי
+המתוארכות נשמרות כהיסטוריה. אין להשתמש בהן כסטטוס נוכחי.
 
 ## ארכיון — לא מקור אמת
 

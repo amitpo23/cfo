@@ -414,6 +414,49 @@ def test_of_daily_budget_gate_allows_when_no_prior_success():
         db.close()
 
 
+def test_of_consent_gate_stops_pending_journey_before_daily_budget():
+    from cfo.api.routes.cron import _of_consent_gate
+    from cfo.models import BankConnection
+
+    db = SessionLocal()
+    try:
+        org_id = _make_org(db, "OF Pending Consent Co").id
+        db.add(BankConnection(
+            organization_id=org_id,
+            source="open_finance",
+            connection_id="pending-consent-1",
+            connect_url="https://consent.example.com/pending-consent-1",
+            status="INACTIVE",
+        ))
+        db.commit()
+
+        gated = _of_consent_gate(db, org_id)
+        assert gated == {
+            "organization_id": org_id,
+            "source": "open_finance",
+            "skipped": "consent_pending",
+            "connection_statuses": ["INACTIVE"],
+        }
+        assert (
+            db.query(SyncCheckpoint)
+            .filter(
+                SyncCheckpoint.organization_id == org_id,
+                SyncCheckpoint.source == "open_finance",
+                SyncCheckpoint.entity_type == SOURCE_CHECKPOINT_ENTITY,
+            )
+            .count()
+            == 0
+        )
+
+        db.query(BankConnection).filter(
+            BankConnection.organization_id == org_id,
+        ).update({"status": "ACTIVE"}, synchronize_session=False)
+        db.commit()
+        assert _of_consent_gate(db, org_id) is None
+    finally:
+        db.close()
+
+
 def test_touch_source_checkpoint_only_on_clean_full_completed_sync():
     """A full (entity_types=None), unforced (updated_since=None) run that
     completes cleanly should set the source-level checkpoint the OF budget
@@ -578,8 +621,216 @@ def test_cost_protection_settings_have_hard_floors():
     s = Settings(
         of_sync_min_interval_hours=1,
         sumit_sync_min_interval_hours=0,
+        sumit_enrichment_daily_action_limit=999,
+        ocr_daily_document_limit=999,
         manual_refresh_cooldown_minutes=1,
     )
     assert s.of_sync_min_interval_hours >= 20
     assert s.sumit_sync_min_interval_hours >= 20
+    assert s.sumit_enrichment_daily_action_limit <= 25
+    assert s.ocr_daily_document_limit <= 25
     assert s.manual_refresh_cooldown_minutes >= 15
+
+
+def test_expense_enrichment_is_hard_gated_to_one_provider_attempt_per_day(
+    client, owner, monkeypatch
+):
+    """Repeat invocations stop before a SUMIT connector can be used."""
+    from cfo.database import SessionLocal
+    from cfo.models import SyncCheckpoint
+
+    org_id = owner["user"]["organization_id"]
+    db = SessionLocal()
+    try:
+        db.query(SyncCheckpoint).filter(
+            SyncCheckpoint.organization_id == org_id,
+            SyncCheckpoint.source == "sumit",
+            SyncCheckpoint.entity_type == "expense_supplier_enrichment",
+        ).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+    calls = []
+
+    async def fake_resolve(self, limit=None, delay=0.4):
+        calls.append((self.organization_id, limit))
+        return {
+            "resolved": 0,
+            "tax_ids": 0,
+            "reclassified": 0,
+            "scanned": 0,
+            "rate_limited": False,
+        }
+
+    monkeypatch.setattr(
+        "cfo.services.expense_filing_service.ExpenseFilingService.resolve_supplier_names",
+        fake_resolve,
+    )
+    headers = {"Authorization": "Bearer test-cron-secret"}
+
+    first = client.get("/api/cron/enrich-expenses", headers=headers)
+    second = client.get("/api/cron/enrich-expenses", headers=headers)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert calls.count((org_id, 25)) == 1
+    target_result = next(
+        item for item in second.json()["results"]
+        if item["organization_id"] == org_id
+    )
+    assert target_result == {
+        "organization_id": org_id,
+        "source": "sumit",
+        "skipped": "daily_budget",
+    }
+
+
+def test_failed_expense_enrichment_keeps_daily_cooldown(
+    client, owner, monkeypatch
+):
+    """Failure is not permission to retry a billable provider operation."""
+    from cfo.database import SessionLocal
+    from cfo.models import SyncCheckpoint
+
+    org_id = owner["user"]["organization_id"]
+    db = SessionLocal()
+    try:
+        db.query(SyncCheckpoint).filter(
+            SyncCheckpoint.organization_id == org_id,
+            SyncCheckpoint.source == "sumit",
+            SyncCheckpoint.entity_type == "expense_supplier_enrichment",
+        ).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+    calls = []
+
+    async def failing_resolve(self, limit=None, delay=0.4):
+        calls.append(self.organization_id)
+        raise RuntimeError("SUMIT 403")
+
+    monkeypatch.setattr(
+        "cfo.services.expense_filing_service.ExpenseFilingService.resolve_supplier_names",
+        failing_resolve,
+    )
+    headers = {"Authorization": "Bearer test-cron-secret"}
+
+    first = client.get("/api/cron/enrich-expenses", headers=headers)
+    second = client.get("/api/cron/enrich-expenses", headers=headers)
+
+    assert first.status_code == 200
+    first_target = next(
+        item for item in first.json()["results"]
+        if item["organization_id"] == org_id
+    )
+    second_target = next(
+        item for item in second.json()["results"]
+        if item["organization_id"] == org_id
+    )
+    assert first_target["error"] == "SUMIT 403"
+    assert second_target["skipped"] == "daily_budget"
+    assert calls.count(org_id) == 1
+
+    db = SessionLocal()
+    try:
+        checkpoint = db.query(SyncCheckpoint).filter(
+            SyncCheckpoint.organization_id == org_id,
+            SyncCheckpoint.source == "sumit",
+            SyncCheckpoint.entity_type == "expense_supplier_enrichment",
+        ).one()
+        assert checkpoint.last_success_at is None
+        assert checkpoint.consecutive_failures == 1
+        assert checkpoint.cooldown_until > datetime.utcnow()
+    finally:
+        db.close()
+
+
+def test_ocr_cron_stops_before_sumit_when_llm_is_disabled(
+    client, monkeypatch
+):
+    from cfo.config import settings
+
+    calls = []
+
+    async def must_not_run(self, *args, **kwargs):
+        calls.append(True)
+        raise AssertionError("OCR scheduler reached while LLM is disabled")
+
+    monkeypatch.setattr(settings, "ocr_llm_enabled", False)
+    monkeypatch.setattr(
+        "cfo.services.expense_ocr_scheduler.ExpenseOCRScheduler.run_scheduled_ocr",
+        must_not_run,
+    )
+
+    response = client.get(
+        "/api/cron/process-ocr",
+        headers={"Authorization": "Bearer test-cron-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["skipped"] == "ocr_llm_disabled"
+    assert calls == []
+
+
+def test_ocr_cron_claims_daily_budget_before_processing(
+    client, owner, monkeypatch
+):
+    from cfo.config import settings
+    from cfo.database import SessionLocal
+    from cfo.models import IntegrationConnection, SyncCheckpoint
+
+    org_id = owner["user"]["organization_id"]
+    db = SessionLocal()
+    try:
+        connection = db.query(IntegrationConnection).filter(
+            IntegrationConnection.organization_id == org_id,
+            IntegrationConnection.source == "sumit",
+        ).one_or_none()
+        if connection is None:
+            db.add(IntegrationConnection(
+                organization_id=org_id,
+                source="sumit",
+                status="active",
+            ))
+        else:
+            connection.status = "active"
+        db.query(SyncCheckpoint).filter(
+            SyncCheckpoint.organization_id == org_id,
+            SyncCheckpoint.source == "sumit",
+            SyncCheckpoint.entity_type == "expense_ocr_pipeline",
+        ).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+    calls = []
+
+    async def fake_run(self, organization_id, limit=50, auto_file=True, **kwargs):
+        calls.append((organization_id, limit, auto_file))
+        return {"scanned": 0, "filed": 0, "flagged": 0, "errors": 0, "results": []}
+
+    monkeypatch.setattr(settings, "ocr_llm_enabled", True)
+    monkeypatch.setattr(settings, "ocr_daily_document_limit", 10, raising=False)
+    monkeypatch.setattr(
+        "cfo.services.expense_ocr_scheduler.ExpenseOCRScheduler.run_scheduled_ocr",
+        fake_run,
+    )
+    headers = {"Authorization": "Bearer test-cron-secret"}
+
+    first = client.get("/api/cron/process-ocr", headers=headers)
+    second = client.get("/api/cron/process-ocr", headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert calls.count((org_id, 10, True)) == 1
+    target_result = next(
+        item for item in second.json()["results"]
+        if item["organization_id"] == org_id
+    )
+    assert target_result == {
+        "organization_id": org_id,
+        "source": "sumit",
+        "skipped": "daily_budget",
+    }

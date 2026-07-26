@@ -21,15 +21,27 @@
 | ניהול משתמשים/תפקידים | ✅ | ✅ (בארגון) | ❌ | ❌ | ❌ | ❌ | ✅ (`require_admin`) |
 | מיגרציות/אדמין מערכת | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ (`require_admin`) |
 | ניהול אינטגרציות (SUMIT/OF credentials) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ (`require_admin`) |
-| הרצת גבייה / תשלומים | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ (`/collection/run`, `/payments/execute`) |
-| יצירה/עריכה של רשומות פיננסיות (חשבוניות/הוצאות/יומן) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ⚠️ org‑scoping בלבד (אין הפרדת viewer) |
+| פעולות כסף חיצוניות (חיוב, ביטול חיוב מחזורי, תשלום/החזר/מנדט OF) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ (`require_admin` בנתיבי הביצוע) |
+| יצירה/עריכה של רשומות פיננסיות (חשבוניות/הוצאות/יומן) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ ל־`viewer`: כל HTTP שאינו GET/HEAD/OPTIONS נחסם מרכזית |
 | צפייה בדשבורדים/דוחות | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ org‑scoping בלבד |
 | הגדרות ארגון | ✅ | ✅ | ❌ | ⚠️ | ❌ | ❌ | ⚠️ חלקי |
 
 ## מצב אכיפה — בכנות
-- **נאכף עכשיו:** הפרדת `admin`/`super_admin` מול השאר (`require_admin`, `require_role`, ובדיקות super‑admin), וכן **org‑scoping** (כל משתמש מאומת רואה רק את הארגון שלו; super_admin רואה הכול).
-- **לא נאכף עדיין (פער ידוע):** ההבחנה הדקה בין `accountant`/`manager`/`user`/`viewer` ברמת ה‑endpoint — כיום כל משתמש מאומת בארגון מקבל גישת קריאה/כתיבה דומה. למשל `viewer` עדיין אינו חסום מכתיבה ברמת ה‑route.
-- **כדי לאכוף את המטריצה במלואה** צריך להוסיף `Depends(require_role(...))` ל‑routes הרלוונטיים (התשתית קיימת — `require_role(*roles)` ב‑dependencies.py). זו עבודה ממוקדת שאפשר לבצע בנפרד.
+- **נאכף עכשיו:** `viewer` הוא read-only בכל route שתלוי ב־`get_current_org_id`;
+  פעולות הכסף החיצוניות המנויות למעלה דורשות `admin`/`super_admin`; וניהול
+  משתמשים/ארגונים נשען על `require_admin` ובדיקות super-admin.
+- **מוכח מקומית:** `tests/test_irreversible_action_authorization.py` בודק בנפרד
+  Viewer ומשתמש רגיל, וחוסם את מחברי SUMIT/Open Finance בטסט כך שרגרסיית הרשאה
+  לא יכולה להפוך לקריאת רשת.
+- **לא הוכח לכל הריפו:** אין עדיין מטריצה מלאה route-by-route עבור
+  `accountant`/`manager`/`user`, ולא כל service או route הוכח כמבודד ארגונית.
+  `FinancialService` תוקן ומכוסה ב־`tests/test_financial_service_tenancy.py`,
+  אך זו אינה הוכחה גורפת לכל השירותים.
+- **שכבת בעלות:** הרשאת role אינה אישור בעלים.
+  `OrganizationSigningAuthority` היא שכבת הבעלות הנפרדת: owner מעניק scope
+  למורשים, ו־super_admin אינו עוקף אותה. רשומת
+  propose → approve → execute-once → verify קיימת, אך חיבור provider מלא
+  מוכח מקומית כרגע רק ליצירת תשלום Open Finance.
 
 ## איך מקצים תפקיד
 - בהרשמה: **משתמש ראשון** או רישום **ללא `organization_id`** מקבל אוטומטית `admin` (`admin.py:364`).

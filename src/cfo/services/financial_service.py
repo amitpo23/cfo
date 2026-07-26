@@ -15,14 +15,21 @@ from ..models import (
 
 
 class FinancialService:
-    """שירות לניהול פעולות פיננסיות"""
+    """Tenant-bound service for the legacy Account/Transaction plane.
+
+    ``organization_id`` is mandatory by design.  Callers must derive it from
+    authentication; accepting an optional/default organization here would turn
+    every missing scope at a caller into a cross-tenant read or write.
+    """
     
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, organization_id: int):
         self.db = db
+        self.organization_id = organization_id
     
     def create_account(self, account_data: AccountCreate) -> Account:
         """יצירת חשבון חדש"""
         account = Account(
+            organization_id=self.organization_id,
             name=account_data.name,
             account_type=account_data.account_type,
             balance=account_data.balance,
@@ -35,11 +42,16 @@ class FinancialService:
     
     def get_account(self, account_id: int) -> Optional[Account]:
         """שליפת חשבון לפי ID"""
-        return self.db.query(Account).filter(Account.id == account_id).first()
+        return self.db.query(Account).filter(
+            Account.id == account_id,
+            Account.organization_id == self.organization_id,
+        ).first()
     
     def get_all_accounts(self) -> List[Account]:
         """שליפת כל החשבונות"""
-        return self.db.query(Account).all()
+        return self.db.query(Account).filter(
+            Account.organization_id == self.organization_id,
+        ).all()
     
     def create_transaction(self, transaction_data: TransactionCreate) -> Transaction:
         """יצירת עסקה חדשה ועדכון יתרת החשבון"""
@@ -50,6 +62,7 @@ class FinancialService:
         
         # יצירת העסקה
         transaction = Transaction(
+            organization_id=self.organization_id,
             account_id=transaction_data.account_id,
             transaction_type=transaction_data.transaction_type,
             amount=transaction_data.amount,
@@ -78,7 +91,9 @@ class FinancialService:
         limit: int = 100
     ) -> List[Transaction]:
         """שליפת עסקאות לפי פילטרים"""
-        query = self.db.query(Transaction)
+        query = self.db.query(Transaction).filter(
+            Transaction.organization_id == self.organization_id,
+        )
         
         if account_id:
             query = query.filter(Transaction.account_id == account_id)
@@ -107,17 +122,20 @@ class FinancialService:
         
         # חישוב סך נכסים
         total_assets = self.db.query(func.sum(Account.balance)).filter(
-            Account.account_type == AccountType.ASSET
+            Account.organization_id == self.organization_id,
+            Account.account_type == AccountType.ASSET,
         ).scalar() or Decimal("0")
         
         # חישוב סך התחייבויות
         total_liabilities = self.db.query(func.sum(Account.balance)).filter(
-            Account.account_type == AccountType.LIABILITY
+            Account.organization_id == self.organization_id,
+            Account.account_type == AccountType.LIABILITY,
         ).scalar() or Decimal("0")
         
         # חישוב סך הכנסות בתקופה
         total_income = self.db.query(func.sum(Transaction.amount)).filter(
             and_(
+                Transaction.organization_id == self.organization_id,
                 Transaction.transaction_type == TransactionType.INCOME,
                 Transaction.transaction_date >= start_date,
                 Transaction.transaction_date <= end_date
@@ -127,6 +145,7 @@ class FinancialService:
         # חישוב סך הוצאות בתקופה
         total_expenses = self.db.query(func.sum(Transaction.amount)).filter(
             and_(
+                Transaction.organization_id == self.organization_id,
                 Transaction.transaction_type == TransactionType.EXPENSE,
                 Transaction.transaction_date >= start_date,
                 Transaction.transaction_date <= end_date

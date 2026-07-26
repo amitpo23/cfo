@@ -17,5 +17,9 @@ FastAPI backend ב-`src/cfo/`, React frontend ב-`frontend/`, פרוד ב-cfo-2.
 ## תפעול
 
 - טסטים: `python -m pytest tests/ -q` (חובה ירוק לפני commit). TDD.
+- חוזה המערכת: `docs/REZEF_OPERATING_SYSTEM.md`; סטטוס יכולת וראיות:
+  `docs/rezef_capabilities.json`; לוח הסטטוס היחיד: `docs/MASTER_EXECUTION_PLAN.md`.
 - המודל המכונן: `docs/BOOKKEEPER_ARMY_OPERATING_MODEL.md` (workflow + 12 SOP).
-- סכימת פרוד: create_all לא מוסיף עמודות — עמודות חדשות דרך סקריפט idempotent (דפוס `scripts/fix_prod_schema_drift.py`).
+- סכימת פרוד: `create_all` לא מוסיף עמודות. לפעול רק לפי
+  `docs/GATE0_DEPLOYMENT_RUNBOOK.md`; סקריפט DDL חלקי אינו הוכחת Alembic
+  `head` ואינו רשאי לסמן אותו.

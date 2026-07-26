@@ -1,0 +1,6 @@
+interface:
+  display_name: "Rezef Operator"
+  short_description: "Route Rezef finance work to canonical truth"
+  default_prompt: "Use $rezef-operator to assess this Rezef bookkeeping or CFO task against the canonical capability contract and active gate."
+policy:
+  allow_implicit_invocation: true

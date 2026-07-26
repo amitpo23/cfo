@@ -4,7 +4,8 @@
 Same idempotent pattern as fix_prod_schema_drift.py / apply_tax_rules_schema.py —
 every statement IF NOT EXISTS, no data modified or dropped. This script accumulates
 one section per PR of the daily-cycle plan; add new DDL to the end of the DDL list
-below rather than creating a new script per PR.
+below rather than creating a new script per PR. A partial repair never stamps
+Alembic head.
 
     python scripts/apply_morning_cycle_schema.py            # dry-run (prints plan)
     python scripts/apply_morning_cycle_schema.py --apply    # executes
@@ -92,7 +93,7 @@ def main() -> None:
         print("DRY RUN — would execute on", url.split("@")[-1].split("/")[0])
         for stmt in DDL:
             print("\n" + stmt.strip())
-        print("\nthen: alembic stamp head")
+        print("\nAlembic history is not changed by this partial repair.")
         print("\nRe-run with --apply to execute.")
         return
 
@@ -101,14 +102,10 @@ def main() -> None:
             conn.execute(text(stmt))
             print("OK:", stmt.split("\n")[0][:70])
 
-    from alembic import command as alembic_command
-    from alembic.config import Config as AlembicConfig
-
-    cfg = AlembicConfig(str(ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(ROOT / "alembic"))
-    alembic_command.stamp(cfg, "head")
-    print("OK: alembic stamped to head")
-    print("\nDone. accounts.credit_limit is live.")
+    print(
+        "\nDone. Morning-cycle fields were repaired; "
+        "Alembic history was not changed."
+    )
 
 
 if __name__ == "__main__":

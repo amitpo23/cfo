@@ -1,5 +1,9 @@
 # CFO Platform Workflow Audit
 
+> **היסטורי — לא מקור אמת.** האודיט נשמר כרקע בלבד. החוזה הפעיל הוא
+> [`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md), והסטטוס נמצא רק
+> ב-[`MASTER_EXECUTION_PLAN.md`](MASTER_EXECUTION_PLAN.md).
+
 ## Target Product
 
 One multi-tenant CFO/finance operations platform for Israeli businesses and
