@@ -738,3 +738,170 @@ def test_get_suppliers_missing_invoices_tool_registered_and_org_scoped(fresh_org
         assert "totals" in result_a
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------- #
+# Package 1 (2026-07-26 personas plan) — P&L source switch + 7 new
+# read-only chat tools (get_credit_line_status, get_ar_health,
+# get_cfo_insights, get_daily_brief, get_tax_estimate, verify_filing,
+# kb_lookup). All read-category, all available to every persona (persona
+# is a prompt-tone axis, not a permission gate — see ai_chat_personas.py).
+# ---------------------------------------------------------------------- #
+
+def test_get_pnl_tool_uses_ledger_source(fresh_org):
+    """Council decision 2026-07-26: one P&L tool, ledger-based
+    (financial_reports_service.generate_profit_loss), not DashboardService
+    (would have been a second, divergent source of truth)."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["get_pnl"].fn(db, org_id))
+        assert result["source"] == "ledger"
+        assert "total_revenue" in result
+        assert "total_expenses" in result
+        assert "net_income" in result
+    finally:
+        db.close()
+
+
+def test_get_credit_line_status_tool_returns_unknown_without_credit_limit(fresh_org):
+    assert TOOLS["get_credit_line_status"].category == "read"
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["get_credit_line_status"].fn(db, org_id))
+        assert result["status"] == "unknown"
+        assert result["breach_date"] is None
+    finally:
+        db.close()
+
+
+def test_get_credit_line_status_tool_reports_breach_date(fresh_org):
+    """org-scoped smoke test with a real credit_limit + a bank balance that
+    goes below it, to prove the tool wraps the real service (not a stub)."""
+    from datetime import datetime
+    from decimal import Decimal
+    from cfo.models import Transaction, TransactionType
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        acc = Account(
+            organization_id=org_id, name="בנק ראשי", account_type=AccountType.BANK,
+            balance=Decimal("-9000"), credit_limit=Decimal("5000"),
+        )
+        db.add(acc)
+        db.flush()
+        db.add(Transaction(
+            organization_id=org_id, account_id=acc.id,
+            transaction_type=TransactionType.EXPENSE, amount=Decimal("9000"),
+            transaction_date=datetime.utcnow(), category="other",
+        ))
+        db.commit()
+
+        result = asyncio.run(TOOLS["get_credit_line_status"].fn(db, org_id))
+        assert result["status"] in ("breach", "warning")
+        assert result["accounts"][0]["credit_limit"] == 5000.0
+    finally:
+        db.close()
+
+
+def test_get_ar_health_tool_returns_dso_trend_and_risk_summary(fresh_org):
+    assert TOOLS["get_ar_health"].category == "read"
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["get_ar_health"].fn(db, org_id))
+        assert isinstance(result["dso_trend"], list)
+        assert "risk_summary" in result
+        assert "collection_summary" in result
+        assert "total_receivables" in result
+    finally:
+        db.close()
+
+
+def test_get_cfo_insights_tool_is_read_only_and_org_scoped(fresh_org):
+    from cfo.models import CfoInsight
+
+    assert TOOLS["get_cfo_insights"].category == "read"
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(CfoInsight(
+            organization_id=org_a, fingerprint="test:fp:1", insight_type="cashflow",
+            severity="high", title="בדיקה", status="active",
+        ))
+        db.commit()
+
+        result_a = asyncio.run(TOOLS["get_cfo_insights"].fn(db, org_a))
+        result_b = asyncio.run(TOOLS["get_cfo_insights"].fn(db, org_b))
+        assert len(result_a["insights"]) == 1
+        assert result_b["insights"] == []
+    finally:
+        db.close()
+
+
+def test_get_daily_brief_tool_returns_subject_and_text(fresh_org):
+    assert TOOLS["get_daily_brief"].category == "read"
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["get_daily_brief"].fn(db, org_id))
+        assert set(result.keys()) == {"subject", "text"}
+        assert isinstance(result["text"], str) and result["text"]
+    finally:
+        db.close()
+
+
+def test_get_tax_estimate_tool_includes_method_caveat_and_low_confidence(fresh_org):
+    """Binding requirement (council 2026-07-26): a tax estimate without an
+    explicit caveat is never allowed — honest-null for tax numbers."""
+    assert TOOLS["get_tax_estimate"].category == "read"
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["get_tax_estimate"].fn(db, org_id))
+        assert result["confidence"] == "low"
+        assert result["method"]
+        assert result["caveat"]
+        assert "calculated_amount" in result
+    finally:
+        db.close()
+
+
+def test_verify_filing_tool_requires_year_and_month_and_returns_status(fresh_org):
+    assert TOOLS["verify_filing"].category == "read"
+    assert TOOLS["verify_filing"].input_schema["required"] == ["year", "month"]
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["verify_filing"].fn(db, org_id, year=2026, month=5))
+        assert result["status"] in ("pass", "warn", "fail")
+        assert "checks" in result
+    finally:
+        db.close()
+
+
+def test_kb_lookup_tool_returns_real_content(fresh_org):
+    """Package 2 wired the real KB loader (kb_loader.py) — kb_lookup now
+    returns actual sections from docs/bookkeeper_kb + docs/sumit_help_kb,
+    not the package-1 honest-null stub."""
+    assert TOOLS["kb_lookup"].category == "read"
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = asyncio.run(TOOLS["kb_lookup"].fn(db, org_id, query="מע\"מ תשומות"))
+        assert result["results"]
+        assert result["results"][0]["text"]
+        assert result["results"][0]["source"]
+    finally:
+        db.close()
+
+
+def test_new_package1_tools_are_not_office_gated():
+    for name in (
+        "get_credit_line_status", "get_ar_health", "get_cfo_insights",
+        "get_daily_brief", "get_tax_estimate", "verify_filing", "kb_lookup",
+    ):
+        assert TOOLS[name].office is False, name

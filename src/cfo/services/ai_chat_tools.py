@@ -42,8 +42,23 @@ async def _get_ap_bills(db, org_id: int, days_ahead: int = 30, **_kwargs) -> dic
 
 
 async def _get_pnl(db, org_id: int, months: int = 6, **_kwargs) -> dict:
-    from .dashboard_service import DashboardService
-    return {"months": DashboardService(db, org_id).get_pnl(months=months)}
+    """דוח רווח והפסד — מבוסס financial_reports_service.generate_profit_loss
+    (ledger חי: Invoice/Bill/Expense בסכומי נטו מפוצלי-מע"מ), לא
+    DashboardService (מקור כפול — הכרעת מועצה 2026-07-26: כלי P&L אחד).
+    מחזיר את דוח ה-ProfitLossReport המלא (revenue/expenses/gross/operating/
+    net לתקופה) + source='ledger' לזיהוי המקור."""
+    from datetime import date
+    from dateutil.relativedelta import relativedelta
+    from .financial_reports_service import FinancialReportsService
+
+    end_date = date.today()
+    start_date = end_date - relativedelta(months=months)
+    report = FinancialReportsService(db).generate_profit_loss(
+        org_id, start_date, end_date, compare_previous=False,
+    )
+    result = report.to_dict()
+    result["source"] = "ledger"
+    return result
 
 
 async def _get_collection_cases(db, org_id: int, status: str | None = None, **_kwargs) -> dict:
@@ -122,7 +137,14 @@ async def _list_invoices(db, org_id: int, status: str | None = None, limit: int 
 
 async def _get_engine_status(db, org_id: int, **_kwargs) -> dict:
     from . import engine_service
-    return engine_service.status(db, org_id)
+    from .kb_loader import kb_index
+    result = engine_service.status(db, org_id)
+    # kb_files_available: a cheap, org-agnostic presence check so prod can be
+    # verified to have the KB actually packaged (see kb_lookup) — 0 rather
+    # than a missing key when the KB isn't available, honest-null style.
+    idx = kb_index()
+    result["kb_files_available"] = idx.get("file_count", 0) if idx.get("available") else 0
+    return result
 
 
 async def _create_payment_link(db, org_id: int, *, invoice_id: int, **_kwargs) -> dict:
@@ -328,6 +350,108 @@ async def _get_suppliers_missing_invoices(
     return result
 
 
+async def _get_credit_line_status(db, org_id: int, days: int = 30, **_kwargs) -> dict:
+    """מסגרת אשראי בנקאית — עד מתי צפויה חריגה/התקרבות למסגרת, על בסיס
+    הליכת יתרה יומית מול Account.credit_limit הידוע (org-level, לא לפי
+    חשבון בודד — ראו הסתייגות credit_line_service)."""
+    from .credit_line_service import get_credit_line_status
+    return get_credit_line_status(db, org_id, days=days)
+
+
+async def _get_ar_health(db, org_id: int, months: int = 12, target_dso: int = 30, **_kwargs) -> dict:
+    """בריאות גבייה — מגמת DSO אמיתית (ממוצע ימי-תשלום בפועל) + סיכומי
+    סיכון/גבייה מדוח הגיול. לא כולל את פירוט הלקוחות המלא (זמין דרך
+    get_ar_aging) — רק המדדים המצטברים."""
+    from .ar_service import AccountsReceivableService
+
+    svc = AccountsReceivableService(db, org_id)
+    dso_trend = svc.get_dso_trend(months=months, target_dso=target_dso)
+    aging = svc.get_aging_report()
+    return {
+        "dso_trend": dso_trend,
+        "current_dso": dso_trend[-1]["dso"] if dso_trend else None,
+        "target_dso": target_dso,
+        "total_receivables": aging.total_receivables,
+        "weighted_average_days": aging.weighted_average_days,
+        "risk_summary": aging.risk_summary,
+        "collection_summary": aging.collection_summary,
+    }
+
+
+async def _get_cfo_insights(
+    db, org_id: int, *, status: str = "active", severity: str | None = None,
+    limit: int = 20, **_kwargs,
+) -> dict:
+    """תובנות CFO קיימות (persisted CfoInsight) — קריאה בלבד מהמאגר; אינו
+    מריץ ניתוח מלא (run_analysis) כברירת מחדל, כדי לא להריץ עיבוד כבד על
+    כל שאלת צ'אט."""
+    from .cfo_brain_service import CFOBrainService
+    insights = CFOBrainService(db, org_id).list_insights(
+        status=status, severity=severity, limit=limit,
+    )
+    return {"insights": insights}
+
+
+async def _get_daily_brief(db, org_id: int, **_kwargs) -> dict:
+    """בריף הבוקר של היום (טקסט טהור) — אותו תוכן שנשלח באימייל/SMS,
+    מבוסס DailySnapshot/CfoInsight קיימים; אינו מריץ מחזור-בוקר חדש."""
+    from datetime import date
+    from .morning_brief_service import compose_brief, render_hebrew
+
+    brief = compose_brief(db, org_id, date.today())
+    subject, text, _html = render_hebrew(brief)
+    return {"subject": subject, "text": text}
+
+
+async def _get_tax_estimate(
+    db, org_id: int, *, year: int | None = None, month: int | None = None, **_kwargs,
+) -> dict:
+    """אומדן מקדמת מס גס — לא תחליף לחישוב מחייב. חובה method+caveat+
+    confidence=low בפלט (הכרעת מועצה 2026-07-26: אף אומדן מס בלי הסתייגות
+    מפורשת)."""
+    from datetime import date
+    from .tax_service import TaxComplianceService
+
+    today = date.today()
+    y = year or today.year
+    m = month or today.month
+    advance = TaxComplianceService(db, org_id).calculate_tax_advance(y, m)
+    return {
+        "period": advance.period,
+        "due_date": advance.due_date,
+        "calculated_amount": advance.calculated_amount,
+        "previous_payments": advance.previous_payments,
+        "remaining_amount": advance.remaining_amount,
+        "payment_status": advance.payment_status,
+        "method": "רווח שנתי מוערך × שיעור מס חברות ÷ 12",
+        "caveat": (
+            "אומדן גס — ללא מדרגות מס ליחיד, ללא נתוני שומה; לחישוב מחייב "
+            "יש לפנות לרו\"ח."
+        ),
+        "confidence": "low",
+    }
+
+
+async def _verify_filing(
+    db, org_id: int, *, year: int, month: int, months: int = 1,
+    basis: str = "document", **_kwargs,
+) -> dict:
+    """אימות משולש (3 בדיקות בלתי-תלויות) של דיווח המע"מ לתקופה — קריאה
+    בלבד, יש להריץ לפני כל שידור בפועל לרשות."""
+    from .filing_verification import verify_filing
+    return verify_filing(db, org_id, year, month, months=months, basis=basis)
+
+
+async def _kb_lookup(db, org_id: int, *, query: str | None = None, **_kwargs) -> dict:
+    """מרכז ידע חשבונאי/מיסויי (docs/bookkeeper_kb + docs/sumit_help_kb) —
+    חיפוש keyword על פני קבצי ה-KB בפועל. אין query -> אינדקס המרכזים
+    (כמו rezef_kb.get_topic(None)). honest-null אם ה-KB לא ארוז בסביבה זו."""
+    from .kb_loader import kb_index, kb_search
+    if not query or not query.strip():
+        return kb_index()
+    return kb_search(query)
+
+
 async def _rezef_help(db, org_id: int, *, topic: str | None = None, **_kwargs) -> dict:
     """Project knowledge-base lookup — "how do I / what can Rezef do / where
     is X". Ignores db/org_id (same signature as every other tool for
@@ -423,10 +547,17 @@ TOOLS: dict[str, ChatTool] = {
     ),
     "get_pnl": ChatTool(
         name="get_pnl",
-        description="קבלת דוח רווח והפסד חודשי לטווח החודשים האחרונים.",
+        description=(
+            "דוח רווח והפסד — מבוסס ledger חי (Invoice/Bill/Expense בנטו), "
+            "לא הערכה. מחזיר סכום מצטבר אחד עבור כל התקופה שנבחרה (revenue/"
+            "cost_of_goods_sold/operating_expenses/net_income וכו'), ו-"
+            "source='ledger'. זהו סיכום לתקופה כולה — אין כאן פירוט חודש-"
+            "בחודש; לשאלה 'כמה הרווחתי בכל חודש בנפרד' אין לענות ממספר "
+            "מצטבר זה."
+        ),
         input_schema={
             "type": "object",
-            "properties": {"months": {"type": "integer", "description": "מספר חודשים", "default": 6}},
+            "properties": {"months": {"type": "integer", "description": "אורך התקופה אחורה מהיום, בחודשים", "default": 6}},
         },
         category="read",
         fn=_get_pnl,
@@ -815,6 +946,126 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_rezef_help,
+    ),
+    "get_credit_line_status": ChatTool(
+        name="get_credit_line_status",
+        description=(
+            "מסגרת אשראי בנקאית — האם/מתי צפויה חריגה או התקרבות (עד 10%) "
+            "למסגרת האשראי הידועה, לפי הליכת יתרה יומית קדימה. עונה ישירות "
+            "'מתי צפוי מינוס' (breach_date/warning_date) ו-min_headroom "
+            "(המרווח המינימלי הצפוי). status='unknown' כשלא ידועה מסגרת "
+            "אשראי לאף חשבון בנק."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"days": {"type": "integer", "description": "טווח ימים קדימה", "default": 30}},
+        },
+        category="read",
+        fn=_get_credit_line_status,
+    ),
+    "get_ar_health": ChatTool(
+        name="get_ar_health",
+        description=(
+            "בריאות גבייה — מגמת DSO אמיתית (ממוצע ימי-תשלום בפועל, לא "
+            "יעד) לאורך מספר חודשים, וסיכומי סיכון/גבייה מדוח הגיול "
+            "(total_receivables, risk_summary, collection_summary). לפירוט "
+            "לקוח-לקוח יש להשתמש ב-get_ar_aging."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "months": {"type": "integer", "description": "טווח חודשים למגמת DSO", "default": 12},
+                "target_dso": {"type": "integer", "description": "יעד DSO להשוואה", "default": 30},
+            },
+        },
+        category="read",
+        fn=_get_ar_health,
+    ),
+    "get_cfo_insights": ChatTool(
+        name="get_cfo_insights",
+        description=(
+            "תובנות CFO קיימות (persisted) — התרעות/המלצות שכבר נוצרו על "
+            "ידי מנוע הניתוח (חיבורים, התאמות, גבייה, תזרים, ספקים, "
+            "רווחיות, סגירת חודש, תקציב). קריאה בלבד — אינו מריץ ניתוח כבד "
+            "מחדש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["active", "acknowledged", "resolved"], "default": "active"},
+                "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info"]},
+                "limit": {"type": "integer", "default": 20},
+            },
+        },
+        category="read",
+        fn=_get_cfo_insights,
+    ),
+    "get_daily_brief": ChatTool(
+        name="get_daily_brief",
+        description=(
+            "בריף הבוקר של היום בעברית (טקסט טהור, subject+text) — אדומים "
+            "שדורשים טיפול היום, מזומן, תורים, וחייבים מובילים. מבוסס "
+            "נתונים שכבר קיימים (DailySnapshot/CfoInsight) — אינו מריץ "
+            "מחזור-בוקר חדש."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_daily_brief,
+    ),
+    "get_tax_estimate": ChatTool(
+        name="get_tax_estimate",
+        description=(
+            "אומדן גס של מקדמת מס (הכנסה) לחודש — לא חישוב מחייב ולא ייעוץ "
+            "מס. מחזיר תמיד method (הנוסחה) ו-caveat (הסתייגות מפורשת) "
+            "ו-confidence='low'."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer", "description": "ברירת מחדל: השנה הנוכחית"},
+                "month": {"type": "integer", "description": "ברירת מחדל: החודש הנוכחי"},
+            },
+        },
+        category="read",
+        fn=_get_tax_estimate,
+    ),
+    "verify_filing": ChatTool(
+        name="verify_filing",
+        description=(
+            "אימות משולש (3 בדיקות בלתי-תלויות: תיאום מול PCN874, חישוב "
+            "עצמאי ובדיקות שפיות, שלמות קליטה והצלבה חיצונית) של דיווח "
+            "המע\"מ לתקופה — קריאה בלבד. יש להריץ ולבדוק pass/warn/fail "
+            "לפני כל שידור בפועל לרשות."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer"},
+                "month": {"type": "integer"},
+                "months": {"type": "integer", "description": "אורך התקופה בחודשים", "default": 1},
+                "basis": {"type": "string", "enum": ["document", "captured"], "default": "document"},
+            },
+            "required": ["year", "month"],
+        },
+        category="read",
+        fn=_verify_filing,
+    ),
+    "kb_lookup": ChatTool(
+        name="kb_lookup",
+        description=(
+            "מרכז ידע חשבונאי/מיסויי: דיני הכרה בהוצאות (מס הכנסה), ניכוי מס "
+            "תשומות (מע\"מ), גשר סיווגים, ונהלי SUMIT (פורטל, הכנסות/הוצאות, "
+            "חיוב וגבייה, אינטגרציה). חפשו כאן לפני שעונים על שאלת דין/נוהל — "
+            "אל תנחשו כלל מס או צעד ב-SUMIT. honest-null (available=False + "
+            "סיבה) אם ה-KB אינו ארוז בסביבה הנוכחית — לא רשימה ריקה שקטה."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "מונח/שאלה לחיפוש במרכז הידע"}},
+            "required": ["query"],
+        },
+        category="read",
+        fn=_kb_lookup,
     ),
     "list_office_clients": ChatTool(
         name="list_office_clients",

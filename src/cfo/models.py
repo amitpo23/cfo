@@ -198,6 +198,106 @@ class AuditLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class OrganizationSigningAuthority(Base):
+    """Business-owner/signatory authority, separate from application RBAC.
+
+    ADMIN and SUPER_ADMIN describe application access.  This row answers the
+    different question: who may approve an irreversible business action for
+    this organization, and for which action types.
+    """
+    __tablename__ = "organization_signing_authorities"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False,
+    )
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    authority_type = Column(
+        String(30), nullable=False, default="authorized_signer",
+    )  # owner | authorized_signer
+    action_types = Column(JSON, nullable=False, default=lambda: ["*"])
+    is_active = Column(Boolean, nullable=False, default=True)
+    granted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    revoked_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "user_id",
+            name="uq_signing_authority_org_user",
+        ),
+        Index(
+            "ix_signing_authority_org_active",
+            "organization_id",
+            "is_active",
+        ),
+    )
+
+
+class IrreversibleActionRequest(Base):
+    """Durable proposal/approval/execution evidence for an external action.
+
+    The row stores the exact payload that was reviewed. Execution is claimed
+    atomically by the service; provider acceptance and independent readback
+    are separate states so an HTTP 200 can never masquerade as verification.
+    """
+    __tablename__ = "irreversible_action_requests"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False,
+    )
+    action_type = Column(String(50), nullable=False)
+    description = Column(Text, nullable=True)
+    payload = Column(JSON, nullable=False)
+    payload_sha256 = Column(String(64), nullable=False)
+    idempotency_key = Column(String(160), nullable=False)
+
+    status = Column(String(24), nullable=False, default="proposed")
+    proposed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    approved_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    approver_role = Column(String(30), nullable=True)
+    approved_by_authority_id = Column(
+        Integer,
+        ForeignKey("organization_signing_authorities.id"),
+        nullable=True,
+    )
+    approver_authority_type = Column(String(30), nullable=True)
+
+    provider_reference = Column(String(255), nullable=True)
+    execution_result = Column(JSON, nullable=True)
+    verification_evidence = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+
+    proposed_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    rejected_at = Column(DateTime(timezone=True), nullable=True)
+    execution_started_at = Column(DateTime(timezone=True), nullable=True)
+    executed_at = Column(DateTime(timezone=True), nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "idempotency_key",
+            name="uq_irreversible_action_org_idempotency",
+        ),
+        Index(
+            "ix_irreversible_action_org_status",
+            "organization_id",
+            "status",
+        ),
+    )
+
+
 # Database Models
 class Account(Base):
     """חשבון"""
@@ -1361,6 +1461,62 @@ class FilingCrosscheck(Base):
     __table_args__ = (
         UniqueConstraint("organization_id", "period", "basis",
                           name="uq_filing_crosscheck_period_basis"),
+    )
+
+
+class ChannelIdentity(Base):
+    """זהות ערוץ שיחה חיצוני (טלגרם, ולעתיד וואטסאפ) המקושרת למשתמש+ארגון
+    ברצף. הקישור מתבצע אך ורק דרך קוד חד-פעמי שהונפק למשתמש מאומת JWT
+    (ChannelLinkCode) — אין זיהוי לפי מספר טלפון, אפס סיסמאות בצ'אט (הכרעה 6,
+    docs/superpowers/plans/2026-07-26-conversational-channels-personas.md)."""
+    __tablename__ = "channel_identities"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    provider = Column(String(20), nullable=False)  # "telegram"
+    external_id = Column(String(64), nullable=False)  # chat_id/user_id של הערוץ, כמחרוזת
+    display_name = Column(String(120), nullable=True)
+    default_persona = Column(String(20), default="cfo")
+    verified_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        UniqueConstraint("provider", "external_id", name="uq_channel_identity_provider_external"),
+    )
+
+
+class ChannelLinkCode(Base):
+    """קוד קישור חד-פעמי (TTL 15 דקות) שמנפיק משתמש מאומת JWT באפליקציה,
+    להקלדה בערוץ החיצוני (למשל /start <קוד> בטלגרם). ה-DB שומר רק hash
+    (sha256) — הקוד הגלוי מוחזר פעם אחת בתשובת ה-API ולעולם לא נשמר בבירור."""
+    __tablename__ = "channel_link_codes"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    code_hash = Column(String(64), nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ChannelProcessedUpdate(Base):
+    """Dedupe עדכוני webhook נכנסים לפי (provider, update_id) — מונע ריצה
+    כפולה (ולכן עלות LLM כפולה) כשהערוץ החיצוני משדר retry על אותו עדכון
+    (הכרעה 7). שורה קיימת = "כבר טופל", מוחזר 200 מיידי בלי לגעת ב-LLM."""
+    __tablename__ = "channel_processed_updates"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(20), nullable=False)
+    update_id = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("provider", "update_id", name="uq_channel_processed_update"),
     )
 
 
