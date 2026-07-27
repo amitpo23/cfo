@@ -9,7 +9,7 @@
 | --- | --- |
 | מודולי Python ב-`src/cfo/` | 152 (40 routers, 102 services) |
 | השורות הגדולות | `sumit_integration.py` 2,847 · `models.py` 1,734 · `routes/admin.py` 1,514 |
-| קבצי טסט / טסטים | 154 קבצים · **1,401 עוברים**, 0 נכשלים, ~247 שנ' |
+| קבצי טסט / טסטים | 159 קבצים · **1,459 עוברים**, 0 נכשלים, ~292 שנ' |
 | אזהרות בסוויטה | 19,948 — כמעט כולן `datetime.utcnow()` deprecation |
 | `audit_routes.py` | **250 routes**: 174 תקין · 39 אזהרה(4xx) · 36 מוגדר-סביבה(400) · **1 כשל** (honest-null) |
 | `schema_drift_check.py` (מקומי) | **נכשל** — 4 טבלאות ועשרות עמודות חסרות ב-SQLite המקומי המיושן. לא רגרסיה בקוד |
@@ -138,7 +138,7 @@ cfo/
 ## 6. איך מריצים בדיקות
 
 ```bash
-python -m pytest tests/ -q            # 1,401 עוברים, ~247 שנ'
+python -m pytest tests/ -q            # 1,459 עוברים, ~292 שנ'
 python scripts/audit_routes.py        # 250 routes, 1 כשל (honest-null)
 python scripts/schema_drift_check.py  # נכשל מקומית — DB מיושן, לא רגרסיה
 python scripts/qa_gate.py             # עוטף את כל הנ"ל + frontend
