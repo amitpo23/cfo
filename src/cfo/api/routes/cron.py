@@ -666,3 +666,64 @@ def run_bank_gap_scan(db: Session = Depends(get_db_session)):
             errors.append({"org": org.id, "error": str(exc)})
 
     return {"status": "ok", "orgs": len(orgs), "summary": totals, "errors": errors}
+
+
+@router.get("/cron/channel-alerts", dependencies=[Depends(_verify_cron_secret)])
+async def run_channel_alerts(db: Session = Depends(get_db_session)):
+    """דוחף ל-Telegram (package B, 2026-07-27 moshko-full-bot plan) את ה-
+    CfoInsight החדשים בסיכון high/critical, פר ארגון פעיל.
+
+    דדופ אמיתי: הסינון הוא לפי created_at ביחס ל-last_push_at המקסימלי בין
+    זהויות הערוץ המאומתות/לא-מבוטלות/opted-in של הארגון (אותה קבוצה בדיוק
+    ש-channel_notifier.recipients_for מחזירה, ו-push_to_organization מעדכן
+    לה last_push_at רק בשליחה שהצליחה בפועל) — כך שתובנה שכבר נדחפה בהצלחה
+    לא תיבחר שוב בהרצה הבאה. אם אף זהות מעולם לא קיבלה push (last_push_at
+    כולן None — כולל ארגון חדש לגמרי), אין בסיס היסטורי להשוואה; הנפילה
+    לחלון 24 שעות אחורה (ולא "כל ההיסטוריה") מונעת הצפה בהרצה הראשונה של
+    ארגון ותיק עם עשרות תובנות ישנות."""
+    from ...models import CfoInsight
+    from ...services.channel_notifier import push_to_organization, recipients_for
+
+    orgs = db.query(Organization).filter(Organization.is_active.is_(True)).all()
+    total_pushed = 0
+    total_insights = 0
+
+    for org in orgs:
+        try:
+            identities = recipients_for(db, org.id, provider="telegram")
+            if not identities:
+                continue
+
+            last_pushes = [i.last_push_at for i in identities if i.last_push_at]
+            query = db.query(CfoInsight).filter(
+                CfoInsight.organization_id == org.id,
+                CfoInsight.status == "active",
+                CfoInsight.severity.in_(("high", "critical")),
+            )
+            if last_pushes:
+                query = query.filter(CfoInsight.created_at > max(last_pushes))
+            else:
+                query = query.filter(CfoInsight.created_at >= datetime.utcnow() - timedelta(hours=24))
+            insights = query.order_by(CfoInsight.created_at.asc()).all()
+
+            if not insights:
+                continue
+
+            total_insights += len(insights)
+            severity = "critical" if any(i.severity == "critical" for i in insights) else "high"
+
+            lines = [f"⚠️ {len(insights)} התרעות חדשות:"]
+            for insight in insights[:5]:
+                lines.append(f"- [{insight.severity}] {insight.title}")
+            if len(insights) > 5:
+                lines.append(f"ועוד {len(insights) - 5}")
+            text = "\n".join(lines)
+
+            result = await push_to_organization(db, org.id, text, severity=severity)
+            if result.get("sent"):
+                total_pushed += 1
+        except Exception as exc:
+            logger.error("Channel alert push failed for org %s: %s", org.id, exc)
+            db.rollback()
+
+    return {"organizations": len(orgs), "pushed": total_pushed, "insights": total_insights}

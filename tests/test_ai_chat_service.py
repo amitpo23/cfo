@@ -905,6 +905,64 @@ def test_confirm_action_executes_classify_pending_expenses_successfully(monkeypa
         db.close()
 
 
+def test_file_expense_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
+    """Package A (moshko-full-bot plan, 2026-07-27): file_expense wraps a
+    real SUMIT booking (ExpenseFilingService.file_to_sumit) — the exact same
+    write-gate mechanism every other write tool goes through, proven here so
+    a receipt captured through chat_expense_intake can never be filed
+    without an explicit confirm_action() call."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        exp = _seed_pending_expense(db, org_id, supplier_name="ספק קבלה מהצ'אט", category="office")
+
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "file_expense", {"expense_id": exp["id"]})],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        result = asyncio.run(service.send_message("s1", f"תייק את הוצאה {exp['id']}"))
+
+        assert result["pending_action"]["tool"] == "file_expense"
+        db.expire_all()
+        from cfo.models import Expense
+        row = db.query(Expense).filter(Expense.id == exp["id"]).first()
+        assert row.status == "pending"  # לא תויק עדיין
+    finally:
+        db.close()
+
+
+def test_confirm_action_executes_file_expense_successfully(monkeypatch, fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        exp = _seed_pending_expense(db, org_id, supplier_name="ספק קבלה מהצ'אט", category="office")
+
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "file_expense", {"expense_id": exp["id"]})],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        proposed = asyncio.run(service.send_message("s1", f"תייק את הוצאה {exp['id']}"))
+        pending_id = proposed["message_id"]
+
+        from cfo.services.expense_filing_service import ExpenseFilingService
+
+        async def fake_file_to_sumit(self, expense_id):
+            return {"id": expense_id, "status": "filed", "sumit_expense_id": "SU-1"}
+
+        monkeypatch.setattr(ExpenseFilingService, "file_to_sumit", fake_file_to_sumit)
+
+        confirmed = asyncio.run(service.confirm_action(pending_id))
+        assert confirmed["result"]["status"] == "filed"
+    finally:
+        db.close()
+
+
 def test_system_prompt_tells_the_model_about_rezef_help():
     """The KB (rezef_kb.py) is deliberately NOT pasted into SYSTEM_PROMPT —
     only a pointer to the rezef_help tool is, so "how do I / what can Rezef

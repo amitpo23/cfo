@@ -199,7 +199,15 @@ class AIChatService:
                     # even if somehow requested by name.
                     result = {"error": _OFFICE_REFUSAL_TEXT}
                 else:
-                    result = await tool.fn(self.db, self.organization_id, **block.input)
+                    # Merge into a dict first (not **a, **b in the call) so a
+                    # duplicate key can never raise "multiple values for
+                    # argument" — if a tool_use.input somehow carried its own
+                    # _user_id, the real caller identity below always wins,
+                    # it's never spoofable from model output.
+                    call_kwargs = dict(block.input)
+                    if tool.needs_user:
+                        call_kwargs["_user_id"] = self.user_id
+                    result = await tool.fn(self.db, self.organization_id, **call_kwargs)
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -250,7 +258,10 @@ class AIChatService:
             raise ChatConfirmationError(_OFFICE_REFUSAL_TEXT)
 
         try:
-            result = await tool.fn(self.db, self.organization_id, **msg.pending_action["input"])
+            call_kwargs = dict(msg.pending_action["input"])
+            if tool.needs_user:
+                call_kwargs["_user_id"] = self.user_id
+            result = await tool.fn(self.db, self.organization_id, **call_kwargs)
         except ValueError as exc:
             # Never fake success: a business-validation failure (e.g.
             # register_office_client with no SUMIT key configured) must

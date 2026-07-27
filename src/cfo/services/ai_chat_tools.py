@@ -29,6 +29,13 @@ class ChatTool:
     # super-admin never sees these tool definitions at all) AND execution
     # (defense in depth — refused even if somehow requested by name).
     office: bool = False
+    # True only for tools that need to know WHO is acting (not just which
+    # org) — e.g. propose_vat_filing_approval, which must load a real User
+    # row to pass as IrreversibleActionService.propose(proposed_by=...).
+    # ai_chat_service passes the caller's user_id as `_user_id` ONLY to
+    # tools with this flag set, so the other ~39 existing tools' call
+    # signature is completely unaffected (Moshko plan 2026-07-27, package D1).
+    needs_user: bool = False
 
 
 async def _get_ar_aging(db, org_id: int, **_kwargs) -> dict:
@@ -297,6 +304,36 @@ async def _classify_pending_expenses(db, org_id: int, **_kwargs) -> dict:
     return ExpenseFilingService(db, organization_id=org_id).classify_pending()
 
 
+async def _file_expense(db, org_id: int, *, expense_id: int, **_kwargs) -> dict:
+    """תיוק הוצאה בפועל ב-SUMIT — עוטף ExpenseFilingService.file_to_sumit
+    הקיים (כולל שער הכפילויות שכבר בתוכו). פעולה בלתי-הפיכה (יוצרת מסמך
+    אמיתי ב-SUMIT) — לכן category="write" למטה."""
+    from .expense_filing_service import ExpenseFilingService
+    service = ExpenseFilingService(db, organization_id=org_id)
+    return await service.file_to_sumit(expense_id)
+
+
+async def _get_expense_intake_status(db, org_id: int, **_kwargs) -> dict:
+    """כמה קבלות נקלטו היום דרך הצ'אט מול התקרה היומית, וכמה טיוטות
+    ממתינות לתיוק — קריאה בלבד, ללא הרצת LLM/תיוק."""
+    from ..config import settings
+    from ..models import Expense
+    from .chat_expense_intake import count_receipts_today
+
+    intake_today = count_receipts_today(db, org_id, "telegram")
+    pending_filing = (
+        db.query(Expense)
+        .filter(Expense.organization_id == org_id, Expense.status == "pending")
+        .count()
+    )
+    return {
+        "intake_today": intake_today,
+        "daily_limit": settings.chat_receipt_daily_limit,
+        "intake_enabled": settings.chat_receipt_intake_enabled,
+        "pending_filing": pending_filing,
+    }
+
+
 async def _query_bank_transactions(
     db, org_id: int, *, date_from: str | None = None, date_to: str | None = None,
     search: str | None = None, txn_type: str | None = None, direction: str | None = None,
@@ -460,6 +497,225 @@ async def _rezef_help(db, org_id: int, *, topic: str | None = None, **_kwargs) -
     SYSTEM_PROMPT (token cost)."""
     from . import rezef_kb
     return {"content": rezef_kb.get_topic(topic)}
+
+
+# ------------------------------------------------------------------------ #
+# Package C (Moshko plan 2026-07-27) — email_report. Recipient safety: the
+# model must never invent a recipient. The tool itself can only check one
+# half of that rule (is recipient_email a known org Contact?) — the other
+# half (did the USER type this address explicitly in the conversation?)
+# lives in the tool description below, since the tool has no access to chat
+# history. `recipient_verified_as` in the result makes the source visible on
+# the confirmation card the user sees before the write actually executes.
+# ------------------------------------------------------------------------ #
+async def _email_report(
+    db, org_id: int, *,
+    report_type: str, recipient_email: str,
+    period_months: int | None = None,
+    year: int | None = None, month: int | None = None,
+    note: str | None = None,
+    **_kwargs,
+) -> dict:
+    from datetime import date
+    import calendar
+    from dateutil.relativedelta import relativedelta
+    from ..config import settings
+    from ..models import Contact, Organization
+    from .email_sender import send_email_smtp
+    from .financial_reports_service import FinancialReportsService
+
+    if not (settings.smtp_host and settings.smtp_from):
+        return {
+            "status": "not_configured",
+            "message": "שליחת מייל אינה מוגדרת במערכת זו (חסר SMTP_HOST/SMTP_FROM) — לא נשלח דבר.",
+        }
+
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.organization_id == org_id,
+            Contact.email == recipient_email,
+            Contact.is_active.is_(True),
+        )
+        .first()
+    )
+    recipient_verified_as = f"contact:{contact.name}" if contact is not None else "user_supplied"
+
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    org_name = org.name if org is not None else "הארגון"
+
+    svc = FinancialReportsService(db)
+    xlsx_subtype = "vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    if report_type == "profit_loss":
+        months = period_months or 6
+        end_date = date.today()
+        start_date = end_date - relativedelta(months=months)
+        report = svc.generate_profit_loss(org_id, start_date, end_date, compare_previous=False)
+        excel_bytes = svc.export_profit_loss_excel(report)
+        period_label = f"{start_date.isoformat()} עד {end_date.isoformat()}"
+        filename = f"רווח-והפסד-{end_date.strftime('%Y-%m')}.xlsx"
+    elif report_type == "balance_sheet":
+        if year and month:
+            as_of = date(year, month, calendar.monthrange(year, month)[1])
+        else:
+            as_of = date.today()
+        report = svc.generate_balance_sheet(org_id, as_of, compare_previous=False)
+        excel_bytes = svc.export_balance_sheet_excel(report)
+        period_label = f"נכון ל-{as_of.isoformat()}"
+        filename = f"מאזן-{as_of.strftime('%Y-%m-%d')}.xlsx"
+    elif report_type == "cash_flow":
+        months = period_months or 12
+        report = svc.generate_cash_flow_projection(org_id, months=months)
+        excel_bytes = svc.export_cash_flow_projection_excel(report)
+        period_label = f"{months} חודשים קדימה"
+        filename = f"תזרים-חזוי-{date.today().strftime('%Y-%m')}.xlsx"
+    else:
+        return {"status": "failed", "message": f"סוג דוח לא מוכר: {report_type}"}
+
+    subject = f"{org_name} — דוח {report_type} ({period_label})"
+    body_lines = ["שלום,", "", f"מצורף הדוח המבוקש: {subject}."]
+    if note:
+        body_lines += ["", note]
+    body_lines += ["", "בברכה,", f"{org_name} — נשלח אוטומטית על ידי מושקו"]
+    body = "\n".join(body_lines)
+
+    sent = await send_email_smtp(
+        recipient_email, subject, body, settings,
+        attachments=[(filename, excel_bytes, xlsx_subtype)],
+    )
+    if not sent:
+        return {
+            "status": "failed",
+            "message": "שליחת המייל נכשלה בפועל (ראו לוג SMTP) — הדוח לא הגיע.",
+            "recipient_verified_as": recipient_verified_as,
+        }
+
+    return {
+        "status": "sent",
+        "recipient_email": recipient_email,
+        "recipient_verified_as": recipient_verified_as,
+        "report_type": report_type,
+        "period": period_label,
+        "filename": filename,
+        "message": f"הדוח נשלח בהצלחה אל {recipient_email}.",
+    }
+
+
+# ------------------------------------------------------------------------ #
+# Package D (Moshko plan 2026-07-27) — VAT filing approval. Rezef has NO
+# transmission mechanism to the tax authority (rezef_kb.py:244 — transmission
+# happens only through the SUMIT UI). This tool never claims otherwise: it
+# records the OWNER's approval of the numbers as an IrreversibleActionRequest
+# (action_type="filing_submission") after the mandatory triple verification,
+# and is explicit in both its description and its output that actual
+# transmission is a separate, manual, SUMIT-side step.
+# ------------------------------------------------------------------------ #
+async def _propose_vat_filing_approval(
+    db, org_id: int, *,
+    year: int, month: int, months: int = 1, basis: str = "document",
+    _user_id: int | None = None,
+    **_kwargs,
+) -> dict:
+    from ..models import User
+    from .daily_reports_service import vat_report_period
+    from .filing_verification import verify_filing
+    from .irreversible_action_service import IrreversibleActionService
+
+    verification = verify_filing(db, org_id, year, month, months=months, basis=basis)
+
+    if verification["status"] == "fail":
+        return {
+            "status": "blocked_by_verification",
+            "verification": verification,
+            "message": "האימות המשולש נכשל — לא ניתן לאשר דיווח לפני תיקון",
+        }
+
+    user = db.query(User).filter(User.id == _user_id).first() if _user_id else None
+    if user is None or user.organization_id != org_id:
+        return {
+            "status": "failed",
+            "message": "לא ניתן לאמת את זהות המשתמש המבקש — הפעולה בוטלה.",
+        }
+
+    report = vat_report_period(db, org_id, year, month, months=months, basis=basis)
+    period_label = f"{year}-{month:02d}"
+    caveat = (
+        "רצף אינו משדר לרשות המסים. אישור זה מתעד את אישור הבעלים למספרים; "
+        "השידור בפועל מתבצע בממשק SUMIT."
+    )
+    # The hashed payload must be a STABLE snapshot of the reviewed numbers.
+    # verification["checks"] as returned by verify_filing carries volatile
+    # per-call fields (check 3's free-text `details` embeds sync age/dates,
+    # plus a separate `sync_age_hours`) — hashing that directly would break
+    # idempotency: proposing the exact same period a few minutes apart would
+    # hash differently and hit ActionConflictError instead of returning the
+    # existing request (proven by test_idempotent_double_call_with_real_
+    # unmocked_verify_filing, which runs the real verify_filing twice —
+    # a mocked verify_filing can't catch this). Only a stable projection
+    # (name + passed) goes into the hashed payload; the full, rich
+    # verification object is still returned in the tool's output below
+    # (never hashed) so the model/user sees the complete picture.
+    stable_checks = [
+        {"name": c["name"], "passed": c["passed"]} for c in verification["checks"]
+    ]
+    payload = {
+        "period": report["period"],
+        "basis": basis,
+        "months": months,
+        "output_vat": float(report["output_vat"]),
+        "input_vat": float(report["input_vat"]),
+        "net_vat": float(report["net_vat"]),
+        "verification_status": verification["status"],
+        "verification_checks": stable_checks,
+    }
+
+    service = IrreversibleActionService(db, org_id)
+    try:
+        row = service.propose(
+            proposed_by=user,
+            action_type="filing_submission",
+            payload=payload,
+            idempotency_key=f"vat-filing:{org_id}:{period_label}:{basis}",
+            description=(
+                f"אישור בעלים למספרי דיווח מע\"מ לתקופה {period_label} "
+                f"(basis={basis}) — לא כולל שידור בפועל, שנעשה ידנית ב-SUMIT."
+            ),
+        )
+    except ValueError as exc:
+        return {"status": "failed", "message": str(exc)}
+
+    return {
+        "status": "proposed",
+        "request_id": row.id,
+        "action_type": row.action_type,
+        "period": report["period"],
+        "basis": basis,
+        "verification_status": verification["status"],
+        "verification": verification,
+        "transmission": "manual_via_sumit",
+        "caveat": caveat,
+        "message": (
+            f"נרשמה בקשת אישור למספרי דיווח מע\"מ {period_label} (בקשה #{row.id}). {caveat}"
+        ),
+    }
+
+
+async def _list_pending_approvals(db, org_id: int, **_kwargs) -> dict:
+    from .irreversible_action_service import IrreversibleActionService
+
+    rows = IrreversibleActionService(db, org_id).list(status="proposed")
+    return {
+        "pending": [
+            {
+                "id": row.id,
+                "action_type": row.action_type,
+                "description": row.description,
+                "proposed_at": row.proposed_at.isoformat() if row.proposed_at else None,
+            }
+            for row in rows
+        ],
+    }
 
 
 # ------------------------------------------------------------------------ #
@@ -829,6 +1085,34 @@ TOOLS: dict[str, ChatTool] = {
         category="write",
         fn=_classify_pending_expenses,
     ),
+    "file_expense": ChatTool(
+        name="file_expense",
+        description=(
+            "תיוק הוצאה בפועל ב-SUMIT (קריאת addexpense אמיתית) — הופך "
+            "טיוטה שנקלטה (מהצ'אט/מהבנק/מ-SUMIT) להוצאה מתויקת בספרים, "
+            "כולל שער הכפילויות הקיים. פעולת כתיבה — דורשת אישור מפורש; "
+            "בלתי-הפיכה (יוצרת מסמך אמיתי ב-SUMIT)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "expense_id": {"type": "integer", "description": "מזהה ההוצאה לתיוק"},
+            },
+            "required": ["expense_id"],
+        },
+        category="write",
+        fn=_file_expense,
+    ),
+    "get_expense_intake_status": ChatTool(
+        name="get_expense_intake_status",
+        description=(
+            "סטטוס קליטת קבלות דרך הצ'אט: כמה נקלטו היום מול התקרה היומית, "
+            "וכמה הוצאות (טיוטות) ממתינות לתיוק. קריאה בלבד."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_expense_intake_status,
+    ),
     "query_bank_transactions": ChatTool(
         name="query_bank_transactions",
         description=(
@@ -1049,6 +1333,72 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_verify_filing,
+    ),
+    "email_report": ChatTool(
+        name="email_report",
+        description=(
+            "שליחת דוח כספי (רווח והפסד / מאזן / תזרים חזוי) כקובץ Excel "
+            "מצורף במייל. פעולת כתיבה — דורשת אישור מפורש של המשתמש לפני "
+            "שליחה בפועל. "
+            "אבטחת נמען — חובה: recipient_email מותר להיות אך ורק כתובת "
+            "שהמשתמש הקליד במפורש בשיחה הנוכחית, או כתובת של איש קשר קיים "
+            "של הארגון (יש לאתר אותו קודם עם search_contacts/get_ledger_card "
+            "אם לא ידוע בוודאות) — לעולם אין להמציא או לנחש כתובת מייל."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "report_type": {
+                    "type": "string",
+                    "enum": ["profit_loss", "balance_sheet", "cash_flow"],
+                },
+                "recipient_email": {
+                    "type": "string",
+                    "description": "כתובת שהמשתמש כתב במפורש, או מייל של איש קשר קיים",
+                },
+                "period_months": {
+                    "type": "integer",
+                    "description": "P&L: חודשים אחורה (ברירת מחדל 6). תזרים: חודשי חיזוי קדימה (ברירת מחדל 12).",
+                },
+                "year": {"type": "integer", "description": "מאזן: שנה ל'נכון ל-תאריך' (ברירת מחדל: היום)"},
+                "month": {"type": "integer", "description": "מאזן: חודש ל'נכון ל-תאריך' (ברירת מחדל: היום)"},
+                "note": {"type": "string", "description": "טקסט חופשי אופציונלי לגוף המייל"},
+            },
+            "required": ["report_type", "recipient_email"],
+        },
+        category="write",
+        fn=_email_report,
+    ),
+    "propose_vat_filing_approval": ChatTool(
+        name="propose_vat_filing_approval",
+        description=(
+            "רישום אישור בעלים למספרי דיווח מע\"מ לתקופה, אחרי אימות משולש "
+            "חובה (verify_filing). אם האימות נכשל (fail) — הבקשה נחסמת ולא "
+            "נוצרת. פעולת כתיבה בלתי-הפיכה — דורשת אישור מפורש של המשתמש. "
+            "חשוב: לרצף אין מנגנון שידור לרשות המסים. פעולה זו רק מתעדת את "
+            "אישור הבעלים למספרים; השידור בפועל לרשות נעשה ידנית בממשק "
+            "SUMIT, לא על ידי רצף."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer"},
+                "month": {"type": "integer"},
+                "months": {"type": "integer", "description": "אורך התקופה בחודשים", "default": 1},
+                "basis": {"type": "string", "enum": ["document", "captured"], "default": "document"},
+            },
+            "required": ["year", "month"],
+        },
+        category="write",
+        fn=_propose_vat_filing_approval,
+        needs_user=True,
+    ),
+    "list_pending_approvals": ChatTool(
+        name="list_pending_approvals",
+        description="רשימת בקשות אישור פעולה בלתי-הפיכה הממתינות לאישור הבעלים בארגון (סטטוס proposed).",
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_list_pending_approvals,
     ),
     "kb_lookup": ChatTool(
         name="kb_lookup",

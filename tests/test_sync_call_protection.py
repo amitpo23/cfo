@@ -623,12 +623,14 @@ def test_cost_protection_settings_have_hard_floors():
         sumit_sync_min_interval_hours=0,
         sumit_enrichment_daily_action_limit=999,
         ocr_daily_document_limit=999,
+        chat_receipt_daily_limit=999,
         manual_refresh_cooldown_minutes=1,
     )
     assert s.of_sync_min_interval_hours >= 20
     assert s.sumit_sync_min_interval_hours >= 20
     assert s.sumit_enrichment_daily_action_limit <= 25
     assert s.ocr_daily_document_limit <= 25
+    assert s.chat_receipt_daily_limit <= 50
     assert s.manual_refresh_cooldown_minutes >= 15
 
 

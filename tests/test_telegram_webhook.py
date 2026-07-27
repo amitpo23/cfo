@@ -252,8 +252,44 @@ def test_pending_action_sends_confirm_prompt(client, telegram_configured, fake_g
         "message": {"chat": {"id": "chat-pending-1"}, "text": "תוציא חשבונית ללקוח X"},
     })
     assert r.status_code == 200
-    assert fake_gateway["send_confirm_prompt"] == [("chat-pending-1", "לאשר את הפעולה?", 77)]
+    chat_id, text, message_id = fake_gateway["send_confirm_prompt"][0]
+    assert (chat_id, message_id) == ("chat-pending-1", 77)
+    assert text.startswith("לאשר את הפעולה?")
     assert not fake_gateway["send_text"]
+
+
+def test_confirm_prompt_discloses_the_actual_arguments(
+    client, telegram_configured, fake_gateway, monkeypatch, fresh_org,
+):
+    """הכפתור בטלגרם חייב להראות *מה* מאושר, לא רק שאלה כללית.
+
+    ב-UI המשתמש רואה את ה-input כ-JSON מתחת לכפתור; אם בטלגרם רואים רק את
+    הטקסט החופשי של המודל, לחיצה על 'אשר' יכולה לשלוח דוח כספי לכתובת
+    שהמשתמש מעולם לא קרא."""
+    iso = fresh_org()
+    _link(iso["org_id"], "chat-pending-2")
+
+    async def fake_send_message(self, session_id, text, persona=None):
+        return {
+            "message_id": 88, "reply": "לשלוח?",
+            "pending_action": {
+                "tool": "email_report",
+                "input": {"report_type": "profit_loss", "recipient_email": "bank@example.com"},
+                "description": "שליחת דוח במייל",
+            },
+        }
+
+    monkeypatch.setattr(AIChatService, "send_message", fake_send_message)
+
+    r = _post(client, {
+        "update_id": 501,
+        "message": {"chat": {"id": "chat-pending-2"}, "text": "שלח לבנק רווח והפסד"},
+    })
+    assert r.status_code == 200
+    _, text, _ = fake_gateway["send_confirm_prompt"][0]
+    assert "bank@example.com" in text
+    assert "profit_loss" in text
+    assert "שליחת דוח במייל" in text
 
 
 def test_callback_confirm_invokes_confirm_action(client, telegram_configured, fake_gateway, monkeypatch, fresh_org):
@@ -304,6 +340,160 @@ def test_callback_cancel_does_not_execute_anything(client, telegram_configured, 
     assert r.status_code == 200
     assert called["n"] == 0
     assert any("בוטל" in text for _, text in fake_gateway["send_text"])
+
+
+def test_sticker_message_is_still_silently_ignored(client, telegram_configured, fake_gateway, fresh_org):
+    """No text, no photo, no document — unchanged regression check for the
+    non-text non-receipt case (voice/sticker/etc)."""
+    iso = fresh_org()
+    _link(iso["org_id"], "chat-sticker-1")
+
+    r = _post(client, {
+        "update_id": 750,
+        "message": {"chat": {"id": "chat-sticker-1"}, "sticker": {"file_id": "abc"}},
+    })
+    assert r.status_code == 200
+    assert not fake_gateway["send_text"]
+
+
+def test_photo_from_unlinked_identity_is_never_downloaded_or_processed(
+    client, telegram_configured, fake_gateway, monkeypatch,
+):
+    """Package A (moshko-full-bot plan): an unlinked identity sending a
+    receipt photo gets the same static link-instructions reply as any other
+    unlinked message — never downloaded, never sent to the LLM."""
+    download_calls = {"n": 0}
+    intake_calls = {"n": 0}
+
+    async def fake_download(file_id, **kw):
+        download_calls["n"] += 1
+        return b"should never be called"
+
+    async def fake_intake(*a, **kw):
+        intake_calls["n"] += 1
+        return {"status": "created", "expense_id": 1, "message": "x"}
+
+    monkeypatch.setattr(
+        "cfo.services.telegram_files.download_telegram_file", fake_download,
+    )
+    monkeypatch.setattr(
+        "cfo.services.chat_expense_intake.intake_receipt_bytes", fake_intake,
+    )
+
+    r = _post(client, {
+        "update_id": 760,
+        "message": {
+            "chat": {"id": "chat-unlinked-photo"},
+            "photo": [{"file_id": "small", "file_size": 100}, {"file_id": "big", "file_size": 5000}],
+        },
+    })
+    assert r.status_code == 200
+    assert download_calls["n"] == 0
+    assert intake_calls["n"] == 0
+    assert fake_gateway["send_text"]
+    last_text = fake_gateway["send_text"][-1][1]
+    assert "מקושר" in last_text or "לקשר" in last_text
+
+
+def test_photo_from_linked_identity_downloads_and_replies_with_summary(
+    client, telegram_configured, fake_gateway, monkeypatch, fresh_org,
+):
+    iso = fresh_org()
+    _link(iso["org_id"], "chat-photo-linked-1")
+
+    download_calls = {}
+    intake_calls = {}
+
+    async def fake_download(file_id, **kw):
+        download_calls["file_id"] = file_id
+        return b"fake-jpeg-bytes"
+
+    async def fake_intake(db, organization_id, content, *, media_type=None, source="telegram",
+                           uploaded_by_user_id=None):
+        intake_calls["organization_id"] = organization_id
+        intake_calls["content"] = content
+        intake_calls["media_type"] = media_type
+        intake_calls["source"] = source
+        intake_calls["uploaded_by_user_id"] = uploaded_by_user_id
+        return {
+            "status": "created", "expense_id": 55,
+            "message": "קלטתי קבלה מ-שופרסל. סכום: 118.00 ₪.",
+        }
+
+    monkeypatch.setattr(
+        "cfo.services.telegram_files.download_telegram_file", fake_download,
+    )
+    monkeypatch.setattr(
+        "cfo.services.chat_expense_intake.intake_receipt_bytes", fake_intake,
+    )
+
+    r = _post(client, {
+        "update_id": 770,
+        "message": {
+            "chat": {"id": "chat-photo-linked-1"},
+            "photo": [{"file_id": "small", "file_size": 100}, {"file_id": "big", "file_size": 5000}],
+        },
+    })
+    assert r.status_code == 200
+    assert download_calls["file_id"] == "big"  # largest resolution picked
+    assert intake_calls["organization_id"] == iso["org_id"]
+    assert intake_calls["source"] == "telegram"
+    assert intake_calls["content"] == b"fake-jpeg-bytes"
+
+    last_text = fake_gateway["send_text"][-1][1]
+    assert "שופרסל" in last_text
+    assert "תייק" in last_text  # offers filing, but does not auto-file
+    assert "55" in last_text
+
+
+def test_pdf_document_from_linked_identity_is_recognized_as_a_receipt(
+    client, telegram_configured, fake_gateway, monkeypatch, fresh_org,
+):
+    iso = fresh_org()
+    _link(iso["org_id"], "chat-pdf-linked-1")
+
+    intake_calls = {}
+
+    async def fake_download(file_id, **kw):
+        return b"%PDF-1.4 fake"
+
+    async def fake_intake(db, organization_id, content, *, media_type=None, source="telegram",
+                           uploaded_by_user_id=None):
+        intake_calls["media_type"] = media_type
+        return {"status": "unreadable", "message": "לא הצלחתי לקרוא את הקבלה."}
+
+    monkeypatch.setattr(
+        "cfo.services.telegram_files.download_telegram_file", fake_download,
+    )
+    monkeypatch.setattr(
+        "cfo.services.chat_expense_intake.intake_receipt_bytes", fake_intake,
+    )
+
+    r = _post(client, {
+        "update_id": 780,
+        "message": {
+            "chat": {"id": "chat-pdf-linked-1"},
+            "document": {"file_id": "doc-1", "mime_type": "application/pdf"},
+        },
+    })
+    assert r.status_code == 200
+    assert intake_calls["media_type"] == "application/pdf"
+    assert "לא הצלחתי" in fake_gateway["send_text"][-1][1]
+
+
+def test_non_pdf_non_image_document_is_ignored(client, telegram_configured, fake_gateway, fresh_org):
+    iso = fresh_org()
+    _link(iso["org_id"], "chat-doc-other-1")
+
+    r = _post(client, {
+        "update_id": 790,
+        "message": {
+            "chat": {"id": "chat-doc-other-1"},
+            "document": {"file_id": "doc-2", "mime_type": "application/zip"},
+        },
+    })
+    assert r.status_code == 200
+    assert not fake_gateway["send_text"]
 
 
 def test_persona_switch_command_persists(client, telegram_configured, fake_gateway, fresh_org):

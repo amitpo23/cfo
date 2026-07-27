@@ -99,11 +99,61 @@ def _extract_chat_id(update: dict) -> str | None:
     return None
 
 
+def _render_pending_action(reply: str, pending: dict) -> str:
+    """Spell out WHAT is about to be executed, next to the confirm button.
+
+    The web UI renders `pending_action.input` as JSON under the confirm
+    button (ChatAssistant.tsx), so a user there always sees the concrete
+    arguments — who the email goes to, which expense gets filed — before
+    approving. Telegram only ever showed the model's free-text reply, which
+    is not guaranteed to name them: a tap on "אשר ✅" could therefore send a
+    financial report to an address the user never actually read. Rendering
+    the inputs here closes that gap, so both channels disclose the same
+    thing before an irreversible-ish write runs.
+    """
+    lines = [reply, "", f"פעולה: {pending.get('description', pending.get('tool', ''))}"]
+    for key, value in (pending.get("input") or {}).items():
+        lines.append(f"• {key}: {value}")
+    return "\n".join(lines)
+
+
 def _parse_message_id(callback_data: str) -> int | None:
     try:
         return int(callback_data.split(":", 1)[1])
     except (IndexError, ValueError):
         return None
+
+
+def _largest_photo_file_id(photos: list) -> str | None:
+    """Telegram sends one entry per resolution, usually ascending — pick the
+    largest explicitly by file_size rather than trusting order, falling
+    back to the last entry when file_size is missing."""
+    sized = [p for p in photos if isinstance(p, dict) and p.get("file_id")]
+    if not sized:
+        return None
+    with_size = [p for p in sized if p.get("file_size") is not None]
+    if with_size:
+        return max(with_size, key=lambda p: p["file_size"])["file_id"]
+    return sized[-1]["file_id"]
+
+
+def _extract_receipt_file(message: dict) -> tuple[str, str] | None:
+    """Returns (file_id, media_type) for a photo or image/PDF document
+    attached to the message, or None if this message carries no such
+    attachment (text-only, sticker, voice, ...)."""
+    photos = message.get("photo")
+    if isinstance(photos, list) and photos:
+        file_id = _largest_photo_file_id(photos)
+        if file_id:
+            return file_id, "image/jpeg"
+    document = message.get("document")
+    if isinstance(document, dict):
+        mime = str(document.get("mime_type") or "")
+        if mime.startswith("image/") or mime == "application/pdf":
+            file_id = document.get("file_id")
+            if file_id:
+                return file_id, mime
+    return None
 
 
 @router.post("/webhook")
@@ -163,8 +213,9 @@ async def _handle_message(db: Session, message: dict) -> None:
         return
     external_id = str(chat_id)
     text = (message.get("text") or "").strip()
-    if not text:
-        return  # non-text message (photo, sticker, ...) — silently ignored
+    receipt_file = _extract_receipt_file(message)
+    if not text and receipt_file is None:
+        return  # non-text, non-receipt message (sticker, voice, ...) — silently ignored
 
     gateway = _gateway()
     identity = resolve_identity(db, "telegram", external_id)
@@ -193,8 +244,15 @@ async def _handle_message(db: Session, message: dict) -> None:
             )
             return
         # Not a verified identity and not a /start attempt — never reaches
-        # the LLM (decision 6/7): explain how to link instead.
+        # the LLM (decision 6/7), and a receipt photo/document from here is
+        # never downloaded either: verification happens strictly before any
+        # tool/LLM/download access. Same static reply as any other unlinked
+        # message.
         await gateway.send_text(external_id, _UNLINKED_INSTRUCTIONS)
+        return
+
+    if receipt_file is not None:
+        await _handle_receipt_message(db, gateway, identity, external_id, message, receipt_file)
         return
 
     persona_key = PERSONA_COMMANDS.get(text)
@@ -219,10 +277,58 @@ async def _handle_message(db: Session, message: dict) -> None:
     result = await service.send_message(
         session_id=f"tg-{external_id}", text=text, persona=identity.default_persona,
     )
-    if result.get("pending_action"):
-        await gateway.send_confirm_prompt(external_id, result["reply"], result["message_id"])
+    pending = result.get("pending_action")
+    if pending:
+        await gateway.send_confirm_prompt(
+            external_id,
+            _render_pending_action(result["reply"], pending),
+            result["message_id"],
+        )
     else:
         await gateway.send_text(external_id, result["reply"])
+
+
+_INTAKE_STATUS_FALLBACK_MESSAGE = {
+    "disabled": "קליטת קבלות דרך הצ'אט כבויה כרגע.",
+    "limit_reached": "הגעת למכסה היומית של קליטת קבלות בצ'אט — נסה שוב מחר.",
+    "error": "לא הצלחתי לעבד את הקבלה.",
+    "unreadable": "לא הצלחתי לקרוא את הקבלה בביטחון מספיק.",
+    "duplicate": "נראה שהקבלה הזו כבר קיימת במערכת — לא נוצרה הוצאה כפולה.",
+}
+
+
+async def _handle_receipt_message(
+    db: Session, gateway, identity, external_id: str, message: dict,
+    receipt_file: tuple[str, str],
+) -> None:
+    """Photo/document attachment from a VERIFIED identity only (the caller
+    already gated on identity is not None) — never downloaded or sent for
+    LLM extraction for an unlinked chat. Filing to SUMIT is a separate write
+    tool (file_expense) reached through the normal chat/confirm flow, never
+    triggered automatically here."""
+    from ...services.telegram_files import TelegramFileError, download_telegram_file
+    from ...services.chat_expense_intake import intake_receipt_bytes
+
+    file_id, media_type = receipt_file
+    try:
+        content = await download_telegram_file(file_id)
+    except TelegramFileError as exc:
+        await gateway.send_text(external_id, f"לא הצלחתי להוריד את הקובץ: {exc}")
+        return
+
+    result = await intake_receipt_bytes(
+        db, identity.organization_id, content,
+        media_type=media_type, source="telegram",
+        uploaded_by_user_id=identity.user_id,
+    )
+
+    status = result.get("status")
+    text = result.get("message") or _INTAKE_STATUS_FALLBACK_MESSAGE.get(
+        status, "לא הצלחתי לעבד את הקבלה."
+    )
+    if status == "created":
+        text += f"\n\nלתייק לספרים? כתוב 'תייק' (מזהה הוצאה: {result.get('expense_id')})."
+    await gateway.send_text(external_id, text)
 
 
 async def _handle_callback(db: Session, callback_query: dict) -> None:

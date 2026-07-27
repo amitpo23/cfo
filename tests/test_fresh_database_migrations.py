@@ -47,7 +47,7 @@ def test_alembic_upgrade_head_builds_a_complete_fresh_database(tmp_path):
         revision = connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
         ).scalar_one()
-    assert revision == "f2a3b4c5d6e7"
+    assert revision == "a0b1c2d3e4f5"
 
     # The constraint must exist in the DDL, not merely in ORM metadata.
     with engine.begin() as connection:

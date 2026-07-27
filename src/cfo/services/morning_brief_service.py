@@ -498,6 +498,36 @@ def _deliver_sms(db, organization_id: int, org, status: str, reds: list, deliver
     return {"status": "failed", "reason": "send_returned_false"}
 
 
+def _deliver_channel(db, organization_id: int, text: str, severity: str, delivered: dict, force: bool) -> dict:
+    """Third delivery channel (package B, 2026-07-27 moshko-full-bot plan) —
+    push the brief's plain `text` (never the html) to the org's linked,
+    opted-in Telegram identities via channel_notifier.push_to_organization.
+
+    Deliberately never forwards `force` into push_to_organization: `force`
+    here only means "redeliver today's already-sent brief", not "bypass
+    quiet hours" — those are two independent gates and this module must not
+    let one override the other."""
+    if not force and delivered.get("channel"):
+        return {"status": "skipped", "reason": "already_delivered_today"}
+
+    try:
+        from .channel_notifier import push_to_organization
+
+        result = asyncio.run(push_to_organization(db, organization_id, text, severity=severity))
+    except Exception as exc:  # noqa: BLE001 — never raise, record instead
+        logger.exception("Morning-brief channel push failed for org %s", organization_id)
+        return {"status": "error", "error": str(exc)}
+
+    push_status = result.get("status")
+    extra = {k: v for k, v in result.items() if k != "status"}
+    if push_status in {"not_configured", "no_recipients", "quiet_hours"}:
+        return {"status": "skipped", "reason": push_status, **extra}
+    if result.get("sent"):
+        delivered["channel"] = _utcnow_iso()
+        return {"status": "sent", **extra}
+    return {"status": "failed", **extra}
+
+
 def persist_and_deliver(
     db, organization_id: int, today: date, brief: dict, *, force: bool = False,
 ) -> dict[str, Any]:
@@ -530,9 +560,11 @@ def persist_and_deliver(
     org = db.get(Organization, organization_id)
     subject, text, html = render_hebrew(brief)
 
+    channel_severity = "high" if status == "red" else "info"
     channel_results = {
         "email": _deliver_email(db, org, subject, text, delivered, force),
         "sms": _deliver_sms(db, organization_id, org, status, brief.get("reds") or [], delivered, force),
+        "channel": _deliver_channel(db, organization_id, text, channel_severity, delivered, force),
     }
 
     row.delivered_channels = delivered

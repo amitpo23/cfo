@@ -77,6 +77,10 @@
     {
       "path": "/api/cron/bookkeeper-morning",
       "schedule": "45 3 * * *"
+    },
+    {
+      "path": "/api/cron/channel-alerts",
+      "schedule": "0 6 * * *"
     }
   ]
 }

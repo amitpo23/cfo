@@ -22,6 +22,7 @@ EXPECTED_DAILY_SCHEDULES = {
     "/api/cron/bank-gap-scan": "15 3 * * *",
     "/api/cron/bookkeeper-morning": "45 3 * * *",
     "/api/cron/collection-reminders": "0 4 * * *",
+    "/api/cron/channel-alerts": "0 6 * * *",
 }
 
 

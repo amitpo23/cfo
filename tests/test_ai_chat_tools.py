@@ -28,6 +28,7 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
         "create_bank_payment_request", "connect_bank_account",
         "run_client_sync", "register_office_client",
         "create_expense_category", "set_expense_category", "classify_pending_expenses",
+        "file_expense", "email_report", "propose_vat_filing_approval",
     }
 
 
@@ -905,3 +906,52 @@ def test_new_package1_tools_are_not_office_gated():
         "get_daily_brief", "get_tax_estimate", "verify_filing", "kb_lookup",
     ):
         assert TOOLS[name].office is False, name
+
+
+def test_file_expense_tool_is_write_and_calls_file_to_sumit(monkeypatch, fresh_org):
+    """Package A (moshko-full-bot plan): file_expense wraps
+    ExpenseFilingService.file_to_sumit — must be category='write' so the
+    chat confirmation gate never auto-executes a real SUMIT booking."""
+    assert TOOLS["file_expense"].category == "write"
+    assert TOOLS["file_expense"].input_schema["required"] == ["expense_id"]
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        called = {}
+
+        async def fake_file_to_sumit(self, expense_id):
+            called["expense_id"] = expense_id
+            return {"id": expense_id, "status": "filed"}
+
+        from cfo.services.expense_filing_service import ExpenseFilingService
+        monkeypatch.setattr(ExpenseFilingService, "file_to_sumit", fake_file_to_sumit)
+
+        result = asyncio.run(TOOLS["file_expense"].fn(db, org_id, expense_id=42))
+        assert called["expense_id"] == 42
+        assert result["status"] == "filed"
+    finally:
+        db.close()
+
+
+def test_get_expense_intake_status_tool_is_read_and_reports_counts(fresh_org):
+    from cfo.models import Expense
+    from datetime import date
+
+    assert TOOLS["get_expense_intake_status"].category == "read"
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Expense(
+            organization_id=org_id, source="telegram", supplier_name="ספק",
+            amount=Decimal("100"), vat_amount=Decimal("18"), total=Decimal("118"),
+            expense_date=date.today(), status="pending",
+        ))
+        db.commit()
+
+        result = asyncio.run(TOOLS["get_expense_intake_status"].fn(db, org_id))
+        assert result["intake_today"] == 1
+        assert result["pending_filing"] == 1
+        assert "daily_limit" in result
+        assert "intake_enabled" in result
+    finally:
+        db.close()

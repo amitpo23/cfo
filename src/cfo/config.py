@@ -111,6 +111,16 @@ class Settings(BaseSettings):
     # one LLM call (and may later file/cancel). Explicit enablement is still
     # required; this is the additional per-org/day document cap.
     ocr_daily_document_limit: int = 10
+    # Chat-initiated receipt intake (package A, moshko-full-bot plan
+    # 2026-07-27): a user explicitly sending a photo/PDF straight to the chat
+    # bot (e.g. Telegram) is a different cost/consent story than the
+    # scheduled background OCR pipeline gated by ocr_llm_enabled above — see
+    # vision_extractor.extract_receipt's user_initiated flag for why these
+    # are two independent gates, not one shared flag.
+    chat_receipt_intake_enabled: bool = True
+    # Per-org/day cap on chat-initiated receipt intakes (mirrors
+    # ocr_daily_document_limit's role for the background pipeline).
+    chat_receipt_daily_limit: int = 20
     # AI chat assistant (Wave 2 Step 9) — same anthropic_api_key as OCR above.
     ai_chat_model: str = "claude-sonnet-5"
     # Companies-registry (רשם החברות) lookup over data.gov.il CKAN.
@@ -202,6 +212,10 @@ class Settings(BaseSettings):
         self.ocr_daily_document_limit = min(
             25,
             max(0, self.ocr_daily_document_limit),
+        )
+        self.chat_receipt_daily_limit = min(
+            50,
+            max(0, self.chat_receipt_daily_limit),
         )
         if self.manual_refresh_cooldown_minutes < 15:
             self.manual_refresh_cooldown_minutes = 15

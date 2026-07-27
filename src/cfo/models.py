@@ -1482,6 +1482,14 @@ class ChannelIdentity(Base):
     revoked_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # --- package B (2026-07-27 moshko-full-bot plan) — proactive push opt-in --- #
+    # Nullable, default True, same pattern as Organization.morning_brief_email_enabled
+    # above: a Python-side default= never reaches a raw-SQL backfill, so NULL must be
+    # read as "not explicitly disabled" (channel_notifier.recipients_for does this via
+    # push_enabled.isnot(False), not push_enabled.is_(True)).
+    push_enabled = Column(Boolean, nullable=True, default=True)
+    last_push_at = Column(DateTime, nullable=True)
+
     organization = relationship("Organization")
 
     __table_args__ = (

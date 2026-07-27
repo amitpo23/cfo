@@ -402,7 +402,7 @@
     },
     {
       "id": "conversational-channels",
-      "title_he": "ממשק שיחה — פרסונות וערוצי הודעות",
+      "title_he": "מושקו — בוט השיחה של רצף",
       "owner": "product",
       "system_of_record": "Rezef owns the conversation, the persona routing and the channel identity binding; every number in a reply comes from the same org-scoped services the web app uses, never from the model's memory.",
       "status": "gated",
@@ -415,21 +415,26 @@
         "src/cfo/services/ai_chat_personas.py",
         "src/cfo/services/ai_chat_service.py",
         "src/cfo/services/ai_chat_tools.py",
-        "src/cfo/services/kb_loader.py",
+        "src/cfo/services/chat_expense_intake.py",
+        "src/cfo/services/channel_notifier.py",
         "src/cfo/services/channel_link_service.py",
         "src/cfo/services/channel_gateway.py",
+        "src/cfo/services/telegram_files.py",
+        "src/cfo/services/kb_loader.py",
+        "src/cfo/services/email_sender.py",
         "src/cfo/api/routes/telegram_webhook.py",
         "src/cfo/api/routes/channels.py",
         "src/cfo/api/routes/ai_chat.py"
       ],
       "tests": [
         "tests/test_ai_chat_personas.py",
+        "tests/test_chat_expense_intake.py",
+        "tests/test_channel_notifier.py",
+        "tests/test_moshko_email_and_approvals.py",
         "tests/test_telegram_webhook.py",
         "tests/test_channel_link.py",
         "tests/test_kb_loader.py",
-        "tests/test_ai_chat_tools.py",
-        "tests/test_ai_chat_routes.py",
-        "tests/test_ai_chat_service.py"
+        "tests/test_email_attachments.py"
       ],
       "gates": [
         "organization_scope",
@@ -438,8 +443,8 @@
         "idempotency",
         "api_cost_discipline"
       ],
-      "honest_boundary": "Persona is a prompt/tone axis only — it never widens tool visibility; the office/role gate remains the sole authorization boundary. No LLM turn runs for an unverified channel identity, and write tools still halt at the existing confirmation gate. Telegram is the only implemented channel; WhatsApp, proactive push and voice are not built. Tax estimates carry a mandatory caveat because the underlying advance formula has no personal-income brackets, and the KB loader returns an explicit unavailable marker rather than an empty result when docs are not packaged.",
-      "next_gate": "Owner action: register a Telegram bot, set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET in production, run migration f2a3b4c5d6e7 per the Gate-0 runbook, then confirm kb_files_available is non-zero in production engine status."
+      "honest_boundary": "מושקו קולט קבלות מצילום, עונה מנתוני המערכת בלבד, דוחף התרעות, שולח דוחות במייל ורושם אישורי דיווח — אך פרסונה אינה הרשאה, וכל כתיבה עוצרת לאישור מפורש שמציג את הארגומנטים בפועל בשני הערוצים. הגבול החד: **רצף אינו משדר לרשות המסים** — propose_vat_filing_approval מתעד את אישור הבעלים למספרים בלבד, השידור נעשה ידנית ב-SUMIT, וקובצי PCN874/OPENFRMT הם טיוטות שמבנן לא אומת מול מפרט הרשות. אומדן מס נושא caveat חובה. טלגרם הוא הערוץ היחיד; WhatsApp וקול לא נבנו.",
+      "next_gate": "פעולת בעלים: רישום בוט ב-BotFather, TELEGRAM_BOT_TOKEN + TELEGRAM_WEBHOOK_SECRET בפרוד, מיגרציה a0b1c2d3e4f5 לפי runbook Gate-0, setWebhook, ואז אימות ש-kb_files_available > 0 ושהתרעה יזומה מגיעה."
     }
   ]
 }
