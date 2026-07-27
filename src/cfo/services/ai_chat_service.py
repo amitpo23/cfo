@@ -33,6 +33,12 @@ SYSTEM_PROMPT = BASE_SYSTEM_PROMPT
 
 _MAX_TOOL_TURNS = 6
 
+# Most recent messages replayed to the model per turn. Not a "context
+# window" figure — it is the point past which older chat turns stop earning
+# their input cost, given every factual answer comes from a tool call made
+# fresh in the current turn, never from what was said ten turns ago.
+_MAX_HISTORY_MESSAGES = 30
+
 
 class ChatConfirmationError(ValueError):
     """Raised when confirm_action can't proceed (not found / wrong org /
@@ -80,16 +86,27 @@ class AIChatService:
         # not shared team data. Without the user_id check, any authenticated
         # user in the same org could read another user's session just by
         # knowing/guessing its session_id.
-        return (
+        #
+        # Capped at the most recent _MAX_HISTORY_MESSAGES. A messaging
+        # channel has no "new chat" button: telegram_webhook.py derives one
+        # permanent session_id per chat (f"tg-{external_id}"), so an
+        # uncapped history means every turn re-sends the entire lifetime of
+        # that conversation to the model — input cost and latency growing
+        # without bound for as long as the user keeps the bot. The query
+        # takes the newest rows and re-sorts ascending so the model still
+        # reads them oldest-first.
+        rows = (
             self.db.query(ChatMessage)
             .filter(
                 ChatMessage.organization_id == self.organization_id,
                 ChatMessage.user_id == self.user_id,
                 ChatMessage.session_id == session_id,
             )
-            .order_by(ChatMessage.id.asc())
+            .order_by(ChatMessage.id.desc())
+            .limit(_MAX_HISTORY_MESSAGES)
             .all()
         )
+        return list(reversed(rows))
 
     def _make_client(self):
         import anthropic

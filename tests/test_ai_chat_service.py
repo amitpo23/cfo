@@ -397,6 +397,34 @@ def test_chat_history_is_scoped_to_the_requesting_user(fresh_org):
         db.close()
 
 
+def test_history_is_capped_and_keeps_the_newest_messages_in_order(fresh_org):
+    """ערוץ הודעות אין בו כפתור 'שיחה חדשה' — telegram_webhook מייצר
+    session_id קבוע אחד לכל צ'אט. בלי תקרה, כל תור שולח למודל את כל
+    היסטוריית החיים של השיחה, והעלות גדלה בלי גבול."""
+    from cfo.services.ai_chat_service import _MAX_HISTORY_MESSAGES
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        total = _MAX_HISTORY_MESSAGES + 15
+        for i in range(total):
+            db.add(ChatMessage(
+                organization_id=org_id, user_id=1, session_id="long-session",
+                role="user", content=f"הודעה {i}",
+            ))
+        db.commit()
+
+        history = AIChatService(db, org_id, user_id=1)._history("long-session")
+
+        assert len(history) == _MAX_HISTORY_MESSAGES
+        # החדשות ביותר נשמרות, והסדר נשאר מהישן לחדש
+        assert history[-1].content == f"הודעה {total - 1}"
+        assert history[0].content == f"הודעה {total - _MAX_HISTORY_MESSAGES}"
+        assert [m.id for m in history] == sorted(m.id for m in history)
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------- #
 # Office-manager tier: SUPER_ADMIN-only tools (list_office_clients,
 # get_office_rollup, get_client_overview, run_client_sync,
