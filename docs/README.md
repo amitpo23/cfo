@@ -24,6 +24,7 @@
 - [`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md) — בעלות נתונים, תפקידים, workflow יומי, שערים וארכיטקטורת היעד
 - [`GATE0_DEPLOYMENT_RUNBOOK.md`](GATE0_DEPLOYMENT_RUNBOOK.md) — פריסה ושינוי סכימה גלובלי באישור בעלים, עם עצירה לפני `head` שקרי
 - [`IRREVERSIBLE_ACTION_CONTROL.md`](IRREVERSIBLE_ACTION_CONTROL.md) — הצעה, אישור, ביצוע יחיד ו-readback לתשלום/שידור/סגירה
+- [`TELEGRAM_CHANNEL_RUNBOOK.md`](TELEGRAM_CHANNEL_RUNBOOK.md) — הפעלת ערוץ השיחה (בוט, סודות, מיגרציה, קישור זהות) — פעולות בעלים בלבד
 - [`rezef_capabilities.json`](rezef_capabilities.json) — חוזה היכולות המכונתי; נבדק מול קוד וטסטים
 - [`DATABASE_MAP.md`](DATABASE_MAP.md) — מודל הנתונים
 - [`PERMISSIONS.md`](PERMISSIONS.md) · [`AUTH_ROADMAP.md`](AUTH_ROADMAP.md) — הרשאות ורב-דיירות

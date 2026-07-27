@@ -33,6 +33,12 @@ interface OrganizationInfo {
   tax_id?: string | null;
 }
 
+interface LinkCodeResponse {
+  code: string;
+  expires_at: string;
+  instructions: string;
+}
+
 const SettingsPage: React.FC<Props> = ({ darkMode }) => {
   const queryClient = useQueryClient();
 
@@ -69,6 +75,60 @@ const SettingsPage: React.FC<Props> = ({ darkMode }) => {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['org-info', orgId] }),
   });
+
+  // Channel link-code — the plaintext code is a one-time secret the backend
+  // shows exactly once (src/cfo/api/routes/channels.py); kept in memory
+  // only, never persisted to localStorage. A 1s ticker drives the
+  // countdown and clears the code from screen once expires_at passes.
+  const [linkCode, setLinkCode] = useState<string | null>(null);
+  const [linkExpiresAt, setLinkExpiresAt] = useState<number | null>(null);
+  const [linkInstructions, setLinkInstructions] = useState<string | null>(null);
+  const [linkExpired, setLinkExpired] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!linkExpiresAt) return;
+    const tick = () => {
+      const current = Date.now();
+      if (current >= linkExpiresAt) {
+        setLinkCode(null);
+        setLinkExpiresAt(null);
+        setLinkInstructions(null);
+        setLinkExpired(true);
+      } else {
+        setNow(current);
+      }
+    };
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [linkExpiresAt]);
+
+  const linkCodeMutation = useMutation({
+    mutationFn: () => apiService.post<LinkCodeResponse>('/channels/link-code'),
+    onSuccess: (data) => {
+      setLinkCode(data.code);
+      setLinkExpiresAt(new Date(data.expires_at).getTime());
+      setLinkInstructions(data.instructions);
+      setLinkExpired(false);
+      setLinkCopied(false);
+    },
+  });
+
+  const linkRemainingMs = linkExpiresAt ? Math.max(0, linkExpiresAt - now) : 0;
+  const linkRemainingMin = Math.floor(linkRemainingMs / 60000);
+  const linkRemainingSec = Math.floor((linkRemainingMs % 60000) / 1000);
+
+  const handleCopyLinkCode = async () => {
+    if (!linkCode) return;
+    try {
+      await navigator.clipboard.writeText(`/start ${linkCode}`);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      // clipboard permission denied/unavailable — code is still visible to copy by hand
+    }
+  };
 
   const cardClass = `p-6 rounded-2xl ${
     darkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-200'
@@ -155,6 +215,56 @@ const SettingsPage: React.FC<Props> = ({ darkMode }) => {
         <div className={cardClass}>
           <h2 className="text-xl font-semibold mb-2">התראות</h2>
           <p className={mutedClass}>ניהול העדפות התראות עדיין לא זמין במערכת.</p>
+        </div>
+
+        {/* Conversational channels — issue a one-time link code to bind Telegram */}
+        <div className={cardClass}>
+          <h2 className="text-xl font-semibold mb-2">ערוצי שיחה</h2>
+          <p className={`text-sm mb-4 ${mutedClass}`}>
+            אפשר לדבר עם רצף גם דרך טלגרם. הקישור נעשה באמצעות קוד חד-פעמי שמוצג כאן פעם אחת בלבד.
+          </p>
+
+          {!linkCode && (
+            <>
+              <button
+                type="button"
+                onClick={() => linkCodeMutation.mutate()}
+                disabled={linkCodeMutation.isPending}
+                className="w-full bg-blue-600 text-white px-4 py-3 rounded-xl hover:bg-blue-700 transition font-medium disabled:opacity-50"
+              >
+                {linkCodeMutation.isPending ? 'מנפיק קוד...' : 'הנפק קוד קישור'}
+              </button>
+              {linkCodeMutation.isError && (
+                <p className="text-sm text-red-600 mt-2">הנפקת הקוד נכשלה. נסה שוב.</p>
+              )}
+              {linkExpired && (
+                <p className="text-sm text-amber-600 mt-2">הקוד פג. הנפק קוד חדש.</p>
+              )}
+            </>
+          )}
+
+          {linkCode && (
+            <div className="space-y-3">
+              <div className={`rounded-xl border-2 border-dashed p-4 text-center ${
+                darkMode ? 'border-blue-500 bg-blue-900/10' : 'border-blue-400 bg-blue-50'
+              }`}>
+                <p className="text-2xl font-bold tracking-widest font-mono" dir="ltr">{linkCode}</p>
+              </div>
+              {linkInstructions && <p className={`text-sm ${mutedClass}`}>{linkInstructions}</p>}
+              <p className="text-sm font-medium text-amber-600">
+                הקוד מוצג פעם אחת בלבד — פג תוקף בעוד {linkRemainingMin}:{String(linkRemainingSec).padStart(2, '0')} דקות.
+              </p>
+              <button
+                type="button"
+                onClick={handleCopyLinkCode}
+                className={`w-full px-4 py-2 rounded-xl border font-medium transition ${
+                  darkMode ? 'border-gray-600 hover:bg-gray-700' : 'border-gray-300 hover:bg-gray-100'
+                }`}
+              >
+                {linkCopied ? 'הועתק!' : `העתק "/start ${linkCode}" ללוח`}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* System Information — real data only */}

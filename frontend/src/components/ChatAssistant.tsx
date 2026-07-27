@@ -26,6 +26,30 @@ interface ChatMessageDto {
 }
 
 const SESSION_KEY = 'ai_chat_session_id';
+const PERSONA_KEY = 'ai_chat_persona';
+
+type PersonaKey = 'bookkeeper' | 'cfo' | 'accountant';
+
+// Titles/descriptions mirror src/cfo/services/ai_chat_personas.py (title_he +
+// the gist of each persona's prompt_addendum). Persona is a tone/foreground-
+// tools axis only — never a permission gate (see that file's docstring).
+const PERSONAS: { key: PersonaKey; title: string; description: string }[] = [
+  {
+    key: 'bookkeeper',
+    title: 'מנהלת חשבונות',
+    description: 'תפעולי: מסמכים חסרים, קליטת הוצאות ומוכנות דיווח מע"מ',
+  },
+  {
+    key: 'cfo',
+    title: 'מנהל כספים',
+    description: 'תזרים מזומנים, גבייה והחלטות ניהוליות',
+  },
+  {
+    key: 'accountant',
+    title: 'רואה חשבון',
+    description: 'מס, מע"מ ואימות דיווח לרשויות',
+  },
+];
 
 function getSessionId(): string {
   let id = localStorage.getItem(SESSION_KEY);
@@ -34,6 +58,12 @@ function getSessionId(): string {
     localStorage.setItem(SESSION_KEY, id);
   }
   return id;
+}
+
+function getStoredPersona(): PersonaKey {
+  const stored = localStorage.getItem(PERSONA_KEY);
+  if (stored === 'bookkeeper' || stored === 'cfo' || stored === 'accountant') return stored;
+  return 'cfo';
 }
 
 function extractErrorMessage(err: unknown): string {
@@ -46,8 +76,14 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
   const [sessionId] = useState(getSessionId);
   const [input, setInput] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [persona, setPersona] = useState<PersonaKey>(getStoredPersona);
   const queryClient = useQueryClient();
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const handlePersonaChange = (key: PersonaKey) => {
+    setPersona(key);
+    localStorage.setItem(PERSONA_KEY, key);
+  };
 
   const { data } = useQuery<{ messages: ChatMessageDto[] }>({
     queryKey: ['ai-chat-history', sessionId],
@@ -61,7 +97,7 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
 
   const sendMutation = useMutation({
     mutationFn: (text: string) =>
-      apiService.post('/ai/chat', { session_id: sessionId, message: text }),
+      apiService.post('/ai/chat', { session_id: sessionId, message: text, persona }),
     onSuccess: () => {
       setErrorMessage(null);
       queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
@@ -103,10 +139,32 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
           </span>
         )}
       </div>
-      <p className={`text-sm mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+      <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
         שאל על מצב פיננסי, גיול חובות, תיקי גבייה ועוד. פעולות כתיבה (הפקת מסמך, רישום ניסיון גבייה)
         מוצגות לאישור מפורש לפני ביצוע.
         {isOfficeManager && ' במצב מנהל משרד יש לך גם כלים לצפייה בכל תיקי הלקוחות ורולאפ פיננסי חוצה-לקוחות.'}
+      </p>
+
+      <div className="flex flex-wrap items-center gap-2 mb-1">
+        {PERSONAS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => handlePersonaChange(p.key)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+              persona === p.key
+                ? 'bg-blue-600 text-white'
+                : darkMode
+                ? 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            {p.title}
+          </button>
+        ))}
+      </div>
+      <p className={`text-xs mb-4 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+        {PERSONAS.find((p) => p.key === persona)?.description}
       </p>
 
       {errorMessage && (

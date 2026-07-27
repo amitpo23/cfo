@@ -9,6 +9,8 @@ through this API again after this response.
 """
 from __future__ import annotations
 
+from datetime import timezone
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -29,7 +31,12 @@ async def create_link_code(
     result = issue_link_code(db, org_id, user.id)
     return {
         "code": result["code"],
-        "expires_at": result["expires_at"].isoformat(),
+        # Stored naive-UTC (channel_link_service uses utcnow), so the offset
+        # must be stated explicitly on the wire: a bare naive ISO string is
+        # parsed as LOCAL time by browsers, which in Israel (UTC+3) would
+        # make a fresh code look already-expired to the countdown in
+        # SettingsPage.tsx.
+        "expires_at": result["expires_at"].replace(tzinfo=timezone.utc).isoformat(),
         "instructions": (
             f"שלח לבוט הטלגרם של רצף את ההודעה: /start {result['code']} "
             "תוך 15 דקות. הקוד חד-פעמי ולא יוצג שוב."

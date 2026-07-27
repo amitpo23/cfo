@@ -1,7 +1,7 @@
 """Package 3 (2026-07-26 conversational-channels plan), decision 6: channel
 link-code issuance/redemption. Covers channel_link_service.py directly and
 the authenticated POST /api/channels/link-code route."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -36,6 +36,19 @@ def test_link_code_route_issues_code_with_instructions(client, fresh_org):
     assert body["code"]
     assert "expires_at" in body
     assert body["code"] in body["instructions"]
+
+
+def test_link_code_expiry_is_timezone_explicit_and_in_the_future(client, fresh_org):
+    """A naive ISO timestamp is read as LOCAL time by browsers — in Israel
+    (UTC+3) that would make a brand-new code look already-expired to the
+    countdown in SettingsPage.tsx. The wire format must carry the offset."""
+    iso = fresh_org()
+    r = client.post("/api/channels/link-code", headers=iso["headers"])
+    expires_at = datetime.fromisoformat(r.json()["expires_at"])
+
+    assert expires_at.tzinfo is not None, "expires_at must state its timezone"
+    remaining = expires_at - datetime.now(timezone.utc)
+    assert timedelta(minutes=10) < remaining <= timedelta(minutes=15)
 
 
 def test_issued_code_is_stored_only_as_hash(fresh_org):

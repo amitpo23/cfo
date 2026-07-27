@@ -20,6 +20,7 @@ REQUIRED_CAPABILITIES = {
     "management-reporting",
     "cfo-control",
     "irreversible-actions",
+    "conversational-channels",
 }
 
 

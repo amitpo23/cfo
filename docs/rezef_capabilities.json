@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-07-25",
+  "updated_at": "2026-07-27",
   "purpose": "Machine-readable contract connecting Rezef capabilities to knowledge, runtime evidence and safety gates.",
   "status_vocabulary": {
     "implemented": "Implemented and covered locally; production operation is a separate claim.",
@@ -399,6 +399,47 @@
       ],
       "honest_boundary": "Owner/signatory authority is separate from RBAC, scoped per action and cannot be bypassed by super-admin. The Open Finance create-payment adapter consumes the persisted payload, claims once and stores readback in offline tests. No live provider behavior is claimed, and refund, cancellation, mandate, SUMIT posting, filing and close adapters are not yet wired.",
       "next_gate": "Bootstrap an explicitly verified owner for each existing organization, then wire and prove the remaining irreversible action types one by one."
+    },
+    {
+      "id": "conversational-channels",
+      "title_he": "ממשק שיחה — פרסונות וערוצי הודעות",
+      "owner": "product",
+      "system_of_record": "Rezef owns the conversation, the persona routing and the channel identity binding; every number in a reply comes from the same org-scoped services the web app uses, never from the model's memory.",
+      "status": "gated",
+      "knowledge": [
+        "docs/superpowers/plans/2026-07-26-conversational-channels-personas.md",
+        "docs/TELEGRAM_CHANNEL_RUNBOOK.md",
+        "docs/bookkeeper_kb/README.md"
+      ],
+      "runtime": [
+        "src/cfo/services/ai_chat_personas.py",
+        "src/cfo/services/ai_chat_service.py",
+        "src/cfo/services/ai_chat_tools.py",
+        "src/cfo/services/kb_loader.py",
+        "src/cfo/services/channel_link_service.py",
+        "src/cfo/services/channel_gateway.py",
+        "src/cfo/api/routes/telegram_webhook.py",
+        "src/cfo/api/routes/channels.py",
+        "src/cfo/api/routes/ai_chat.py"
+      ],
+      "tests": [
+        "tests/test_ai_chat_personas.py",
+        "tests/test_telegram_webhook.py",
+        "tests/test_channel_link.py",
+        "tests/test_kb_loader.py",
+        "tests/test_ai_chat_tools.py",
+        "tests/test_ai_chat_routes.py",
+        "tests/test_ai_chat_service.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "verified_channel_identity",
+        "owner_approval",
+        "idempotency",
+        "api_cost_discipline"
+      ],
+      "honest_boundary": "Persona is a prompt/tone axis only — it never widens tool visibility; the office/role gate remains the sole authorization boundary. No LLM turn runs for an unverified channel identity, and write tools still halt at the existing confirmation gate. Telegram is the only implemented channel; WhatsApp, proactive push and voice are not built. Tax estimates carry a mandatory caveat because the underlying advance formula has no personal-income brackets, and the KB loader returns an explicit unavailable marker rather than an empty result when docs are not packaged.",
+      "next_gate": "Owner action: register a Telegram bot, set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET in production, run migration f2a3b4c5d6e7 per the Gate-0 runbook, then confirm kb_files_available is non-zero in production engine status."
     }
   ]
 }
