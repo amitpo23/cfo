@@ -15,11 +15,20 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
-from ...models import User
+from ...models import ChannelIdentity, User
 from ..dependencies import get_current_org_id, get_current_user
 from ...services.channel_link_service import issue_link_code
 
 router = APIRouter(prefix="/channels", tags=["Channels"])
+
+
+def _mask_external_id(external_id: str) -> str:
+    """Partial mask so the endpoint doesn't hand back a usable phone
+    number/chat id in the clear — keeps first 2 and last 2 characters,
+    same spirit as masking a card number."""
+    if len(external_id) <= 4:
+        return "*" * len(external_id)
+    return f"{external_id[:2]}{'*' * (len(external_id) - 4)}{external_id[-2:]}"
 
 
 @router.post("/link-code")
@@ -41,4 +50,38 @@ async def create_link_code(
             f"שלח לבוט הטלגרם של רצף את ההודעה: /start {result['code']} "
             "תוך 15 דקות. הקוד חד-פעמי ולא יוצג שוב."
         ),
+    }
+
+
+@router.get("/identities")
+async def list_channel_identities(
+    org_id: int = Depends(get_current_org_id),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session),
+):
+    """Currently-linked channel identities for the caller's organization —
+    verified and not revoked. external_id is partially masked; deletion is
+    intentionally out of scope for this endpoint (plan package G, step 4)."""
+    rows = (
+        db.query(ChannelIdentity)
+        .filter(
+            ChannelIdentity.organization_id == org_id,
+            ChannelIdentity.verified_at.isnot(None),
+            ChannelIdentity.revoked_at.is_(None),
+        )
+        .order_by(ChannelIdentity.created_at.desc())
+        .all()
+    )
+    return {
+        "identities": [
+            {
+                "provider": row.provider,
+                "external_id_masked": _mask_external_id(row.external_id),
+                "display_name": row.display_name,
+                "verified_at": row.verified_at.replace(tzinfo=timezone.utc).isoformat()
+                if row.verified_at else None,
+                "push_enabled": row.push_enabled is not False,
+            }
+            for row in rows
+        ]
     }

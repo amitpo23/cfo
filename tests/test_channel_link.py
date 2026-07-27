@@ -182,3 +182,66 @@ def test_resolve_identity_returns_none_for_unknown_external_id():
         assert resolve_identity(db, "telegram", "no-such-chat-id") is None
     finally:
         db.close()
+
+
+# --- package G (2026-07-27b plan): GET /api/channels/identities --- #
+
+def test_list_identities_requires_auth(client):
+    r = client.get("/api/channels/identities")
+    assert r.status_code == 403
+
+
+def test_list_identities_masks_external_id_and_scopes_to_org(client, fresh_org):
+    iso = fresh_org()
+    db = SessionLocal()
+    try:
+        user_id = _row_user_id(db, iso["org_id"])
+        result = issue_link_code(db, iso["org_id"], user_id)
+        redeem_link_code(
+            db, result["code"], provider="telegram", external_id="chat-list-1234567",
+            display_name="Dana",
+        )
+    finally:
+        db.close()
+
+    r = client.get("/api/channels/identities", headers=iso["headers"])
+    assert r.status_code == 200, r.text
+    identities = r.json()["identities"]
+    assert len(identities) == 1
+    row = identities[0]
+    assert row["provider"] == "telegram"
+    assert row["display_name"] == "Dana"
+    assert row["external_id_masked"] != "chat-list-1234567"
+    assert row["external_id_masked"].startswith("ch")
+    assert row["external_id_masked"].endswith("67")
+    assert row["push_enabled"] is True
+    assert row["verified_at"] is not None
+
+
+def test_list_identities_excludes_revoked(client, fresh_org):
+    iso = fresh_org()
+    db = SessionLocal()
+    try:
+        user_id = _row_user_id(db, iso["org_id"])
+        result = issue_link_code(db, iso["org_id"], user_id)
+        identity = redeem_link_code(
+            db, result["code"], provider="telegram", external_id="chat-revoked-list",
+        )
+        identity.revoked_at = datetime.utcnow()
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.get("/api/channels/identities", headers=iso["headers"])
+    assert r.status_code == 200
+    external_ids_present = [row["external_id_masked"] for row in r.json()["identities"]]
+    # A fully-masked short id would collapse to all-'*' — just confirm the
+    # revoked identity doesn't show up at all, regardless of masking.
+    db2 = SessionLocal()
+    try:
+        assert db2.query(ChannelIdentity).filter(
+            ChannelIdentity.external_id == "chat-revoked-list"
+        ).first().revoked_at is not None
+    finally:
+        db2.close()
+    assert len(external_ids_present) == 0

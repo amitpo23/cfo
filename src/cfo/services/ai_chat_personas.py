@@ -48,7 +48,21 @@ BASE_SYSTEM_PROMPT = (
     "rezef_help — מאגר-ידע פנימי על רצף עצמו (אילו מסכים קיימים, איך "
     "מבצעים תהליך מסוים, אילו כלים זמינים לך, ומה המגבלות הידועות). השתמש "
     "בו לפני שאתה עונה על כל שאלת 'איך עושים X' / 'מה רצף יודע לעשות' / "
-    "'איפה נמצא Y' — ולעולם אל תנחש תשובה כזו מהזיכרון."
+    "'איפה נמצא Y' — ולעולם אל תנחש תשובה כזו מהזיכרון. "
+    "יש לך גם זיכרון לומד דרך כלי memory: שני scope — 'עסק' (עובדה קבועה "
+    "על הארגון, גלויה לכל המשתמשים בו) ו'אתה' (אישי, גלוי רק למשתמש "
+    "הנוכחי). זכור: תיקון מפורש של המשתמש, העדפה שהתגלתה, עובדה יציבה על "
+    "העסק (מי הבנק, מי הספק הקבוע, מוסכמה תפעולית) — לא נתון משתנה "
+    "(יתרות, סכומים, תאריכים משתנים) ולא מידע רגיש. קריטי: הזיכרון הוא "
+    "הקשר והעדפות בלבד — אסור בהחלט לשאוב ממנו מספר פיננסי כלשהו; כל "
+    "מספר חייב להגיע מקריאת כלי טרייה בתור הנוכחי (honest-null). אם "
+    "הזיכרון מתקרב לתקרה או מלא — הצע למשתמש לאחד רשומות ישנות (action="
+    "'update') במקום לוותר על עובדה חדשה. update/forget מתאימים לפי "
+    "תת-מחרוזת (match) בתוך scope בודד — אם match מתאים ליותר מזיכרון "
+    "אחד, הפעולה לא מתבצעת ומוחזרים המועמדים; בקש מהמשתמש ניסוח מדויק "
+    "יותר במקום לנחש איזה זיכרון התכוון. כלי search_history מאפשר לך "
+    "לחפש בהיסטוריית השיחות הישנות מעבר ל-30 ההודעות האחרונות — השתמש בו "
+    "לפני שאתה אומר 'אין לי מידע' על משהו שנאמר בעבר."
 )
 
 # Appended to the composed prompt only when the caller is SUPER_ADMIN (see
@@ -164,9 +178,17 @@ def resolve_persona(key: str | None) -> Persona:
     return PERSONAS[DEFAULT_PERSONA]
 
 
-def build_system_prompt(persona: Persona, *, include_office: bool) -> str:
-    """BASE + persona block + (office addendum only when include_office)."""
+def build_system_prompt(
+    persona: Persona, *, include_office: bool, memory_block: str = "",
+) -> str:
+    """BASE + persona block + (office addendum only when include_office) +
+    (memory block, if any, appended last). `memory_block` defaults to ""
+    for backward compatibility — existing callers/tests that don't pass it
+    get the exact same prompt as before (package E,
+    docs/superpowers/plans/2026-07-27b-moshko-memory-and-whatsapp.md)."""
     parts = [BASE_SYSTEM_PROMPT, persona.prompt_addendum]
     if include_office:
         parts.append(OFFICE_SYSTEM_PROMPT_ADDENDUM)
+    if memory_block:
+        parts.append(memory_block)
     return "\n\n".join(parts)

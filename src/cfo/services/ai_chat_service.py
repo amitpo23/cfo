@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import ChatMessage
+from . import moshko_memory
 from .ai_chat_tools import TOOLS, anthropic_tool_schemas
 from .ai_chat_personas import (
     BASE_SYSTEM_PROMPT,
@@ -144,8 +145,15 @@ class AIChatService:
         # widens this gate; every persona gets the exact same tool_schemas.
         tool_schemas = anthropic_tool_schemas(include_office=self.is_super_admin)
         persona_obj = resolve_persona(persona)
+        # Frozen injection, not retrieval (Hermes-style — see moshko_memory.py):
+        # loaded fresh once per turn, never mutated mid-turn, so a write via
+        # the `memory` tool this turn only shows up starting the NEXT turn.
+        memory_block = moshko_memory.render_memory_block(
+            self.db, self.organization_id, self.user_id,
+        )
         system_prompt = build_system_prompt(
             persona_obj, include_office=self.is_super_admin,
+            memory_block=memory_block,
         )
 
         pending_action: Optional[dict[str, Any]] = None

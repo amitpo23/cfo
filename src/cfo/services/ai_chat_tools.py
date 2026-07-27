@@ -783,6 +783,102 @@ async def _register_office_client(
     )
 
 
+# ------------------------------------------------------------------------ #
+# Package E (2026-07-27b moshko-memory-and-whatsapp plan) — Moshko's learned
+# memory. `memory` is category="write": a memory write is a persisted state
+# change (not a one-off answer), and needs_user=True so the caller's real
+# identity (never model-supplied) is used to resolve scope="user" writes —
+# same needs_user pattern as propose_vat_filing_approval. `search_history`
+# is category="read": it complements the 30-message history cap in
+# ai_chat_service.py by letting Moshko look further back on demand instead
+# of the memory layer trying to hold everything.
+# ------------------------------------------------------------------------ #
+async def _memory(
+    db, org_id: int, *,
+    action: str, content: str | None = None, scope: str = "org",
+    match: str | None = None, category: str = "business_fact",
+    _user_id: int | None = None, **_kwargs,
+) -> dict:
+    """Raises ValueError (never returns a "failed"-shaped dict) for every
+    outcome that did NOT actually write — cap_reached, not_found,
+    ambiguous, bad input. ai_chat_service.confirm_action's existing
+    `except ValueError` path is what keeps msg.executed False and skips
+    the "בוצע: ..." confirmation message on these outcomes (same contract
+    register_office_client relies on) — a status dict would instead have
+    been silently treated as success (msg.executed=True, a fake "בוצע"
+    row persisted into the next 30 turns of model input), which would
+    let the model believe a capped/ambiguous write actually happened and
+    never prompt the user to consolidate. "ok" and "already_known" are
+    the only pass-through (real or no-op-but-honest) successes."""
+    from . import moshko_memory
+
+    target_user_id = _user_id if scope == "user" else None
+
+    if action == "add":
+        if not content:
+            raise ValueError("content נדרש לפעולת add")
+        result = moshko_memory.remember(
+            db, org_id, content=content, scope=scope, user_id=target_user_id,
+            category=category, source="conversation",
+        )
+    elif action == "update":
+        if not match or not content:
+            raise ValueError("match ו-content נדרשים לפעולת update")
+        result = moshko_memory.update_memory(
+            db, org_id, match=match, content=content, user_id=target_user_id,
+        )
+    elif action == "forget":
+        if not match:
+            raise ValueError("match נדרש לפעולת forget")
+        result = moshko_memory.forget(db, org_id, match=match, user_id=target_user_id)
+    else:
+        raise ValueError(f"action לא מוכר: {action}")
+
+    if result["status"] == "ambiguous":
+        candidates = "; ".join(c["content"] for c in result["candidates"])
+        raise ValueError(f"{result['message']} מועמדים: {candidates}")
+    if result["status"] in ("cap_reached", "not_found", "failed"):
+        raise ValueError(result["message"])
+    return result
+
+
+async def _search_history(db, org_id: int, *, query: str, _user_id: int | None = None, **_kwargs) -> dict:
+    from ..models import ChatMessage
+
+    query = (query or "").strip()
+    if not query:
+        return {"results": []}
+
+    rows = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.organization_id == org_id,
+            ChatMessage.user_id == _user_id,
+            ChatMessage.content.ilike(f"%{query}%"),
+            # Same rule as ai_chat_service._history: an unconfirmed proposal
+            # never happened — it must not surface here as if it were real
+            # history (a search for "תייק את הוצאה 42" must not let Moshko
+            # conclude the filing occurred just because it was PROPOSED).
+            # The separate "בוצע: ..." confirmation message still matches
+            # normally, so real executions stay findable.
+            ChatMessage.pending_action.is_(None),
+        )
+        .order_by(ChatMessage.id.desc())
+        .limit(20)
+        .all()
+    )
+    return {
+        "results": [
+            {
+                "date": r.created_at.isoformat() if r.created_at else None,
+                "role": r.role,
+                "excerpt": r.content[:280],
+            }
+            for r in rows
+        ],
+    }
+
+
 TOOLS: dict[str, ChatTool] = {
     "get_ar_aging": ChatTool(
         name="get_ar_aging",
@@ -1496,6 +1592,52 @@ TOOLS: dict[str, ChatTool] = {
         category="write",
         fn=_register_office_client,
         office=True,
+    ),
+    "memory": ChatTool(
+        name="memory",
+        description=(
+            "זיכרון לומד: הוספה/עדכון/מחיקה של עובדה אחת. scope='org' לעובדה "
+            "על העסק (גלויה לכל הארגון), scope='user' לזיכרון אישי (גלוי רק "
+            "למשתמש הנוכחי). ראו הנחיית הזיכרון המלאה בהוראות המערכת. "
+            "פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["add", "update", "forget"]},
+                "content": {"type": "string", "description": "עובדה הצהרתית אחת (נדרש ל-add/update)"},
+                "scope": {"type": "string", "enum": ["org", "user"], "default": "org"},
+                "match": {"type": "string", "description": "תת-מחרוזת לזיהוי הזיכרון הקיים (נדרש ל-update/forget)"},
+                "category": {
+                    "type": "string",
+                    "enum": ["preference", "business_fact", "correction", "convention"],
+                    "default": "business_fact",
+                },
+            },
+            "required": ["action"],
+        },
+        category="write",
+        fn=_memory,
+        needs_user=True,
+    ),
+    "search_history": ChatTool(
+        name="search_history",
+        description=(
+            "חיפוש טקסט חופשי בהיסטוריית השיחות הישנות שלך עם מושקו (מעבר "
+            "ל-30 ההודעות האחרונות שתמיד נטענות) — עד 20 תוצאות אחרונות "
+            "תואמות, עם תאריך ותפקיד. משלים את תקרת ההיסטוריה: השתמש בו "
+            "לפני שאתה אומר שאין לך מידע על שיחה קודמת."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "מונח חיפוש חופשי"},
+            },
+            "required": ["query"],
+        },
+        category="read",
+        fn=_search_history,
+        needs_user=True,
     ),
 }
 

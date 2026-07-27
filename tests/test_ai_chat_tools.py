@@ -29,6 +29,7 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
         "run_client_sync", "register_office_client",
         "create_expense_category", "set_expense_category", "classify_pending_expenses",
         "file_expense", "email_report", "propose_vat_filing_approval",
+        "memory",
     }
 
 

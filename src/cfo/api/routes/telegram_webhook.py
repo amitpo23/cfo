@@ -21,6 +21,7 @@ model turn — verification happens strictly before any tool/LLM access.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -29,14 +30,16 @@ from sqlalchemy.orm import Session
 
 from ...config import settings
 from ...database import get_db_session
-from ...models import ChannelProcessedUpdate
+from ...models import ChannelIdentity, ChannelProcessedUpdate
 from ...services.ai_chat_personas import PERSONAS, resolve_persona
 from ...services.ai_chat_service import AIChatService, ChatConfirmationError
 from ...services.channel_gateway import TelegramGateway
 from ...services.channel_link_service import (
     ChannelLinkError,
+    complete_email_verification,
     redeem_link_code,
     resolve_identity,
+    start_email_verification,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,10 +56,23 @@ PERSONA_COMMANDS = {
 }
 
 _UNLINKED_INSTRUCTIONS = (
-    "החשבון הזה עדיין לא מקושר לרצף. כדי לקשר: היכנס לאפליקציית רצף, "
-    "הנפק קוד קישור (בהגדרות → ערוצים), ושלח לכאן "
-    "/start <קוד> תוך 15 דקות."
+    "החשבון הזה עדיין לא מקושר לרצף. שתי דרכים לקשר:\n"
+    "1) קוד מהאפליקציה: היכנס לאפליקציית רצף, הנפק קוד קישור "
+    "(בהגדרות → ערוצים), ושלח לכאן /start <קוד> תוך 15 דקות.\n"
+    "2) מייל רשום: שלח לכאן את כתובת המייל שרשומה שלך ברצף — נשלח אליה "
+    "קוד בן 6 ספרות, ואז שלח את הקוד לכאן."
 )
+
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_SIX_DIGIT_CODE_PATTERN = re.compile(r"^\d{6}$")
+
+
+def _looks_like_email(text: str) -> bool:
+    return bool(_EMAIL_PATTERN.match(text))
+
+
+def _looks_like_six_digit_code(text: str) -> bool:
+    return bool(_SIX_DIGIT_CODE_PATTERN.match(text))
 
 
 def _gateway() -> TelegramGateway:
@@ -68,6 +84,16 @@ def _gateway() -> TelegramGateway:
 
 def _persona_names() -> str:
     return ", ".join(f"{p.title_he} (/{key})" for key, p in PERSONAS.items())
+
+
+async def _send_welcome(gateway: TelegramGateway, external_id: str, identity: ChannelIdentity) -> None:
+    welcome_persona = resolve_persona(identity.default_persona).title_he
+    await gateway.send_text(
+        external_id,
+        "הקישור הצליח! ברוך הבא לרצף.\n"
+        f"פרסונות זמינות: {_persona_names()}\n"
+        f"ברירת המחדל שלך כעת: {welcome_persona}.",
+    )
 
 
 def _mark_processed(db: Session, update_id: str) -> bool:
@@ -235,19 +261,38 @@ async def _handle_message(db: Session, message: dict) -> None:
             except ChannelLinkError as exc:
                 await gateway.send_text(external_id, str(exc))
                 return
-            welcome_persona = resolve_persona(new_identity.default_persona).title_he
-            await gateway.send_text(
-                external_id,
-                "הקישור הצליח! ברוך הבא לרצף.\n"
-                f"פרסונות זמינות: {_persona_names()}\n"
-                f"ברירת המחדל שלך כעת: {welcome_persona}.",
-            )
+            await _send_welcome(gateway, external_id, new_identity)
             return
-        # Not a verified identity and not a /start attempt — never reaches
-        # the LLM (decision 6/7), and a receipt photo/document from here is
-        # never downloaded either: verification happens strictly before any
-        # tool/LLM/download access. Same static reply as any other unlinked
-        # message.
+        if _looks_like_email(text):
+            # Package G: no LLM call, no lookup result disclosed either way
+            # (see channel_link_service._ENUMERATION_SAFE_RESPONSE) — the
+            # same reply goes out whether or not this email is registered.
+            result = await start_email_verification(
+                db, provider="telegram", external_id=external_id, email=text,
+            )
+            await gateway.send_text(external_id, result["message"])
+            return
+        if _looks_like_six_digit_code(text):
+            try:
+                new_identity = complete_email_verification(
+                    db, provider="telegram", external_id=external_id, code=text,
+                )
+            except ChannelLinkError as exc:
+                await gateway.send_text(external_id, str(exc))
+                return
+            # complete_email_verification doesn't persist display_name (no
+            # schema slot spanning the two-step flow — see its docstring);
+            # the webhook sets it here from Telegram's own message metadata,
+            # same source redeem_link_code uses for the app-code path.
+            new_identity.display_name = (message.get("from") or {}).get("first_name")
+            db.commit()
+            await _send_welcome(gateway, external_id, new_identity)
+            return
+        # Not a verified identity and not a recognized link attempt — never
+        # reaches the LLM (decision 6/7), and a receipt photo/document from
+        # here is never downloaded either: verification happens strictly
+        # before any tool/LLM/download access. Same static reply as any
+        # other unlinked message.
         await gateway.send_text(external_id, _UNLINKED_INSTRUCTIONS)
         return
 

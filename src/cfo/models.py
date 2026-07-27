@@ -1512,6 +1512,33 @@ class ChannelLinkCode(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class MoshkoMemory(Base):
+    """זיכרון-לומד של מושקו — הפניית עיצוב Hermes Agent (שני scope בדיוק:
+    עסק/משתמש), הזרקה קפואה לפרומפט (לא retrieval, אין vector DB), עם
+    תקרת-תווים שכופה אוצרות (docs/superpowers/plans/
+    2026-07-27b-moshko-memory-and-whatsapp.md, חבילה E). user_id=NULL =
+    עובדה על העסק, גלויה לכל משתמשי הארגון; user_id מוגדר = זיכרון אישי,
+    גלוי רק לבעליו. אין קשר ל-CfoMemory (org-only, ללא user_id, לא מגיע
+    ל-LLM) — זו טבלה חדשה ונפרדת, לא מיחזור."""
+    __tablename__ = "moshko_memory"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    content = Column(Text, nullable=False)
+    category = Column(String(30), nullable=True)  # preference | business_fact | correction | convention
+    source = Column(String(50), nullable=True)  # conversation | admin | inferred
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_used_at = Column(DateTime, nullable=True)
+
+    organization = relationship("Organization")
+
+    __table_args__ = (
+        Index("ix_moshko_memory_org_user", "organization_id", "user_id"),
+    )
+
+
 class ChannelProcessedUpdate(Base):
     """Dedupe עדכוני webhook נכנסים לפי (provider, update_id) — מונע ריצה
     כפולה (ולכן עלות LLM כפולה) כשהערוץ החיצוני משדר retry על אותו עדכון

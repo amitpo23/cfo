@@ -241,10 +241,14 @@ def test_propose_vat_filing_approval_flagged_needs_user():
 
 
 def test_needs_user_regression_on_existing_tools():
-    """None of the ~39 pre-existing tools should have opted into needs_user
-    by accident — only the two new ones from this plan."""
+    """None of the pre-existing tools should have opted into needs_user by
+    accident. propose_vat_filing_approval is this plan's original
+    needs_user tool; memory/search_history were added deliberately by
+    package E (2026-07-27b moshko-memory-and-whatsapp plan) — memory needs
+    the real caller identity to scope a personal write, search_history
+    needs it to scope a personal read."""
     flagged = {name for name, t in TOOLS.items() if t.needs_user}
-    assert flagged == {"propose_vat_filing_approval"}
+    assert flagged == {"propose_vat_filing_approval", "memory", "search_history"}
 
 
 def test_needs_user_tool_receives_user_id_kwarg(monkeypatch, fresh_org):

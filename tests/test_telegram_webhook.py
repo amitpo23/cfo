@@ -5,13 +5,18 @@ from types import SimpleNamespace
 
 import pytest
 
+import re
+
 from cfo import config as config_module
 from cfo.api.routes import telegram_webhook as tw_module
 from cfo.database import SessionLocal
 from cfo.models import User
+from cfo.services import channel_link_service as link_service_module
 from cfo.services.ai_chat_service import AIChatService
 from cfo.services.channel_link_service import issue_link_code, redeem_link_code
 from cfo.services.channel_gateway import TelegramGateway
+
+_CODE_RE = re.compile(r"\b(\d{6})\b")
 
 SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
 TEST_SECRET = "test-telegram-secret"
@@ -516,3 +521,166 @@ def test_persona_switch_command_persists(client, telegram_configured, fake_gatew
         assert identity.default_persona == "bookkeeper"
     finally:
         db.close()
+
+
+# --- package G (2026-07-27b plan): email-based verification via webhook --- #
+
+@pytest.fixture
+def fake_smtp(monkeypatch):
+    """Records every send_email_smtp call instead of hitting real SMTP —
+    monkeypatched on channel_link_service, the module that imports it."""
+    calls = []
+
+    async def _fake_send(to, subject, body, settings, *, attachments=None):
+        calls.append({"to": to, "subject": subject, "body": body})
+        return True
+
+    monkeypatch.setattr(link_service_module, "send_email_smtp", _fake_send)
+    return calls
+
+
+def _email_for_org(org_id: int) -> str:
+    db = SessionLocal()
+    try:
+        return db.query(User).filter(User.organization_id == org_id).first().email
+    finally:
+        db.close()
+
+
+def _extract_code(body: str) -> str:
+    m = _CODE_RE.search(body)
+    assert m, f"no 6-digit code found in email body: {body!r}"
+    return m.group(1)
+
+
+def test_email_from_unlinked_identity_starts_verification_without_llm(
+    client, telegram_configured, fake_gateway, fake_smtp, monkeypatch, fresh_org,
+):
+    called = {"n": 0}
+
+    async def fake_send_message(self, *a, **kw):
+        called["n"] += 1
+        return {"message_id": 1, "reply": "x", "pending_action": None}
+
+    monkeypatch.setattr(AIChatService, "send_message", fake_send_message)
+
+    iso = fresh_org()
+    known_email = _email_for_org(iso["org_id"])
+
+    r = _post(client, {
+        "update_id": 900,
+        "message": {"chat": {"id": "chat-email-1"}, "text": known_email},
+    })
+    assert r.status_code == 200
+    assert called["n"] == 0
+    assert len(fake_smtp) == 1
+    assert "קוד" in fake_gateway["send_text"][-1][1]
+
+
+def test_email_from_unlinked_identity_gives_identical_reply_for_unknown_email(
+    client, telegram_configured, fake_gateway, fake_smtp,
+):
+    """Anti-enumeration must hold at the webhook layer too: a made-up email
+    typed into the chat gets the exact same reply as a registered one."""
+    r_unknown = _post(client, {
+        "update_id": 901,
+        "message": {"chat": {"id": "chat-email-unknown"}, "text": "nobody-at-all@example.com"},
+    })
+    assert r_unknown.status_code == 200
+    unknown_reply = fake_gateway["send_text"][-1][1]
+    assert len(fake_smtp) == 0  # no email actually sent for the unknown address
+
+    r_known = _post(client, {
+        "update_id": 902,
+        "message": {"chat": {"id": "chat-email-known-cmp"}, "text": "owner@example.com"},
+    })
+    assert r_known.status_code == 200
+    known_reply = fake_gateway["send_text"][-1][1]
+
+    assert unknown_reply == known_reply
+
+
+def test_six_digit_code_completes_verification_and_welcomes(
+    client, telegram_configured, fake_gateway, fake_smtp, fresh_org,
+):
+    iso = fresh_org()
+    known_email = _email_for_org(iso["org_id"])
+
+    r1 = _post(client, {
+        "update_id": 910,
+        "message": {"chat": {"id": "chat-email-complete"}, "text": known_email},
+    })
+    assert r1.status_code == 200
+    code = _extract_code(fake_smtp[-1]["body"])
+
+    r2 = _post(client, {
+        "update_id": 911,
+        "message": {"chat": {"id": "chat-email-complete"}, "text": code,
+                    "from": {"first_name": "Yossi"}},
+    })
+    assert r2.status_code == 200
+    assert "הצליח" in fake_gateway["send_text"][-1][1]
+
+    from cfo.models import ChannelIdentity
+    db = SessionLocal()
+    try:
+        identity = db.query(ChannelIdentity).filter(
+            ChannelIdentity.provider == "telegram",
+            ChannelIdentity.external_id == "chat-email-complete",
+        ).first()
+        assert identity is not None
+        assert identity.verified_at is not None
+        assert identity.display_name == "Yossi"
+    finally:
+        db.close()
+
+
+def test_wrong_six_digit_code_returns_error_message_not_llm(
+    client, telegram_configured, fake_gateway, fake_smtp, monkeypatch, fresh_org,
+):
+    called = {"n": 0}
+
+    async def fake_send_message(self, *a, **kw):
+        called["n"] += 1
+        return {"message_id": 1, "reply": "x", "pending_action": None}
+
+    monkeypatch.setattr(AIChatService, "send_message", fake_send_message)
+
+    iso = fresh_org()
+    known_email = _email_for_org(iso["org_id"])
+    _post(client, {
+        "update_id": 920,
+        "message": {"chat": {"id": "chat-email-wrong"}, "text": known_email},
+    })
+
+    r = _post(client, {
+        "update_id": 921,
+        "message": {"chat": {"id": "chat-email-wrong"}, "text": "000000"},
+    })
+    assert r.status_code == 200
+    assert called["n"] == 0
+    assert "שגוי" in fake_gateway["send_text"][-1][1]
+
+
+def test_super_admin_email_cannot_be_linked_via_webhook(
+    client, telegram_configured, fake_gateway, fake_smtp,
+):
+    admin_email = "super-admin-webhook-pkg-g@example.com"
+    db = SessionLocal()
+    try:
+        if db.query(User).filter(User.email == admin_email).first() is None:
+            db.add(User(
+                email=admin_email, password_hash="x", full_name="Super Admin",
+                organization_id=None, is_active=True,
+            ))
+            db.commit()
+    finally:
+        db.close()
+
+    r = _post(client, {
+        "update_id": 930,
+        "message": {"chat": {"id": "chat-superadmin-webhook"}, "text": admin_email},
+    })
+    assert r.status_code == 200
+    assert len(fake_smtp) == 0  # no email sent — never linkable
+    assert "קוד" in fake_gateway["send_text"][-1][1]  # same reply as any other email
