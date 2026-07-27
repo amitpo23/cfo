@@ -147,6 +147,14 @@ class Organization(Base):
     morning_brief_recipients = Column(String(500), nullable=True)
     morning_brief_sms_enabled = Column(Boolean, default=False, nullable=True)
 
+    # --- חבילה H (התאמת בעלות אוטומטית) --- #
+    # חותמת שהבעלים (מנהל המערכת היחיד — אין "אדמין ארגון") הכריע ידנית מי
+    # חשבון העסק הראשי, דרך POST /admin/moshko/ownership-review/{id}/resolve.
+    # NULL = לא הוכרע — account_ownership.ownership_status ממשיך להתאים
+    # אוטומטית (tax_id ↔ Account.owner_national_id ↔ SUMIT CorporateNumber);
+    # ערך = ההתאמה נעולה ידנית ולא חוזרת לתור ההכרעה.
+    ownership_reviewed_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -327,6 +335,17 @@ class Account(Base):
     # חריגה, לא רק LOAN). NULL = לא ידוע (הספק לא החזיר את השדה) — לעולם לא
     # נגזר מ-interimAvailable (זמין-לשימוש, לא מסגרת).
     credit_limit = Column(Numeric(precision=14, scale=2), nullable=True)
+    # בעלות מדויקת (חבילה H) — Open Finance מחזיר ownerInfo.{nationalId,
+    # fullName} על כל Account (docs/OPEN_FINANCE_KNOWLEDGE_BASE.md:248).
+    # nationalId מנורמל לספרות בלבד ע"י account_ownership.normalize_israeli_id
+    # לפני שמירה. NULL = הספק לא סיפק ownerInfo (honest-null), לא ניחוש.
+    # מתמלא בסנכרון היומי הרגיל — אין קריאת API ייעודית בשביל זה.
+    owner_national_id = Column(String(20), nullable=True, index=True)
+    owner_name = Column(String(255), nullable=True)
+    # עקיפה ידנית של הבעלים (מנהל המערכת היחיד): מסמן איזה חשבון הוא חשבון
+    # העסק כשההתאמה האוטומטית (account_ownership.ownership_status) לא
+    # מתלכדת. NULL/False = לא נבחר. ר' גם Organization.ownership_reviewed_at.
+    is_primary_business_account = Column(Boolean, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

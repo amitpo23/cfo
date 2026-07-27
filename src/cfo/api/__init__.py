@@ -12,7 +12,7 @@ from .routes import (
     cashflow, sync, reports, financial_management, financial_operations
 )
 from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, expense_deduction, manual_reconciliation, advanced_features, phase10_12, analytics
-from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding, accounting_events, collections, ai_chat, contacts, sumit_webhooks, approvals, channels, telegram_webhook
+from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding, accounting_events, collections, ai_chat, contacts, sumit_webhooks, approvals, channels, telegram_webhook, whatsapp_webhook
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
@@ -311,6 +311,14 @@ app.include_router(
 # (mirrors sumit_webhooks.router's public /webhooks registration above).
 app.include_router(
     telegram_webhook.router, prefix="/api/telegram", tags=["Telegram Channel"],
+)
+
+# WhatsApp webhook (Meta Cloud API) — no user JWT. GET is authenticated by
+# the hub.verify_token handshake, POST by the X-Hub-Signature-256 HMAC —
+# both validated inside the route itself (mirrors telegram_webhook.router
+# and sumit_webhooks.router's public registration above).
+app.include_router(
+    whatsapp_webhook.router, prefix="/api/whatsapp", tags=["WhatsApp Channel"],
 )
 
 # Cron jobs authenticate with CRON_SECRET, not user tokens

@@ -564,6 +564,12 @@ class SyncEngine:
             # תמיד מחזיר אותו) לא אמור לאפס מסגרת ידועה שכבר נשמרה.
             if item.credit_limit is not None:
                 existing.credit_limit = item.credit_limit
+            # אותו עיקרון לבעלות (חבילה H): ownerInfo לא מובטח בכל עמוד/פולינג
+            # — אין לאפס מזהה בעלים ידוע כשהפעימה הנוכחית פשוט לא כללה אותו.
+            if item.owner_national_id is not None:
+                existing.owner_national_id = item.owner_national_id
+            if item.owner_name is not None:
+                existing.owner_name = item.owner_name
             existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
@@ -578,6 +584,8 @@ class SyncEngine:
             balance_as_of=item.balance_as_of,
             raw_account_type=item.raw_account_type,
             credit_limit=item.credit_limit,
+            owner_national_id=item.owner_national_id,
+            owner_name=item.owner_name,
         )
         self.db.add(account)
         return "created"

@@ -85,6 +85,23 @@ class Settings(BaseSettings):
     telegram_bot_token: Optional[str] = None
     telegram_webhook_secret: Optional[str] = None
 
+    # WhatsApp conversational channel (Meta Cloud API directly — no Twilio/
+    # 360dialog), package F (plan 2026-07-27b) — /api/whatsapp/webhook.
+    # phone_number_id + access_token identify the ONE shared business number
+    # all customers message (SUMIT-bot pattern — routing is by sender
+    # number, not by a per-customer number). verify_token is a value you
+    # choose yourself and register in the Meta App dashboard's webhook
+    # subscription (compared via secrets.compare_digest on the GET
+    # handshake). app_secret authenticates every POST body via the
+    # X-Hub-Signature-256 HMAC header. Any of these unset => the
+    # corresponding webhook path answers 503 (channel not configured),
+    # never silently open — same doctrine as the Telegram secret above.
+    whatsapp_phone_number_id: Optional[str] = None
+    whatsapp_access_token: Optional[str] = None
+    whatsapp_verify_token: Optional[str] = None
+    whatsapp_app_secret: Optional[str] = None
+    whatsapp_api_version: str = "v21.0"
+
     # Google Sign-In
     google_client_id: Optional[str] = None
 

@@ -18,12 +18,13 @@ from ...models import (
     OrganizationCreate, OrganizationUpdate, OrganizationResponse,
     UserRole, IntegrationType, SumitCompany, Invoice, Bill, BankTransaction,
     Alert, Task, OnboardingTask, AlertStatus, TaskStatus,
-    OrganizationSigningAuthority,
+    OrganizationSigningAuthority, Account,
 )
 from ...auth import verify_password, get_password_hash, create_access_token
 from ...config import settings
 from ...services.sync_engine import SyncEngine, get_connector_for_org
 from ...services.client_automation_service import mark_client_loop_result, run_post_sync_tasks
+from ...services.account_ownership import ownership_status, review_queue
 from ..dependencies import (
     get_current_user, 
     get_super_admin, 
@@ -1586,3 +1587,72 @@ async def test_connection(
             "connected": is_connected,
             "message": "Connection successful" if is_connected else "Connection failed"
         }
+
+
+# ==================== Moshko: ownership review (Package H) ====================
+# The sole "super admin" is the business owner — there is no separate "org
+# admin" role that self-declares ownership. Identification is automatic by
+# default (account_ownership.ownership_status); this queue exists ONLY for
+# the cases where it doesn't converge (honest-null).
+
+class OwnershipResolveRequest(BaseModel):
+    account_id: int
+    tax_id: Optional[str] = None
+
+
+@router.get("/moshko/ownership-review", tags=["Moshko"])
+async def get_ownership_review_queue(
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """כל הארגונים שההתאמה האוטומטית שלהם לא הכריעה, ממוין לפי חומרה."""
+    return review_queue(db)
+
+
+@router.post("/moshko/ownership-review/{organization_id}/resolve", tags=["Moshko"])
+async def resolve_ownership_review(
+    organization_id: int,
+    body: OwnershipResolveRequest,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """הכרעה ידנית של הבעלים: מסמן איזה חשבון הוא חשבון העסק הראשי.
+
+    לא ניחוש — רק מנהל המערכת (הבעלים) יכול לקבוע זאת, ורק כשההתאמה
+    האוטומטית לא התלכדה. מסמן, כותב AuditLog, ולא חוזר לתור ההכרעה.
+    """
+    org = db.query(Organization).filter(Organization.id == organization_id).first()
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+
+    account = db.query(Account).filter(Account.id == body.account_id).first()
+    if not account or account.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Account does not belong to this organization",
+        )
+
+    # Clear any previous primary flag before setting the new one — exactly
+    # one account may be marked primary at a time.
+    db.query(Account).filter(
+        Account.organization_id == organization_id,
+        Account.is_primary_business_account.is_(True),
+    ).update({"is_primary_business_account": False})
+
+    account.is_primary_business_account = True
+    if body.tax_id:
+        org.tax_id = body.tax_id
+    org.ownership_reviewed_at = datetime.now(timezone.utc)
+
+    audit_log = AuditLog(
+        user_id=current_user.id,
+        organization_id=organization_id,
+        action="RESOLVE",
+        entity_type="OwnershipReview",
+        entity_id=organization_id,
+        details={"account_id": body.account_id, "tax_id": body.tax_id},
+    )
+    db.add(audit_log)
+    db.commit()
+
+    return ownership_status(db, organization_id)
