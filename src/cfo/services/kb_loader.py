@@ -1,13 +1,24 @@
 """KB loader for the conversational chat assistant (channels/personas plan,
-Package 2 — see docs/superpowers/plans/2026-07-26-conversational-channels-personas.md).
+Package 2 — see docs/superpowers/plans/2026-07-26-conversational-channels-personas.md;
+Package J — procedures center, see the same plan directory).
 
-Exposes the two static, on-disk knowledge centers to the chat tool layer:
+Exposes three static, on-disk knowledge centers to the chat tool layer,
+mirroring the Hermes-agent split between reference knowledge and
+procedure:
 
 - ``docs/bookkeeper_kb/`` — the bookkeeper's professional knowledge base
   (Israeli income-tax expense recognition, VAT input deductibility, the
   classification bridge, evidence rules, the daily analysis prompt set).
 - ``docs/sumit_help_kb/`` — the SUMIT help-center corpus (operational
   how-to for the accounting portal itself).
+- ``procedures`` (key ``"procedures"``) — standing operating procedures:
+  files that live directly under ``docs/`` (not a subdirectory) and answer
+  "what is the order of operations for X", as opposed to "what does the
+  law say" (bookkeeper_kb) or "how does the SUMIT UI work" (sumit_help_kb).
+  A center's files may therefore sit in a subdirectory (``dir_name`` set)
+  or directly under ``DOCS_ROOT`` (``dir_name=""`` — pathlib composes
+  ``Path(root) / "" / filename`` to ``Path(root) / filename``, so every
+  path-construction site below needs no special-casing for the flat case).
 
 Design goals:
 
@@ -46,7 +57,16 @@ DOCS_ROOT = REPO_ROOT / "docs"
 # entire max_chars budget and crowd out every other matching source.
 _SECTION_CHAR_CAP = 1200
 
+# Section-splitting heading depth. bookkeeper_kb/sumit_help_kb files are
+# short and flat (## only) — kept as-is so their existing search results
+# don't shift. The procedures docs are long, deeply-nested runbooks (##
+# through ####; e.g. BOOKKEEPER_ARMY_OPERATING_MODEL.md's chapter 2 runs
+# ~490 lines under a single ## heading) — splitting only on ## would hand
+# back one multi-thousand-char section that outranks and crowds out every
+# more specific ###/#### SOP subsection at the same score. Splitting one
+# level deeper keeps each returned section scoped to the actual procedure.
 _HEADING_RE = re.compile(r"^##[ \t]+(.*)$", re.MULTILINE)
+_HEADING_RE_DEEP = re.compile(r"^#{2,4}[ \t]+(.*)$", re.MULTILINE)
 
 NOT_AVAILABLE_REASON = "מרכז הידע אינו זמין בסביבה זו (docs לא נארזו בפריסה)"
 
@@ -62,8 +82,9 @@ class KBFile:
 class KBCenter:
     key: str
     title_he: str
-    dir_name: str  # relative to DOCS_ROOT
+    dir_name: str  # relative to DOCS_ROOT; "" means the files sit directly under it
     files: tuple[KBFile, ...]
+    heading_re: re.Pattern[str] = _HEADING_RE
 
 
 # Manually curated from reading every file in both directories (2026-07-26) —
@@ -143,6 +164,44 @@ KB_CENTERS: tuple[KBCenter, ...] = (
             ),
         ),
     ),
+    KBCenter(
+        key="procedures",
+        title_he="פרוצדורות ונהלי עבודה",
+        dir_name="",  # these files sit directly under docs/, not a subdirectory
+        heading_re=_HEADING_RE_DEEP,
+        files=(
+            KBFile(
+                "BOOKKEEPER_ARMY_OPERATING_MODEL.md",
+                "מודל ההפעלה של צבא מנהלי החשבונות — ה-workflow וה-SOP המכוננים",
+                "865 שורות: 4 דוקטרינות-על (verify-first, אימות משולש, אפס אוטונומיה "
+                "בבלתי-הפיך, שובל אסמכתאות סעיף 224א), לוח השנה הרגולטורי, ה-workflow "
+                "המלא פר תיק (יומי/שבועי/חודשי/רבעוני/שנתי) כולל סגירת מנה ואיחוד "
+                "עולמות התיוק, SOP-ים מלאים לזיכויים / דוח מתקן ומסמך רטרואקטיבי / "
+                "מספרי הקצאה (חשבונית ישראל) / בקרת VAT מגלה, ארכיטקטורת הצבא "
+                "והסקיילביליות, פערים פתוחים, ונספח \"היום הראשון של סוכן חדש בתיק\".",
+            ),
+            KBFile(
+                "REZEF_OPERATING_SYSTEM.md",
+                "מערכת ההפעלה של רצף — חוזה ארכיטקטוני יציב",
+                "היררכיית מקור האמת פר-שאלה, מטרת המערכת, חלוקת בעלות על אמת "
+                "(מה SUMIT/Open Finance מחזיקים מול מה רצף מחזיקה), ארבעת התפקידים "
+                "(integration steward / מנהל חשבונות / controller-רו\"ח / CFO), "
+                "ה-workflow היומי הקנוני ותקציבי ה-cron, מצב היעד של הנה\"ח כפולה, "
+                "ארבעת מסלולי הליבה (הוצאה / הכנסה וגבייה / ספק ותשלום / סגירת "
+                "תקופה), חבילת דוחות CFO, שערים חוצי מערכת, זיכרון/skills, ותכנית "
+                "ההשלמה בת 8 השלבים.",
+            ),
+            KBFile(
+                "SUMIT_BOOKS_BATCH_UNIFICATION_PLAYBOOK.md",
+                "נוהל איחוד עולמות התיוק (מודול הוצאות ↔ תיק) והפקת קובץ חשבשבת",
+                "נוהל בן 9 שלבים, הוכח על org5 (עומר ועודד פורת, מנה 2): חילוץ המנה "
+                "מהפורטל, הצלבה מול מסמכי העסק, החלטות בעלים על שורות חשודות, מחיקת "
+                "שורה, השלמת צד-נגדי חסר, אימות איזון ('מאזן: 0'), סגירת המנה "
+                "כרישום בלתי-הפיך, יבוא הכנסות מהעסק, והפקת קובץ חשבשבת מלא; כולל "
+                "מלכודות דפדפן Blazor/SUMIT ותנאים להחלה על תיקים אחרים.",
+            ),
+        ),
+    ),
 )
 
 
@@ -180,18 +239,23 @@ def _index_for(root: str) -> dict[str, Any]:
 
 
 def kb_index() -> dict[str, Any]:
-    """The two knowledge centers and the files actually present on disk,
+    """The three knowledge centers and the files actually present on disk,
     with hand-written Hebrew titles/summaries. honest-null (``available:
     False`` + reason) if nothing is found on disk at all — never a silent
     empty ``centers`` list."""
     return _index_for(str(DOCS_ROOT))
 
 
-def _split_sections(text: str, file_title: str) -> list[dict[str, str]]:
-    """Split a markdown document into sections at each ``## `` heading.
-    Content before the first ``## `` heading (the ``# `` title + any intro)
+def _split_sections(
+    text: str, file_title: str, heading_re: re.Pattern[str] = _HEADING_RE
+) -> list[dict[str, str]]:
+    """Split a markdown document into sections at each heading matched by
+    ``heading_re`` (``## `` only by default; centers with deeply-nested
+    runbooks pass ``_HEADING_RE_DEEP`` to split on ``##``-``####`` so one
+    long chapter can't crowd out its own subsections — see ``KBCenter``).
+    Content before the first matched heading (the ``# `` title + any intro)
     becomes one section named after the file itself, so nothing is lost."""
-    matches = list(_HEADING_RE.finditer(text))
+    matches = list(heading_re.finditer(text))
     if not matches:
         return [{"heading": file_title, "text": text.strip()}]
 
@@ -238,7 +302,7 @@ def kb_search(query: str, *, max_chars: int = 4000) -> dict[str, Any]:
             if not (center_dir / f.filename).exists():
                 continue
             text = _read_file(root, center.dir_name, f.filename)
-            for section in _split_sections(text, f.title_he):
+            for section in _split_sections(text, f.title_he, center.heading_re):
                 haystack = section["text"].lower()
                 score = sum(haystack.count(t) for t in lowered_terms)
                 if score > 0:

@@ -108,16 +108,22 @@ class ManualReconciliationService:
         old_category = exp.category
         exp.category = corrected_category
 
-        # Store feedback metadata (for learning later)
-        if not exp.classifier_feedback:
-            exp.classifier_feedback = []
-        exp.classifier_feedback.append({
+        # Store feedback metadata (for learning later). classifier_feedback
+        # is a plain JSON column (not MutableList.as_mutable(JSON)) — an
+        # in-place .append() on the existing list does NOT mark the column
+        # dirty, so only the very first entry (which also involves a real
+        # `= []` assignment) would ever persist; every correction after the
+        # first would silently vanish on commit, making the >=3-corrections
+        # learning threshold unreachable in practice. Always reassign a new
+        # list so SQLAlchemy sees the attribute change every time.
+        entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "old_category": old_category,
             "new_category": corrected_category,
             "supplier": exp.supplier_name,
             "feedback_text": feedback_text,
-        })
+        }
+        exp.classifier_feedback = (exp.classifier_feedback or []) + [entry]
 
         self.db.commit()
         return {

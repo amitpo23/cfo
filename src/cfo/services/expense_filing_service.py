@@ -64,6 +64,7 @@ class ExpenseFilingService:
     def create_expense(self, data: Dict) -> Dict:
         from .expense_classifier import classify_expense
         from . import expense_category_service
+        from .classifier_ml_training import ClassifierMLTrainingService
 
         amount = Decimal(str(data.get("amount", 0)))
         vat = Decimal(str(data.get("vat_amount", 0) or 0))
@@ -75,9 +76,12 @@ class ExpenseFilingService:
             org_categories = expense_category_service.get_classifier_categories(
                 self.db, self.organization_id
             )
+            learned_rules = ClassifierMLTrainingService(
+                self.db, self.organization_id
+            ).get_learned_rules_map()
             category = classify_expense(
                 data.get("supplier_name"), data.get("description"), data.get("invoice_number"),
-                org_categories=org_categories,
+                org_categories=org_categories, learned_rules=learned_rules,
             )
         doc_kind = data.get("doc_kind")
         exp = Expense(
@@ -152,10 +156,15 @@ class ExpenseFilingService:
         """סיווג אוטומטי של הוצאות. ברירת מחדל: רק ללא קטגוריה / 'other'."""
         from .expense_classifier import classify_expense
         from . import expense_category_service
+        from .classifier_ml_training import ClassifierMLTrainingService
 
         org_categories = expense_category_service.get_classifier_categories(
             self.db, self.organization_id
         )
+        # נטען פעם אחת לכל ריצת סיווג גורפת — לא פר-הוצאה בתוך הלולאה למטה.
+        learned_rules = ClassifierMLTrainingService(
+            self.db, self.organization_id
+        ).get_learned_rules_map()
         q = self.db.query(Expense).filter(Expense.organization_id == self.organization_id)
         if not reclassify_all:
             q = q.filter((Expense.category.is_(None)) | (Expense.category == "") | (Expense.category == "other"))
@@ -164,6 +173,7 @@ class ExpenseFilingService:
             new_cat = classify_expense(
                 exp.supplier_name, exp.description, exp.invoice_number,
                 sumit_item_name=exp.sumit_item_name, org_categories=org_categories,
+                learned_rules=learned_rules,
             )
             if new_cat != exp.category:
                 exp.category = new_cat
@@ -178,10 +188,15 @@ class ExpenseFilingService:
         ידנית לקטגוריה אחרת אינן נגעות."""
         from .expense_classifier import classify_expense
         from . import expense_category_service
+        from .classifier_ml_training import ClassifierMLTrainingService
 
         org_categories = expense_category_service.get_classifier_categories(
             self.db, self.organization_id
         )
+        # נטען פעם אחת לכל ריצת סיווג גורפת — לא פר-הוצאה בתוך הלולאה למטה.
+        learned_rules = ClassifierMLTrainingService(
+            self.db, self.organization_id
+        ).get_learned_rules_map()
         rows = (
             self.db.query(Expense)
             .filter(
@@ -197,6 +212,7 @@ class ExpenseFilingService:
             new_cat = classify_expense(
                 exp.supplier_name, exp.description, exp.invoice_number,
                 sumit_item_name=exp.sumit_item_name, org_categories=org_categories,
+                learned_rules=learned_rules,
             )
             if new_cat != exp.category:
                 exp.category = new_cat
@@ -222,6 +238,7 @@ class ExpenseFilingService:
         from .sync_engine import get_connector_for_org
         from .expense_classifier import classify_expense
         from . import expense_category_service
+        from .classifier_ml_training import ClassifierMLTrainingService
 
         connector, _conn_id, source = get_connector_for_org(
             self.db, self.organization_id, preferred_source="sumit"
@@ -232,6 +249,10 @@ class ExpenseFilingService:
         org_categories = expense_category_service.get_classifier_categories(
             self.db, self.organization_id
         )
+        # נטען פעם אחת לכל ריצת הפתרון הגורפת — לא פר-הוצאה בתוך הלולאה למטה.
+        learned_rules = ClassifierMLTrainingService(
+            self.db, self.organization_id
+        ).get_learned_rules_map()
 
         # הוצאות SUMIT שעדיין חסר בהן שם ספק אמיתי או ח.פ
         q = (
@@ -280,6 +301,7 @@ class ExpenseFilingService:
             new_cat = classify_expense(
                 e.supplier_name, e.description, e.invoice_number,
                 sumit_item_name=e.sumit_item_name, org_categories=org_categories,
+                learned_rules=learned_rules,
             )
             if new_cat != e.category:
                 e.category = new_cat
@@ -490,6 +512,7 @@ class ExpenseFilingService:
         from .sync_engine import get_connector_for_org
         from .expense_classifier import classify_expense
         from . import expense_category_service
+        from .classifier_ml_training import ClassifierMLTrainingService
         from ..integrations.sumit_models import DocumentListRequest
 
         connector, _conn_id, source = get_connector_for_org(
@@ -501,6 +524,10 @@ class ExpenseFilingService:
         org_categories = expense_category_service.get_classifier_categories(
             self.db, self.organization_id
         )
+        # נטען פעם אחת לכל ריצת סנכרון גורפת — לא פר-הוצאה בתוך הלולאה למטה.
+        learned_rules = ClassifierMLTrainingService(
+            self.db, self.organization_id
+        ).get_learned_rules_map()
 
         # הטיוטות הממתינות (עמוד fileexpenses) הן status="draft" — לא מסוננות
         # נכון ע"י document_type="expense" (הן סוג 15, לא 16). מושכים הכל ומסננים
@@ -559,7 +586,10 @@ class ExpenseFilingService:
                 total=total,
                 expense_date=getattr(d, "issue_date", None) or date.today(),
                 invoice_number=invoice_no,
-                category=classify_expense(supplier, None, invoice_no, org_categories=org_categories),
+                category=classify_expense(
+                    supplier, None, invoice_no,
+                    org_categories=org_categories, learned_rules=learned_rules,
+                ),
                 # טיוטה = ממתינה לאישור; מסמך סופי = כבר מתויק ב-SUMIT
                 status="pending" if is_draft else "filed",
                 sumit_expense_id=None if is_draft else ext,

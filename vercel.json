@@ -7,7 +7,7 @@
   "functions": {
     "api/**/*.py": {
       "excludeFiles": "{.venv/**,frontend/node_modules/**,node_modules/**,.agents/**,.claude/**,tests/**,__tests__/**,**/*.test.py,**/test_*.py,*.db,*.sqlite,*.sqlite3}",
-      "includeFiles": "{docs/bookkeeper_kb/**,docs/sumit_help_kb/**}",
+      "includeFiles": "{docs/bookkeeper_kb/**,docs/sumit_help_kb/**,docs/BOOKKEEPER_ARMY_OPERATING_MODEL.md,docs/REZEF_OPERATING_SYSTEM.md,docs/SUMIT_BOOKS_BATCH_UNIFICATION_PLAYBOOK.md}",
       "maxDuration": 300
     }
   },

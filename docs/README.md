@@ -13,6 +13,12 @@
 | מודל התפעול היומי/חודשי | [`BOOKKEEPER_ARMY_OPERATING_MODEL.md`](BOOKKEEPER_ARMY_OPERATING_MODEL.md) — workflow + 12 SOP |
 | כתיבת קוד / הרצת בדיקות | [`../CLAUDE.md`](../CLAUDE.md), [`../AGENTS.md`](../AGENTS.md) |
 
+**נגיש למושקו בזמן ריצה** דרך `kb_lookup` (`src/cfo/services/kb_loader.py`), מרכז ידע
+`procedures`: `BOOKKEEPER_ARMY_OPERATING_MODEL.md`, `REZEF_OPERATING_SYSTEM.md`,
+`SUMIT_BOOKS_BATCH_UNIFICATION_PLAYBOOK.md` — לצד שני מרכזי הידע הקיימים
+(`bookkeeper_kb`, `sumit_help_kb`). כך "מה סדר הפעולות ל-X" נענה מתוך הנוהל בפועל,
+לא מזיכרון.
+
 ## מקורות אמת — אינטגרציות
 
 - [`SUMIT_KNOWLEDGE_BASE.md`](SUMIT_KNOWLEDGE_BASE.md) · [`SUMIT_API_REFERENCE.md`](SUMIT_API_REFERENCE.md) · [`sumit_swagger_v1_2026-07-10.json`](sumit_swagger_v1_2026-07-10.json) · [`sumit_help_kb/`](sumit_help_kb/)

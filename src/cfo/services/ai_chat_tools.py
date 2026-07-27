@@ -294,9 +294,54 @@ async def _create_expense_category(
 
 
 async def _set_expense_category(db, org_id: int, *, expense_id: int, category: str, **_kwargs) -> dict:
+    """שינוי קטגוריה דרך מושקו — סוגר את לולאת הלמידה: כל תיקון בשיחה נרשם
+    גם כ-classifier_feedback (record_classifier_feedback הקיים, ר'
+    manual_reconciliation.py — לא משוכפל כאן), כך שתיקון חוזר של אותו ספק
+    הופך בהמשך לכלל נלמד שהמסווג צורך (expense_classifier.classify_expense
+    עם learned_rules, ר' חבילה I 2026-07-27).
+
+    סדר הפעולות קריטי: record_classifier_feedback רץ *ראשון* כי הוא זה
+    שקורא את exp.category הנוכחי (האמיתי, טרם השינוי) כ-old_category — אם
+    update_expense היה רץ קודם, old_category שנרשם היה כבר שווה ל-new
+    category והפידבק היה חסר-משמעות. update_expense רץ אחריו רק כדי
+    לחשב מחדש שדות נגזרים (vat_claimable/ניכוי) לפי הקטגוריה החדשה — הוא
+    אינו כותב יותר ל-classifier_feedback, כדי לא לשכפל את לוגיקת הלמידה."""
     from .expense_filing_service import ExpenseFilingService
+    from .manual_reconciliation import ManualReconciliationService
+    from .expense_classifier import VALID_CATEGORIES
+    from . import expense_category_service
+
+    valid_keys = VALID_CATEGORIES | expense_category_service.org_category_keys(db, org_id)
+    if category not in valid_keys:
+        raise ValueError(f"קטגוריה לא מוכרת: {category}")
+
+    ManualReconciliationService(db, org_id).record_classifier_feedback(
+        entity_id=expense_id, entity_type="expense", corrected_category=category,
+    )
     service = ExpenseFilingService(db, organization_id=org_id)
     return service.update_expense(expense_id, {"category": category})
+
+
+async def _get_learned_rules(db, org_id: int, **_kwargs) -> dict:
+    """מה מושקו למד על סיווג הוצאות מתיקוני משתמש קודמים — לכל כלל: ספק,
+    קטגוריה, וכמה תיקונים ביססו אותו (סף: 3). כולל גם ספקים שעדיין מתחת
+    לסף כדי שהמשתמש יראה — ויוכל לתקן — גם מה שעוד לא הפך לכלל בפועל."""
+    from .classifier_ml_training import ClassifierMLTrainingService
+
+    result = ClassifierMLTrainingService(db, org_id).get_learned_rules()
+    rules = [
+        {
+            "supplier": supplier,
+            "category": info["category"],
+            "correction_count": info["correction_count"],
+        }
+        for supplier, info in result["rules"].items()
+    ]
+    return {
+        "learned_rules": rules,
+        "below_threshold": result["below_threshold"],
+        "min_corrections_required": result["min_corrections"],
+    }
 
 
 async def _classify_pending_expenses(db, org_id: int, **_kwargs) -> dict:
@@ -1169,6 +1214,18 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="write",
         fn=_set_expense_category,
+    ),
+    "get_learned_rules": ChatTool(
+        name="get_learned_rules",
+        description=(
+            "מה מושקו למד על סיווג הוצאות מתיקוני משתמש קודמים בצ'אט/במסך "
+            "הוצאות — לכל כלל: ספק, קטגוריה, וכמה תיקונים ביססו אותו (סף: 3 "
+            "תיקונים לאותו ספק). מציג גם ספקים שעדיין מתחת לסף, כדי לראות "
+            "מה עוד לא הפך לכלל בפועל. קריאה בלבד."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_learned_rules,
     ),
     "classify_pending_expenses": ChatTool(
         name="classify_pending_expenses",
