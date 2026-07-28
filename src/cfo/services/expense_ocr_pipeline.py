@@ -46,6 +46,10 @@ class ExpenseOCRPipeline:
         # ניתנים להזרקה לצורך בדיקות; ברירת המחדל היא הממשים האמיתיים.
         self._registry = registry
         self._extractor = extractor
+        # cache ברמת המופע (לא גלובלי חוצה-ארגונים) לכללים הנלמדים של הארגון
+        # הזה — ר' _get_learned_rules. מופע אחד של הפייפליין מעבד את כל
+        # process_pending, כך שהמפה נטענת פעם אחת לכל ריצה, לא פר-קבלה.
+        self._learned_rules_cache: Optional[Dict[str, str]] = None
 
     # ---------- public API ----------
 
@@ -129,6 +133,19 @@ class ExpenseOCRPipeline:
 
     # ---------- core ----------
 
+    def _get_learned_rules(self) -> Dict[str, str]:
+        """כללים נלמדים לארגון הזה (ר' classifier_ml_training.
+        ClassifierMLTrainingService.get_learned_rules_map) — נטענים פעם
+        אחת ונשמרים ב-cache על המופע. process_pending משתמש באותו מופע
+        לכל הטיוטות בריצה, כך שזו שאילתת DB אחת לריצה, לא פר-קבלה."""
+        if self._learned_rules_cache is None:
+            from .classifier_ml_training import ClassifierMLTrainingService
+
+            self._learned_rules_cache = ClassifierMLTrainingService(
+                self.db, self.organization_id
+            ).get_learned_rules_map()
+        return self._learned_rules_cache
+
     async def _process_one(
         self, exp: Expense, connector, auto_file: bool
     ) -> Dict[str, Any]:
@@ -159,6 +176,7 @@ class ExpenseOCRPipeline:
             exp.description,
             extract.get("invoice_number") or exp.invoice_number,
             sumit_item_name=exp.sumit_item_name,
+            learned_rules=self._get_learned_rules(),
         )
 
         # תאריך

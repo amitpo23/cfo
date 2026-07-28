@@ -19,37 +19,26 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models import ChatMessage
+from . import moshko_memory
 from .ai_chat_tools import TOOLS, anthropic_tool_schemas
-
-SYSTEM_PROMPT = (
-    "אתה עוזר CFO דיגיטלי של רצף. ענה בעברית, תמציתי ומדויק, ורק על סמך "
-    "הנתונים שהכלים מחזירים — אל תמציא מספרים. אתה יכול להציג הוצאות (עם "
-    "סינון לפי סטטוס/קטגוריה/תאריכים/ספק), לפתוח קטגוריות/כרטיסי הוצאה "
-    "מותאמים אישית לפי הנחיית המשתמש (עם מילות מפתח לסיווג אוטומטי), לשנות "
-    "סיווג של הוצאה בודדת, להריץ סיווג אוטומטי גורף על הוצאות ממתינות, "
-    "ולבדוק מוכנות דיווח מע\"מ (PCN874). לפני כל פעולת כתיבה (הפקת מסמך, "
-    "רישום ניסיון גבייה, פתיחת כרטיס הוצאה, שינוי סיווג הוצאה, סיווג גורף "
-    "של הוצאות) המערכת תבקש אישור מהמשתמש בעצמה; אתה לא צריך (ואסור לך) "
-    "להניח שאושר. יש לך גם כלי בשם rezef_help — מאגר-ידע פנימי על רצף עצמו "
-    "(אילו מסכים קיימים, איך מבצעים תהליך מסוים, אילו כלים זמינים לך, ומה "
-    "המגבלות הידועות). השתמש בו לפני שאתה עונה על כל שאלת 'איך עושים X' / "
-    "'מה רצף יודע לעשות' / 'איפה נמצא Y' — ולעולם אל תנחש תשובה כזו מהזיכרון."
+from .ai_chat_personas import (
+    BASE_SYSTEM_PROMPT,
+    build_system_prompt,
+    resolve_persona,
 )
 
-# Appended to SYSTEM_PROMPT only when the caller is SUPER_ADMIN (see
-# AIChatService.is_super_admin) — i.e. only when the office tools are also
-# present in the schema, so the model is never told about a persona whose
-# tools it can't actually see.
-OFFICE_SYSTEM_PROMPT_ADDENDUM = (
-    "אתה פועל כרגע במצב מנהל משרד רואי-חשבון (Office Manager): מעבר לתיק "
-    "לקוח בודד, יש לך כלים נוספים לצפייה בכל תיקי הלקוחות של המשרד, סטטוס "
-    "הסנכרון וחיבור SUMIT שלהם, רולאפ פיננסי חוצה-לקוחות, וסקירת תיק לקוח "
-    "ספציפי. פעולות כתיבה (הרצת סנכרון, רישום תיק לקוח חדש) עדיין דורשות "
-    "אישור מפורש של המשתמש לפני ביצוע — בדיוק כמו כל פעולת כתיבה אחרת; "
-    "לעולם אל תניח שאושרו."
-)
+# Backward-compatible alias — the persona layer (ai_chat_personas.py) now
+# owns the prompt strings; re-exported here under the original name because
+# existing callers/tests reference ai_chat_service.SYSTEM_PROMPT directly.
+SYSTEM_PROMPT = BASE_SYSTEM_PROMPT
 
 _MAX_TOOL_TURNS = 6
+
+# Most recent messages replayed to the model per turn. Not a "context
+# window" figure — it is the point past which older chat turns stop earning
+# their input cost, given every factual answer comes from a tool call made
+# fresh in the current turn, never from what was said ten turns ago.
+_MAX_HISTORY_MESSAGES = 30
 
 
 class ChatConfirmationError(ValueError):
@@ -98,16 +87,27 @@ class AIChatService:
         # not shared team data. Without the user_id check, any authenticated
         # user in the same org could read another user's session just by
         # knowing/guessing its session_id.
-        return (
+        #
+        # Capped at the most recent _MAX_HISTORY_MESSAGES. A messaging
+        # channel has no "new chat" button: telegram_webhook.py derives one
+        # permanent session_id per chat (f"tg-{external_id}"), so an
+        # uncapped history means every turn re-sends the entire lifetime of
+        # that conversation to the model — input cost and latency growing
+        # without bound for as long as the user keeps the bot. The query
+        # takes the newest rows and re-sorts ascending so the model still
+        # reads them oldest-first.
+        rows = (
             self.db.query(ChatMessage)
             .filter(
                 ChatMessage.organization_id == self.organization_id,
                 ChatMessage.user_id == self.user_id,
                 ChatMessage.session_id == session_id,
             )
-            .order_by(ChatMessage.id.asc())
+            .order_by(ChatMessage.id.desc())
+            .limit(_MAX_HISTORY_MESSAGES)
             .all()
         )
+        return list(reversed(rows))
 
     def _make_client(self):
         import anthropic
@@ -117,7 +117,9 @@ class AIChatService:
             )
         return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
-    async def send_message(self, session_id: str, text: str) -> dict[str, Any]:
+    async def send_message(
+        self, session_id: str, text: str, persona: Optional[str] = None,
+    ) -> dict[str, Any]:
         # Unconfirmed proposals are excluded from context — from the
         # model's point of view, a pending (not-yet-executed) action never
         # happened, so it must not be treated as something already done.
@@ -138,11 +140,20 @@ class AIChatService:
         client = self._make_client()
         # Fail closed: office tools are added to the schema ONLY for a
         # confirmed SUPER_ADMIN — a regular user's request never even
-        # mentions these tools exist (see anthropic_tool_schemas).
+        # mentions these tools exist (see anthropic_tool_schemas). The
+        # persona (resolved below) is a prompt/tone axis only — it never
+        # widens this gate; every persona gets the exact same tool_schemas.
         tool_schemas = anthropic_tool_schemas(include_office=self.is_super_admin)
-        system_prompt = (
-            f"{SYSTEM_PROMPT}\n\n{OFFICE_SYSTEM_PROMPT_ADDENDUM}"
-            if self.is_super_admin else SYSTEM_PROMPT
+        persona_obj = resolve_persona(persona)
+        # Frozen injection, not retrieval (Hermes-style — see moshko_memory.py):
+        # loaded fresh once per turn, never mutated mid-turn, so a write via
+        # the `memory` tool this turn only shows up starting the NEXT turn.
+        memory_block = moshko_memory.render_memory_block(
+            self.db, self.organization_id, self.user_id,
+        )
+        system_prompt = build_system_prompt(
+            persona_obj, include_office=self.is_super_admin,
+            memory_block=memory_block,
         )
 
         pending_action: Optional[dict[str, Any]] = None
@@ -213,7 +224,15 @@ class AIChatService:
                     # even if somehow requested by name.
                     result = {"error": _OFFICE_REFUSAL_TEXT}
                 else:
-                    result = await tool.fn(self.db, self.organization_id, **block.input)
+                    # Merge into a dict first (not **a, **b in the call) so a
+                    # duplicate key can never raise "multiple values for
+                    # argument" — if a tool_use.input somehow carried its own
+                    # _user_id, the real caller identity below always wins,
+                    # it's never spoofable from model output.
+                    call_kwargs = dict(block.input)
+                    if tool.needs_user:
+                        call_kwargs["_user_id"] = self.user_id
+                    result = await tool.fn(self.db, self.organization_id, **call_kwargs)
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -264,7 +283,10 @@ class AIChatService:
             raise ChatConfirmationError(_OFFICE_REFUSAL_TEXT)
 
         try:
-            result = await tool.fn(self.db, self.organization_id, **msg.pending_action["input"])
+            call_kwargs = dict(msg.pending_action["input"])
+            if tool.needs_user:
+                call_kwargs["_user_id"] = self.user_id
+            result = await tool.fn(self.db, self.organization_id, **call_kwargs)
         except ValueError as exc:
             # Never fake success: a business-validation failure (e.g.
             # register_office_client with no SUMIT key configured) must

@@ -45,6 +45,12 @@ class NormalizedAccount:
     # מסגרת חריגה, לא רק LOAN). None כשהספק לא מחזיר את השדה — אין לגזור
     # ערך ממנו (למשל מ-interimAvailable, שהוא זמין-לשימוש ולא מסגרת).
     credit_limit: Optional[Decimal] = None
+    # בעלות מדויקת — ownerInfo.{nationalId, fullName} של Open Finance (חבילה H,
+    # docs/OPEN_FINANCE_KNOWLEDGE_BASE.md:248). nationalId מנורמל לספרות בלבד.
+    # None כשהספק לא סיפק ownerInfo. משמש להתאמה אוטומטית מול Organization.tax_id
+    # ו-SUMIT CorporateNumber (services/account_ownership.py) — לא לניחוש שמות.
+    owner_national_id: Optional[str] = None
+    owner_name: Optional[str] = None
 
 
 @dataclass

@@ -1,0 +1,450 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-07-27",
+  "purpose": "Machine-readable contract connecting Rezef capabilities to knowledge, runtime evidence and safety gates.",
+  "status_vocabulary": {
+    "implemented": "Implemented and covered locally; production operation is a separate claim.",
+    "partial": "Useful implementation exists, but the honest boundary prevents a complete claim.",
+    "gated": "Implementation exists but configuration, consent, verification or owner action blocks operation.",
+    "blocked": "A required product link is missing.",
+    "target": "Required end-state with no complete implementation yet."
+  },
+  "governance": {
+    "stable_contract": "docs/REZEF_OPERATING_SYSTEM.md",
+    "active_status_board": "docs/MASTER_EXECUTION_PLAN.md",
+    "bookkeeper_sop": "docs/BOOKKEEPER_ARMY_OPERATING_MODEL.md",
+    "code_agent_rules": [
+      "AGENTS.md",
+      "CLAUDE.md"
+    ]
+  },
+  "daily_workflow": [
+    "acquire_org_lock_and_enforce_budget",
+    "incremental_sumit_and_open_finance_sync",
+    "freshness_and_source_parity",
+    "normalize_and_deduplicate",
+    "classify_expenses_and_queue_ambiguity",
+    "reconcile_bank_documents_and_payments",
+    "rebuild_derived_ledger_and_management_views",
+    "snapshot_scores_tasks_and_morning_brief"
+  ],
+  "capabilities": [
+    {
+      "id": "sumit-integration",
+      "title_he": "SUMIT — מסמכים, לקוחות, תשלומים וספרים",
+      "owner": "integration",
+      "system_of_record": "SUMIT is authoritative for issued/received documents and the official books; Rezef stores normalized copies, workflow state and evidence.",
+      "status": "partial",
+      "knowledge": [
+        "docs/SUMIT_KNOWLEDGE_BASE.md",
+        "docs/SUMIT_API_REFERENCE.md",
+        "docs/sumit_swagger_v1_2026-07-10.json"
+      ],
+      "runtime": [
+        "src/cfo/config.py",
+        "src/cfo/api/routes/cron.py",
+        "src/cfo/services/expense_filing_service.py",
+        "src/cfo/services/sumit_connector.py",
+        "src/cfo/services/sync_engine.py",
+        "src/cfo/integrations/sumit_integration.py"
+      ],
+      "tests": [
+        "tests/test_sumit_connector_no_wasted_calls.py",
+        "tests/test_sync_call_protection.py",
+        "tests/test_expense_filing.py",
+        "tests/test_expense_ocr_scheduler.py",
+        "tests/test_expense_ocr_pipeline.py",
+        "tests/test_vercel_cron_contract.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "daily_sync_budget",
+        "idempotency",
+        "verify_first",
+        "owner_approval_for_write"
+      ],
+      "honest_boundary": "Read synchronization and several document/payment actions exist. Scheduled detail enrichment claims a separate 20-hour budget before provider access, caps paid getdetails calls at 25 per org/day and reuses CustomerName from the list response. OCR stops before SUMIT while disabled; when enabled it claims a separate 20-hour budget and defaults to 10 documents with a hard cap of 25. Official journal-batch posting and closing are not a fully verified, owner-approved end-to-end workflow.",
+      "next_gate": "MASTER_EXECUTION_PLAN gate 3: verified createbatch/readback pipeline and owner-approved batch close."
+    },
+    {
+      "id": "open-finance-ingestion",
+      "title_he": "Open Finance — חשבונות, כרטיסים ותנועות",
+      "owner": "integration",
+      "system_of_record": "Open Finance is authoritative for bank/card observations; Rezef owns normalized transactions, reconciliation decisions and derived insights.",
+      "status": "gated",
+      "knowledge": [
+        "docs/OPEN_FINANCE_KNOWLEDGE_BASE.md",
+        "docs/OPEN_FINANCE_API_REFERENCE.md",
+        "docs/OPEN_FINANCE_PROVIDER_COVERAGE.md"
+      ],
+      "runtime": [
+        "src/cfo/api/routes/open_finance.py",
+        "src/cfo/services/open_finance_client.py",
+        "src/cfo/services/open_finance_connector.py",
+        "src/cfo/services/open_finance_onboarding.py",
+        "src/cfo/services/sync_engine.py"
+      ],
+      "tests": [
+        "tests/test_open_finance_client.py",
+        "tests/test_open_finance_connector.py",
+        "tests/test_open_finance_onboarding.py",
+        "tests/test_open_finance_routes.py",
+        "tests/test_sync_call_protection.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "daily_sync_budget",
+        "idempotency",
+        "customer_consent",
+        "environment_configuration"
+      ],
+      "honest_boundary": "Client, normalization and an admin-only consent journey exist locally. Provider responses missing id/connectUrl/status fail closed, connection operations are checked against the local organization before provider access, and daily sync stops before its budget claim while tracked consent is pending. A company without owner-completed consent, valid provider scopes and a successful live sync still has no bank truth.",
+      "next_gate": "MASTER_EXECUTION_PLAN gate 0.3: connect the pilot company and prove daily account ingestion."
+    },
+    {
+      "id": "daily-bookkeeping-cycle",
+      "title_he": "מחזור הנהלת חשבונות יומי",
+      "owner": "bookkeeper",
+      "system_of_record": "Rezef orchestrates DB-first checks after cost-gated source ingestion.",
+      "status": "implemented",
+      "knowledge": [
+        "docs/BOOKKEEPER_ARMY_OPERATING_MODEL.md",
+        "docs/bookkeeper_kb/00-role-and-daily-order.md"
+      ],
+      "runtime": [
+        "vercel.json",
+        "src/cfo/config.py",
+        "src/cfo/api/routes/admin.py",
+        "src/cfo/api/routes/cron.py",
+        "src/cfo/services/schema_deployment.py",
+        "src/cfo/services/expense_filing_service.py",
+        "src/cfo/services/morning_cycle_service.py",
+        "src/cfo/services/morning_brief_service.py",
+        "alembic/versions/c4d5e6f7a8b9_add_morning_briefs.py",
+        "alembic/versions/e6f7a8b9c0d1_add_bank_transaction_provisional.py"
+      ],
+      "tests": [
+        "tests/test_morning_cycle.py",
+        "tests/test_morning_brief.py",
+        "tests/test_admin_migrate.py",
+        "tests/test_schema_deployment.py",
+        "tests/test_fresh_database_migrations.py",
+        "tests/test_vercel_cron_contract.py",
+        "tests/test_sync_call_protection.py",
+        "tests/test_expense_filing.py",
+        "tests/test_expense_ocr_scheduler.py",
+        "tests/test_expense_ocr_pipeline.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "source_freshness",
+        "step_isolation",
+        "idempotency",
+        "daily_sync_budget",
+        "no_new_external_reads"
+      ],
+      "honest_boundary": "The DB-first cycle, UTC-to-Israel schedule contract and a clean Alembic-to-head deployment are covered locally. The legacy schema path is SUPER_ADMIN-only, requires exact confirmation, repairs and checks table/column drift before stamping head, and records an audit event; partial DDL scripts never stamp head. SUMIT detail enrichment claims a separate 20-hour budget before provider access, is capped at 25 paid getdetails actions per org/day, and reuses free list fields. OCR is fail-closed while disabled and, when enabled, uses a separate 20-hour claim with a default limit of 10 and hard cap of 25 documents. This does not prove that the cron, schema and both integrations are deployed and healthy for a pilot company.",
+      "next_gate": "MASTER_EXECUTION_PLAN gate 0.1: owner-approved deployment and production smoke; then gate 4.1 requires seven consecutive pilot days with a verified brief by 08:00."
+    },
+    {
+      "id": "expense-intake-filing",
+      "title_he": "קליטת מסמכים, OCR, סיווג ותיוק הוצאות",
+      "owner": "bookkeeper",
+      "system_of_record": "Raw source document remains evidence; Rezef owns extracted fields and decisions; SUMIT owns the final filed expense.",
+      "status": "partial",
+      "knowledge": [
+        "docs/bookkeeper_kb/README.md",
+        "docs/bookkeeper_kb/03-classification-bridge.md",
+        "docs/BOOKKEEPER_ARMY_OPERATING_MODEL.md"
+      ],
+      "runtime": [
+        "src/cfo/services/expense_ocr_pipeline.py",
+        "src/cfo/services/expense_filing_service.py",
+        "src/cfo/services/israeli_tax_rules.py"
+      ],
+      "tests": [
+        "tests/test_expense_ocr_pipeline.py",
+        "tests/test_expense_filing.py",
+        "tests/test_israeli_tax_rules.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "document_evidence",
+        "duplicate_detection",
+        "honest_null",
+        "human_decision_queue"
+      ],
+      "honest_boundary": "Classification and filing paths exist, but ambiguous documents, missing vehicle profiles and unsupported evidence must remain in review rather than be auto-filed.",
+      "next_gate": "MASTER_EXECUTION_PLAN gates 1-2: complete intake coverage and 20 consecutive correctly filed documents."
+    },
+    {
+      "id": "double-entry-books",
+      "title_he": "הנהלת חשבונות כפולה וספרים רשמיים",
+      "owner": "controller",
+      "system_of_record": "Rezef currently builds a derived balanced ledger; SUMIT remains authoritative for official books.",
+      "status": "blocked",
+      "knowledge": [
+        "docs/BOOKKEEPER_ARMY_OPERATING_MODEL.md",
+        "docs/SUMIT_BOOKS_BATCH_UNIFICATION_PLAYBOOK.md"
+      ],
+      "runtime": [
+        "src/cfo/services/ledger_service.py",
+        "src/cfo/api/routes/ledger.py"
+      ],
+      "tests": [
+        "tests/test_ledger_service.py",
+        "tests/test_ledger_opening_balances.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "balanced_entry",
+        "immutable_posting",
+        "reversal_not_delete",
+        "period_lock",
+        "accountant_approval"
+      ],
+      "honest_boundary": "Trial balance and balance sheet are deterministic derived views, not proof of official immutable posting, period close or parity with SUMIT books.",
+      "next_gate": "MASTER_EXECUTION_PLAN gate 3: persistent posting evidence, SUMIT batch readback, reversals and approved close."
+    },
+    {
+      "id": "bank-reconciliation",
+      "title_he": "התאמות בנק ומסמכים חסרים",
+      "owner": "bookkeeper",
+      "system_of_record": "Rezef owns match proposals and decisions; bank truth comes from Open Finance and document truth from SUMIT.",
+      "status": "partial",
+      "knowledge": [
+        "docs/OPEN_FINANCE_KNOWLEDGE_BASE.md",
+        "docs/BOOKKEEPER_ARMY_OPERATING_MODEL.md"
+      ],
+      "runtime": [
+        "src/cfo/services/bank_reconciliation.py",
+        "src/cfo/services/manual_reconciliation.py",
+        "src/cfo/services/bank_expense_gap.py"
+      ],
+      "tests": [
+        "tests/test_bank_reconciliation.py",
+        "tests/test_manual_reconciliation.py",
+        "tests/test_bank_expense_gap.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "source_freshness",
+        "confidence_threshold",
+        "human_decision_queue",
+        "audit_trail"
+      ],
+      "honest_boundary": "Matching and gap detection exist, but completeness depends on fresh bank and document sources; unsupported writeback must stay visible.",
+      "next_gate": "MASTER_EXECUTION_PLAN gate 4: zero prior-day unexplained movements for seven consecutive pilot days."
+    },
+    {
+      "id": "ap-ar-collections",
+      "title_he": "ספקים, לקוחות, גיול חובות וגבייה",
+      "owner": "bookkeeper",
+      "system_of_record": "SUMIT documents/payments are evidence; Rezef owns aging, tasks, collection cases and communication state.",
+      "status": "partial",
+      "knowledge": [
+        "docs/REZEF_OPERATING_SYSTEM.md",
+        "docs/BOOKKEEPER_ARMY_OPERATING_MODEL.md"
+      ],
+      "runtime": [
+        "src/cfo/services/ar_service.py",
+        "src/cfo/services/ap_service.py",
+        "src/cfo/services/collection_service.py"
+      ],
+      "tests": [
+        "tests/test_ar_real_values.py",
+        "tests/test_ap_service_honest_values.py",
+        "tests/test_collection_cases.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "document_payment_parity",
+        "communication_opt_in",
+        "owner_approval_for_escalation",
+        "audit_trail"
+      ],
+      "honest_boundary": "Aging and collection workflows exist; legal escalation, payment execution and any communication without verified opt-in are outside autonomous operation.",
+      "next_gate": "Prove invoice-to-payment matching, action ownership and collections outcomes on the pilot month."
+    },
+    {
+      "id": "regulatory-filings",
+      "title_he": "מע״מ, PCN874 ודיווחים לרשויות",
+      "owner": "controller",
+      "system_of_record": "Rezef prepares evidence-backed drafts; the authorized filing channel and authority acknowledgement are final.",
+      "status": "gated",
+      "knowledge": [
+        "docs/bookkeeper_kb/README.md",
+        "docs/bookkeeper_kb/02-vat-input-deductibility.md",
+        "docs/bookkeeper_kb/04-documents-and-evidence.md"
+      ],
+      "runtime": [
+        "src/cfo/services/filing_verification.py",
+        "src/cfo/services/parity_service.py",
+        "src/cfo/api/routes/daily_reports.py"
+      ],
+      "tests": [
+        "tests/test_filing_verification.py",
+        "tests/test_filing_crosscheck.py",
+        "tests/test_parity_service.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "source_freshness",
+        "triple_verification",
+        "accountant_approval",
+        "owner_approval_for_filing"
+      ],
+      "honest_boundary": "Drafts and verification exist. A draft, an export, or a passing local calculation is never a filed return or authority acceptance.",
+      "next_gate": "MASTER_EXECUTION_PLAN gate 5: pilot pre-filing checklist passes and the VAT package is independently verified three ways."
+    },
+    {
+      "id": "management-reporting",
+      "title_he": "רווח והפסד, מאזן, תזרים ודוח בנק",
+      "owner": "cfo",
+      "system_of_record": "Rezef derives management views from normalized evidence and the derived ledger, with freshness and derivation labels.",
+      "status": "partial",
+      "knowledge": [
+        "docs/REZEF_OPERATING_SYSTEM.md",
+        "docs/DATABASE_MAP.md"
+      ],
+      "runtime": [
+        "src/cfo/services/daily_reports_service.py",
+        "src/cfo/services/bank_report_service.py",
+        "src/cfo/services/ledger_service.py"
+      ],
+      "tests": [
+        "tests/test_daily_reports.py",
+        "tests/test_kpi_insights_bank_report.py",
+        "tests/test_balance_sheet_derived.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "source_freshness",
+        "honest_null",
+        "derived_label",
+        "reconciliation_status"
+      ],
+      "honest_boundary": "Several reports are real and derived; legacy transaction-backed screens and forecasts cannot be promoted as current until their data plane is unified.",
+      "next_gate": "Make one canonical trial-balance-backed P&L, balance sheet and cash-flow package with freshness and reconciliation evidence."
+    },
+    {
+      "id": "cfo-control",
+      "title_he": "מנהל כספים — תזרים, תקציב, KPI והחלטות",
+      "owner": "cfo",
+      "system_of_record": "Rezef owns decision support, scenarios, tasks and snapshots; every number retains source and as-of metadata.",
+      "status": "partial",
+      "knowledge": [
+        "docs/REZEF_OPERATING_SYSTEM.md",
+        "docs/MASTER_EXECUTION_PLAN.md"
+      ],
+      "runtime": [
+        "src/cfo/services/financial_control_service.py",
+        "src/cfo/services/financial_synthesis.py",
+        "src/cfo/services/morning_brief_service.py"
+      ],
+      "tests": [
+        "tests/test_financial_control_overdue_status.py",
+        "tests/test_financial_synthesis.py",
+        "tests/test_morning_brief.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "source_freshness",
+        "honest_null",
+        "scenario_label",
+        "decision_owner"
+      ],
+      "honest_boundary": "Decision support exists, but stale transaction-backed forecasts and illustrative AI output are not management truth.",
+      "next_gate": "Complete the pilot management pack: 13-week cash forecast, budget variance, debt plan and evidence-linked action list."
+    },
+    {
+      "id": "irreversible-actions",
+      "title_he": "תשלומים, שידורים וסגירת תקופה",
+      "owner": "owner",
+      "system_of_record": "The external provider or authority records the effect; Rezef records proposal, approval, execution and verification evidence.",
+      "status": "gated",
+      "knowledge": [
+        "docs/REZEF_OPERATING_SYSTEM.md",
+        "docs/IRREVERSIBLE_ACTION_CONTROL.md",
+        "docs/SUMIT_BOOKS_BATCH_UNIFICATION_PLAYBOOK.md"
+      ],
+      "runtime": [
+        "src/cfo/models.py",
+        "src/cfo/api/dependencies.py",
+        "src/cfo/api/routes/approvals.py",
+        "src/cfo/api/routes/payments.py",
+        "src/cfo/api/routes/open_finance.py",
+        "src/cfo/api/routes/phase10_12.py",
+        "src/cfo/services/irreversible_action_service.py",
+        "src/cfo/services/signing_authority_service.py",
+        "src/cfo/services/ai_chat_service.py",
+        "src/cfo/services/payment_orchestration.py",
+        "src/cfo/services/filing_verification.py"
+      ],
+      "tests": [
+        "tests/test_irreversible_action_workflow.py",
+        "tests/test_signing_authority.py",
+        "tests/test_approved_open_finance_payment.py",
+        "tests/test_irreversible_action_authorization.py",
+        "tests/test_ai_chat_service.py",
+        "tests/test_open_finance_payments.py",
+        "tests/test_filing_verification.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "owner_approval",
+        "idempotency",
+        "audit_trail",
+        "post_action_verification"
+      ],
+      "honest_boundary": "Owner/signatory authority is separate from RBAC, scoped per action and cannot be bypassed by super-admin. The Open Finance create-payment adapter consumes the persisted payload, claims once and stores readback in offline tests. No live provider behavior is claimed, and refund, cancellation, mandate, SUMIT posting, filing and close adapters are not yet wired.",
+      "next_gate": "Bootstrap an explicitly verified owner for each existing organization, then wire and prove the remaining irreversible action types one by one."
+    },
+    {
+      "id": "conversational-channels",
+      "title_he": "מושקו — בוט השיחה של רצף",
+      "owner": "product",
+      "system_of_record": "Rezef owns the conversation, the persona routing and the channel identity binding; every number in a reply comes from the same org-scoped services the web app uses, never from the model's memory.",
+      "status": "gated",
+      "knowledge": [
+        "docs/superpowers/plans/2026-07-26-conversational-channels-personas.md",
+        "docs/TELEGRAM_CHANNEL_RUNBOOK.md",
+        "docs/bookkeeper_kb/README.md"
+      ],
+      "runtime": [
+        "src/cfo/services/ai_chat_personas.py",
+        "src/cfo/services/ai_chat_service.py",
+        "src/cfo/services/ai_chat_tools.py",
+        "src/cfo/services/chat_expense_intake.py",
+        "src/cfo/services/channel_notifier.py",
+        "src/cfo/services/channel_link_service.py",
+        "src/cfo/services/channel_gateway.py",
+        "src/cfo/services/telegram_files.py",
+        "src/cfo/services/kb_loader.py",
+        "src/cfo/services/email_sender.py",
+        "src/cfo/api/routes/telegram_webhook.py",
+        "src/cfo/api/routes/channels.py",
+        "src/cfo/api/routes/ai_chat.py"
+      ],
+      "tests": [
+        "tests/test_ai_chat_personas.py",
+        "tests/test_chat_expense_intake.py",
+        "tests/test_channel_notifier.py",
+        "tests/test_moshko_email_and_approvals.py",
+        "tests/test_telegram_webhook.py",
+        "tests/test_channel_link.py",
+        "tests/test_kb_loader.py",
+        "tests/test_email_attachments.py"
+      ],
+      "gates": [
+        "organization_scope",
+        "verified_channel_identity",
+        "owner_approval",
+        "idempotency",
+        "api_cost_discipline"
+      ],
+      "honest_boundary": "מושקו קולט קבלות מצילום, עונה מנתוני המערכת בלבד, דוחף התרעות, שולח דוחות במייל ורושם אישורי דיווח — אך פרסונה אינה הרשאה, וכל כתיבה עוצרת לאישור מפורש שמציג את הארגומנטים בפועל בשני הערוצים. הגבול החד: **רצף אינו משדר לרשות המסים** — propose_vat_filing_approval מתעד את אישור הבעלים למספרים בלבד, השידור נעשה ידנית ב-SUMIT, וקובצי PCN874/OPENFRMT הם טיוטות שמבנן לא אומת מול מפרט הרשות. אומדן מס נושא caveat חובה. טלגרם הוא הערוץ היחיד; WhatsApp וקול לא נבנו.",
+      "next_gate": "פעולת בעלים: רישום בוט ב-BotFather, TELEGRAM_BOT_TOKEN + TELEGRAM_WEBHOOK_SECRET בפרוד, מיגרציה a0b1c2d3e4f5 לפי runbook Gate-0, setWebhook, ואז אימות ש-kb_files_available > 0 ושהתרעה יזומה מגיעה."
+    }
+  ]
+}

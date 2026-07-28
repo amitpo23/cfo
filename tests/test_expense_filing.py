@@ -89,6 +89,61 @@ def test_expense_is_org_scoped(client, acc):
     assert lst == []  # לא רואה את ההוצאות של acc
 
 
+def test_pending_sumit_sync_uses_supplier_name_already_returned_by_list(
+    acc, monkeypatch
+):
+    """Do not replace a free list-response field with a numeric ID that later
+    forces a paid getdetails call."""
+    import asyncio
+    from decimal import Decimal
+
+    from cfo.database import SessionLocal
+    from cfo.integrations.sumit_models import DocumentResponse
+    from cfo.models import Expense
+    from cfo.services.expense_filing_service import ExpenseFilingService
+    import cfo.services.sync_engine as sync_engine
+
+    class FakeConnector:
+        async def list_documents(self, request):
+            return [
+                DocumentResponse(
+                    document_id="SUMIT-LIST-NAME-1",
+                    document_number="EXP-LIST-1",
+                    document_type="15",
+                    customer_id="99123",
+                    customer_name="ספק אמיתי מה-list",
+                    total_amount=Decimal("118.00"),
+                    vat_amount=Decimal("18.00"),
+                    status="draft",
+                    issue_date=date(2026, 7, 25),
+                )
+            ]
+
+    monkeypatch.setattr(
+        sync_engine,
+        "get_connector_for_org",
+        lambda db, org_id, preferred_source=None: (
+            FakeConnector(),
+            None,
+            "sumit",
+        ),
+    )
+
+    db = SessionLocal()
+    try:
+        result = asyncio.run(
+            ExpenseFilingService(db, acc["org_id"]).sync_pending_from_sumit()
+        )
+        row = db.query(Expense).filter(
+            Expense.organization_id == acc["org_id"],
+            Expense.external_id == "SUMIT-LIST-NAME-1",
+        ).one()
+        assert result["imported"] == 1
+        assert row.supplier_name == "ספק אמיתי מה-list"
+    finally:
+        db.close()
+
+
 def test_file_to_sumit_without_connection(client, acc):
     # יצירת הוצאה
     r = client.post("/api/expenses", json={

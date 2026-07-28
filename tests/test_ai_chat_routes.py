@@ -197,3 +197,26 @@ def test_regular_user_does_not_see_office_tools_via_route(monkeypatch, client, f
     tool_names = {t["name"] for t in fake.messages.calls[0]["tools"]}
     assert "list_office_clients" not in tool_names
     assert "register_office_client" not in tool_names
+
+
+def test_send_message_route_accepts_persona_and_wires_the_prompt(monkeypatch, client, fresh_org):
+    """Package 1 (2026-07-26 personas plan): `persona` is an optional body
+    field that flows session_id/text/persona -> AIChatService.send_message.
+    A regular user picking a persona must still never see office tools —
+    persona is a prompt/tone axis, never a permission gate."""
+    iso = fresh_org()
+    fake = FakeAnthropicClientCapture([
+        SimpleNamespace(stop_reason="end_turn", content=[_text_block("שלום")]),
+    ])
+    monkeypatch.setattr(AIChatService, "_make_client", lambda self: fake)
+
+    r = client.post("/api/ai/chat", headers=iso["headers"], json={
+        "session_id": "persona-s1", "message": "מה חסר לי לתייק?",
+        "persona": "bookkeeper",
+    })
+    assert r.status_code == 200, r.text
+
+    system_prompt = fake.messages.calls[0]["system"]
+    assert "מנהלת חשבונות" in system_prompt
+    tool_names = {t["name"] for t in fake.messages.calls[0]["tools"]}
+    assert "list_office_clients" not in tool_names

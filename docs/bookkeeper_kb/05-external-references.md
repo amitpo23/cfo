@@ -17,7 +17,9 @@
 
 | מקור | URL | לאימות |
 |---|---|---|
-| רשות המסים | https://www.gov.il/he/departments/israel_tax_authority | ספי הקצאה 2026, שווי שימוש, תקרות |
+| רשות המסים — חשבוניות ישראל | https://www.gov.il/he/service/request-assignment-number-for-tax-invoice | ספי הקצאה מתוארכים: 20K ב־2025, 10K מ־1.1.2026, 5K מ־1.6.2026; אומת 2026-07-25 |
+| הוראת ביצוע מע"מ 01/2025 | https://www.gov.il/BlobFolder/policy/inst-071225-1/he/vat_inst-071225-1.pdf | תנאי ההקצאה והסכום לפני מע"מ |
+| רשות המסים | https://www.gov.il/he/departments/israel_tax_authority | שווי שימוש ותקרות שנתיות אחרות |
 | תקנות ניכוי הוצאות מסויימות 1972 | https://www.nevo.co.il/law_html/law01/255_418.htm | אירוח/כיבוד/מתנות/טלפון |
 | תקנות ניכוי הוצאות רכב 1995 | https://www.nevo.co.il/law_html/law01/255_439.htm | higher-of, מד-אוץ |
 | מדריך תשומות רכב | https://www.gov.il/he/pages/instructions-for-deduction-of-input-tax-for-vehicles-and-motorcycles | תקנה 14/18, חריגים |

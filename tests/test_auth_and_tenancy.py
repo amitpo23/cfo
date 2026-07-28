@@ -279,7 +279,34 @@ def test_sumit_routes_reject_unconfigured_tenant(client, fresh_org):
     assert "SUMIT" in resp.text
 
 
-def test_cron_sync_pulls_pending_expenses_per_sumit_org(client, monkeypatch):
+@pytest.fixture
+def clear_sumit_sync_budget():
+    """מנטרל את שער התקציב היומי (cron._daily_budget_gate) לארגון 1/SUMIT.
+
+    בלי זה שני הטסטים שאחריו שבירים: אם רשומת SyncCheckpoint של org1/sumit מכילה
+    last_success_at צעיר מ-sumit_sync_min_interval_hours (20h) — לא משנה איזה טסט
+    קודם כתב אותה — ה-cron מחזיר {"skipped": "daily_budget"} בלי המפתח
+    expenses_pull, והאסרשן נופל על סיבה שאינה קשורה למה שהטסט בודק.
+
+    נצפה בפועל 2026-07-25: כשל בודד בשער "6. Tenancy-focused tests" של qa_gate
+    שלא שוחזר ב-5 ריצות חוזרות. במקום לרדוף אחרי המזהם, הטסט שולט בתנאי שלו.
+    """
+    from cfo.database import SessionLocal
+    from cfo.models import SyncCheckpoint
+
+    db = SessionLocal()
+    try:
+        db.query(SyncCheckpoint).filter(
+            SyncCheckpoint.organization_id == 1,
+            SyncCheckpoint.source == "sumit",
+        ).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+    yield
+
+
+def test_cron_sync_pulls_pending_expenses_per_sumit_org(client, monkeypatch, clear_sumit_sync_budget):
     """ה-cron חייב למשוך הוצאות ממתינות מ-SUMIT לכל ארגון — לא רק SyncEngine.
 
     ממצא אודיט התאימות (2026-07-05): טבלת ההוצאות פיגרה ב~43 מסמכים כי
@@ -303,7 +330,7 @@ def test_cron_sync_pulls_pending_expenses_per_sumit_org(client, monkeypatch):
     assert org1_results, "התוצאה חייבת לדווח על משיכת ההוצאות"
 
 
-def test_cron_sync_expense_pull_failure_does_not_abort(client, monkeypatch):
+def test_cron_sync_expense_pull_failure_does_not_abort(client, monkeypatch, clear_sumit_sync_budget):
     """כשל במשיכת הוצאות של ארגון לא מפיל את ריצת ה-cron כולה."""
 
     async def _boom(self, from_date=None, to_date=None):

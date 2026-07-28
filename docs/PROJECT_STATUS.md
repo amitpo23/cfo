@@ -1,8 +1,13 @@
 # CFO Platform — Project Status & Gap Review
 
+> **היסטורי — לא מקור אמת.** תמונת מצב מ-2026-06-26. לסטטוס הפעיל ראו
+> [`MASTER_EXECUTION_PLAN.md`](MASTER_EXECUTION_PLAN.md); לחוזה היכולות וגבולותיהן ראו
+> [`rezef_capabilities.json`](rezef_capabilities.json).
+
 **Updated:** 2026-06-26 · **Branch:** `feat/sumit-ar-ap-documents-ocr` · **Scale:** 74 services · 33 route modules · 64 test files · 19 migrations.
 
-This is the single entry point for "what exists, what's done, what's open". Every status below was verified against current code (not the unreliable multi-agent audit — see `PHASE13_VERIFIED_BUG_SCAN.md`).
+At the time of writing, this was the entry point for "what exists, what's done,
+what's open". It is retained as a dated snapshot; it is not current status.
 
 ---
 

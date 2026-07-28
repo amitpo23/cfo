@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 
+from .account_ownership import normalize_israeli_id
 from .connector_base import (
     AccountingConnector,
     FetchResult,
@@ -150,6 +151,8 @@ class OpenFinanceConnector(AccountingConnector):
             balance_as_of=_account_balance_as_of(item),
             raw_account_type=raw_account_type,
             credit_limit=_credit_limit(item),
+            owner_national_id=_owner_national_id(item),
+            owner_name=_owner_name(item),
         )
 
     def _normalize_transaction(self, item: dict[str, Any]) -> NormalizedBankTransaction:
@@ -362,6 +365,29 @@ def _credit_limit(item: dict[str, Any]) -> Optional[Decimal]:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+
+
+# בעלות מדויקת (חבילה H) — Account.ownerInfo: {nationalId, fullName}
+# (docs/OPEN_FINANCE_KNOWLEDGE_BASE.md:248). הספק אינו עקבי בשם השדה עצמו
+# ("ownerInfo" ב-OpenAPI, אבל תיעדנו וריאציות snake/lower בפועל) — תומכים
+# בכל השלוש, באותו רוח כמו _first_str.
+def _owner_info(item: dict[str, Any]) -> dict[str, Any]:
+    for key in ("ownerInfo", "owner_info", "ownerinfo"):
+        value = item.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _owner_national_id(item: dict[str, Any]) -> Optional[str]:
+    info = _owner_info(item)
+    raw = _first_str(info, "nationalId", "national_id", "nationalid")
+    return normalize_israeli_id(raw)
+
+
+def _owner_name(item: dict[str, Any]) -> Optional[str]:
+    info = _owner_info(item)
+    return _first_str(info, "fullName", "full_name", "fullname")
 
 
 def _stable_id(item: dict[str, Any]) -> str:

@@ -22,7 +22,8 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
-from ..models import IntegrationConnection
+from ..models import BankConnection, IntegrationConnection
+from .open_finance_client import OpenFinanceError
 from .credentials_vault import decrypt_credentials, encrypt_credentials
 
 # Hebrew explanations for the connection statuses the UI/chat needs to
@@ -93,6 +94,84 @@ def ensure_of_identity(db: Session, org_id: int) -> IntegrationConnection:
     return conn
 
 
+def local_bank_connection(
+    db: Session,
+    org_id: int,
+    connection_id: str,
+) -> BankConnection:
+    """Resolve a provider connection id inside one tenant before any live call."""
+    row = (
+        db.query(BankConnection)
+        .filter(
+            BankConnection.organization_id == org_id,
+            BankConnection.connection_id == connection_id,
+        )
+        .first()
+    )
+    if row is None:
+        raise OpenFinanceError(
+            404,
+            "Open Finance connection not found for this organization",
+        )
+    return row
+
+
+def persist_connection_journey(
+    db: Session,
+    org_id: int,
+    payload: dict[str, Any],
+    *,
+    psu_id: Optional[str] = None,
+) -> BankConnection:
+    """Validate and persist the provider's consent-journey response.
+
+    Both stable provider fields are mandatory. Returning a successful response
+    with a null id or URL would leave an untraceable consent and must fail
+    closed.
+    """
+    if not isinstance(payload, dict):
+        raise OpenFinanceError(
+            502,
+            "connection response is not an object",
+            payload,
+        )
+    connection_id = payload.get("id")
+    connect_url = payload.get("connectUrl")
+    if not connection_id or not connect_url:
+        raise OpenFinanceError(
+            502,
+            "connection response missing id or connectUrl",
+            payload,
+        )
+
+    row = (
+        db.query(BankConnection)
+        .filter(
+            BankConnection.organization_id == org_id,
+            BankConnection.connection_id == str(connection_id),
+        )
+        .first()
+    )
+    if row is None:
+        row = BankConnection(
+            organization_id=org_id,
+            source="open_finance",
+            connection_id=str(connection_id),
+        )
+        db.add(row)
+    row.connect_url = str(connect_url)
+    row.status = payload.get("status") or "INACTIVE"
+    row.psu_id = psu_id
+    row.provider_id = (
+        payload.get("providerFriendlyId")
+        or payload.get("providerId")
+        or row.provider_id
+    )
+    row.raw_data = payload
+    db.flush()
+    return row
+
+
 async def start_bank_connection(
     db: Session,
     org_id: int,
@@ -127,8 +206,14 @@ async def start_bank_connection(
     finally:
         await client.close()
 
-    connection_id = payload.get("id")
-    connect_url = payload.get("connectUrl")
+    bank_connection = persist_connection_journey(
+        db,
+        org_id,
+        payload,
+        psu_id=psu_id,
+    )
+    connection_id = bank_connection.connection_id
+    connect_url = bank_connection.connect_url
 
     creds = decrypt_credentials(conn.credentials_encrypted) or {}
     of_connection_ids = list(creds.get("of_connection_ids") or [])
@@ -151,13 +236,42 @@ async def get_connection_status(db: Session, org_id: int, connection_id: str) ->
     """
     from ..api.routes.open_finance import get_open_finance_client
 
+    row = local_bank_connection(db, org_id, connection_id)
+
     client = get_open_finance_client(db, org_id)
     try:
         payload = await client.get_connection(connection_id)
     finally:
         await client.close()
 
+    if not isinstance(payload, dict):
+        raise OpenFinanceError(
+            502,
+            "connection status response is not an object",
+            payload,
+        )
     status = payload.get("status") or payload.get("connectionStatus")
+    if not status:
+        raise OpenFinanceError(
+            502,
+            "connection status response missing status",
+            payload,
+        )
+    row.status = status
+    row.provider_id = (
+        payload.get("providerFriendlyId")
+        or payload.get("providerId")
+        or row.provider_id
+    )
+    row.bank_name = payload.get("bankName") or row.bank_name
+    accounts = payload.get("accounts")
+    if isinstance(accounts, list):
+        row.accounts_count = len(accounts)
+    elif isinstance(accounts, int):
+        row.accounts_count = accounts
+    row.raw_data = payload
+    db.commit()
+
     result: dict[str, Any] = {
         "status": status,
         "provider": payload.get("providerFriendlyId") or payload.get("provider") or payload.get("bankName"),

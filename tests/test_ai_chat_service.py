@@ -397,6 +397,34 @@ def test_chat_history_is_scoped_to_the_requesting_user(fresh_org):
         db.close()
 
 
+def test_history_is_capped_and_keeps_the_newest_messages_in_order(fresh_org):
+    """ערוץ הודעות אין בו כפתור 'שיחה חדשה' — telegram_webhook מייצר
+    session_id קבוע אחד לכל צ'אט. בלי תקרה, כל תור שולח למודל את כל
+    היסטוריית החיים של השיחה, והעלות גדלה בלי גבול."""
+    from cfo.services.ai_chat_service import _MAX_HISTORY_MESSAGES
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        total = _MAX_HISTORY_MESSAGES + 15
+        for i in range(total):
+            db.add(ChatMessage(
+                organization_id=org_id, user_id=1, session_id="long-session",
+                role="user", content=f"הודעה {i}",
+            ))
+        db.commit()
+
+        history = AIChatService(db, org_id, user_id=1)._history("long-session")
+
+        assert len(history) == _MAX_HISTORY_MESSAGES
+        # החדשות ביותר נשמרות, והסדר נשאר מהישן לחדש
+        assert history[-1].content == f"הודעה {total - 1}"
+        assert history[0].content == f"הודעה {total - _MAX_HISTORY_MESSAGES}"
+        assert [m.id for m in history] == sorted(m.id for m in history)
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------- #
 # Office-manager tier: SUPER_ADMIN-only tools (list_office_clients,
 # get_office_rollup, get_client_overview, run_client_sync,
@@ -901,6 +929,64 @@ def test_confirm_action_executes_classify_pending_expenses_successfully(monkeypa
         db.expire_all()
         row = db.query(Expense).filter(Expense.id == exp["id"]).first()
         assert row.category == "vehicle"
+    finally:
+        db.close()
+
+
+def test_file_expense_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
+    """Package A (moshko-full-bot plan, 2026-07-27): file_expense wraps a
+    real SUMIT booking (ExpenseFilingService.file_to_sumit) — the exact same
+    write-gate mechanism every other write tool goes through, proven here so
+    a receipt captured through chat_expense_intake can never be filed
+    without an explicit confirm_action() call."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        exp = _seed_pending_expense(db, org_id, supplier_name="ספק קבלה מהצ'אט", category="office")
+
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "file_expense", {"expense_id": exp["id"]})],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        result = asyncio.run(service.send_message("s1", f"תייק את הוצאה {exp['id']}"))
+
+        assert result["pending_action"]["tool"] == "file_expense"
+        db.expire_all()
+        from cfo.models import Expense
+        row = db.query(Expense).filter(Expense.id == exp["id"]).first()
+        assert row.status == "pending"  # לא תויק עדיין
+    finally:
+        db.close()
+
+
+def test_confirm_action_executes_file_expense_successfully(monkeypatch, fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        exp = _seed_pending_expense(db, org_id, supplier_name="ספק קבלה מהצ'אט", category="office")
+
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "file_expense", {"expense_id": exp["id"]})],
+            ),
+        ])
+        service = AIChatService(db, org_id, user_id=1)
+        proposed = asyncio.run(service.send_message("s1", f"תייק את הוצאה {exp['id']}"))
+        pending_id = proposed["message_id"]
+
+        from cfo.services.expense_filing_service import ExpenseFilingService
+
+        async def fake_file_to_sumit(self, expense_id):
+            return {"id": expense_id, "status": "filed", "sumit_expense_id": "SU-1"}
+
+        monkeypatch.setattr(ExpenseFilingService, "file_to_sumit", fake_file_to_sumit)
+
+        confirmed = asyncio.run(service.confirm_action(pending_id))
+        assert confirmed["result"]["status"] == "filed"
     finally:
         db.close()
 

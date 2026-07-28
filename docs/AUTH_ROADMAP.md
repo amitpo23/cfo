@@ -28,11 +28,15 @@ Use Logto as the external identity and access layer:
 - Logto Organizations map to Rezef `organizations`.
 - Logto global role `rezef_super_admin` maps to Rezef `UserRole.SUPER_ADMIN`.
 - Logto organization roles map to Rezef roles:
-  - `owner`
   - `admin`
   - `accountant`
   - `finance_manager`
   - `viewer`
+
+`owner` הוא מושג אישור עסקי ולא ערך ב־`UserRole`. הוא נשמר במדיניות הנפרדת
+`OrganizationSigningAuthority`, כולל scope לפי פעולה. אין למפות Logto
+`owner` בשקט ל־`admin`: המיפוי צריך ליצור/לעדכן authority ארגוני מפורש;
+`super_admin` נשאר מפעיל מערכת ואינו מחליף בעל עסק.
 
 Rezef remains the source of truth for financial data, client files, SUMIT/Open
 Finance credentials, documents, reports, and sync state.
@@ -53,6 +57,7 @@ Finance credentials, documents, reports, and sync state.
    migration.
 5. Add frontend Logto SDK sign-in/sign-out.
 6. Map Logto organization context to Rezef `organization_id`.
-7. Replace open signup/password handling with Logto invite/signup flows.
-8. Disable `AUTH_BYPASS_ENABLED` outside local development.
-
+7. Map verified Logto organization-owner membership to
+   `OrganizationSigningAuthority` without bypassing its audit trail.
+8. Replace open signup/password handling with Logto invite/signup flows.
+9. Disable `AUTH_BYPASS_ENABLED` outside local development.

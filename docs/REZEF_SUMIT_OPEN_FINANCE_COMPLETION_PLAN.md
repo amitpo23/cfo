@@ -1,5 +1,10 @@
 # Rezef ↔ SUMIT ↔ Open Finance — Completion Plan
 
+> **Historical plan — superseded.** Use
+> [`MASTER_EXECUTION_PLAN.md`](MASTER_EXECUTION_PLAN.md) for active status and
+> [`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md) for integration ownership
+> and workflow contracts.
+
 **Status:** Planning only — no implementation authorized by this document  
 **Prepared:** 2026-07-09  
 **Primary pilot organization:** Organization 1 — עמית פורת  

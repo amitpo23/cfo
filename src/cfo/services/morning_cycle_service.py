@@ -3,8 +3,9 @@
 Runs the accountant's morning order-of-operations for one organization, end
 to end, entirely against Rezef's own Postgres data — **zero new SUMIT/Open
 Finance API calls** (those happen on their own cron schedules: sync-sumit
-02:00, sync-open-finance 05:30, process-ocr 05:45). This module only reads
-and reasons over what has already been synced.
+01:30 UTC, sync-open-finance 02:00 UTC, enrichment 02:15 UTC and process-ocr
+02:45 UTC). This module only reads and reasons over what has already been
+synced.
 
 Step order (accountant-judgment, advisor-mandated — see
 docs/bookkeeper_kb/00-role-and-daily-order.md, "לא נוגעים במספר לפני שיודעים

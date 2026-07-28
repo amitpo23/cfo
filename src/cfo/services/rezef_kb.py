@@ -509,6 +509,18 @@ def _bookkeeper_section() -> str:
     )
 
 
+def _operating_system_section() -> str:
+    """Render capability status from the same contract agents validate."""
+    from .capability_control_plane import render_status_summary_he
+
+    return (
+        "## מערכת ההפעלה ומפת היכולות\n\n"
+        "מקור האמת המכונתי הוא `docs/rezef_capabilities.json`; חוזי הבעלות, "
+        "התפקידים וה-workflow נמצאים ב-`docs/REZEF_OPERATING_SYSTEM.md`.\n\n"
+        f"{render_status_summary_he()}"
+    )
+
+
 # key -> one-line summary (for the topic index — the model sees this BEFORE
 # fetching a full section, so it stays cheap even when unsure which topic fits).
 TOPIC_SUMMARIES: dict[str, str] = {
@@ -525,6 +537,7 @@ TOPIC_SUMMARIES: dict[str, str] = {
     "limitations": "מגבלות ידועות ומה עוד לא מומש",
     "tax_rules": "חוקי מס ישראליים: הכרה במס הכנסה + ניכוי מע\"מ תשומות לפי קטגוריית הוצאה",
     "bookkeeper": "התפקיד וסדר היום המחייב של מנהל החשבונות (8 צעדים)",
+    "operating_system": "מפת יכולות חיה: מה ממומש, חלקי או חסום ומה הגבול הכנה",
 }
 
 # Small alias map so a slightly different phrasing of the topic still hits —
@@ -546,6 +559,8 @@ _ALIASES: dict[str, str] = {
     "הוצאות מוכרות": "tax_rules", "ניכוי": "tax_rules", "מס": "tax_rules",
     "תקנה 18": "tax_rules", "tax": "tax_rules", "taxes": "tax_rules",
     "סדר יום": "bookkeeper", "bookkeeping_order": "bookkeeper", "מנהל חשבונות": "bookkeeper",
+    "מערכת הפעלה": "operating_system", "capabilities": "operating_system",
+    "יכולת": "operating_system", "סטטוס מערכת": "operating_system",
 }
 
 TOPICS: dict[str, str] = {
@@ -562,6 +577,7 @@ TOPICS: dict[str, str] = {
     "limitations": _limitations_section(),
     "tax_rules": _tax_rules_section(),
     "bookkeeper": _bookkeeper_section(),
+    "operating_system": _operating_system_section(),
 }
 
 

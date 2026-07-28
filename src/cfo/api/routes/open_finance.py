@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
-from ..dependencies import get_current_org_id
+from ..dependencies import get_current_org_id, require_admin
 from ...config import settings
 from ...models import (
     Account, BankConnection, BankTransaction, CfoInsight, IntegrationConnection,
@@ -31,6 +31,12 @@ from ...services import bank_anomalies, bank_insights, bank_reconciliation, cred
 from ...services import bank_query_service
 from ...services import of_snapshot_service
 from ...services.of_snapshot_service import OfSnapshotRefreshCooldown
+from ...services.irreversible_action_service import (
+    ActionConflictError,
+    ActionStateError,
+    ActionValidationError,
+    IrreversibleActionService,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -227,6 +233,7 @@ class CreateConnectionRequest(BaseModel):
 async def create_connection(
     body: CreateConnectionRequest,
     org_id: int = Depends(get_current_org_id),
+    _admin=Depends(require_admin),
     db: Session = Depends(get_db_session),
 ):
     """Start a bank consent journey; returns connectUrl for the user to complete."""
@@ -240,17 +247,26 @@ async def create_connection(
             "iframe": body.iframe,
             "psuId": body.psu_id,
         })))
-        connection_id = payload.get("id")
-        connect_url = payload.get("connectUrl")
-        # Persist the consent-journey state.
-        row = BankConnection(
-            organization_id=org_id, source="open_finance",
-            connection_id=connection_id, connect_url=connect_url,
-            status="INACTIVE", psu_id=body.psu_id, raw_data=payload,
-        )
-        db.add(row)
-        db.commit()
-        return {"connection_id": connection_id, "connect_url": connect_url}
+        from ...services.open_finance_onboarding import persist_connection_journey
+
+        try:
+            row = persist_connection_journey(
+                db,
+                org_id,
+                payload,
+                psu_id=body.psu_id,
+            )
+            db.commit()
+        except OpenFinanceError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=exc.status_code or 502,
+                detail=exc.message,
+            )
+        return {
+            "connection_id": row.connection_id,
+            "connect_url": row.connect_url,
+        }
     finally:
         await client.close()
 
@@ -270,6 +286,7 @@ class StartOnboardingRequest(BaseModel):
 async def start_onboarding(
     body: StartOnboardingRequest,
     org_id: int = Depends(get_current_org_id),
+    _admin=Depends(require_admin),
     db: Session = Depends(get_db_session),
 ):
     """Onboard this org to Open Finance and start a bank consent journey.
@@ -336,6 +353,15 @@ async def get_connection(connection_id: str, org_id: int = Depends(get_current_o
     """Onboarding-status polling stays live (consent journeys change fast),
     but RSF-030 puts a 60s per-org+connection floor under it via the same
     cache mechanism so a tight poll loop can't hammer the provider."""
+    from ...services.open_finance_onboarding import local_bank_connection
+
+    try:
+        local_bank_connection(db, org_id, connection_id)
+    except OpenFinanceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code or 502,
+            detail=exc.message,
+        )
     return await _cached_get(
         db, org_id, f"connection:{connection_id}", lambda c: c.get_connection(connection_id),
         max_age_hours=60 / 3600,
@@ -343,24 +369,47 @@ async def get_connection(connection_id: str, org_id: int = Depends(get_current_o
 
 
 @router.delete("/connections/{connection_id}")
-async def delete_connection(connection_id: str, org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+async def delete_connection(
+    connection_id: str,
+    org_id: int = Depends(get_current_org_id),
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db_session),
+):
+    from ...services.open_finance_onboarding import local_bank_connection
+
+    try:
+        row = local_bank_connection(db, org_id, connection_id)
+    except OpenFinanceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code or 502,
+            detail=exc.message,
+        )
     client = get_open_finance_client(db, org_id)
     try:
         await _call(client.delete_connection(connection_id))
     finally:
         await client.close()
-    row = db.query(BankConnection).filter(
-        BankConnection.organization_id == org_id,
-        BankConnection.connection_id == connection_id,
-    ).first()
-    if row:
-        row.status = "REVOKED"
-        db.commit()
+    row.status = "REVOKED"
+    db.commit()
     return {"deleted": True}
 
 
 @router.post("/connections/{connection_id}/refresh")
-async def refresh_connection(connection_id: str, org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+async def refresh_connection(
+    connection_id: str,
+    org_id: int = Depends(get_current_org_id),
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db_session),
+):
+    from ...services.open_finance_onboarding import local_bank_connection
+
+    try:
+        local_bank_connection(db, org_id, connection_id)
+    except OpenFinanceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code or 502,
+            detail=exc.message,
+        )
     client = get_open_finance_client(db, org_id)
     try:
         await _call(client.refresh_connection(connection_id))
@@ -644,11 +693,117 @@ async def dispatch_reconciliation_to_sumit(
 # ====================================================================== #
 # PAYMENTS (B)
 # ====================================================================== #
+def _provider_reference(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("paymentId", "payment_id", "resourceId", "id"):
+        value = payload.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
 @router.post("/payments")
-async def create_payment(body: dict = Body(...), org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+async def create_payment(
+    body: dict = Body(...),
+    approval_id: Optional[int] = Header(
+        None,
+        alias="X-Rezef-Approval-Id",
+    ),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+    _admin=Depends(require_admin),
+):
+    if approval_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="An approved X-Rezef-Approval-Id is required",
+        )
+    action_service = IrreversibleActionService(db, org_id)
+    try:
+        # Validate the client-visible body before a provider client is built.
+        # The provider call below uses the persisted payload, never this body.
+        action_service.validate_approved_intent(
+            approval_id,
+            action_type="payment",
+            submitted_payload=body,
+        )
+    except (
+        ActionConflictError,
+        ActionStateError,
+        ActionValidationError,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     client = get_open_finance_client(db, org_id)
     try:
-        return await _call(client.create_payment(body))
+        try:
+            action = action_service.claim_approved_for_execution(
+                approval_id,
+                action_type="payment",
+                submitted_payload=body,
+            )
+            created = await _call(client.create_payment(action.payload))
+            reference = _provider_reference(created)
+            if reference is None:
+                action_service.mark_failed(
+                    approval_id,
+                    error="Open Finance response omitted a payment reference",
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="Open Finance response omitted a payment reference",
+                )
+            action_service.mark_executed(
+                approval_id,
+                provider_reference=reference,
+                execution_result=created,
+            )
+            readback = await _call(client.get_payment(reference))
+            if not isinstance(readback, dict) or not readback:
+                action_service.mark_failed(
+                    approval_id,
+                    error="Open Finance payment readback was empty",
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="Open Finance payment readback was empty",
+                )
+            readback_reference = _provider_reference(readback)
+            if (
+                readback_reference is not None
+                and readback_reference != reference
+            ):
+                action_service.mark_failed(
+                    approval_id,
+                    error="Open Finance payment readback reference mismatch",
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="Open Finance payment readback reference mismatch",
+                )
+            action_service.mark_verified(
+                approval_id,
+                verification_evidence=readback,
+            )
+            return {
+                "approval_request_id": approval_id,
+                "approval_status": "verified",
+                "provider_reference": reference,
+                "payment": created,
+                "readback": readback,
+            }
+        except HTTPException as exc:
+            current = action_service.get(approval_id)
+            if current is not None and current.status in {
+                "executing",
+                "executed",
+            }:
+                action_service.mark_failed(
+                    approval_id,
+                    error=str(exc.detail),
+                )
+            raise
     finally:
         await client.close()
 
@@ -671,7 +826,12 @@ async def get_payment(payment_id: str, org_id: int = Depends(get_current_org_id)
 
 
 @router.delete("/payments/{payment_id}")
-async def cancel_payment(payment_id: str, org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+async def cancel_payment(
+    payment_id: str,
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+    _admin=Depends(require_admin),
+):
     client = get_open_finance_client(db, org_id)
     try:
         return await _call(client.cancel_payment(payment_id)) or {"cancelled": True}
@@ -680,7 +840,13 @@ async def cancel_payment(payment_id: str, org_id: int = Depends(get_current_org_
 
 
 @router.post("/payments/{payment_id}/refund")
-async def refund_payment(payment_id: str, body: dict = Body(...), org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+async def refund_payment(
+    payment_id: str,
+    body: dict = Body(...),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+    _admin=Depends(require_admin),
+):
     client = get_open_finance_client(db, org_id)
     try:
         return await _call(client.refund_payment(
@@ -702,7 +868,12 @@ async def payment_status(payment_id: str, org_id: int = Depends(get_current_org_
 
 
 @router.post("/payments/init")
-async def init_payment(body: dict = Body(...), org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+async def init_payment(
+    body: dict = Body(...),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+    _admin=Depends(require_admin),
+):
     client = get_open_finance_client(db, org_id)
     try:
         return await _call(client.init_payment(body))
@@ -712,7 +883,12 @@ async def init_payment(body: dict = Body(...), org_id: int = Depends(get_current
 
 # ---- Mandates ---- #
 @router.post("/mandates")
-async def create_mandate(body: dict = Body(...), org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+async def create_mandate(
+    body: dict = Body(...),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+    _admin=Depends(require_admin),
+):
     client = get_open_finance_client(db, org_id)
     try:
         return await _call(client.create_mandate(body))
@@ -730,7 +906,12 @@ async def get_mandate(resource_id: str, org_id: int = Depends(get_current_org_id
 
 
 @router.delete("/mandates/{resource_id}")
-async def delete_mandate(resource_id: str, org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
+async def delete_mandate(
+    resource_id: str,
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+    _admin=Depends(require_admin),
+):
     client = get_open_finance_client(db, org_id)
     try:
         return await _call(client.delete_mandate(resource_id)) or {"deleted": True}

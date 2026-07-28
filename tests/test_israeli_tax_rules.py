@@ -5,6 +5,7 @@
 את שני המסמכים האלה; אם הם משתנים, TAX_RULES ו-VERIFICATION_NEEDED צריכים
 להשתנות איתם.
 """
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from cfo.services import expense_deduction_service
 from cfo.services.expense_classifier import VALID_CATEGORIES
 from cfo.services.israeli_tax_rules import (
     IncomeTaxTreatment,
+    allocation_amount_exceeds_threshold,
+    allocation_threshold_for,
     TAX_RULES,
     SUPPLIER_KINDS_NO_VAT,
     VERIFICATION_NEEDED,
@@ -171,6 +174,53 @@ def test_vehicle_purchase_without_kind_is_none():
 
 
 # ---------------------------------------------------------------------- #
+# Israel Invoice allocation thresholds — official, date-effective facts
+# ---------------------------------------------------------------------- #
+
+@pytest.mark.parametrize(
+    ("invoice_date", "expected"),
+    [
+        (date(2025, 1, 1), Decimal("20000")),
+        (date(2025, 12, 31), Decimal("20000")),
+        (date(2026, 1, 1), Decimal("10000")),
+        (date(2026, 5, 31), Decimal("10000")),
+        (date(2026, 6, 1), Decimal("5000")),
+        (date(2026, 12, 31), Decimal("5000")),
+    ],
+)
+def test_allocation_threshold_uses_invoice_date(invoice_date, expected):
+    assert allocation_threshold_for(invoice_date) == expected
+
+
+def test_allocation_threshold_is_honest_null_before_verified_timeline():
+    assert allocation_threshold_for(date(2024, 12, 31)) is None
+    assert (
+        allocation_amount_exceeds_threshold(
+            invoice_date=date(2024, 12, 31),
+            amount_before_vat=Decimal("999999"),
+        )
+        is None
+    )
+
+
+def test_allocation_amount_must_strictly_exceed_threshold_before_vat():
+    assert allocation_amount_exceeds_threshold(
+        invoice_date=date(2026, 6, 1),
+        amount_before_vat=Decimal("5000"),
+    ) is False
+    assert allocation_amount_exceeds_threshold(
+        invoice_date=date(2026, 6, 1),
+        amount_before_vat=Decimal("5000.01"),
+    ) is True
+
+
+def test_verified_allocation_threshold_is_not_in_verification_queue():
+    joined = " | ".join(VERIFICATION_NEEDED)
+    assert "מספרי הקצאה" not in joined
+    assert "15,000" not in joined
+
+
+# ---------------------------------------------------------------------- #
 # resolve_vehicle_profile_args — pure selection over loaded profiles
 # ---------------------------------------------------------------------- #
 
@@ -205,7 +255,7 @@ def test_verification_needed_covers_kb_flagged_thresholds():
 
     joined = " | ".join(VERIFICATION_NEEDED)
     for term in (
-        "15,000", "97", "162", "240", "1,200", "2.48", "122,833", "239", "2,700", "26,600", "33%", "6%",
+        "97", "162", "240", "1,200", "2.48", "122,833", "239", "2,700", "26,600", "33%", "6%",
     ):
         assert term in joined, term
 

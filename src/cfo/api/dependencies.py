@@ -200,6 +200,16 @@ async def get_current_org_id(
     A non-super user with no organization (e.g. a stray row) must NOT silently
     fall back to org 1 — that would read/write another tenant's data. Reject.
     """
+    if (
+        request is not None
+        and current_user.role == UserRole.VIEWER
+        and request.method not in ("GET", "HEAD", "OPTIONS")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Viewer role is read-only",
+        )
+
     active = _resolve_super_admin_active_org(request, current_user)
     if active is not None:
         return active

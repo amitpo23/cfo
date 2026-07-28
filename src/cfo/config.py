@@ -76,6 +76,32 @@ class Settings(BaseSettings):
     # api/routes/sumit_webhooks.py) — same pattern as the Open Finance one.
     sumit_webhook_secret: Optional[str] = None
 
+    # Telegram conversational channel (plan 2026-07-26, package 3). Bot API
+    # token from @BotFather; the webhook secret is a separate value you set
+    # yourself and register with Telegram's setWebhook (secret_token param) —
+    # api/routes/telegram_webhook.py compares it via secrets.compare_digest.
+    # Unset secret => the webhook route answers 503 (channel not configured),
+    # never silently open.
+    telegram_bot_token: Optional[str] = None
+    telegram_webhook_secret: Optional[str] = None
+
+    # WhatsApp conversational channel (Meta Cloud API directly — no Twilio/
+    # 360dialog), package F (plan 2026-07-27b) — /api/whatsapp/webhook.
+    # phone_number_id + access_token identify the ONE shared business number
+    # all customers message (SUMIT-bot pattern — routing is by sender
+    # number, not by a per-customer number). verify_token is a value you
+    # choose yourself and register in the Meta App dashboard's webhook
+    # subscription (compared via secrets.compare_digest on the GET
+    # handshake). app_secret authenticates every POST body via the
+    # X-Hub-Signature-256 HMAC header. Any of these unset => the
+    # corresponding webhook path answers 503 (channel not configured),
+    # never silently open — same doctrine as the Telegram secret above.
+    whatsapp_phone_number_id: Optional[str] = None
+    whatsapp_access_token: Optional[str] = None
+    whatsapp_verify_token: Optional[str] = None
+    whatsapp_app_secret: Optional[str] = None
+    whatsapp_api_version: str = "v21.0"
+
     # Google Sign-In
     google_client_id: Optional[str] = None
 
@@ -98,6 +124,20 @@ class Settings(BaseSettings):
     # החלטת משתמש (2026-07-06): מפתח ה-API משרת את עוזר ה-AI בלבד.
     # OCR מבוסס-LLM נצרך מכסה ברקע (cron) — כבוי אלא אם הופעל במפורש.
     ocr_llm_enabled: bool = False
+    # A scheduled OCR document consumes at least one SUMIT getpdf action and
+    # one LLM call (and may later file/cancel). Explicit enablement is still
+    # required; this is the additional per-org/day document cap.
+    ocr_daily_document_limit: int = 10
+    # Chat-initiated receipt intake (package A, moshko-full-bot plan
+    # 2026-07-27): a user explicitly sending a photo/PDF straight to the chat
+    # bot (e.g. Telegram) is a different cost/consent story than the
+    # scheduled background OCR pipeline gated by ocr_llm_enabled above — see
+    # vision_extractor.extract_receipt's user_initiated flag for why these
+    # are two independent gates, not one shared flag.
+    chat_receipt_intake_enabled: bool = True
+    # Per-org/day cap on chat-initiated receipt intakes (mirrors
+    # ocr_daily_document_limit's role for the background pipeline).
+    chat_receipt_daily_limit: int = 20
     # AI chat assistant (Wave 2 Step 9) — same anthropic_api_key as OCR above.
     ai_chat_model: str = "claude-sonnet-5"
     # Companies-registry (רשם החברות) lookup over data.gov.il CKAN.
@@ -139,6 +179,11 @@ class Settings(BaseSettings):
     # sync per org per this many hours — the cron schedule alone is not a
     # guarantee.
     sumit_sync_min_interval_hours: int = 20
+    # /documents/getdetails is one paid SUMIT action per document. Supplier
+    # enrichment is therefore capped independently from the once-daily job
+    # cadence. This is an internal cost budget, not a claimed provider quota;
+    # operators may lower it (including 0 to disable), never raise above 25.
+    sumit_enrichment_daily_action_limit: int = 25
     # Minimum time between manually-triggered (POST /sync/run) syncs for the
     # same org/source, to stop a user/UI from hammering the provider.
     manual_refresh_cooldown_minutes: int = 15
@@ -177,6 +222,18 @@ class Settings(BaseSettings):
             self.of_sync_min_interval_hours = 20
         if self.sumit_sync_min_interval_hours < 20:
             self.sumit_sync_min_interval_hours = 20
+        self.sumit_enrichment_daily_action_limit = min(
+            25,
+            max(0, self.sumit_enrichment_daily_action_limit),
+        )
+        self.ocr_daily_document_limit = min(
+            25,
+            max(0, self.ocr_daily_document_limit),
+        )
+        self.chat_receipt_daily_limit = min(
+            50,
+            max(0, self.chat_receipt_daily_limit),
+        )
         if self.manual_refresh_cooldown_minutes < 15:
             self.manual_refresh_cooldown_minutes = 15
         return self

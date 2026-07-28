@@ -138,42 +138,113 @@ def _classify_by_sumit_item(item_name: str) -> Optional[str]:
     return None
 
 
+def normalize_supplier_key(supplier_name: Optional[str]) -> str:
+    """נרמול שם ספק להשוואה בין כלל נלמד לבין הוצאה חדשה: strip + הקטנת
+    אותיות (case-fold). ספק None/ריק -> מחרוזת ריקה (לעולם לא מתאים לכלל).
+    משמש גם את classifier_ml_training.py כדי לבנות את מפתחות הכלל הנלמד
+    באותה צורה בדיוק שבה classify_expense מחפש אותם."""
+    return (supplier_name or "").strip().lower()
+
+
+def classify_expense_detailed(
+    supplier_name: Optional[str] = None,
+    description: Optional[str] = None,
+    invoice_number: Optional[str] = None,
+    sumit_item_name: Optional[str] = None,
+    org_categories: Optional[List[Dict]] = None,
+    learned_rules: Optional[Dict[str, str]] = None,
+) -> Dict[str, Optional[str]]:
+    """כמו classify_expense, אך מחזיר גם את מקור ההחלטה
+    (classification_source) — לצורך שקיפות ובדיקות. classify_expense עצמה
+    היא עטיפה דקה שמחזירה רק את ["category"], כדי שקריאה קיימת (str) לא
+    תישבר בשום נקודת קריאה קיימת בקוד.
+
+    סדר עדיפויות (מפורש — אין לשנות בלי לעדכן את התיעוד כאן):
+      1. 'sumit_item'    — שם פריט SUMIT מפורש (לא גנרי). האות האמין ביותר,
+                           קיים מאז ומעולם — לא נגעתי בעדיפות שלו.
+      2. 'org_category'  — כרטיס מותאם אישית שהמשתמש הגדיר (מילות מפתח).
+                           כלל *מפורש* של המשתמש — גובר תמיד על מה שנלמד
+                           אוטומטית (סעיף 3) ועל מילות המפתח המובנות (סעיף 4).
+      3. 'learned'        — כלל נלמד (learned_rules): מפה supplier_key (מנורמל
+                           strip+lower) -> קטגוריה, שנבנתה מתוך >=3 תיקוני
+                           משתמש לאותו ספק (ר' classifier_ml_training.
+                           ClassifierMLTrainingService.get_learned_rules_map).
+                           מתאים לפי שם ספק בלבד — לא substring בתיאור/
+                           בחשבונית. **לעולם לא עוקף שם פריט SUMIT או כרטיס
+                           מותאם אישית** (סעיפים 1-2) — זו בדיוק הדרישה שלא
+                           לתת ללמידה האוטומטית לעקוף כלל מפורש של המשתמש.
+      4. 'keyword'        — מילות מפתח מובנות (CATEGORY_KEYWORDS).
+      5. 'sumit_item'/'default' — שם פריט SUMIT שמיפה במפורש ל-'other' (פריט
+                           גנרי) גובר על ברירת המחדל הכללית; אחרת 'other'.
+
+    learned_rules: מתקבל כפרמטר מוכן מראש (dict), ולא נטען כאן מה-DB — אותו
+    עקרון בדיוק כמו org_categories (הפונקציה נשארת טהורה, ללא תלות ב-DB,
+    וללא קריאה ל-analyze_feedback/get_learned_rules_map פר-הוצאה). הקורא
+    האחראי על ריצת סיווג גורפת (למשל ExpenseFilingService.classify_pending)
+    טוען את המפה פעם אחת לפני הלולאה ומעביר אותה לכל קריאה.
+    """
+    # 1. שם פריט SUMIT — האות האמין ביותר
+    by_item = _classify_by_sumit_item(sumit_item_name) if sumit_item_name else None
+    if by_item and by_item != "other":
+        return {"category": by_item, "classification_source": "sumit_item"}
+
+    text = " ".join(filter(None, [supplier_name, description, invoice_number])).lower()
+
+    # 2. כרטיסים מותאמים אישית לארגון — כלל מפורש של המשתמש, גובר תמיד
+    if text.strip():
+        for cat in org_categories or []:
+            keywords = cat.get("keywords") or []
+            if any(str(kw).lower() in text for kw in keywords):
+                return {"category": cat["key"], "classification_source": "org_category"}
+
+    # 3. כלל נלמד — לפי שם ספק מנורמל בלבד, ורק אם לא נמצאה כבר התאמה מפורשת
+    supplier_key = normalize_supplier_key(supplier_name)
+    if supplier_key and learned_rules:
+        learned_category = learned_rules.get(supplier_key)
+        if learned_category:
+            return {"category": learned_category, "classification_source": "learned"}
+
+    # 4. מילות מפתח מובנות
+    if text.strip():
+        for category, keywords in CATEGORY_KEYWORDS.items():
+            if any(kw.lower() in text for kw in keywords):
+                return {"category": category, "classification_source": "keyword"}
+
+    # 5. אם פריט SUMIT מיפה במפורש ל-"other" (פריט גנרי) — נשתמש בו לפני ברירת מחדל
+    if by_item:
+        return {"category": by_item, "classification_source": "sumit_item"}
+    return {"category": "other", "classification_source": "default"}
+
+
 def classify_expense(
     supplier_name: Optional[str] = None,
     description: Optional[str] = None,
     invoice_number: Optional[str] = None,
     sumit_item_name: Optional[str] = None,
     org_categories: Optional[List[Dict]] = None,
+    learned_rules: Optional[Dict[str, str]] = None,
 ) -> str:
     """מחזיר קטגוריה (אחת מ-VALID_CATEGORIES, או מפתח כרטיס מותאם אישית).
     ברירת מחדל: 'other'.
 
-    עדיפות: שם פריט SUMIT -> מילות מפתח של כרטיסים מותאמים אישית לארגון
-    (org_categories) -> מילות מפתח מובנות בשם ספק/תיאור/חשבונית.
+    עדיפות: שם פריט SUMIT -> כרטיסים מותאמים אישית לארגון (org_categories)
+    -> כלל נלמד (learned_rules) -> מילות מפתח מובנות. ר' תיעוד מלא ב-
+    classify_expense_detailed (שהיא זו שמבצעת בפועל את הלוגיקה; פונקציה זו
+    היא רק עטיפה שמחזירה את הקטגוריה כמחרוזת, לשמירת תאימות לאחור עם כל
+    נקודות הקריאה הקיימות).
 
     org_categories: רשימת dict-ים בצורה {"key": ..., "keywords": [...]} —
     הכרטיסים המותאמים אישית של הארגון (ExpenseCategory). מתקבלת כפרמטר
     ולא נטענת כאן מה-DB כדי לשמור על הפונקציה הזו טהורה וללא תלות ב-DB.
+
+    learned_rules: dict אופציונלי supplier_key (מנורמל) -> קטגוריה. ר'
+    classify_expense_detailed לפירוט מלא על העדיפות והמקור.
     """
-    # 1. שם פריט SUMIT — האות האמין ביותר
-    by_item = _classify_by_sumit_item(sumit_item_name) if sumit_item_name else None
-    if by_item and by_item != "other":
-        return by_item
-
-    # 2. מילות מפתח בשם ספק / תיאור / חשבונית
-    text = " ".join(filter(None, [supplier_name, description, invoice_number])).lower()
-    if text.strip():
-        # 2א. כרטיסים מותאמים אישית לארגון — גוברים על המובנות
-        for cat in org_categories or []:
-            keywords = cat.get("keywords") or []
-            if any(str(kw).lower() in text for kw in keywords):
-                return cat["key"]
-        # 2ב. מילות מפתח מובנות
-        for category, keywords in CATEGORY_KEYWORDS.items():
-            if any(kw.lower() in text for kw in keywords):
-                return category
-
-    # 3. אם פריט SUMIT מיפה במפורש ל-"other" (פריט גנרי) — נשתמש בו לפני ברירת מחדל
-    if by_item:
-        return by_item
-    return "other"
+    return classify_expense_detailed(
+        supplier_name=supplier_name,
+        description=description,
+        invoice_number=invoice_number,
+        sumit_item_name=sumit_item_name,
+        org_categories=org_categories,
+        learned_rules=learned_rules,
+    )["category"]

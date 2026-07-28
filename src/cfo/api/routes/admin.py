@@ -18,11 +18,13 @@ from ...models import (
     OrganizationCreate, OrganizationUpdate, OrganizationResponse,
     UserRole, IntegrationType, SumitCompany, Invoice, Bill, BankTransaction,
     Alert, Task, OnboardingTask, AlertStatus, TaskStatus,
+    OrganizationSigningAuthority, Account,
 )
 from ...auth import verify_password, get_password_hash, create_access_token
 from ...config import settings
 from ...services.sync_engine import SyncEngine, get_connector_for_org
 from ...services.client_automation_service import mark_client_loop_result, run_post_sync_tasks
+from ...services.account_ownership import ownership_status, review_queue
 from ..dependencies import (
     get_current_user, 
     get_super_admin, 
@@ -63,6 +65,13 @@ class CheckoutCreate(BaseModel):
     email: Optional[str] = None
     success_path: str = "/"
     cancel_path: str = "/"
+
+
+SCHEMA_MIGRATION_CONFIRMATION = "I_UNDERSTAND_SCHEMA_MIGRATION_IS_GLOBAL"
+
+
+class DatabaseMigrationRequest(BaseModel):
+    confirmation: str
 
 
 def _to_float(value) -> float:
@@ -410,6 +419,31 @@ def _create_self_registered_user(
     )
     
     db.add(new_user)
+    db.flush()
+    if requested_organization_id is None:
+        existing_authority = db.query(OrganizationSigningAuthority).filter(
+            OrganizationSigningAuthority.organization_id == organization_id,
+            OrganizationSigningAuthority.is_active.is_(True),
+        ).first()
+        if existing_authority is None:
+            authority = OrganizationSigningAuthority(
+                organization_id=organization_id,
+                user_id=new_user.id,
+                authority_type="owner",
+                action_types=["*"],
+                is_active=True,
+                granted_by_user_id=new_user.id,
+            )
+            db.add(authority)
+            db.flush()
+            db.add(AuditLog(
+                user_id=new_user.id,
+                organization_id=organization_id,
+                action="BOOTSTRAP_OWNER_AUTHORITY",
+                entity_type="OrganizationSigningAuthority",
+                entity_id=authority.id,
+                details={"source": "self_registration"},
+            ))
     db.commit()
     db.refresh(new_user)
     return new_user
@@ -556,51 +590,62 @@ async def login(
 
 
 @router.post("/db/migrate", tags=["Admin"])
-async def run_db_migrations(current_user: User = Depends(require_admin)):
+async def run_db_migrations(
+    request: DatabaseMigrationRequest,
+    current_user: User = Depends(get_super_admin),
+    db: Session = Depends(get_db_session),
+):
     """
-    Apply Alembic migrations (admin only).
+    Apply the global schema transition after explicit operator confirmation.
 
-    Databases created before Alembic was introduced (via create_all) are
-    stamped to the baseline first, then upgraded.
+    This endpoint is intentionally SUPER_ADMIN-only: organization admins do
+    not own the shared database schema. Legacy ``create_all`` databases are
+    repaired additively, verified against the ORM contract, and only then
+    stamped to Alembic head.
     """
     from pathlib import Path
 
-    import sqlalchemy
-    from alembic import command as alembic_command
     from alembic.config import Config as AlembicConfig
-    from sqlalchemy import inspect as sa_inspect
 
     from ...database import engine
+    from ...services.schema_deployment import reconcile_schema_to_head
+
+    if request.confirmation != SCHEMA_MIGRATION_CONFIRMATION:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Exact confirmation required: "
+                f"{SCHEMA_MIGRATION_CONFIRMATION}"
+            ),
+        )
 
     root = Path(__file__).resolve().parents[4]
     cfg = AlembicConfig(str(root / "alembic.ini"))
     cfg.set_main_option("script_location", str(root / "alembic"))
 
-    from ...services.schema_sync import apply_additive
-
-    inspector = sa_inspect(engine)
-    tables = inspector.get_table_names()
-    try:
-        if "users" in tables and "alembic_version" not in tables:
-            # Pre-Alembic database: schema already matches the baseline.
-            alembic_command.stamp(cfg, "head")
-            action = "stamped"
-        else:
-            alembic_command.upgrade(cfg, "head")
-            action = "upgraded"
-    except sqlalchemy.exc.DatabaseError as exc:  # create_all↔alembic: "already exists" וכדומה
-        if "already exists" not in str(exc).lower():
-            raise
-        alembic_command.stamp(cfg, "head")
-        action = f"stamped_after_conflict ({type(exc).__name__})"
-
-    schema_sync_report = apply_additive(engine)
+    result = reconcile_schema_to_head(engine, alembic_config=cfg)
 
     with engine.connect() as conn:
         from sqlalchemy import text
         revision = conn.execute(text("select version_num from alembic_version")).scalar()
 
-    return {"action": action, "current_revision": revision, "schema_sync": schema_sync_report}
+    db.add(AuditLog(
+        user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        action="GLOBAL_SCHEMA_MIGRATION",
+        entity_type="DatabaseSchema",
+        details={
+            "action": result["action"],
+            "current_revision": revision,
+            "schema_sync": result["schema_sync"],
+        },
+    ))
+    db.commit()
+
+    return {
+        **result,
+        "current_revision": revision,
+    }
 
 
 @router.get("/auth/me", response_model=UserResponse, tags=["Auth"])
@@ -1307,6 +1352,23 @@ async def update_app_user(
             detail="Cannot change your own role",
         )
 
+    active_signing_authority = db.query(OrganizationSigningAuthority).filter(
+        OrganizationSigningAuthority.organization_id == user.organization_id,
+        OrganizationSigningAuthority.user_id == user.id,
+        OrganizationSigningAuthority.is_active.is_(True),
+    ).first()
+    if active_signing_authority is not None and (
+        user_update.is_active is False
+        or user_update.role == UserRole.VIEWER
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "User has an active signing authority; an organization owner "
+                "must revoke it before deactivation or viewer demotion"
+            ),
+        )
+
     # Last-admin protection — applies when:
     #   (a) deactivating the user, or
     #   (b) demoting from ADMIN/SUPER_ADMIN to a lower role
@@ -1376,6 +1438,19 @@ async def delete_app_user(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Cannot delete yourself",
+        )
+
+    if db.query(OrganizationSigningAuthority).filter(
+        OrganizationSigningAuthority.organization_id == user.organization_id,
+        OrganizationSigningAuthority.user_id == user.id,
+        OrganizationSigningAuthority.is_active.is_(True),
+    ).first() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "User has an active signing authority; an organization owner "
+                "must revoke it before deletion"
+            ),
         )
 
     # Last-admin protection
@@ -1512,3 +1587,72 @@ async def test_connection(
             "connected": is_connected,
             "message": "Connection successful" if is_connected else "Connection failed"
         }
+
+
+# ==================== Moshko: ownership review (Package H) ====================
+# The sole "super admin" is the business owner — there is no separate "org
+# admin" role that self-declares ownership. Identification is automatic by
+# default (account_ownership.ownership_status); this queue exists ONLY for
+# the cases where it doesn't converge (honest-null).
+
+class OwnershipResolveRequest(BaseModel):
+    account_id: int
+    tax_id: Optional[str] = None
+
+
+@router.get("/moshko/ownership-review", tags=["Moshko"])
+async def get_ownership_review_queue(
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """כל הארגונים שההתאמה האוטומטית שלהם לא הכריעה, ממוין לפי חומרה."""
+    return review_queue(db)
+
+
+@router.post("/moshko/ownership-review/{organization_id}/resolve", tags=["Moshko"])
+async def resolve_ownership_review(
+    organization_id: int,
+    body: OwnershipResolveRequest,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """הכרעה ידנית של הבעלים: מסמן איזה חשבון הוא חשבון העסק הראשי.
+
+    לא ניחוש — רק מנהל המערכת (הבעלים) יכול לקבוע זאת, ורק כשההתאמה
+    האוטומטית לא התלכדה. מסמן, כותב AuditLog, ולא חוזר לתור ההכרעה.
+    """
+    org = db.query(Organization).filter(Organization.id == organization_id).first()
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+
+    account = db.query(Account).filter(Account.id == body.account_id).first()
+    if not account or account.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Account does not belong to this organization",
+        )
+
+    # Clear any previous primary flag before setting the new one — exactly
+    # one account may be marked primary at a time.
+    db.query(Account).filter(
+        Account.organization_id == organization_id,
+        Account.is_primary_business_account.is_(True),
+    ).update({"is_primary_business_account": False})
+
+    account.is_primary_business_account = True
+    if body.tax_id:
+        org.tax_id = body.tax_id
+    org.ownership_reviewed_at = datetime.now(timezone.utc)
+
+    audit_log = AuditLog(
+        user_id=current_user.id,
+        organization_id=organization_id,
+        action="RESOLVE",
+        entity_type="OwnershipReview",
+        entity_id=organization_id,
+        details={"account_id": body.account_id, "tax_id": body.tax_id},
+    )
+    db.add(audit_log)
+    db.commit()
+
+    return ownership_status(db, organization_id)

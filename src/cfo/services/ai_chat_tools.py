@@ -29,6 +29,13 @@ class ChatTool:
     # super-admin never sees these tool definitions at all) AND execution
     # (defense in depth — refused even if somehow requested by name).
     office: bool = False
+    # True only for tools that need to know WHO is acting (not just which
+    # org) — e.g. propose_vat_filing_approval, which must load a real User
+    # row to pass as IrreversibleActionService.propose(proposed_by=...).
+    # ai_chat_service passes the caller's user_id as `_user_id` ONLY to
+    # tools with this flag set, so the other ~39 existing tools' call
+    # signature is completely unaffected (Moshko plan 2026-07-27, package D1).
+    needs_user: bool = False
 
 
 async def _get_ar_aging(db, org_id: int, **_kwargs) -> dict:
@@ -42,8 +49,23 @@ async def _get_ap_bills(db, org_id: int, days_ahead: int = 30, **_kwargs) -> dic
 
 
 async def _get_pnl(db, org_id: int, months: int = 6, **_kwargs) -> dict:
-    from .dashboard_service import DashboardService
-    return {"months": DashboardService(db, org_id).get_pnl(months=months)}
+    """דוח רווח והפסד — מבוסס financial_reports_service.generate_profit_loss
+    (ledger חי: Invoice/Bill/Expense בסכומי נטו מפוצלי-מע"מ), לא
+    DashboardService (מקור כפול — הכרעת מועצה 2026-07-26: כלי P&L אחד).
+    מחזיר את דוח ה-ProfitLossReport המלא (revenue/expenses/gross/operating/
+    net לתקופה) + source='ledger' לזיהוי המקור."""
+    from datetime import date
+    from dateutil.relativedelta import relativedelta
+    from .financial_reports_service import FinancialReportsService
+
+    end_date = date.today()
+    start_date = end_date - relativedelta(months=months)
+    report = FinancialReportsService(db).generate_profit_loss(
+        org_id, start_date, end_date, compare_previous=False,
+    )
+    result = report.to_dict()
+    result["source"] = "ledger"
+    return result
 
 
 async def _get_collection_cases(db, org_id: int, status: str | None = None, **_kwargs) -> dict:
@@ -122,7 +144,14 @@ async def _list_invoices(db, org_id: int, status: str | None = None, limit: int 
 
 async def _get_engine_status(db, org_id: int, **_kwargs) -> dict:
     from . import engine_service
-    return engine_service.status(db, org_id)
+    from .kb_loader import kb_index
+    result = engine_service.status(db, org_id)
+    # kb_files_available: a cheap, org-agnostic presence check so prod can be
+    # verified to have the KB actually packaged (see kb_lookup) — 0 rather
+    # than a missing key when the KB isn't available, honest-null style.
+    idx = kb_index()
+    result["kb_files_available"] = idx.get("file_count", 0) if idx.get("available") else 0
+    return result
 
 
 async def _create_payment_link(db, org_id: int, *, invoice_id: int, **_kwargs) -> dict:
@@ -265,14 +294,89 @@ async def _create_expense_category(
 
 
 async def _set_expense_category(db, org_id: int, *, expense_id: int, category: str, **_kwargs) -> dict:
+    """שינוי קטגוריה דרך מושקו — סוגר את לולאת הלמידה: כל תיקון בשיחה נרשם
+    גם כ-classifier_feedback (record_classifier_feedback הקיים, ר'
+    manual_reconciliation.py — לא משוכפל כאן), כך שתיקון חוזר של אותו ספק
+    הופך בהמשך לכלל נלמד שהמסווג צורך (expense_classifier.classify_expense
+    עם learned_rules, ר' חבילה I 2026-07-27).
+
+    סדר הפעולות קריטי: record_classifier_feedback רץ *ראשון* כי הוא זה
+    שקורא את exp.category הנוכחי (האמיתי, טרם השינוי) כ-old_category — אם
+    update_expense היה רץ קודם, old_category שנרשם היה כבר שווה ל-new
+    category והפידבק היה חסר-משמעות. update_expense רץ אחריו רק כדי
+    לחשב מחדש שדות נגזרים (vat_claimable/ניכוי) לפי הקטגוריה החדשה — הוא
+    אינו כותב יותר ל-classifier_feedback, כדי לא לשכפל את לוגיקת הלמידה."""
     from .expense_filing_service import ExpenseFilingService
+    from .manual_reconciliation import ManualReconciliationService
+    from .expense_classifier import VALID_CATEGORIES
+    from . import expense_category_service
+
+    valid_keys = VALID_CATEGORIES | expense_category_service.org_category_keys(db, org_id)
+    if category not in valid_keys:
+        raise ValueError(f"קטגוריה לא מוכרת: {category}")
+
+    ManualReconciliationService(db, org_id).record_classifier_feedback(
+        entity_id=expense_id, entity_type="expense", corrected_category=category,
+    )
     service = ExpenseFilingService(db, organization_id=org_id)
     return service.update_expense(expense_id, {"category": category})
+
+
+async def _get_learned_rules(db, org_id: int, **_kwargs) -> dict:
+    """מה מושקו למד על סיווג הוצאות מתיקוני משתמש קודמים — לכל כלל: ספק,
+    קטגוריה, וכמה תיקונים ביססו אותו (סף: 3). כולל גם ספקים שעדיין מתחת
+    לסף כדי שהמשתמש יראה — ויוכל לתקן — גם מה שעוד לא הפך לכלל בפועל."""
+    from .classifier_ml_training import ClassifierMLTrainingService
+
+    result = ClassifierMLTrainingService(db, org_id).get_learned_rules()
+    rules = [
+        {
+            "supplier": supplier,
+            "category": info["category"],
+            "correction_count": info["correction_count"],
+        }
+        for supplier, info in result["rules"].items()
+    ]
+    return {
+        "learned_rules": rules,
+        "below_threshold": result["below_threshold"],
+        "min_corrections_required": result["min_corrections"],
+    }
 
 
 async def _classify_pending_expenses(db, org_id: int, **_kwargs) -> dict:
     from .expense_filing_service import ExpenseFilingService
     return ExpenseFilingService(db, organization_id=org_id).classify_pending()
+
+
+async def _file_expense(db, org_id: int, *, expense_id: int, **_kwargs) -> dict:
+    """תיוק הוצאה בפועל ב-SUMIT — עוטף ExpenseFilingService.file_to_sumit
+    הקיים (כולל שער הכפילויות שכבר בתוכו). פעולה בלתי-הפיכה (יוצרת מסמך
+    אמיתי ב-SUMIT) — לכן category="write" למטה."""
+    from .expense_filing_service import ExpenseFilingService
+    service = ExpenseFilingService(db, organization_id=org_id)
+    return await service.file_to_sumit(expense_id)
+
+
+async def _get_expense_intake_status(db, org_id: int, **_kwargs) -> dict:
+    """כמה קבלות נקלטו היום דרך הצ'אט מול התקרה היומית, וכמה טיוטות
+    ממתינות לתיוק — קריאה בלבד, ללא הרצת LLM/תיוק."""
+    from ..config import settings
+    from ..models import Expense
+    from .chat_expense_intake import count_receipts_today
+
+    intake_today = count_receipts_today(db, org_id, "telegram")
+    pending_filing = (
+        db.query(Expense)
+        .filter(Expense.organization_id == org_id, Expense.status == "pending")
+        .count()
+    )
+    return {
+        "intake_today": intake_today,
+        "daily_limit": settings.chat_receipt_daily_limit,
+        "intake_enabled": settings.chat_receipt_intake_enabled,
+        "pending_filing": pending_filing,
+    }
 
 
 async def _query_bank_transactions(
@@ -328,6 +432,108 @@ async def _get_suppliers_missing_invoices(
     return result
 
 
+async def _get_credit_line_status(db, org_id: int, days: int = 30, **_kwargs) -> dict:
+    """מסגרת אשראי בנקאית — עד מתי צפויה חריגה/התקרבות למסגרת, על בסיס
+    הליכת יתרה יומית מול Account.credit_limit הידוע (org-level, לא לפי
+    חשבון בודד — ראו הסתייגות credit_line_service)."""
+    from .credit_line_service import get_credit_line_status
+    return get_credit_line_status(db, org_id, days=days)
+
+
+async def _get_ar_health(db, org_id: int, months: int = 12, target_dso: int = 30, **_kwargs) -> dict:
+    """בריאות גבייה — מגמת DSO אמיתית (ממוצע ימי-תשלום בפועל) + סיכומי
+    סיכון/גבייה מדוח הגיול. לא כולל את פירוט הלקוחות המלא (זמין דרך
+    get_ar_aging) — רק המדדים המצטברים."""
+    from .ar_service import AccountsReceivableService
+
+    svc = AccountsReceivableService(db, org_id)
+    dso_trend = svc.get_dso_trend(months=months, target_dso=target_dso)
+    aging = svc.get_aging_report()
+    return {
+        "dso_trend": dso_trend,
+        "current_dso": dso_trend[-1]["dso"] if dso_trend else None,
+        "target_dso": target_dso,
+        "total_receivables": aging.total_receivables,
+        "weighted_average_days": aging.weighted_average_days,
+        "risk_summary": aging.risk_summary,
+        "collection_summary": aging.collection_summary,
+    }
+
+
+async def _get_cfo_insights(
+    db, org_id: int, *, status: str = "active", severity: str | None = None,
+    limit: int = 20, **_kwargs,
+) -> dict:
+    """תובנות CFO קיימות (persisted CfoInsight) — קריאה בלבד מהמאגר; אינו
+    מריץ ניתוח מלא (run_analysis) כברירת מחדל, כדי לא להריץ עיבוד כבד על
+    כל שאלת צ'אט."""
+    from .cfo_brain_service import CFOBrainService
+    insights = CFOBrainService(db, org_id).list_insights(
+        status=status, severity=severity, limit=limit,
+    )
+    return {"insights": insights}
+
+
+async def _get_daily_brief(db, org_id: int, **_kwargs) -> dict:
+    """בריף הבוקר של היום (טקסט טהור) — אותו תוכן שנשלח באימייל/SMS,
+    מבוסס DailySnapshot/CfoInsight קיימים; אינו מריץ מחזור-בוקר חדש."""
+    from datetime import date
+    from .morning_brief_service import compose_brief, render_hebrew
+
+    brief = compose_brief(db, org_id, date.today())
+    subject, text, _html = render_hebrew(brief)
+    return {"subject": subject, "text": text}
+
+
+async def _get_tax_estimate(
+    db, org_id: int, *, year: int | None = None, month: int | None = None, **_kwargs,
+) -> dict:
+    """אומדן מקדמת מס גס — לא תחליף לחישוב מחייב. חובה method+caveat+
+    confidence=low בפלט (הכרעת מועצה 2026-07-26: אף אומדן מס בלי הסתייגות
+    מפורשת)."""
+    from datetime import date
+    from .tax_service import TaxComplianceService
+
+    today = date.today()
+    y = year or today.year
+    m = month or today.month
+    advance = TaxComplianceService(db, org_id).calculate_tax_advance(y, m)
+    return {
+        "period": advance.period,
+        "due_date": advance.due_date,
+        "calculated_amount": advance.calculated_amount,
+        "previous_payments": advance.previous_payments,
+        "remaining_amount": advance.remaining_amount,
+        "payment_status": advance.payment_status,
+        "method": "רווח שנתי מוערך × שיעור מס חברות ÷ 12",
+        "caveat": (
+            "אומדן גס — ללא מדרגות מס ליחיד, ללא נתוני שומה; לחישוב מחייב "
+            "יש לפנות לרו\"ח."
+        ),
+        "confidence": "low",
+    }
+
+
+async def _verify_filing(
+    db, org_id: int, *, year: int, month: int, months: int = 1,
+    basis: str = "document", **_kwargs,
+) -> dict:
+    """אימות משולש (3 בדיקות בלתי-תלויות) של דיווח המע"מ לתקופה — קריאה
+    בלבד, יש להריץ לפני כל שידור בפועל לרשות."""
+    from .filing_verification import verify_filing
+    return verify_filing(db, org_id, year, month, months=months, basis=basis)
+
+
+async def _kb_lookup(db, org_id: int, *, query: str | None = None, **_kwargs) -> dict:
+    """מרכז ידע חשבונאי/מיסויי (docs/bookkeeper_kb + docs/sumit_help_kb) —
+    חיפוש keyword על פני קבצי ה-KB בפועל. אין query -> אינדקס המרכזים
+    (כמו rezef_kb.get_topic(None)). honest-null אם ה-KB לא ארוז בסביבה זו."""
+    from .kb_loader import kb_index, kb_search
+    if not query or not query.strip():
+        return kb_index()
+    return kb_search(query)
+
+
 async def _rezef_help(db, org_id: int, *, topic: str | None = None, **_kwargs) -> dict:
     """Project knowledge-base lookup — "how do I / what can Rezef do / where
     is X". Ignores db/org_id (same signature as every other tool for
@@ -336,6 +542,225 @@ async def _rezef_help(db, org_id: int, *, topic: str | None = None, **_kwargs) -
     SYSTEM_PROMPT (token cost)."""
     from . import rezef_kb
     return {"content": rezef_kb.get_topic(topic)}
+
+
+# ------------------------------------------------------------------------ #
+# Package C (Moshko plan 2026-07-27) — email_report. Recipient safety: the
+# model must never invent a recipient. The tool itself can only check one
+# half of that rule (is recipient_email a known org Contact?) — the other
+# half (did the USER type this address explicitly in the conversation?)
+# lives in the tool description below, since the tool has no access to chat
+# history. `recipient_verified_as` in the result makes the source visible on
+# the confirmation card the user sees before the write actually executes.
+# ------------------------------------------------------------------------ #
+async def _email_report(
+    db, org_id: int, *,
+    report_type: str, recipient_email: str,
+    period_months: int | None = None,
+    year: int | None = None, month: int | None = None,
+    note: str | None = None,
+    **_kwargs,
+) -> dict:
+    from datetime import date
+    import calendar
+    from dateutil.relativedelta import relativedelta
+    from ..config import settings
+    from ..models import Contact, Organization
+    from .email_sender import send_email_smtp
+    from .financial_reports_service import FinancialReportsService
+
+    if not (settings.smtp_host and settings.smtp_from):
+        return {
+            "status": "not_configured",
+            "message": "שליחת מייל אינה מוגדרת במערכת זו (חסר SMTP_HOST/SMTP_FROM) — לא נשלח דבר.",
+        }
+
+    contact = (
+        db.query(Contact)
+        .filter(
+            Contact.organization_id == org_id,
+            Contact.email == recipient_email,
+            Contact.is_active.is_(True),
+        )
+        .first()
+    )
+    recipient_verified_as = f"contact:{contact.name}" if contact is not None else "user_supplied"
+
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    org_name = org.name if org is not None else "הארגון"
+
+    svc = FinancialReportsService(db)
+    xlsx_subtype = "vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    if report_type == "profit_loss":
+        months = period_months or 6
+        end_date = date.today()
+        start_date = end_date - relativedelta(months=months)
+        report = svc.generate_profit_loss(org_id, start_date, end_date, compare_previous=False)
+        excel_bytes = svc.export_profit_loss_excel(report)
+        period_label = f"{start_date.isoformat()} עד {end_date.isoformat()}"
+        filename = f"רווח-והפסד-{end_date.strftime('%Y-%m')}.xlsx"
+    elif report_type == "balance_sheet":
+        if year and month:
+            as_of = date(year, month, calendar.monthrange(year, month)[1])
+        else:
+            as_of = date.today()
+        report = svc.generate_balance_sheet(org_id, as_of, compare_previous=False)
+        excel_bytes = svc.export_balance_sheet_excel(report)
+        period_label = f"נכון ל-{as_of.isoformat()}"
+        filename = f"מאזן-{as_of.strftime('%Y-%m-%d')}.xlsx"
+    elif report_type == "cash_flow":
+        months = period_months or 12
+        report = svc.generate_cash_flow_projection(org_id, months=months)
+        excel_bytes = svc.export_cash_flow_projection_excel(report)
+        period_label = f"{months} חודשים קדימה"
+        filename = f"תזרים-חזוי-{date.today().strftime('%Y-%m')}.xlsx"
+    else:
+        return {"status": "failed", "message": f"סוג דוח לא מוכר: {report_type}"}
+
+    subject = f"{org_name} — דוח {report_type} ({period_label})"
+    body_lines = ["שלום,", "", f"מצורף הדוח המבוקש: {subject}."]
+    if note:
+        body_lines += ["", note]
+    body_lines += ["", "בברכה,", f"{org_name} — נשלח אוטומטית על ידי מושקו"]
+    body = "\n".join(body_lines)
+
+    sent = await send_email_smtp(
+        recipient_email, subject, body, settings,
+        attachments=[(filename, excel_bytes, xlsx_subtype)],
+    )
+    if not sent:
+        return {
+            "status": "failed",
+            "message": "שליחת המייל נכשלה בפועל (ראו לוג SMTP) — הדוח לא הגיע.",
+            "recipient_verified_as": recipient_verified_as,
+        }
+
+    return {
+        "status": "sent",
+        "recipient_email": recipient_email,
+        "recipient_verified_as": recipient_verified_as,
+        "report_type": report_type,
+        "period": period_label,
+        "filename": filename,
+        "message": f"הדוח נשלח בהצלחה אל {recipient_email}.",
+    }
+
+
+# ------------------------------------------------------------------------ #
+# Package D (Moshko plan 2026-07-27) — VAT filing approval. Rezef has NO
+# transmission mechanism to the tax authority (rezef_kb.py:244 — transmission
+# happens only through the SUMIT UI). This tool never claims otherwise: it
+# records the OWNER's approval of the numbers as an IrreversibleActionRequest
+# (action_type="filing_submission") after the mandatory triple verification,
+# and is explicit in both its description and its output that actual
+# transmission is a separate, manual, SUMIT-side step.
+# ------------------------------------------------------------------------ #
+async def _propose_vat_filing_approval(
+    db, org_id: int, *,
+    year: int, month: int, months: int = 1, basis: str = "document",
+    _user_id: int | None = None,
+    **_kwargs,
+) -> dict:
+    from ..models import User
+    from .daily_reports_service import vat_report_period
+    from .filing_verification import verify_filing
+    from .irreversible_action_service import IrreversibleActionService
+
+    verification = verify_filing(db, org_id, year, month, months=months, basis=basis)
+
+    if verification["status"] == "fail":
+        return {
+            "status": "blocked_by_verification",
+            "verification": verification,
+            "message": "האימות המשולש נכשל — לא ניתן לאשר דיווח לפני תיקון",
+        }
+
+    user = db.query(User).filter(User.id == _user_id).first() if _user_id else None
+    if user is None or user.organization_id != org_id:
+        return {
+            "status": "failed",
+            "message": "לא ניתן לאמת את זהות המשתמש המבקש — הפעולה בוטלה.",
+        }
+
+    report = vat_report_period(db, org_id, year, month, months=months, basis=basis)
+    period_label = f"{year}-{month:02d}"
+    caveat = (
+        "רצף אינו משדר לרשות המסים. אישור זה מתעד את אישור הבעלים למספרים; "
+        "השידור בפועל מתבצע בממשק SUMIT."
+    )
+    # The hashed payload must be a STABLE snapshot of the reviewed numbers.
+    # verification["checks"] as returned by verify_filing carries volatile
+    # per-call fields (check 3's free-text `details` embeds sync age/dates,
+    # plus a separate `sync_age_hours`) — hashing that directly would break
+    # idempotency: proposing the exact same period a few minutes apart would
+    # hash differently and hit ActionConflictError instead of returning the
+    # existing request (proven by test_idempotent_double_call_with_real_
+    # unmocked_verify_filing, which runs the real verify_filing twice —
+    # a mocked verify_filing can't catch this). Only a stable projection
+    # (name + passed) goes into the hashed payload; the full, rich
+    # verification object is still returned in the tool's output below
+    # (never hashed) so the model/user sees the complete picture.
+    stable_checks = [
+        {"name": c["name"], "passed": c["passed"]} for c in verification["checks"]
+    ]
+    payload = {
+        "period": report["period"],
+        "basis": basis,
+        "months": months,
+        "output_vat": float(report["output_vat"]),
+        "input_vat": float(report["input_vat"]),
+        "net_vat": float(report["net_vat"]),
+        "verification_status": verification["status"],
+        "verification_checks": stable_checks,
+    }
+
+    service = IrreversibleActionService(db, org_id)
+    try:
+        row = service.propose(
+            proposed_by=user,
+            action_type="filing_submission",
+            payload=payload,
+            idempotency_key=f"vat-filing:{org_id}:{period_label}:{basis}",
+            description=(
+                f"אישור בעלים למספרי דיווח מע\"מ לתקופה {period_label} "
+                f"(basis={basis}) — לא כולל שידור בפועל, שנעשה ידנית ב-SUMIT."
+            ),
+        )
+    except ValueError as exc:
+        return {"status": "failed", "message": str(exc)}
+
+    return {
+        "status": "proposed",
+        "request_id": row.id,
+        "action_type": row.action_type,
+        "period": report["period"],
+        "basis": basis,
+        "verification_status": verification["status"],
+        "verification": verification,
+        "transmission": "manual_via_sumit",
+        "caveat": caveat,
+        "message": (
+            f"נרשמה בקשת אישור למספרי דיווח מע\"מ {period_label} (בקשה #{row.id}). {caveat}"
+        ),
+    }
+
+
+async def _list_pending_approvals(db, org_id: int, **_kwargs) -> dict:
+    from .irreversible_action_service import IrreversibleActionService
+
+    rows = IrreversibleActionService(db, org_id).list(status="proposed")
+    return {
+        "pending": [
+            {
+                "id": row.id,
+                "action_type": row.action_type,
+                "description": row.description,
+                "proposed_at": row.proposed_at.isoformat() if row.proposed_at else None,
+            }
+            for row in rows
+        ],
+    }
 
 
 # ------------------------------------------------------------------------ #
@@ -403,6 +828,102 @@ async def _register_office_client(
     )
 
 
+# ------------------------------------------------------------------------ #
+# Package E (2026-07-27b moshko-memory-and-whatsapp plan) — Moshko's learned
+# memory. `memory` is category="write": a memory write is a persisted state
+# change (not a one-off answer), and needs_user=True so the caller's real
+# identity (never model-supplied) is used to resolve scope="user" writes —
+# same needs_user pattern as propose_vat_filing_approval. `search_history`
+# is category="read": it complements the 30-message history cap in
+# ai_chat_service.py by letting Moshko look further back on demand instead
+# of the memory layer trying to hold everything.
+# ------------------------------------------------------------------------ #
+async def _memory(
+    db, org_id: int, *,
+    action: str, content: str | None = None, scope: str = "org",
+    match: str | None = None, category: str = "business_fact",
+    _user_id: int | None = None, **_kwargs,
+) -> dict:
+    """Raises ValueError (never returns a "failed"-shaped dict) for every
+    outcome that did NOT actually write — cap_reached, not_found,
+    ambiguous, bad input. ai_chat_service.confirm_action's existing
+    `except ValueError` path is what keeps msg.executed False and skips
+    the "בוצע: ..." confirmation message on these outcomes (same contract
+    register_office_client relies on) — a status dict would instead have
+    been silently treated as success (msg.executed=True, a fake "בוצע"
+    row persisted into the next 30 turns of model input), which would
+    let the model believe a capped/ambiguous write actually happened and
+    never prompt the user to consolidate. "ok" and "already_known" are
+    the only pass-through (real or no-op-but-honest) successes."""
+    from . import moshko_memory
+
+    target_user_id = _user_id if scope == "user" else None
+
+    if action == "add":
+        if not content:
+            raise ValueError("content נדרש לפעולת add")
+        result = moshko_memory.remember(
+            db, org_id, content=content, scope=scope, user_id=target_user_id,
+            category=category, source="conversation",
+        )
+    elif action == "update":
+        if not match or not content:
+            raise ValueError("match ו-content נדרשים לפעולת update")
+        result = moshko_memory.update_memory(
+            db, org_id, match=match, content=content, user_id=target_user_id,
+        )
+    elif action == "forget":
+        if not match:
+            raise ValueError("match נדרש לפעולת forget")
+        result = moshko_memory.forget(db, org_id, match=match, user_id=target_user_id)
+    else:
+        raise ValueError(f"action לא מוכר: {action}")
+
+    if result["status"] == "ambiguous":
+        candidates = "; ".join(c["content"] for c in result["candidates"])
+        raise ValueError(f"{result['message']} מועמדים: {candidates}")
+    if result["status"] in ("cap_reached", "not_found", "failed"):
+        raise ValueError(result["message"])
+    return result
+
+
+async def _search_history(db, org_id: int, *, query: str, _user_id: int | None = None, **_kwargs) -> dict:
+    from ..models import ChatMessage
+
+    query = (query or "").strip()
+    if not query:
+        return {"results": []}
+
+    rows = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.organization_id == org_id,
+            ChatMessage.user_id == _user_id,
+            ChatMessage.content.ilike(f"%{query}%"),
+            # Same rule as ai_chat_service._history: an unconfirmed proposal
+            # never happened — it must not surface here as if it were real
+            # history (a search for "תייק את הוצאה 42" must not let Moshko
+            # conclude the filing occurred just because it was PROPOSED).
+            # The separate "בוצע: ..." confirmation message still matches
+            # normally, so real executions stay findable.
+            ChatMessage.pending_action.is_(None),
+        )
+        .order_by(ChatMessage.id.desc())
+        .limit(20)
+        .all()
+    )
+    return {
+        "results": [
+            {
+                "date": r.created_at.isoformat() if r.created_at else None,
+                "role": r.role,
+                "excerpt": r.content[:280],
+            }
+            for r in rows
+        ],
+    }
+
+
 TOOLS: dict[str, ChatTool] = {
     "get_ar_aging": ChatTool(
         name="get_ar_aging",
@@ -423,10 +944,17 @@ TOOLS: dict[str, ChatTool] = {
     ),
     "get_pnl": ChatTool(
         name="get_pnl",
-        description="קבלת דוח רווח והפסד חודשי לטווח החודשים האחרונים.",
+        description=(
+            "דוח רווח והפסד — מבוסס ledger חי (Invoice/Bill/Expense בנטו), "
+            "לא הערכה. מחזיר סכום מצטבר אחד עבור כל התקופה שנבחרה (revenue/"
+            "cost_of_goods_sold/operating_expenses/net_income וכו'), ו-"
+            "source='ledger'. זהו סיכום לתקופה כולה — אין כאן פירוט חודש-"
+            "בחודש; לשאלה 'כמה הרווחתי בכל חודש בנפרד' אין לענות ממספר "
+            "מצטבר זה."
+        ),
         input_schema={
             "type": "object",
-            "properties": {"months": {"type": "integer", "description": "מספר חודשים", "default": 6}},
+            "properties": {"months": {"type": "integer", "description": "אורך התקופה אחורה מהיום, בחודשים", "default": 6}},
         },
         category="read",
         fn=_get_pnl,
@@ -687,6 +1215,18 @@ TOOLS: dict[str, ChatTool] = {
         category="write",
         fn=_set_expense_category,
     ),
+    "get_learned_rules": ChatTool(
+        name="get_learned_rules",
+        description=(
+            "מה מושקו למד על סיווג הוצאות מתיקוני משתמש קודמים בצ'אט/במסך "
+            "הוצאות — לכל כלל: ספק, קטגוריה, וכמה תיקונים ביססו אותו (סף: 3 "
+            "תיקונים לאותו ספק). מציג גם ספקים שעדיין מתחת לסף, כדי לראות "
+            "מה עוד לא הפך לכלל בפועל. קריאה בלבד."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_learned_rules,
+    ),
     "classify_pending_expenses": ChatTool(
         name="classify_pending_expenses",
         description=(
@@ -697,6 +1237,34 @@ TOOLS: dict[str, ChatTool] = {
         input_schema={"type": "object", "properties": {}},
         category="write",
         fn=_classify_pending_expenses,
+    ),
+    "file_expense": ChatTool(
+        name="file_expense",
+        description=(
+            "תיוק הוצאה בפועל ב-SUMIT (קריאת addexpense אמיתית) — הופך "
+            "טיוטה שנקלטה (מהצ'אט/מהבנק/מ-SUMIT) להוצאה מתויקת בספרים, "
+            "כולל שער הכפילויות הקיים. פעולת כתיבה — דורשת אישור מפורש; "
+            "בלתי-הפיכה (יוצרת מסמך אמיתי ב-SUMIT)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "expense_id": {"type": "integer", "description": "מזהה ההוצאה לתיוק"},
+            },
+            "required": ["expense_id"],
+        },
+        category="write",
+        fn=_file_expense,
+    ),
+    "get_expense_intake_status": ChatTool(
+        name="get_expense_intake_status",
+        description=(
+            "סטטוס קליטת קבלות דרך הצ'אט: כמה נקלטו היום מול התקרה היומית, "
+            "וכמה הוצאות (טיוטות) ממתינות לתיוק. קריאה בלבד."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_expense_intake_status,
     ),
     "query_bank_transactions": ChatTool(
         name="query_bank_transactions",
@@ -816,6 +1384,192 @@ TOOLS: dict[str, ChatTool] = {
         category="read",
         fn=_rezef_help,
     ),
+    "get_credit_line_status": ChatTool(
+        name="get_credit_line_status",
+        description=(
+            "מסגרת אשראי בנקאית — האם/מתי צפויה חריגה או התקרבות (עד 10%) "
+            "למסגרת האשראי הידועה, לפי הליכת יתרה יומית קדימה. עונה ישירות "
+            "'מתי צפוי מינוס' (breach_date/warning_date) ו-min_headroom "
+            "(המרווח המינימלי הצפוי). status='unknown' כשלא ידועה מסגרת "
+            "אשראי לאף חשבון בנק."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"days": {"type": "integer", "description": "טווח ימים קדימה", "default": 30}},
+        },
+        category="read",
+        fn=_get_credit_line_status,
+    ),
+    "get_ar_health": ChatTool(
+        name="get_ar_health",
+        description=(
+            "בריאות גבייה — מגמת DSO אמיתית (ממוצע ימי-תשלום בפועל, לא "
+            "יעד) לאורך מספר חודשים, וסיכומי סיכון/גבייה מדוח הגיול "
+            "(total_receivables, risk_summary, collection_summary). לפירוט "
+            "לקוח-לקוח יש להשתמש ב-get_ar_aging."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "months": {"type": "integer", "description": "טווח חודשים למגמת DSO", "default": 12},
+                "target_dso": {"type": "integer", "description": "יעד DSO להשוואה", "default": 30},
+            },
+        },
+        category="read",
+        fn=_get_ar_health,
+    ),
+    "get_cfo_insights": ChatTool(
+        name="get_cfo_insights",
+        description=(
+            "תובנות CFO קיימות (persisted) — התרעות/המלצות שכבר נוצרו על "
+            "ידי מנוע הניתוח (חיבורים, התאמות, גבייה, תזרים, ספקים, "
+            "רווחיות, סגירת חודש, תקציב). קריאה בלבד — אינו מריץ ניתוח כבד "
+            "מחדש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["active", "acknowledged", "resolved"], "default": "active"},
+                "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info"]},
+                "limit": {"type": "integer", "default": 20},
+            },
+        },
+        category="read",
+        fn=_get_cfo_insights,
+    ),
+    "get_daily_brief": ChatTool(
+        name="get_daily_brief",
+        description=(
+            "בריף הבוקר של היום בעברית (טקסט טהור, subject+text) — אדומים "
+            "שדורשים טיפול היום, מזומן, תורים, וחייבים מובילים. מבוסס "
+            "נתונים שכבר קיימים (DailySnapshot/CfoInsight) — אינו מריץ "
+            "מחזור-בוקר חדש."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_daily_brief,
+    ),
+    "get_tax_estimate": ChatTool(
+        name="get_tax_estimate",
+        description=(
+            "אומדן גס של מקדמת מס (הכנסה) לחודש — לא חישוב מחייב ולא ייעוץ "
+            "מס. מחזיר תמיד method (הנוסחה) ו-caveat (הסתייגות מפורשת) "
+            "ו-confidence='low'."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer", "description": "ברירת מחדל: השנה הנוכחית"},
+                "month": {"type": "integer", "description": "ברירת מחדל: החודש הנוכחי"},
+            },
+        },
+        category="read",
+        fn=_get_tax_estimate,
+    ),
+    "verify_filing": ChatTool(
+        name="verify_filing",
+        description=(
+            "אימות משולש (3 בדיקות בלתי-תלויות: תיאום מול PCN874, חישוב "
+            "עצמאי ובדיקות שפיות, שלמות קליטה והצלבה חיצונית) של דיווח "
+            "המע\"מ לתקופה — קריאה בלבד. יש להריץ ולבדוק pass/warn/fail "
+            "לפני כל שידור בפועל לרשות."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer"},
+                "month": {"type": "integer"},
+                "months": {"type": "integer", "description": "אורך התקופה בחודשים", "default": 1},
+                "basis": {"type": "string", "enum": ["document", "captured"], "default": "document"},
+            },
+            "required": ["year", "month"],
+        },
+        category="read",
+        fn=_verify_filing,
+    ),
+    "email_report": ChatTool(
+        name="email_report",
+        description=(
+            "שליחת דוח כספי (רווח והפסד / מאזן / תזרים חזוי) כקובץ Excel "
+            "מצורף במייל. פעולת כתיבה — דורשת אישור מפורש של המשתמש לפני "
+            "שליחה בפועל. "
+            "אבטחת נמען — חובה: recipient_email מותר להיות אך ורק כתובת "
+            "שהמשתמש הקליד במפורש בשיחה הנוכחית, או כתובת של איש קשר קיים "
+            "של הארגון (יש לאתר אותו קודם עם search_contacts/get_ledger_card "
+            "אם לא ידוע בוודאות) — לעולם אין להמציא או לנחש כתובת מייל."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "report_type": {
+                    "type": "string",
+                    "enum": ["profit_loss", "balance_sheet", "cash_flow"],
+                },
+                "recipient_email": {
+                    "type": "string",
+                    "description": "כתובת שהמשתמש כתב במפורש, או מייל של איש קשר קיים",
+                },
+                "period_months": {
+                    "type": "integer",
+                    "description": "P&L: חודשים אחורה (ברירת מחדל 6). תזרים: חודשי חיזוי קדימה (ברירת מחדל 12).",
+                },
+                "year": {"type": "integer", "description": "מאזן: שנה ל'נכון ל-תאריך' (ברירת מחדל: היום)"},
+                "month": {"type": "integer", "description": "מאזן: חודש ל'נכון ל-תאריך' (ברירת מחדל: היום)"},
+                "note": {"type": "string", "description": "טקסט חופשי אופציונלי לגוף המייל"},
+            },
+            "required": ["report_type", "recipient_email"],
+        },
+        category="write",
+        fn=_email_report,
+    ),
+    "propose_vat_filing_approval": ChatTool(
+        name="propose_vat_filing_approval",
+        description=(
+            "רישום אישור בעלים למספרי דיווח מע\"מ לתקופה, אחרי אימות משולש "
+            "חובה (verify_filing). אם האימות נכשל (fail) — הבקשה נחסמת ולא "
+            "נוצרת. פעולת כתיבה בלתי-הפיכה — דורשת אישור מפורש של המשתמש. "
+            "חשוב: לרצף אין מנגנון שידור לרשות המסים. פעולה זו רק מתעדת את "
+            "אישור הבעלים למספרים; השידור בפועל לרשות נעשה ידנית בממשק "
+            "SUMIT, לא על ידי רצף."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer"},
+                "month": {"type": "integer"},
+                "months": {"type": "integer", "description": "אורך התקופה בחודשים", "default": 1},
+                "basis": {"type": "string", "enum": ["document", "captured"], "default": "document"},
+            },
+            "required": ["year", "month"],
+        },
+        category="write",
+        fn=_propose_vat_filing_approval,
+        needs_user=True,
+    ),
+    "list_pending_approvals": ChatTool(
+        name="list_pending_approvals",
+        description="רשימת בקשות אישור פעולה בלתי-הפיכה הממתינות לאישור הבעלים בארגון (סטטוס proposed).",
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_list_pending_approvals,
+    ),
+    "kb_lookup": ChatTool(
+        name="kb_lookup",
+        description=(
+            "מרכז ידע חשבונאי/מיסויי: דיני הכרה בהוצאות (מס הכנסה), ניכוי מס "
+            "תשומות (מע\"מ), גשר סיווגים, ונהלי SUMIT (פורטל, הכנסות/הוצאות, "
+            "חיוב וגבייה, אינטגרציה). חפשו כאן לפני שעונים על שאלת דין/נוהל — "
+            "אל תנחשו כלל מס או צעד ב-SUMIT. honest-null (available=False + "
+            "סיבה) אם ה-KB אינו ארוז בסביבה הנוכחית — לא רשימה ריקה שקטה."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "מונח/שאלה לחיפוש במרכז הידע"}},
+            "required": ["query"],
+        },
+        category="read",
+        fn=_kb_lookup,
+    ),
     "list_office_clients": ChatTool(
         name="list_office_clients",
         description=(
@@ -895,6 +1649,52 @@ TOOLS: dict[str, ChatTool] = {
         category="write",
         fn=_register_office_client,
         office=True,
+    ),
+    "memory": ChatTool(
+        name="memory",
+        description=(
+            "זיכרון לומד: הוספה/עדכון/מחיקה של עובדה אחת. scope='org' לעובדה "
+            "על העסק (גלויה לכל הארגון), scope='user' לזיכרון אישי (גלוי רק "
+            "למשתמש הנוכחי). ראו הנחיית הזיכרון המלאה בהוראות המערכת. "
+            "פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["add", "update", "forget"]},
+                "content": {"type": "string", "description": "עובדה הצהרתית אחת (נדרש ל-add/update)"},
+                "scope": {"type": "string", "enum": ["org", "user"], "default": "org"},
+                "match": {"type": "string", "description": "תת-מחרוזת לזיהוי הזיכרון הקיים (נדרש ל-update/forget)"},
+                "category": {
+                    "type": "string",
+                    "enum": ["preference", "business_fact", "correction", "convention"],
+                    "default": "business_fact",
+                },
+            },
+            "required": ["action"],
+        },
+        category="write",
+        fn=_memory,
+        needs_user=True,
+    ),
+    "search_history": ChatTool(
+        name="search_history",
+        description=(
+            "חיפוש טקסט חופשי בהיסטוריית השיחות הישנות שלך עם מושקו (מעבר "
+            "ל-30 ההודעות האחרונות שתמיד נטענות) — עד 20 תוצאות אחרונות "
+            "תואמות, עם תאריך ותפקיד. משלים את תקרת ההיסטוריה: השתמש בו "
+            "לפני שאתה אומר שאין לך מידע על שיחה קודמת."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "מונח חיפוש חופשי"},
+            },
+            "required": ["query"],
+        },
+        category="read",
+        fn=_search_history,
+        needs_user=True,
     ),
 }
 

@@ -12,7 +12,7 @@ from .routes import (
     cashflow, sync, reports, financial_management, financial_operations
 )
 from .routes import cfo_dashboard, cfo_sync, cfo_tasks, cron, masav, inventory, dashboard, expenses, expense_deduction, manual_reconciliation, advanced_features, phase10_12, analytics
-from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding, accounting_events, collections, ai_chat, contacts, sumit_webhooks
+from .routes import open_finance, office, calculators, payroll, ledger, daily_reports, annual_reports, engine, business, onboarding, accounting_events, collections, ai_chat, contacts, sumit_webhooks, approvals, channels, telegram_webhook, whatsapp_webhook
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
@@ -287,10 +287,38 @@ app.include_router(
     dependencies=[Depends(get_current_user)],
 )
 
+# Durable proposal/review evidence for money movement, filing and period close.
+# Provider execution remains internal and must consume an approved request.
+app.include_router(
+    approvals.router, prefix="/api", tags=["Irreversible Action Approvals"],
+    dependencies=[Depends(get_current_user)],
+)
+
 # Contact search — org-scoped, backs the customer autocomplete in document issuance
 app.include_router(
     contacts.router, prefix="/api", tags=["Contacts"],
     dependencies=[Depends(get_current_user)],
+)
+
+# Channel link-code issuance — authenticated (JWT), organization-scoped
+app.include_router(
+    channels.router, prefix="/api", tags=["Channels"],
+    dependencies=[Depends(get_current_user)],
+)
+
+# Telegram webhook — no user JWT; authenticated by the shared
+# X-Telegram-Bot-Api-Secret-Token header validated inside the route itself
+# (mirrors sumit_webhooks.router's public /webhooks registration above).
+app.include_router(
+    telegram_webhook.router, prefix="/api/telegram", tags=["Telegram Channel"],
+)
+
+# WhatsApp webhook (Meta Cloud API) — no user JWT. GET is authenticated by
+# the hub.verify_token handshake, POST by the X-Hub-Signature-256 HMAC —
+# both validated inside the route itself (mirrors telegram_webhook.router
+# and sumit_webhooks.router's public registration above).
+app.include_router(
+    whatsapp_webhook.router, prefix="/api/whatsapp", tags=["WhatsApp Channel"],
 )
 
 # Cron jobs authenticate with CRON_SECRET, not user tokens

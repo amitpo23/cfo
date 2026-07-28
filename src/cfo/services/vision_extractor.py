@@ -105,15 +105,32 @@ def _looks_like_pdf(content: bytes) -> bool:
 async def extract_receipt(
     content: bytes,
     media_type: Optional[str] = None,
+    *,
+    user_initiated: bool = False,
 ) -> Dict[str, Any]:
     """מחלץ נתוני קבלה מבייטים של קובץ (PDF או תמונה).
 
     בוחר ספק לפי המפתחות המוגדרים: Anthropic מועדף, OpenAI fallback.
     זורק VisionExtractionError אם אין מפתח/SDK או אם הקריאה נכשלה.
+
+    user_initiated: שני שערי-עלות נפרדים ומכוונים ל-*מקורות שונים* של
+    קריאת OCR, ולכן לא משותפים לדגל אחד:
+    - ocr_llm_enabled (ברירת המחדל, user_initiated=False — אף קורא קיים לא
+      משתנה) חוסם OCR *רקע* (expense_ocr_scheduler.py) שצורך מכסת API בשקט
+      בלי שמשתמש הפעיל אותו במפורש באותו רגע.
+    - chat_receipt_intake_enabled (user_initiated=True) חוסם קליטה שהמשתמש
+      עצמו יזם עכשיו (למשל שליחת צילום קבלה לצ'אטבוט) — סיפור עלות/הסכמה
+      שונה: יש אדם שממתין לתשובה, לא ריצת רקע.
     """
     if not content:
         raise VisionExtractionError("קובץ ריק — אין מה לחלץ")
-    if not settings.ocr_llm_enabled:
+    if user_initiated:
+        if not settings.chat_receipt_intake_enabled:
+            raise VisionExtractionError(
+                "קליטת קבלות דרך הצ'אט כבויה כרגע. "
+                "להפעלה: CHAT_RECEIPT_INTAKE_ENABLED=true"
+            )
+    elif not settings.ocr_llm_enabled:
         # החלטת משתמש (2026-07-06): מפתח ה-Anthropic משרת את הצ'אטבוט בלבד.
         # OCR בראייה ממוחשבת מופעל רק בהסכמה מפורשת (OCR_LLM_ENABLED=true).
         raise VisionExtractionError(

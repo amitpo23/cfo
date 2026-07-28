@@ -2,7 +2,10 @@
 
 **מקור:** [help.open-finance.ai/he](https://help.open-finance.ai/he/) (מרכז העזרה הרשמי, 25 מאמרים, 4 קטגוריות)
 **נאסף:** 2026-07-10
-**הקשר בפרויקט:** תומך ב-Workstream A/C ב-[REZEF_SUMIT_OPEN_FINANCE_COMPLETION_PLAN.md](REZEF_SUMIT_OPEN_FINANCE_COMPLETION_PLAN.md) ו-`OpenFinanceClient` ב-[src/cfo/services/open_finance_client.py](../src/cfo/services/open_finance_client.py).
+**הקשר בפרויקט:** מקור הידע ליכולת `open-finance-ingestion` ב-
+[`rezef_capabilities.json`](rezef_capabilities.json) ול-workflow ב-
+[`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md); המימוש ב-
+[`OpenFinanceClient`](../src/cfo/services/open_finance_client.py).
 **דוקומנטציה מלאה (interactive):** `docs.open-finance.ai`
 
 ---
@@ -52,6 +55,28 @@
 - **תגובה (201):** `id` (מזהה חיבור), `connectUrl` (קישור למסע ההסכמה)
 - **מסע המשתמש:** בחירת בנק (אם `providerIds` לא צוין) → התחברות בבנק → אישור שיתוף מידע → חיבור פעיל, נתונים זורמים
 - **גילוי ספקים:** `GET /v2/providers` — לכל ספק יש וריאנט `-sandbox` לבדיקות.
+
+### 2.1 מסע ה-consent בתוך רצף
+
+הנתיב הקנוני הוא `POST /api/open-finance/onboarding/start`, זמין ל־admin בלבד.
+הוא יוצר זהות Open Finance מבודדת לארגון, שולח `allowBusiness=true`, ודורש
+מהספק גם `id` וגם `connectUrl`; תגובה חלקית נכשלת ב־502 ואינה מוצגת כהצלחה.
+המסע נשמר מיד כ־`BankConnection` עם `organization_id`.
+
+סדר ההפעלה לבעלים:
+
+1. admin מתחיל את המסע עם `psu_id`; בחשבון חברה מוסיף `psu_corporate_id`.
+2. הבעלים פותח את `connect_url`, מזדהה בבנק ומאשר שיתוף מידע.
+3. רצף בודק `GET /api/open-finance/onboarding/status/{connection_id}`. רק מזהה
+   שנשמר לאותו ארגון מגיע לספק; מזהה זר מקבל 404 לפני קריאת רשת.
+4. `PARTIALLY_AUTHORIZED` אינו הצלחה — ממתינים לאישור שאר בעלי החשבון.
+5. ה־cron היומי מדלג עם `consent_pending` לפני checkpoint ולפני קונקטור כל עוד
+   יש מסע מקומי אך אין סטטוס `ACTIVE`/`CONNECTED`/`COMPLETED`.
+6. scope ‏`create:connections` ותקינות הקרדנצ'לים ניתנים להוכחה רק בניסיון חי
+   מאושר. 403 נשאר חסם ספק גלוי ומועבר לתמיכה; אין retry אוטומטי עוקף.
+
+יצירה, מחיקה ורענון חיבור דורשים admin. השלמת ההסכמה עצמה נשארת בידי בעל
+החשבון במסכי הבנק; רצף אינה מאשרת בשמו.
 
 ## 3. שליפת חשבונות ותנועות
 

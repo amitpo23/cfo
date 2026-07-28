@@ -30,9 +30,10 @@ async def send_chat_message(
     text = body.get("message", "")
     if not session_id or not text.strip():
         raise HTTPException(400, "session_id ו-message נדרשים")
+    persona = body.get("persona")
 
     service = _service_for(db, org_id, user)
-    return await service.send_message(session_id, text)
+    return await service.send_message(session_id, text, persona=persona)
 
 
 @router.post("/chat/confirm")

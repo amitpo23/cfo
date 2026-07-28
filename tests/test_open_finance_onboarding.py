@@ -14,7 +14,7 @@ Covers:
 import pytest
 
 from cfo.database import SessionLocal
-from cfo.models import IntegrationConnection
+from cfo.models import BankConnection, IntegrationConnection
 from cfo.services.credentials_vault import decrypt_credentials, encrypt_credentials
 
 
@@ -169,19 +169,78 @@ def test_start_bank_connection_returns_connect_url_and_persists_id(fresh_org, pl
         creds = decrypt_credentials(conn.credentials_encrypted)
         assert creds["user_id"] == f"rezef-org-{org_id}"
         assert "conn-onb-1" in creds["of_connection_ids"]
+        bank_connection = (
+            db.query(BankConnection)
+            .filter(
+                BankConnection.organization_id == org_id,
+                BankConnection.connection_id == "conn-onb-1",
+            )
+            .one()
+        )
+        assert bank_connection.connect_url == "https://consent.example.com/conn-onb-1"
+        assert bank_connection.status == "INACTIVE"
+    finally:
+        db.close()
+
+
+def test_start_bank_connection_rejects_incomplete_provider_response(
+    fresh_org, platform_creds, monkeypatch
+):
+    from cfo.services.open_finance_client import OpenFinanceClient, OpenFinanceError
+    from cfo.services.open_finance_onboarding import start_bank_connection
+    import asyncio
+
+    org_id = fresh_org()["org_id"]
+
+    async def fake_create_connection(self, body):
+        return {"id": "conn-without-url"}
+
+    monkeypatch.setattr(OpenFinanceClient, "create_connection", fake_create_connection)
+
+    async def _run():
+        db = SessionLocal()
+        try:
+            with pytest.raises(OpenFinanceError, match="missing"):
+                await start_bank_connection(db, org_id)
+        finally:
+            db.close()
+
+    asyncio.run(_run())
+
+    db = SessionLocal()
+    try:
+        assert (
+            db.query(BankConnection)
+            .filter(BankConnection.organization_id == org_id)
+            .count()
+            == 0
+        )
     finally:
         db.close()
 
 
 def test_get_connection_status_proxies_and_explains_partially_authorized(fresh_org, platform_creds, monkeypatch):
     from cfo.services.open_finance_client import OpenFinanceClient
-    from cfo.services.open_finance_onboarding import ensure_of_identity, get_connection_status
+    from cfo.services.open_finance_onboarding import (
+        ensure_of_identity,
+        get_connection_status,
+        persist_connection_journey,
+    )
     import asyncio
 
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
         ensure_of_identity(db, org_id)
+        persist_connection_journey(
+            db,
+            org_id,
+            {
+                "id": "conn-onb-2",
+                "connectUrl": "https://consent.example.com/conn-onb-2",
+            },
+        )
+        db.commit()
     finally:
         db.close()
 
@@ -213,6 +272,152 @@ def test_get_connection_status_proxies_and_explains_partially_authorized(fresh_o
     assert "explanation" in result and "משותף" in result["explanation"]
 
 
+def test_get_connection_status_rejects_missing_provider_status(
+    fresh_org, platform_creds, monkeypatch
+):
+    from cfo.services.open_finance_client import OpenFinanceClient, OpenFinanceError
+    from cfo.services.open_finance_onboarding import (
+        ensure_of_identity,
+        get_connection_status,
+        persist_connection_journey,
+    )
+    import asyncio
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        ensure_of_identity(db, org_id)
+        persist_connection_journey(
+            db,
+            org_id,
+            {
+                "id": "conn-missing-status",
+                "connectUrl": "https://consent.example.com/conn-missing-status",
+            },
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    async def fake_get_connection(self, connection_id):
+        return {"id": connection_id}
+
+    monkeypatch.setattr(OpenFinanceClient, "get_connection", fake_get_connection)
+
+    async def _run():
+        db = SessionLocal()
+        try:
+            with pytest.raises(OpenFinanceError, match="missing status"):
+                await get_connection_status(db, org_id, "conn-missing-status")
+        finally:
+            db.close()
+
+    asyncio.run(_run())
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(BankConnection)
+            .filter(
+                BankConnection.organization_id == org_id,
+                BankConnection.connection_id == "conn-missing-status",
+            )
+            .one()
+        )
+        assert row.status == "INACTIVE"
+    finally:
+        db.close()
+
+
+def test_connection_routes_refuse_cross_org_id_before_provider_access(
+    client, fresh_org, platform_creds, monkeypatch
+):
+    from cfo.services.open_finance_client import OpenFinanceClient
+
+    source_org = fresh_org()
+    other_org = fresh_org()
+
+    async def fake_create_connection(self, body):
+        return {
+            "id": "conn-private-to-source",
+            "connectUrl": "https://consent.example.com/conn-private-to-source",
+        }
+
+    monkeypatch.setattr(OpenFinanceClient, "create_connection", fake_create_connection)
+    created = client.post(
+        "/api/open-finance/onboarding/start",
+        json={"language": "he"},
+        headers=source_org["headers"],
+    )
+    assert created.status_code == 200, created.text
+
+    async def must_not_call_provider(self, *args, **kwargs):
+        raise AssertionError("cross-org connection id reached provider")
+
+    monkeypatch.setattr(OpenFinanceClient, "get_connection", must_not_call_provider)
+    monkeypatch.setattr(OpenFinanceClient, "delete_connection", must_not_call_provider)
+    monkeypatch.setattr(OpenFinanceClient, "refresh_connection", must_not_call_provider)
+
+    responses = [
+        client.get(
+            "/api/open-finance/onboarding/status/conn-private-to-source",
+            headers=other_org["headers"],
+        ),
+        client.get(
+            "/api/open-finance/connections/conn-private-to-source",
+            headers=other_org["headers"],
+        ),
+        client.delete(
+            "/api/open-finance/connections/conn-private-to-source",
+            headers=other_org["headers"],
+        ),
+        client.post(
+            "/api/open-finance/connections/conn-private-to-source/refresh",
+            headers=other_org["headers"],
+        ),
+    ]
+    assert [response.status_code for response in responses] == [404, 404, 404, 404]
+
+
+def test_onboarding_start_requires_admin_before_provider_access(
+    client, owner, monkeypatch
+):
+    from cfo.services.open_finance_client import OpenFinanceClient
+
+    email = "of-onboarding-regular@example.com"
+    created = client.post(
+        "/api/admin/users",
+        json={
+            "email": email,
+            "password": "securepass",
+            "full_name": "OF Regular User",
+            "organization_id": owner["user"]["organization_id"],
+            "role": "user",
+        },
+        headers=owner["headers"],
+    )
+    assert created.status_code == 201, created.text
+    login = client.post(
+        "/api/admin/auth/login",
+        json={"email": email, "password": "securepass"},
+    )
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    async def must_not_call_provider(self, *args, **kwargs):
+        raise AssertionError("non-admin reached provider")
+
+    monkeypatch.setattr(OpenFinanceClient, "create_connection", must_not_call_provider)
+
+    response = client.post(
+        "/api/open-finance/onboarding/start",
+        json={"language": "he"},
+        headers=headers,
+    )
+    assert response.status_code == 403
+    assert "admin" in response.json()["detail"].lower()
+
+
 # ------------------------------------------------------------------ #
 # routes
 # ------------------------------------------------------------------ #
@@ -238,12 +443,24 @@ def test_onboarding_start_route_org_scoped(client, fresh_org, platform_creds, mo
 
 def test_onboarding_status_route_org_scoped(client, fresh_org, platform_creds, monkeypatch):
     from cfo.services.open_finance_client import OpenFinanceClient
-    from cfo.services.open_finance_onboarding import ensure_of_identity
+    from cfo.services.open_finance_onboarding import (
+        ensure_of_identity,
+        persist_connection_journey,
+    )
 
     org = fresh_org()
     db = SessionLocal()
     try:
         ensure_of_identity(db, org["org_id"])
+        persist_connection_journey(
+            db,
+            org["org_id"],
+            {
+                "id": "conn-route-2",
+                "connectUrl": "https://consent.example.com/conn-route-2",
+            },
+        )
+        db.commit()
     finally:
         db.close()
 

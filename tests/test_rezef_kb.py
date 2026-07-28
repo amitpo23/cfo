@@ -80,6 +80,23 @@ def test_bookkeeper_topic_alias_and_content():
     assert "טריות" in TOPICS["bookkeeper"]
 
 
+def test_bookkeeping_topic_is_the_derived_ledger_not_the_daily_role():
+    assert get_topic("ledger") == TOPICS["bookkeeping"]
+    assert "מאזן בוחן" in TOPICS["bookkeeping"]
+    assert "derived" in TOPICS["bookkeeping"]
+    assert TOPICS["bookkeeping"] != TOPICS["bookkeeper"]
+
+
+def test_operating_system_topic_is_rendered_from_the_capability_registry():
+    topic = get_topic("מערכת הפעלה")
+
+    assert topic == TOPICS["operating_system"]
+    assert "sumit-integration" not in topic  # user-facing titles, not internal IDs
+    assert "SUMIT" in topic
+    assert "הנהלת חשבונות כפולה" in topic
+    assert "MASTER_EXECUTION_PLAN.md" in topic
+
+
 def test_screens_cover_all_frontend_nav_routes():
     """Locks in screen count so a future App.tsx route addition/removal is
     a deliberate KB edit, not silent drift."""
