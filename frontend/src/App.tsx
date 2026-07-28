@@ -93,6 +93,7 @@ import CFOCashFlowProjection from './components/CFOCashFlowProjection';
 import CashFlowDashboard from './components/CashFlowDashboard';
 
 import RezefLanding from './components/RezefLanding';
+import PrivacyPolicy from './components/PrivacyPolicy';
 
 import './App.css';
 
@@ -195,6 +196,16 @@ function App() {
       .then(setCurrentUser)
       .catch(() => setCurrentUser(null));
   }, [authed]);
+
+  // Public, pre-auth route. Meta requires a reachable privacy-policy URL to
+  // publish the WhatsApp app and fetches it without any session, so this must
+  // be resolved BEFORE the auth gate below — otherwise the crawler (and any
+  // logged-out visitor) gets the login screen instead of the policy. Checked
+  // on window.location rather than via the Router, which only mounts after
+  // authentication.
+  if (window.location.pathname.replace(/\/+$/, '') === '/privacy') {
+    return <PrivacyPolicy />;
+  }
 
   if (!authed && !AUTH_BYPASS) {
     return <RezefLanding darkMode={darkMode} onSuccess={() => setAuthed(true)} />;
