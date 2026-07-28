@@ -17,6 +17,10 @@
       "destination": "/api/index"
     },
     {
+      "source": "/privacy",
+      "destination": "/privacy.html"
+    },
+    {
       "source": "/((?!assets/).*)",
       "destination": "/index.html"
     }
