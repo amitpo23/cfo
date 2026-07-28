@@ -82,7 +82,43 @@
 
 ---
 
-## שלב 5 — הקמת ערוץ WhatsApp
+## שלב 5א — PoC מהיר: מספר הבדיקה של Meta ⭐
+
+**זה המסלול להתחלה.** ‏Meta נותנת מספר בדיקה **חינם ומיידי, בלי אימות עסקי** —
+אפשר אפילו ליצור Test Business Account. הקוד שלנו עובד איתו כמו שהוא.
+
+1. `developers.facebook.com` ← **Create App** ← סוג **Business**.
+2. במסך המוצרים ← **WhatsApp** ← **Set up**. נוצרים אוטומטית מספר בדיקה
+   ו-Test Business Account.
+3. במסך **API Setup**:
+   - העתק את **Phone number ID** (⚠️ ה-ID, לא המספר עצמו — זו הטעות הנפוצה).
+   - העתק את ה-**Temporary access token**. לטווח ארוך הפק Permanent token
+     דרך System User.
+   - תחת **To** ← **Manage phone number list** ← הוסף את המספרים שיבדקו.
+     **עד 5 נמענים** — זו המגבלה היחידה שתרגיש.
+4. **App Secret**: Settings ← Basic ← **Show**.
+5. **Verify token**: מחרוזת שאתה בוחר — `openssl rand -hex 16`.
+6. הזן את ארבעת הערכים ל-Vercel (Production) ואמת:
+
+```bash
+python scripts/check_whatsapp_setup.py --send-to 972501234567
+```
+
+הסקריפט בודק שהערכים קיימים, שה-token באמת מורשה על המספר, ושחישוב חתימת
+ה-webhook תקין — ומסביר מה לתקן בכל כשל. ⚠️ **קריאות רשת חיות — הרצה ידנית
+של הבעלים בלבד** (חסום לסוכנים ב-`AGENTS.md`).
+
+7. **Webhook**: WhatsApp ← Configuration ← Callback URL
+   `https://cfo-2.vercel.app/api/whatsapp/webhook`, ה-Verify Token שלך,
+   ו-Subscribe ל-**messages**.
+
+**מגבלות שכדאי לדעת מראש**: עד 5 נמענים, והמספר מוקצה ע"י Meta ואינו קבוע —
+לא ניתן למתג אותו כ"המספר של מושקו" לצמיתות. המעבר למספר קבוע אחרי אימות
+עסקי הוא **החלפת ארבעה ערכים, אפס שינוי קוד**.
+
+---
+
+## שלב 5ב — מספר פרודקשיין קבוע
 
 1. **חשבון**: צור/ודא Meta Business Account מאומת.
 2. **מספר**: הוסף מספר ייעודי ב-WhatsApp Manager. חייב להיות מספר ש**אינו רשום

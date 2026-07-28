@@ -35,6 +35,7 @@
 | --- | --- |
 | `scripts/production_readiness_check.py` | ping חי ל-SUMIT ול-Open Finance |
 | `scripts/prod_smoke.py` | httpx חי מול cfo-2.vercel.app |
+| `scripts/check_whatsapp_setup.py` | קריאות חיות ל-Graph API של Meta; `--send-to` אף שולח הודעה |
 | `scripts/verify_sumit_writeback.py`, `pull_sumit_item_names.py` | קריאות SUMIT API |
 | `scripts/run_ocr_pipeline.py`, `classify_expenses.py`, `sumit_daily_file_expenses.js` | מוריד מסמכים מ-SUMIT + מתייק (כתיבה) |
 | `scripts/fix_prod_schema_drift.py`, `migrate_sqlite_to_postgres.py`, `apply_*_schema.py`, `backfill_vat_split.py`, `fix_bills_sign_status.py` | DDL/DML על פרוד |
