@@ -52,6 +52,10 @@ class AccountType(str, Enum):
     BANK = "bank"
     ACCOUNTS_RECEIVABLE = "accounts_receivable"
     ACCOUNTS_PAYABLE = "accounts_payable"
+    # Source charts can contain control/system accounts whose debit/credit
+    # nature cannot be inferred safely from the source classification alone
+    # (for example VAT current accounts and tax institutions).
+    OTHER = "other"
 
 
 class ContactType(str, Enum):
@@ -322,6 +326,26 @@ class Account(Base):
     # Provenance — distinguishes SUMIT synthesized accounts from real Open Finance
     # bank accounts so the two sources coexist without external_id collisions.
     source = Column(String(50), default="manual")
+    # Source chart-of-accounts provenance.  These columns intentionally live on
+    # Account (the existing connector chart data plane), not ExpenseCategory and
+    # not a parallel ledger-account table.
+    source_account_code = Column(String(100), nullable=True)
+    source_name = Column(String(255), nullable=True)
+    source_classification = Column(String(50), nullable=True)
+    sort_code = Column(String(50), nullable=True)
+    vat_key = Column(String(50), nullable=True)
+    tax_id = Column(String(20), nullable=True)
+    withholding_rate = Column(Numeric(precision=7, scale=4), nullable=True)
+    withholding_valid_until = Column(Date, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_historical = Column(Boolean, nullable=False, default=False)
+    source_status_code = Column(String(10), nullable=True)
+    row_hash = Column(String(64), nullable=True)
+    source_file_hash = Column(String(64), nullable=True)
+    observed_at = Column(DateTime(timezone=True), nullable=True)
+    synced_at = Column(DateTime(timezone=True), nullable=True)
+    # Filled only by the later SUMIT readback; offline source importers preserve it.
+    sumit_account_code = Column(String(100), nullable=True)
     # חותמת טריות ליתרה — referenceDate של רשומת ה-balance שנבחרה מ-Open
     # Finance (closingBooked/expected/interimAvailable, האחרון מבין הזמינים).
     # NULL לחשבונות שלא הגיעו מ-OF (SUMIT מסונתז, ידני).
@@ -354,7 +378,37 @@ class Account(Base):
 
     __table_args__ = (
         Index("ix_account_org_ext_source", "organization_id", "external_id", "source", unique=True),
+        UniqueConstraint(
+            "organization_id",
+            "source_account_code",
+            name="uq_account_org_source_account_code",
+        ),
     )
+
+
+class AccountImportChange(Base):
+    """Immutable audit evidence for source chart changes detected on re-import."""
+
+    __tablename__ = "account_import_changes"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    source_account_code = Column(String(100), nullable=False)
+    source_file_hash = Column(String(64), nullable=False)
+    old_row_hash = Column(String(64), nullable=True)
+    new_row_hash = Column(String(64), nullable=False)
+    changes = Column(JSON, nullable=False)
+    changed_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    organization = relationship("Organization")
+    account = relationship("Account")
 
 
 class Transaction(Base):
