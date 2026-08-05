@@ -647,8 +647,10 @@ def run_bookkeeper_morning(
 def run_bank_gap_scan(db: Session = Depends(get_db_session)):
     """יומי (03:15 UTC — אחרי sync-open-finance של 02:00): סורק לכל ארגון
     פעיל תנועות בנק יוצאות חדשות ללא מסמך הנה"ח, ויוצר CfoInsight
-    (insight_type="missing_document") לכל תנועה חדשה. כשל בארגון אחד
-    מבודד (rollback + נרשם ב-errors) ולא מפיל את הריצה עבור האחרים —
+    (insight_type="missing_document") לכל תנועה חדשה. באותה ריצה גם סורק
+    תנועות זיכוי (הכנסות) ללא Invoice תואמת ויוצר CfoInsight
+    (insight_type="unrecorded_income"). כשל בארגון אחד מבודד (rollback +
+    נרשם ב-errors) ולא מפיל את הריצה עבור האחרים —
     ראה services/bank_expense_gap.scan_and_alert."""
     from ...services.bank_expense_gap import scan_and_alert
 

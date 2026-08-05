@@ -19,11 +19,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
-from ..dependencies import get_current_org_id, require_admin
+from ..dependencies import get_current_org_id, get_current_user, require_admin
 from ...config import settings
 from ...models import (
     Account, BankConnection, BankTransaction, CfoInsight, IntegrationConnection,
-    OpenFinancePayment,
+    OpenFinancePayment, User,
 )
 from ...services.open_finance_client import OpenFinanceClient, OpenFinanceError
 from ...services.credentials_vault import decrypt_credentials
@@ -51,6 +51,11 @@ BANK_INSIGHT_TYPES = {
     "category_spike", "cashflow_forecast", "savings_opportunity", "anomaly",
     "risk_signal", "aggregate_balance", "portfolio_summary", "portfolio_position",
     "missing_document",
+    # "unrecorded_income" is the inflow-side counterpart of "missing_document"
+    # — also produced by services/bank_expense_gap.py (scan_and_alert), for
+    # bank credits with no matching Invoice in SUMIT (closes the bank↔insights
+    # loop for money coming in, not just money going out).
+    "unrecorded_income",
     # PR2 of the bookkeeper daily-cycle plan — morning bank scan (credit-line
     # breach detector + bank-anomaly scan), run additively at the end of
     # POST /insights/generate (see credit_line_service.py, bank_anomalies.py).
@@ -683,10 +688,11 @@ async def reconcile(
 async def dispatch_reconciliation_to_sumit(
     dry_run: bool = Query(False),
     org_id: int = Depends(get_current_org_id),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db_session),
 ):
     return await reconciliation_dispatch.dispatch_reconciliation_to_sumit(
-        db, org_id, dry_run=dry_run
+        db, org_id, dry_run=dry_run, actor=current_user,
     )
 
 

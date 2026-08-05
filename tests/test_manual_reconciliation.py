@@ -208,6 +208,48 @@ def test_manual_match_not_found(acc):
         db.close()
 
 
+def test_suggest_matches_ranks_candidates(acc):
+    """suggest_matches() must actually run (previously crashed on undefined
+    `invoices`/`bills`/`expenses` names) and rank the best amount/date match first."""
+    org_id = acc["org_id"]
+    db = SessionLocal()
+    try:
+        good_inv = Invoice(
+            organization_id=org_id, external_id="SUMIT-INV-SUGGEST-GOOD", source="sumit",
+            issue_date=date(2026, 6, 20), status=InvoiceStatus.SENT, total=555, balance=555,
+        )
+        far_inv = Invoice(
+            organization_id=org_id, external_id="SUMIT-INV-SUGGEST-FAR", source="sumit",
+            issue_date=date(2026, 1, 1), status=InvoiceStatus.SENT, total=555, balance=555,
+        )
+        txn = BankTransaction(
+            organization_id=org_id, external_id="OF-TXN-SUGGEST", source="open_finance",
+            transaction_date=date(2026, 6, 21), description="תשלום", amount=555, currency="ILS",
+        )
+        db.add_all([good_inv, far_inv, txn])
+        db.commit()
+
+        service = ManualReconciliationService(db, organization_id=org_id)
+        candidates = service.suggest_matches(txn.id, limit=5)
+
+        assert candidates, "suggest_matches returned no candidates"
+        assert candidates[0]["entity_type"] == "invoice"
+        assert candidates[0]["entity_id"] == good_inv.id
+    finally:
+        db.close()
+
+
+def test_suggest_matches_no_transaction_date_returns_empty(acc):
+    """Graceful empty result (not a crash) when the txn/date is missing."""
+    org_id = acc["org_id"]
+    db = SessionLocal()
+    try:
+        service = ManualReconciliationService(db, organization_id=org_id)
+        assert service.suggest_matches(999999) == []
+    finally:
+        db.close()
+
+
 def test_manual_match_via_api(client, acc):
     """Test manual match endpoint."""
     org_id = acc["org_id"]

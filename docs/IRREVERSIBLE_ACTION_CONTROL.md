@@ -59,7 +59,7 @@
 | ביטול/החזר/`init`/מנדטים ב־Open Finance | דורשים Admin; עדיין אינם צורכים approval עמיד | לא |
 | `/api/accounting/documents*` | pass-through ל־SUMIT; טרם חובר לחוזה | לא |
 | `/api/financial/documents*` והפקה/ביטול חשבונית | מסלולי שירות נוספים; טרם חוברו לחוזה | לא |
-| `/api/open-finance/reconcile/sumit-dispatch` | writeback חיצוני; טרם חובר לחוזה | לא |
+| `/api/open-finance/reconcile/sumit-dispatch` | writeback חיצוני (הערת לקוח ב-SUMIT); מחובר לחוזה `sumit_writeback` — proposed/approved per-row, ללא verified (SUMIT חסר readback עצמאי להערות) | רק לאחר פריסה וקונפיגורציה; לא נבדק חי |
 | יצוא/בדיקות דיווח | draft/verification בלבד; אינם שידור לרשות | כן, כטיוטה בלבד |
 | סגירת תקופה/מנה | אין executor מאומת | לא |
 
@@ -83,3 +83,17 @@ adapter עתידי חייב:
 חובה; client לא נבנה לפני בדיקת האישור וה־payload; התשלום נוצר מה־payload
 השמור בלבד; replay נחסם; ו־`get_payment` נשמר כראיית readback. הטסט משתמש
 בלקוח מזויף בלבד — התנהגות חיה מול הספק **לא נבדקה**.
+
+`services/reconciliation_dispatch.dispatch_reconciliation_to_sumit` הוא adapter
+שני, לסוג `sumit_writeback` — עם סטייה מכוונת אחת מהחוזה הכללי: הוא מציע
+(`propose`) ומטפל ב־claim/execute **בפנימיות השירות עצמו**, לא דרך header
+`X-Rezef-Approval-Id` בבקשת ביצוע נפרדת, כי dispatch מטפל במנה של תנועות בנק
+בבת אחת (per-row idempotency key `sumit-writeback:{org_id}:banktxn:{txn_id}`),
+לא בפעולה בודדת כמו תשלום. אישור עדיין קורה אך ורק דרך
+`POST /api/approvals/{id}/approve` הקיים — השירות לא מדלג על approve, רק
+מאחד claim+execute עם ה-dispatch run הבא אחרי האישור. סטייה שנייה, מתועדת:
+ל-SUMIT אין endpoint readback עצמאי להערת לקוח (`createremark`), אז ה-adapter
+הזה **אינו קורא ל-`mark_verified`** — הפעולה נשארת ב-`executed` (לא `verified`)
+לצמיתות; זו מגבלה כנה של הספק, לא פרצה בקוד. `tests/test_sumit_reconciliation_writeback.py`
+מכסה propose→pending_approval, approve→confirmed (executed) עם connector מזויף,
+reject→unsupported, וכשל ספק→failed — ללא רשת אמיתית.

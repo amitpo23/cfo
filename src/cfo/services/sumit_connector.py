@@ -552,6 +552,45 @@ class SumitConnector(AccountingConnector):
         # SUMIT doesn't expose journal entries directly
         return FetchResult(items=[], has_more=False)
 
+    async def post_bank_reconciliation(self, payload: dict) -> dict:
+        """Write a bank-reconciliation match back to SUMIT (used by
+        reconciliation_dispatch.dispatch_reconciliation_to_sumit).
+
+        SUMIT has no dedicated "bank reconciliation" endpoint — the only real
+        write available for this is a customer remark
+        (POST /accounting/customers/createremark/), attached to the Contact
+        behind the matched document (Invoice.contact / Bill.vendor /
+        Expense.supplier). Honest-null: when the matched entity has no linked
+        contact (`matched_entity.contact_external_id` is falsy) there is
+        nothing in SUMIT to write to, so this raises NotImplementedError
+        instead of pretending the write-back happened — the caller
+        (reconciliation_dispatch) treats that as `unsupported`, not a
+        fabricated success.
+        """
+        from ..integrations.sumit_models import CustomerRemarkRequest
+
+        matched = payload.get("matched_entity") or {}
+        contact_external_id = matched.get("contact_external_id")
+        if not contact_external_id:
+            raise NotImplementedError(
+                "SUMIT bank-reconciliation write-back requires a contact linked "
+                "to the matched document (no contact_external_id on the matched entity)",
+            )
+
+        txn = payload.get("bank_transaction") or {}
+        remark = (
+            f"תואם לתנועת בנק #{txn.get('id')} מ-{txn.get('date')} על סך "
+            f"{txn.get('amount')} {txn.get('currency') or 'ILS'} "
+            f"(\"{txn.get('description') or ''}\") — מסמך {matched.get('type')} "
+            f"{matched.get('document_number') or matched.get('external_id') or matched.get('id')}."
+        )
+        client = await self._get_client()
+        async with client:
+            result = await client.create_customer_remark(
+                CustomerRemarkRequest(customer_id=str(contact_external_id), remark=remark)
+            )
+        return result
+
     async def close(self):
         # Each fetch method opens and closes its own client via `async with`.
         return None
