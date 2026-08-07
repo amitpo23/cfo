@@ -47,7 +47,7 @@ def test_alembic_upgrade_head_builds_a_complete_fresh_database(tmp_path):
         revision = connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
         ).scalar_one()
-    assert revision == "c5d6e7f8a9b0"
+    assert revision == "e7f8a9b0c1d2"
     account_indexes = {
         index["name"]: index
         for index in sa.inspect(engine).get_indexes("accounts")

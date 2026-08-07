@@ -924,6 +924,43 @@ async def _search_history(db, org_id: int, *, query: str, _user_id: int | None =
     }
 
 
+# Moshko Stage 3 — tasks use the existing Task table. create/update are
+# registered as writes below, so the chat loop persists a pending_action and
+# never reaches these wrappers until the user explicitly confirms.
+async def _create_task(
+    db, org_id: int, *, title: str, description: str | None = None,
+    due_date: str | None = None, entity_type: str | None = None,
+    entity_id: int | None = None, alert_id: int | None = None, **_kwargs,
+) -> dict:
+    from . import moshko_tasks
+    return moshko_tasks.create_task(
+        db, org_id, title=title, description=description, due_date=due_date,
+        entity_type=entity_type, entity_id=entity_id, alert_id=alert_id,
+    )
+
+
+async def _list_tasks(
+    db, org_id: int, *, status: str | None = None,
+    due_from: str | None = None, due_to: str | None = None,
+    limit: int = 100, **_kwargs,
+) -> dict:
+    from . import moshko_tasks
+    return moshko_tasks.list_tasks(
+        db, org_id, status=status, due_from=due_from, due_to=due_to, limit=limit,
+    )
+
+
+async def _update_task(
+    db, org_id: int, *, task_id: int, status: str | None = None,
+    due_date: str | None = None, clear_due_date: bool = False, **_kwargs,
+) -> dict:
+    from . import moshko_tasks
+    return moshko_tasks.update_task(
+        db, org_id, task_id=task_id, status=status, due_date=due_date,
+        clear_due_date=clear_due_date,
+    )
+
+
 TOOLS: dict[str, ChatTool] = {
     "get_ar_aging": ChatTool(
         name="get_ar_aging",
@@ -1677,6 +1714,69 @@ TOOLS: dict[str, ChatTool] = {
         fn=_memory,
         needs_user=True,
     ),
+    "create_task": ChatTool(
+        name="create_task",
+        description=(
+            "יצירת משימת מעקב חדשה בטבלת המשימות של הארגון. תאריך היעד יכול "
+            "להיות ISO או ניסוח ישראלי מפורש כמו 'מחר' או 'ב-15'. אם המשימה "
+            "נובעת מהתראה קיימת, יש להעביר alert_id כדי לשמר את הקישור. "
+            "פעולת כתיבה — דורשת אישור מפורש לפני יצירה."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "כותרת קצרה ומעשית"},
+                "description": {"type": "string"},
+                "due_date": {
+                    "type": "string",
+                    "description": "היום, מחר, ב-15, YYYY-MM-DD או DD/MM/YYYY",
+                },
+                "entity_type": {"type": "string"},
+                "entity_id": {"type": "integer"},
+                "alert_id": {"type": "integer"},
+            },
+            "required": ["title"],
+        },
+        category="write",
+        fn=_create_task,
+    ),
+    "list_tasks": ChatTool(
+        name="list_tasks",
+        description=(
+            "רשימת משימות הארגון מתוך טבלת Task הקיימת, עם סינון לפי סטטוס "
+            "וטווח תאריך יעד. קריאה בלבד ומבודדת לארגון הנוכחי."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["open", "in_progress", "done"]},
+                "due_from": {"type": "string", "description": "תחילת טווח תאריך יעד"},
+                "due_to": {"type": "string", "description": "סוף טווח תאריך יעד"},
+                "limit": {"type": "integer", "default": 100},
+            },
+        },
+        category="read",
+        fn=_list_tasks,
+    ),
+    "update_task": ChatTool(
+        name="update_task",
+        description=(
+            "עדכון סטטוס או תאריך יעד של משימה קיימת בארגון. אפשר להסיר תאריך "
+            "יעד עם clear_due_date=true. פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer"},
+                "status": {"type": "string", "enum": ["open", "in_progress", "done"]},
+                "due_date": {"type": "string"},
+                "clear_due_date": {"type": "boolean", "default": False},
+            },
+            "required": ["task_id"],
+        },
+        category="write",
+        fn=_update_task,
+    ),
     "search_history": ChatTool(
         name="search_history",
         description=(
@@ -1697,6 +1797,54 @@ TOOLS: dict[str, ChatTool] = {
         needs_user=True,
     ),
 }
+
+
+# Explicit target classification, reviewed against each wrapper above. Most
+# tools query or mutate Rezef's normalized DB. Only wrappers that actually
+# cross a provider boundary are classified as provider calls; bank queries
+# over already-normalized BankTransaction rows remain rezef_db. Knowledge and
+# SMTP helpers are local because the reporting taxonomy intentionally has only
+# sumit/open_finance/rezef_db/local.
+_SUMIT_TOOLS = {"issue_document", "create_payment_link", "file_expense"}
+_OPEN_FINANCE_TOOLS = {"create_bank_payment_request", "connect_bank_account"}
+_LOCAL_TOOLS = {"rezef_help", "kb_lookup", "email_report"}
+_REZEF_DB_TOOLS = set(TOOLS) - _SUMIT_TOOLS - _OPEN_FINANCE_TOOLS - _LOCAL_TOOLS
+
+
+def tool_target_system(
+    tool_name: str,
+    *,
+    arguments: dict[str, Any] | None = None,
+    result: dict[str, Any] | None = None,
+) -> str:
+    """Return the implementation-backed system actually targeted by a call.
+
+    Two wrappers are data-dependent: issue_document can explicitly create a
+    local draft (send_to_sumit=false), and run_client_sync reports the source
+    selected by the existing connector resolver.
+    """
+    if tool_name not in TOOLS:
+        raise KeyError(f"Unknown Moshko tool: {tool_name}")
+    if tool_name == "issue_document" and (arguments or {}).get("send_to_sumit") is False:
+        return "rezef_db"
+    if tool_name == "run_client_sync":
+        source = (result or {}).get("source")
+        if source in {"sumit", "open_finance"}:
+            return source
+        return "local"  # connector orchestration; exact source unavailable on failure
+    if tool_name in _SUMIT_TOOLS:
+        return "sumit"
+    if tool_name in _OPEN_FINANCE_TOOLS:
+        return "open_finance"
+    if tool_name in _LOCAL_TOOLS:
+        return "local"
+    if tool_name in _REZEF_DB_TOOLS:
+        return "rezef_db"
+    # Tests and extensions may inject an ephemeral ChatTool after module
+    # initialization. It has no reviewed provider boundary, so classify that
+    # synthetic call as local. Every built-in tool is still covered by the
+    # explicit sets above and by the mapping contract test.
+    return "local"
 
 
 def anthropic_tool_schemas(*, include_office: bool = False) -> list[dict[str, Any]]:

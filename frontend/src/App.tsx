@@ -41,6 +41,7 @@ import {
   ChevronDown,
   ClipboardCheck,
   MessageCircle,
+  Activity,
   FileX,
 } from 'lucide-react';
 
@@ -53,6 +54,8 @@ import BankStatementDashboard from './components/BankStatementDashboard';
 import BankInsightsDashboard from './components/BankInsightsDashboard';
 import OfficeDashboard from './components/OfficeDashboard';
 import AdminClientsDashboard from './components/AdminClientsDashboard';
+import MoshkoObservabilityDashboard from './components/MoshkoObservabilityDashboard';
+import MoshkoKnowledgeDashboard from './components/MoshkoKnowledgeDashboard';
 import CalculatorsDashboard from './components/CalculatorsDashboard';
 import PayrollDashboard from './components/PayrollDashboard';
 import OpenFinanceOpsDashboard from './components/OpenFinanceOpsDashboard';
@@ -152,6 +155,8 @@ const navigationConfig = [
       { to: '/bank-insights', icon: Sparkles, label: 'תובנות בנק', description: 'אנומליות, מנויים, עמלות וחיסכון מדפי הבנק' },
       { to: '/office', icon: Building2, label: 'ניהול משרד', description: 'תיקי לקוחות, סנכרון רוחבי והתאמות נדרשות' },
       { to: '/admin-clients', icon: Database, label: 'אדמין — כל הלקוחות', description: 'תצוגת על של כל תיקי הלקוחות' },
+      { to: '/admin-moshko', icon: Activity, label: 'ניטור מושקו', description: 'שיחות, כלים ועלויות LLM', superAdminOnly: true },
+      { to: '/admin-moshko-knowledge', icon: BookOpen, label: 'הידע של מושקו', description: 'זיכרון לומד וידע מקצועי', adminOnly: true },
       { to: '/calculators', icon: Calculator, label: 'מחשבונים', description: 'חישובי שכר/מס/ב"ל דטרמיניסטיים, בלי צ\'אט' },
       { to: '/payroll', icon: Users, label: 'שכר', description: 'עובדים, תלושים ודוח 102/126' },
       { to: '/ledger', icon: BookOpen, label: 'הנה"ח כפולה', description: 'מאזן בוחן, פקודות יומן וכרטסת — נגזר מהמסמכים' },
@@ -230,7 +235,10 @@ function App() {
                       {group.section}
                     </div>
                   )}
-                  {group.items.map((item) => (
+                  {group.items.filter((item) => (
+                    (!(('superAdminOnly' in item) && item.superAdminOnly) || currentUser?.role === 'super_admin')
+                    && (!(('adminOnly' in item) && item.adminOnly) || currentUser?.role === 'admin' || currentUser?.role === 'super_admin')
+                  )).map((item) => (
                     <NavItem
                       key={item.to}
                       to={item.to}
@@ -367,6 +375,8 @@ function App() {
                 <Route path="/bank-insights" element={<BankInsightsDashboard />} />
                 <Route path="/office" element={<OfficeDashboard />} />
                 <Route path="/admin-clients" element={<AdminClientsDashboard />} />
+                <Route path="/admin-moshko" element={<MoshkoObservabilityDashboard currentUser={currentUser} />} />
+                <Route path="/admin-moshko-knowledge" element={<MoshkoKnowledgeDashboard currentUser={currentUser} />} />
                 <Route path="/calculators" element={<CalculatorsDashboard />} />
                 <Route path="/payroll" element={<PayrollDashboard />} />
                 <Route path="/of-ops" element={<OpenFinanceOpsDashboard />} />

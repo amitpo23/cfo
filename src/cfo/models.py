@@ -1022,6 +1022,55 @@ class ChatMessage(Base):
     )
 
 
+class LLMUsage(Base):
+    """One immutable usage observation for one provider LLM request."""
+    __tablename__ = "llm_usage"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    session_id = Column(String(128), nullable=True)
+    provider = Column(String(30), nullable=False)
+    model = Column(String(120), nullable=False)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    cache_read_input_tokens = Column(Integer, nullable=True)
+    cache_creation_input_tokens = Column(Integer, nullable=True)
+    cost_usd = Column(Numeric(18, 8), nullable=True)
+    purpose = Column(String(20), nullable=False)  # chat | vision | ocr
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_llm_usage_org_created", "organization_id", "created_at"),
+        Index("ix_llm_usage_session", "session_id"),
+    )
+
+
+class MoshkoToolCall(Base):
+    """Auditable execution of a Moshko tool (read and confirmed write)."""
+    __tablename__ = "moshko_tool_calls"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    session_id = Column(String(128), nullable=False)
+    message_id = Column(Integer, ForeignKey("ai_chat_messages.id"), nullable=True)
+    tool_name = Column(String(100), nullable=False)
+    target_system = Column(String(30), nullable=False)
+    arguments = Column(JSON, nullable=False, default=dict)
+    succeeded = Column(Boolean, nullable=False)
+    error = Column(Text, nullable=True)
+    duration_ms = Column(Integer, nullable=False, default=0)
+    result_size_bytes = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_moshko_tool_calls_org_created", "organization_id", "created_at"),
+        Index("ix_moshko_tool_calls_session", "session_id"),
+        Index("ix_moshko_tool_calls_target_success", "target_system", "succeeded"),
+    )
+
+
 class InventoryItem(Base):
     """Inventory / stock item — מלאי"""
     __tablename__ = "inventory_items"
@@ -1562,6 +1611,11 @@ class ChannelIdentity(Base):
     # push_enabled.isnot(False), not push_enabled.is_(True)).
     push_enabled = Column(Boolean, nullable=True, default=True)
     last_push_at = Column(DateTime, nullable=True)
+    # Updated for every inbound WhatsApp event before routing. This is the
+    # authoritative Meta 24-hour service-window clock; chat history cannot
+    # substitute because media/persona/interactive messages may not create a
+    # ChatMessage row.
+    last_inbound_at = Column(DateTime(timezone=True), nullable=True)
 
     organization = relationship("Organization")
 
@@ -1601,6 +1655,8 @@ class MoshkoMemory(Base):
     content = Column(Text, nullable=False)
     category = Column(String(30), nullable=True)  # preference | business_fact | correction | convention
     source = Column(String(50), nullable=True)  # conversation | admin | inferred
+    approved_at = Column(DateTime, nullable=True)
+    approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_used_at = Column(DateTime, nullable=True)
