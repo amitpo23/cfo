@@ -25,17 +25,18 @@ def _row_user_id(db, org_id: int) -> int:
 
 def _make_identity(
     db, org_id, *, external_id, push_enabled=None, verified=True, revoked=False,
-    last_push_at=None,
+    last_push_at=None, provider="telegram", last_inbound_at=None,
 ):
     identity = ChannelIdentity(
         organization_id=org_id,
         user_id=_row_user_id(db, org_id),
-        provider="telegram",
+        provider=provider,
         external_id=external_id,
         verified_at=datetime.utcnow() if verified else None,
         revoked_at=datetime.utcnow() if revoked else None,
         push_enabled=push_enabled,
         last_push_at=last_push_at,
+        last_inbound_at=last_inbound_at,
     )
     db.add(identity)
     db.commit()
@@ -71,6 +72,15 @@ class _FakeGateway:
         if chat_id in self.fail_for:
             raise RuntimeError("boom")
         self.sent.append((chat_id, text))
+
+
+class _FakeWhatsAppGateway(_FakeGateway):
+    def __init__(self, fail_for=None):
+        super().__init__(fail_for=fail_for)
+        self.templates: list[tuple[str, str, str, list[str]]] = []
+
+    async def send_template(self, chat_id, template_name, language_code, variables):
+        self.templates.append((chat_id, template_name, language_code, variables))
 
 
 def _minimal_brief(org_id, status="yellow"):
@@ -243,6 +253,89 @@ def test_push_no_recipients_status(fresh_org, monkeypatch):
         db.close()
 
 
+def test_whatsapp_push_uses_provider_specific_configuration_and_gateway(fresh_org, monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(settings, "telegram_bot_token", None, raising=False)
+    monkeypatch.setattr(settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_access_token", "wa-token", raising=False)
+    monkeypatch.setattr(notifier, "is_quiet_hours", lambda *a, **kw: False)
+    now = datetime(2026, 7, 20, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _make_identity(
+            db, org_id, external_id="972500000001", provider="whatsapp",
+            last_inbound_at=now - timedelta(hours=1),
+        )
+        gateway = _FakeWhatsAppGateway()
+        result = asyncio.run(notifier.push_to_organization(
+            db, org_id, "שלום בוואטסאפ", provider="whatsapp", gateway=gateway, now=now,
+        ))
+        assert result["status"] == "sent"
+        assert gateway.sent == [("972500000001", "שלום בוואטסאפ")]
+    finally:
+        db.close()
+
+
+def test_whatsapp_outside_service_window_without_template_is_explicit(fresh_org, monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_access_token", "wa-token", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_push_template_name", None, raising=False)
+    monkeypatch.setattr(notifier, "is_quiet_hours", lambda *a, **kw: False)
+    now = datetime(2026, 7, 20, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _make_identity(
+            db, org_id, external_id="972500000002", provider="whatsapp",
+            last_inbound_at=now - timedelta(hours=25),
+        )
+        gateway = _FakeWhatsAppGateway()
+        result = asyncio.run(notifier.push_to_organization(
+            db, org_id, "התראה", provider="whatsapp", gateway=gateway, now=now,
+        ))
+        assert result["status"] == "outside_service_window"
+        assert result["sent"] == 0
+        assert result["outside_service_window"] == 1
+        assert gateway.sent == []
+        assert gateway.templates == []
+    finally:
+        db.close()
+
+
+def test_whatsapp_outside_window_uses_configured_template(fresh_org, monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_access_token", "wa-token", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_push_template_name", "rezef_alert", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_push_template_language", "he", raising=False)
+    monkeypatch.setattr(notifier, "is_quiet_hours", lambda *a, **kw: False)
+    now = datetime(2026, 7, 20, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _make_identity(
+            db, org_id, external_id="972500000003", provider="whatsapp",
+            last_inbound_at=now - timedelta(days=2),
+        )
+        gateway = _FakeWhatsAppGateway()
+        result = asyncio.run(notifier.push_to_organization(
+            db, org_id, "התראת תזרים", provider="whatsapp", gateway=gateway, now=now,
+        ))
+        assert result["status"] == "sent"
+        assert gateway.sent == []
+        assert gateway.templates == [("972500000003", "rezef_alert", "he", ["התראת תזרים"])]
+    finally:
+        db.close()
+
+
 # --------------------------------------------------------------------- #
 # morning_brief_service — third channel
 # --------------------------------------------------------------------- #
@@ -369,3 +462,39 @@ def test_channel_alerts_cron_only_pushes_high_or_critical_and_dedupes(fresh_org,
     assert body2["insights"] == 0
     assert body2["pushed"] == 0
     assert gateway.sent == []
+
+
+def test_channel_alerts_cron_pushes_to_whatsapp_only_organization(
+    fresh_org, monkeypatch, client,
+):
+    monkeypatch.setattr(settings, "telegram_bot_token", None, raising=False)
+    monkeypatch.setattr(settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_access_token", "wa-token", raising=False)
+    monkeypatch.setattr(notifier, "is_quiet_hours", lambda *a, **kw: False)
+
+    import cfo.services.whatsapp_gateway as gateway_module
+
+    gateway = _FakeWhatsAppGateway()
+    monkeypatch.setattr(gateway_module, "WhatsAppGateway", lambda *a, **kw: gateway)
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _make_identity(
+            db, org_id, external_id="972500000099", provider="whatsapp",
+            last_inbound_at=datetime.now(ZoneInfo("UTC")) - timedelta(hours=1),
+        )
+        _mk_insight(
+            db, org_id, severity="critical", title="התראת וואטסאפ",
+            created_at=datetime.utcnow() - timedelta(minutes=5),
+        )
+    finally:
+        db.close()
+
+    response = client.get(
+        "/api/cron/channel-alerts",
+        headers={"Authorization": f"Bearer {settings.cron_secret}"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["pushed"] >= 1
+    assert gateway.sent and "התראת וואטסאפ" in gateway.sent[0][1]

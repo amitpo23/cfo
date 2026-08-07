@@ -33,6 +33,7 @@ import hmac
 import json
 import logging
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -272,11 +273,18 @@ async def _handle_message(db: Session, message: dict) -> None:
         text = ((message.get("text") or {}).get("body") or "").strip()
     receipt_media = _extract_receipt_media(message)
 
-    if not text and receipt_media is None:
-        return  # non-text, non-receipt message (audio, location, ...) — silently ignored
-
     gateway = _gateway()
     identity = resolve_identity(db, "whatsapp", external_id)
+
+    # Every verified inbound message opens/refreshes Meta's 24-hour service
+    # window, including types Rezef does not process (audio/location). Record
+    # that fact before the content-routing early return.
+    if identity is not None:
+        identity.last_inbound_at = datetime.now(timezone.utc)
+        db.commit()
+
+    if not text and receipt_media is None:
+        return  # unsupported content is ignored after refreshing the window
 
     if identity is None:
         if _looks_like_email(text):
@@ -296,6 +304,7 @@ async def _handle_message(db: Session, message: dict) -> None:
                 await gateway.send_text(external_id, str(exc))
                 return
             new_identity.display_name = message.get("_profile_name")
+            new_identity.last_inbound_at = datetime.now(timezone.utc)
             db.commit()
             await _send_welcome(gateway, external_id, new_identity)
             return
@@ -360,6 +369,7 @@ async def _handle_receipt_message(
     separate write tool reached through the normal chat/confirm flow, never
     triggered automatically here."""
     from ...services.chat_expense_intake import intake_receipt_bytes
+    import inspect
 
     media_id, message_mime_type = receipt_media
     try:
@@ -377,11 +387,17 @@ async def _handle_receipt_message(
     # all — WhatsAppGateway.download_media never returns a falsy one
     # itself (it defaults to "application/octet-stream"), so this branch
     # is effectively unreachable in practice, not the common path.
-    result = await intake_receipt_bytes(
-        db, identity.organization_id, content,
-        media_type=message_mime_type or downloaded_mime_type, source="whatsapp",
-        uploaded_by_user_id=identity.user_id,
-    )
+    kwargs = {
+        "media_type": message_mime_type or downloaded_mime_type,
+        "source": "whatsapp",
+        "uploaded_by_user_id": identity.user_id,
+    }
+    parameters = inspect.signature(intake_receipt_bytes).parameters.values()
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters) or (
+        "session_id" in inspect.signature(intake_receipt_bytes).parameters
+    ):
+        kwargs["session_id"] = f"wa-{external_id}"
+    result = await intake_receipt_bytes(db, identity.organization_id, content, **kwargs)
 
     status = result.get("status")
     text = result.get("message") or _INTAKE_STATUS_FALLBACK_MESSAGE.get(
@@ -406,6 +422,9 @@ async def _handle_interactive(db: Session, message: dict) -> None:
         # dropping it, in case of a stale/replayed button.
         await gateway.send_text(external_id, _UNLINKED_INSTRUCTIONS)
         return
+
+    identity.last_inbound_at = datetime.now(timezone.utc)
+    db.commit()
 
     interactive = message.get("interactive") or {}
     button_reply = interactive.get("button_reply") or {}

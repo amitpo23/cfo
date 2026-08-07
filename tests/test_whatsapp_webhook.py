@@ -435,7 +435,7 @@ def test_image_from_linked_identity_downloads_and_replies_with_summary(
     intake_calls = {}
 
     async def fake_intake(db, organization_id, content, *, media_type=None, source="whatsapp",
-                           uploaded_by_user_id=None):
+                           uploaded_by_user_id=None, session_id=None):
         intake_calls["organization_id"] = organization_id
         intake_calls["content"] = content
         intake_calls["media_type"] = media_type
@@ -475,7 +475,7 @@ def test_pdf_document_from_linked_identity_is_recognized_as_a_receipt(
     intake_calls = {}
 
     async def fake_intake(db, organization_id, content, *, media_type=None, source="whatsapp",
-                           uploaded_by_user_id=None):
+                           uploaded_by_user_id=None, session_id=None):
         intake_calls["media_type"] = media_type
         return {"status": "unreadable", "message": "לא הצלחתי לקרוא את הקבלה."}
 
