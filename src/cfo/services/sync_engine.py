@@ -306,13 +306,15 @@ class SyncEngine:
         Pure local-DB repair — no SUMIT calls, safe to run repeatedly.
         """
         fixed = 0
+        created = 0
         candidates = self.db.query(Invoice).filter(
             Invoice.organization_id == self.org_id,
             Invoice.source == self.source,
             Invoice.contact_id.is_(None),
         ).all()
         for inv in candidates:
-            cust_id = (inv.raw_data or {}).get("customer_id")
+            raw = inv.raw_data or {}
+            cust_id = raw.get("customer_id")
             if not cust_id:
                 continue
             contact = self.db.query(Contact).filter(
@@ -320,12 +322,34 @@ class SyncEngine:
                 Contact.external_id == str(cust_id),
                 Contact.source == self.source,
             ).first()
-            if contact:
-                inv.contact_id = contact.id
-                fixed += 1
-        if fixed:
+
+            # הקישור לבדו לא מספיק: כשה-Contact מעולם לא נוצר, החשבונית
+            # נשארת יתומה לנצח והדוח מחזיר 0. בפרוד (05/08/2026) כך נתקעו
+            # 8 מ-23 החשבוניות של org 5 — כולן נושאות customer_id **וגם**
+            # customer_name, כלומר את זהות הלקוח במלואה. יוצרים את איש
+            # הקשר מהמטען של החשבונית עצמה; זה נתון של SUMIT, לא ניחוש.
+            # בלי שם אין מה ליצור — honest-null, לא ממציאים לקוח ממזהה.
+            if not contact:
+                name = (raw.get("customer_name") or "").strip()
+                if not name:
+                    continue
+                contact = Contact(
+                    organization_id=self.org_id,
+                    source=self.source,
+                    external_id=str(cust_id),
+                    name=name,
+                    contact_type="CUSTOMER",
+                    raw_data={"backfilled_from_invoice_id": inv.id},
+                )
+                self.db.add(contact)
+                self.db.flush()  # assign id
+                created += 1
+
+            inv.contact_id = contact.id
+            fixed += 1
+        if fixed or created:
             self.db.commit()
-        return {"invoices_fixed": fixed}
+        return {"invoices_fixed": fixed, "contacts_created": created}
 
     def backfill_bill_vendors(self) -> dict:
         """Same repair as backfill_invoice_contacts, for Bill.vendor_id."""
