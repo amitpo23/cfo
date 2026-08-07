@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-07-27",
+  "updated_at": "2026-08-05",
   "purpose": "Machine-readable contract connecting Rezef capabilities to knowledge, runtime evidence and safety gates.",
   "status_vocabulary": {
     "implemented": "Implemented and covered locally; production operation is a separate claim.",
@@ -38,7 +38,8 @@
       "knowledge": [
         "docs/SUMIT_KNOWLEDGE_BASE.md",
         "docs/SUMIT_API_REFERENCE.md",
-        "docs/sumit_swagger_v1_2026-07-10.json"
+        "docs/sumit_swagger_v1_2026-07-10.json",
+        "reports/2026-08-05-cross-org-consistency-audit.md"
       ],
       "runtime": [
         "src/cfo/config.py",
@@ -46,7 +47,9 @@
         "src/cfo/services/expense_filing_service.py",
         "src/cfo/services/sumit_connector.py",
         "src/cfo/services/sync_engine.py",
-        "src/cfo/integrations/sumit_integration.py"
+        "src/cfo/integrations/sumit_integration.py",
+        "src/cfo/services/roster_coverage.py",
+        "scripts/roster_health.py"
       ],
       "tests": [
         "tests/test_sumit_connector_no_wasted_calls.py",
@@ -54,7 +57,8 @@
         "tests/test_expense_filing.py",
         "tests/test_expense_ocr_scheduler.py",
         "tests/test_expense_ocr_pipeline.py",
-        "tests/test_vercel_cron_contract.py"
+        "tests/test_vercel_cron_contract.py",
+        "tests/test_roster_coverage.py"
       ],
       "gates": [
         "organization_scope",
@@ -63,7 +67,7 @@
         "verify_first",
         "owner_approval_for_write"
       ],
-      "honest_boundary": "Read synchronization and several document/payment actions exist. Scheduled detail enrichment claims a separate 20-hour budget before provider access, caps paid getdetails calls at 25 per org/day and reuses CustomerName from the list response. OCR stops before SUMIT while disabled; when enabled it claims a separate 20-hour budget and defaults to 10 documents with a hard cap of 25. Official journal-batch posting and closing are not a fully verified, owner-approved end-to-end workflow.",
+      "honest_boundary": "Read synchronization and several document/payment actions exist. Scheduled detail enrichment claims a separate 20-hour budget before provider access, caps paid getdetails calls at 25 per org/day and reuses CustomerName from the list response. OCR stops before SUMIT while disabled; when enabled it claims a separate 20-hour budget and defaults to 10 documents with a hard cap of 25. Official journal-batch posting and closing are not a fully verified, owner-approved end-to-end workflow. Measured 2026-08-05: an organization silently drops out of the daily cron when its IntegrationConnection turns paused/inactive, because both scheduled_sync_sumit and roster_sync_targets select on status=='active' -- org2 was out for 467h and org3 for 762h with no error raised. roster_coverage now reports this per source (a healthy open_finance connection must not mask a paused sumit one) but deliberately does not reactivate anything: reconnecting a client file is an owner decision.",
       "next_gate": "MASTER_EXECUTION_PLAN gate 3: verified createbatch/readback pipeline and owner-approved batch close."
     },
     {
@@ -174,8 +178,8 @@
         "honest_null",
         "human_decision_queue"
       ],
-      "honest_boundary": "Classification and filing paths exist, but ambiguous documents, missing vehicle profiles and unsupported evidence must remain in review rather than be auto-filed.",
-      "next_gate": "MASTER_EXECUTION_PLAN gates 1-2: complete intake coverage and 20 consecutive correctly filed documents."
+      "honest_boundary": "Classification and filing paths exist, but ambiguous documents, missing vehicle profiles and unsupported evidence must remain in review rather than be auto-filed. Measured in production 2026-08-05: 415 of the pending SUMIT drafts carry total=0 (org1 243, org2 16, org5 156) because the API returns an empty draft envelope -- the readable receipt lives behind the app.sumit.co.il session, so no key-based pipeline can extract them. Only the 41 'sumit_fileexpense' rows for org5 (ILS 211,107.98) carry real amounts. 1,200 of 1,491 expenses have no supplier_tax_id, which blocks registry verification and a correct PCN874 base.",
+      "next_gate": "MASTER_EXECUTION_PLAN gates 1-2: complete intake coverage and 20 consecutive correctly filed documents. Blocked on a browser-session route for the 415 blank envelopes; the API route cannot reach them."
     },
     {
       "id": "double-entry-books",
@@ -409,42 +413,66 @@
       "knowledge": [
         "docs/superpowers/plans/2026-07-26-conversational-channels-personas.md",
         "docs/TELEGRAM_CHANNEL_RUNBOOK.md",
+        "docs/MOSHKO_ACTIVATION_RUNBOOK.md",
         "docs/bookkeeper_kb/README.md"
       ],
       "runtime": [
+        "src/cfo/models.py",
+        "src/cfo/config.py",
         "src/cfo/services/ai_chat_personas.py",
         "src/cfo/services/ai_chat_service.py",
         "src/cfo/services/ai_chat_tools.py",
+        "src/cfo/services/moshko_observability.py",
+        "src/cfo/services/moshko_tasks.py",
+        "src/cfo/services/moshko_knowledge.py",
         "src/cfo/services/chat_expense_intake.py",
         "src/cfo/services/channel_notifier.py",
         "src/cfo/services/channel_link_service.py",
         "src/cfo/services/channel_gateway.py",
+        "src/cfo/services/whatsapp_gateway.py",
         "src/cfo/services/telegram_files.py",
         "src/cfo/services/kb_loader.py",
         "src/cfo/services/email_sender.py",
+        "src/cfo/services/vision_extractor.py",
+        "src/cfo/api/routes/admin.py",
         "src/cfo/api/routes/telegram_webhook.py",
+        "src/cfo/api/routes/whatsapp_webhook.py",
         "src/cfo/api/routes/channels.py",
-        "src/cfo/api/routes/ai_chat.py"
+        "src/cfo/api/routes/ai_chat.py",
+        "alembic/versions/d6e7f8a9b0c1_add_moshko_observability.py",
+        "alembic/versions/e7f8a9b0c1d2_add_moshko_memory_approval.py",
+        "frontend/src/components/MoshkoObservabilityDashboard.tsx",
+        "frontend/src/components/MoshkoKnowledgeDashboard.tsx"
       ],
       "tests": [
         "tests/test_ai_chat_personas.py",
+        "tests/test_ai_chat_service.py",
         "tests/test_chat_expense_intake.py",
         "tests/test_channel_notifier.py",
+        "tests/test_moshko_observability.py",
+        "tests/test_moshko_stage3.py",
         "tests/test_moshko_email_and_approvals.py",
         "tests/test_telegram_webhook.py",
+        "tests/test_whatsapp_webhook.py",
         "tests/test_channel_link.py",
         "tests/test_kb_loader.py",
-        "tests/test_email_attachments.py"
+        "tests/test_email_attachments.py",
+        "tests/test_fresh_database_migrations.py"
       ],
       "gates": [
         "organization_scope",
         "verified_channel_identity",
         "owner_approval",
         "idempotency",
-        "api_cost_discipline"
+        "api_cost_discipline",
+        "privacy_redaction",
+        "personal_memory_privacy",
+        "memory_audit_trail",
+        "super_admin_observability",
+        "whatsapp_service_window"
       ],
-      "honest_boundary": "מושקו קולט קבלות מצילום, עונה מנתוני המערכת בלבד, דוחף התרעות, שולח דוחות במייל ורושם אישורי דיווח — אך פרסונה אינה הרשאה, וכל כתיבה עוצרת לאישור מפורש שמציג את הארגומנטים בפועל בשני הערוצים. הגבול החד: **רצף אינו משדר לרשות המסים** — propose_vat_filing_approval מתעד את אישור הבעלים למספרים בלבד, השידור נעשה ידנית ב-SUMIT, וקובצי PCN874/OPENFRMT הם טיוטות שמבנן לא אומת מול מפרט הרשות. אומדן מס נושא caveat חובה. טלגרם הוא הערוץ היחיד; WhatsApp וקול לא נבנו.",
-      "next_gate": "פעולת בעלים: רישום בוט ב-BotFather, TELEGRAM_BOT_TOKEN + TELEGRAM_WEBHOOK_SECRET בפרוד, מיגרציה a0b1c2d3e4f5 לפי runbook Gate-0, setWebhook, ואז אימות ש-kb_files_available > 0 ושהתרעה יזומה מגיעה."
+      "honest_boundary": "מושקו קולט קבלות מצילום, עונה מנתוני המערכת בלבד ופועל דרך ווב, Telegram ו-WhatsApp בקוד שנבדק אופליין. כל קריאת LLM וכלי נרשמת best-effort עם tenant scope; עלות נשארת NULL כשאין מחיר מדויק בקונפיג, וארגומנטים רגישים מחוטאים. תמלולים וטלמטריה רוחבית זמינים רק ל-SUPER_ADMIN. זיכרון לומד ניתן לניהול אנושי עם אישור ו-AuditLog; מנהל ארגון רואה רק עובדות עסק משותפות ואת הזיכרון האישי שלו, בעוד SUPER_ADMIN יכול לבצע ביקורת רוחבית. שלושת כלי המשימות משתמשים בטבלת Task הקיימת, מבודדים לארגון, ו-create/update נעצרים ב-pending_action עד אישור. ה-KB המקצועי מוצג לקריאה בלבד ומחזיר unavailable מפורש כשמסמכי docs אינם ארוזים. דחיפה יזומה מכבדת opt-in, תצורה פר-provider וחלון שירות WhatsApp בן 24 שעות; מחוץ לחלון אין ניסיון free-form, ובהיעדר תבנית מאושרת מוחזר outside_service_window. פרסונה אינה הרשאה וכל כתיבה נעצרת לאישור מפורש. הגבול החד: **רצף אינו משדר לרשות המסים** — propose_vat_filing_approval מתעד אישור למספרים בלבד והשידור ידני ב-SUMIT. שום התנהגות ספק חיה, תבנית Meta מאושרת, אריזת docs או פריסת Stage 2/3 בפרוד אינה מוכחת כאן; קול לא נבנה.",
+      "next_gate": "פעולת בעלים בשער 0: אישור deploy והמיגרציות d6e7f8a9b0c1 ו-e7f8a9b0c1d2 לפי runbook, הגדרת מחירי מודלים מדויקים ב-LLM_PRICING_JSON, סודות Telegram/WhatsApp, אימות אריזת docs ותבנית Meta מאושרת אופציונלית; לאחר מכן smoke חי מאושר שמוכיח webhook, שיחה, usage, tool-call, זיכרון, משימה ודחיפה בכל ערוץ בלי לעקוף את חלון השירות."
     }
   ]
 }

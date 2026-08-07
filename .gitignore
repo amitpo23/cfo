@@ -48,7 +48,11 @@ docker/.env.docker
 *.sqlite3
 
 # Reports
-reports/
+reports/*
+!reports/moshko_observability/
+reports/moshko_observability/*
+!reports/moshko_observability/implementation_report.md
+!reports/moshko_observability/stage3_report.md
 *.pdf
 *.xlsx
 
