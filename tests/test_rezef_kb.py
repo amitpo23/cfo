@@ -100,7 +100,7 @@ def test_operating_system_topic_is_rendered_from_the_capability_registry():
 def test_screens_cover_all_frontend_nav_routes():
     """Locks in screen count so a future App.tsx route addition/removal is
     a deliberate KB edit, not silent drift."""
-    assert len(SCREENS) == 40
+    assert len(SCREENS) == 42
     paths = [s.path for s in SCREENS]
     assert len(paths) == len(set(paths))  # no duplicates
 

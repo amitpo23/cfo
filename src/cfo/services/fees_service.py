@@ -46,13 +46,14 @@ class FeesService:
         return None
 
     def _expense_total(self, start_date: date, end_date: date) -> float:
+        end_exclusive = end_date + timedelta(days=1)
         return float(
             self.db.query(func.coalesce(func.sum(Transaction.amount), 0))
             .filter(
                 Transaction.organization_id == self.organization_id,
                 Transaction.transaction_type == TransactionType.EXPENSE,
                 Transaction.transaction_date >= start_date,
-                Transaction.transaction_date <= end_date,
+                Transaction.transaction_date < end_exclusive,
             ).scalar() or 0
         )
 
@@ -64,6 +65,7 @@ class FeesService:
         """דוח עמלות מפורט לפי סוג, עם אחוז מההוצאות ופירוט פריטים."""
         today = end_date or date.today()
         start = start_date or today.replace(month=1, day=1)
+        end_exclusive = today + timedelta(days=1)
 
         rows = (
             self.db.query(Transaction)
@@ -71,7 +73,7 @@ class FeesService:
                 Transaction.organization_id == self.organization_id,
                 Transaction.transaction_type == TransactionType.EXPENSE,
                 Transaction.transaction_date >= start,
-                Transaction.transaction_date <= today,
+                Transaction.transaction_date < end_exclusive,
             )
             .all()
         )

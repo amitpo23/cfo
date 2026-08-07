@@ -246,6 +246,32 @@ def kb_index() -> dict[str, Any]:
     return _index_for(str(DOCS_ROOT))
 
 
+def kb_document(center_key: str, filename: str) -> dict[str, Any]:
+    """Return one curated markdown document without accepting arbitrary paths.
+
+    The requested center/file must exist in ``KB_CENTERS``. If the curated
+    document is known but not packaged, return the same explicit unavailable
+    shape as the index; unknown identifiers remain distinguishable.
+    """
+    center = next((item for item in KB_CENTERS if item.key == center_key), None)
+    if center is None:
+        return {"available": True, "found": False}
+    metadata = next((item for item in center.files if item.filename == filename), None)
+    if metadata is None:
+        return {"available": True, "found": False}
+    path = DOCS_ROOT / center.dir_name / metadata.filename
+    if not path.exists():
+        return {"available": False, "reason": NOT_AVAILABLE_REASON, "found": None}
+    return {
+        "available": True,
+        "found": True,
+        "center": center.title_he,
+        "title": metadata.title_he,
+        "summary": metadata.summary_he,
+        "content": _read_file(str(DOCS_ROOT), center.dir_name, metadata.filename),
+    }
+
+
 def _split_sections(
     text: str, file_title: str, heading_re: re.Pattern[str] = _HEADING_RE
 ) -> list[dict[str, str]]:

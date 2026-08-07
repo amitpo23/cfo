@@ -51,6 +51,32 @@ def repair_missing_client_roster(
             SumitCompany.office_organization_id == office_organization_id,
             SumitCompany.company_id == str(company_id),
         ).first()
+        # שער לפני קליטה: קישור מחדש אסור לגנוב ארגון ששייך לתיק אחר.
+        # עד 05/08/2026 ה-`ensure_row` קישר ללא תנאי, כלומר כל ריצת cron
+        # יכלה להעביר ארגון-דייר מתיק לתיק בלי שאיש ידע.
+        from .roster_coverage import intake_conflict
+
+        conflict = intake_conflict(
+            db,
+            office_organization_id=office_organization_id,
+            company_id=str(company_id),
+            target_organization_id=target_org.id,
+        )
+        if conflict:
+            # לוג לבדו אינו אות: ה-cron מדווח את `repaired`, ולכן דילוג
+            # חייב להופיע שם כדי שהבעלים יראה אותו (honest-null).
+            logger.warning(
+                "roster repair skipped for company %s: %s", company_id, conflict
+            )
+            repaired.append({
+                "organization_id": target_org.id,
+                "company_id": str(company_id),
+                "source": source,
+                "skipped": True,
+                "reason": conflict,
+            })
+            return
+
         if existing:
             changed = False
             if existing.target_organization_id != target_org.id:
@@ -109,6 +135,9 @@ def repair_missing_client_roster(
     if repaired:
         db.commit()
         for item in repaired:
+            # שורה שדולגה בגלל התנגשות מדווחת אך לא נכנסת ללולאה.
+            if item.get("skipped"):
+                continue
             enqueue_client_automation(
                 db,
                 office_organization_id=office_organization_id,

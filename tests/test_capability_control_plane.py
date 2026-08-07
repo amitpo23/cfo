@@ -8,6 +8,10 @@ validate versioned files and imports.
 from cfo.services import capability_control_plane as control_plane
 
 
+# סט סגור בכוונה, בשני הכיוונים: יכולת חסרה = הסתרת פער, יכולת עודפת =
+# מרשם שהופך לקטלוג מודולים במקום מפת התפעול. שירות תשתית חדש (בקרה,
+# observability, כלי) נרשם כ-runtime/tests/knowledge בתוך היכולת שהוא משרת —
+# לא כשורה משלו. אם באמת נפתח תחום תפעול חדש, מרחיבים את הסט הזה במודע.
 REQUIRED_CAPABILITIES = {
     "sumit-integration",
     "open-finance-ingestion",
@@ -55,3 +59,19 @@ def test_every_capability_has_an_honest_boundary_and_next_gate():
     for capability in control_plane.load_registry()["capabilities"]:
         assert capability["honest_boundary"].strip()
         assert capability["next_gate"].strip()
+
+
+def test_infrastructure_services_are_folded_into_the_capability_they_serve():
+    """המרשם הוא מפת תפעול, לא קטלוג מודולים.
+
+    רגרסיה מ-05/08/2026: בקרת הכיסוי (`roster_coverage`) נרשמה בטעות כיכולת
+    שלוש-עשרה. היא אינה תחום תפעול אלא ראיה על בריאות האינטגרציה, ומקומה
+    כ-runtime/tests בתוך `sumit-integration`.
+    """
+    by_id = control_plane.capabilities_by_id()
+    sumit = by_id["sumit-integration"]
+
+    assert "src/cfo/services/roster_coverage.py" in sumit["runtime"]
+    assert "scripts/roster_health.py" in sumit["runtime"]
+    assert "tests/test_roster_coverage.py" in sumit["tests"]
+    assert "roster-coverage" not in by_id

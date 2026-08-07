@@ -500,6 +500,11 @@ class CostAnalysisService:
 
     def _expense_rows(self, start_date: date, end_date: date):
         """סכומי הוצאה אמיתיים לפי קטגוריה בטווח."""
+        # Transaction.transaction_date is DateTime while report inputs are
+        # dates. An inclusive ``<= end_date`` becomes ``<= YYYY-MM-DD
+        # 00:00:00`` and drops the entire end day on SQLite (most visibly on
+        # the first day of a month). Use a half-open date interval instead.
+        end_exclusive = end_date + timedelta(days=1)
         return (
             self.db.query(
                 Transaction.category,
@@ -509,7 +514,7 @@ class CostAnalysisService:
                 Transaction.organization_id == self.organization_id,
                 Transaction.transaction_type == TransactionType.EXPENSE,
                 Transaction.transaction_date >= start_date,
-                Transaction.transaction_date <= end_date,
+                Transaction.transaction_date < end_exclusive,
             )
             .group_by(Transaction.category)
             .all()
