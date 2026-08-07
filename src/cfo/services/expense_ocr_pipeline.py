@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 
 from ..models import Expense
@@ -29,6 +31,30 @@ logger = logging.getLogger(__name__)
 
 # מע"מ ישראלי נכון ל-2025+ (ראה skill israeli-vat-reporting).
 VAT_RATE = Decimal("0.18")
+
+# כל המקורות שמקורם במסמך SUMIT ולכן ניתנים למשיכה ב-getpdf. אלה נוצרים
+# בשני מסלולים שונים ואסור לסנן רק אחד מהם:
+#   'sumit'             — סנכרון ה-API הרגיל (accounting/documents/list).
+#   'sumit_fileexpense' — קליטה ממסך תיוק ההוצאות של הפורטל. אלה דווקא
+#                         ההוצאות שיש להן סכומים אמיתיים, בעוד טיוטות ה-API
+#                         חוזרות כמעטפות ריקות (total=0) עד תיוק.
+SUMIT_SOURCES = ("sumit", "sumit_fileexpense")
+
+# מזהים שנוצרו אצלנו ואינם קיימים ב-SUMIT. הקליטה הידנית של 07/2026
+# (commit e69d654) הטביעה `sumit_file_<uuid>` על 41 שורות של org 5;
+# getpdf עליהן הוא קריאת API מבוזבזת בוודאות.
+#
+# מכוון כשלילה של דפוס ידוע ולא כהיתר-מספרי: מזהי המסמך שנצפו בפרוד הם
+# אמנם בני 10 ספרות, אבל היתר צר על סמך מדגם אחד היה פוסל מזהים תקינים
+# בפורמט אחר. עדיף לפסול רק את מה שידוע בוודאות כמומצא.
+_SYNTHETIC_ID_PREFIXES = ("sumit_file_",)
+
+
+def _is_sumit_document_id(external_id: Optional[str]) -> bool:
+    if not external_id:
+        return False
+    value = str(external_id).strip()
+    return bool(value) and not value.startswith(_SYNTHETIC_ID_PREFIXES)
 
 
 class ExpenseOCRPipeline:
@@ -67,41 +93,62 @@ class ExpenseOCRPipeline:
         """
         connector = self._get_connector()
 
-        q = (
-            self.db.query(Expense)
-            .filter(
-                Expense.organization_id == self.organization_id,
-                Expense.source == "sumit",
-                Expense.external_id.isnot(None),
-                Expense.status != "filed",
-            )
-            .order_by(Expense.id)
+        # טיוטה בסכום 0 היא מעטפת ריקה: ה-getpdf מחזיר עבורה דף בלי תוכן,
+        # וכל קריאה כזאת שורפת מכסת SUMIT + קריאת מודל ראייה על לא-כלום.
+        # כש--limit מגביל את הריצה, התקציב הולך קודם לטיוטות שנושאות סכום.
+        blank_last = case(
+            (or_(Expense.total.is_(None), Expense.total == 0), 1), else_=0
+        )
+        pending = self.db.query(Expense).filter(
+            Expense.organization_id == self.organization_id,
+            Expense.source.in_(SUMIT_SOURCES),
+            Expense.external_id.isnot(None),
+            Expense.status != "filed",
         )
         if since:
-            q = q.filter(Expense.expense_date >= since)
-        rows = q.all()
+            pending = pending.filter(Expense.expense_date >= since)
+
+        # שורות עם מזהה סינתטי אינן ניתנות למשיכה, ולכן אינן נכנסות לתור
+        # כלל — אחרת `--limit 50` היה מתבזבז על 41 קיצורי-דרך. הן נספרות
+        # בנפרד כדי שלא ייעלמו מהדיווח (honest-null).
+        synthetic = or_(*[
+            Expense.external_id.like(f"{prefix}%")
+            for prefix in _SYNTHETIC_ID_PREFIXES
+        ])
+        not_fetchable_total = pending.filter(synthetic).count()
+
+        rows = pending.filter(~synthetic).order_by(blank_last, Expense.id).all()
         if limit:
             rows = rows[:limit]
 
         results: List[Dict[str, Any]] = []
         filed = flagged = errors = 0
+        not_fetchable = not_fetchable_total
         for i, exp in enumerate(rows):
             try:
                 res = await self._process_one(exp, connector, auto_file=auto_file)
             except Exception as exc:  # כשל לא-צפוי בקבלה בודדת — לא עוצרים את כולן
                 if "403" in str(exc):  # rate limit — עוצרים בעדינות
                     logger.warning("SUMIT rate-limited at #%s; stopping", exp.id)
-                    results.append({"expense_id": exp.id, "status": "rate_limited"})
+                    results.append({"expense_id": exp.id, "source": exp.source,
+                                    "status": "rate_limited"})
                     break
                 logger.exception("OCR pipeline failed for expense %s", exp.id)
                 errors += 1
-                res = {"expense_id": exp.id, "status": "error", "error": str(exc)}
+                res = {"expense_id": exp.id, "source": exp.source,
+                       "status": "error", "error": str(exc)}
             results.append(res)
-            if res.get("status") == "filed":
+            status = res.get("status")
+            if status == "filed":
                 filed += 1
-            elif res.get("status") == "flagged":
+            elif status == "flagged":
                 flagged += 1
-            if delay and i < len(rows) - 1:
+            elif status == "not_fetchable":
+                not_fetchable += 1
+            # ההשהיה קיימת בשביל ה-rate-limit של SUMIT. שורה שקוצרה לפני
+            # כל קריאה לא צריכה אותה — 41 שורות סינתטיות × delay=3 היו
+            # שתי דקות שינה תמורת אפס קריאות.
+            if delay and status != "not_fetchable" and i < len(rows) - 1:
                 await asyncio.sleep(delay)
 
         return {
@@ -109,6 +156,8 @@ class ExpenseOCRPipeline:
             "filed": filed,
             "flagged": flagged,
             "errors": errors,
+            # honest-null: ריצה שקיצרה שורות לא רשאית להיראות כריצה נקייה.
+            "not_fetchable": not_fetchable,
             "results": results,
         }
 
@@ -152,23 +201,63 @@ class ExpenseOCRPipeline:
         from .expense_classifier import classify_expense
         from .israeli_tax_rules import claimable_vat
 
+        # 0. שער מזהה: רק מסמך שקיים ב-SUMIT ניתן למשיכה. שורות שנקלטו
+        # בקליטה ידנית נושאות מזהה סינתטי (`sumit_file_<uuid>`) ולא מזהה
+        # מסמך — getpdf עליהן הוא קריאת API מבוזבזת בוודאות. הן שייכות
+        # למסלול התיוק, לא למסלול החילוץ.
+        if not _is_sumit_document_id(exp.external_id):
+            return {
+                "expense_id": exp.id,
+                "external_id": exp.external_id,
+                "source": exp.source,
+                "status": "not_fetchable",
+                "reason": (
+                    "מזהה סינתטי — אין מסמך למשוך מ-SUMIT; נדרש מסלול תיוק"
+                ),
+            }
+
         # 1. צילום הקבלה
         pdf = await connector.get_document_pdf(exp.external_id)
 
         # 2. חילוץ ראייה
         extract = await self._extract(pdf)
 
-        # 3. אימות ח.פ מול רשם החברות (מתקן בועת OCR שגויה)
+        # 2א. החלטת אמון אחת, מוקדמת, שחלה על כל השדות. מה שכבר רשום הוא
+        # נתון מאומת עד שיוכח אחרת: 41 השורות של org 5 נושאות שם ספק אמיתי,
+        # 29 מהן ח.פ, ו-₪211K סכומים — כולם מקליטה ידנית מדוקדקת. חילוץ
+        # חלש רשאי **למלא חוסר**, לא לדרוס. `_review_reasons` חוסם *תיוק*
+        # ולא *כתיבה*, ולכן השער חייב לשבת כאן.
+        trustworthy = self._extract_is_trustworthy(extract)
+
+        def may_write(existing) -> bool:
+            return trustworthy or not existing
+
+        # 3. אימות ח.פ מול רשם החברות (מתקן בועת OCR שגויה).
+        # נקרא רק כשנשתמש בתוצאה — קריאה חיה ל-data.gov.il על ח.פ מומצא
+        # מחילוץ חלש עלולה להחזיר חברה אמיתית ולהחליף שם מאומת בשם שגוי
+        # אך משכנע, שממנו ה-ח.פ זורם ל-PCN874.
         registry_match = None
-        if extract.get("supplier_tax_id"):
-            registry_match = await self._lookup_registry(extract["supplier_tax_id"])
+        ocr_tax_id = extract.get("supplier_tax_id")
+        if ocr_tax_id and may_write(exp.supplier_tax_id):
+            registry_match = await self._lookup_registry(ocr_tax_id)
 
         official_name = registry_match["name"] if registry_match else None
-        supplier_name = official_name or extract.get("supplier_name") or exp.supplier_name
-        tax_id = extract.get("supplier_tax_id")
+        ocr_supplier_name = official_name or extract.get("supplier_name")
+
+        supplier_name = exp.supplier_name
+        if ocr_supplier_name and may_write(exp.supplier_name):
+            supplier_name = ocr_supplier_name
+
+        tax_id = exp.supplier_tax_id
+        if ocr_tax_id and may_write(exp.supplier_tax_id):
+            tax_id = ocr_tax_id
 
         # סכומים: total כולל מע"מ, ממנו נגזרים net + vat
         total, net, vat = self._resolve_amounts(extract)
+        # סכום 0 אינו נתון מאומת אלא מעטפת ריקה — אין מה להגן עליו.
+        verified_total = exp.total if exp.total and float(exp.total) > 0 else None
+        if total is not None and not may_write(verified_total):
+            total, net, vat = None, None, None
 
         # 4. סיווג
         category = classify_expense(
@@ -203,11 +292,12 @@ class ExpenseOCRPipeline:
                 vehicle_primarily_business=vehicle_business, vehicle_kind=vehicle_kind,
             )
             exp.vat_claimable = vat_claimable
-        if extract.get("invoice_number"):
+        if extract.get("invoice_number") and may_write(exp.invoice_number):
             exp.invoice_number = extract["invoice_number"]
-        if exp_date:
+        if exp_date and may_write(exp.expense_date):
             exp.expense_date = exp_date
-        exp.category = category
+        if may_write(exp.category):
+            exp.category = category
 
         # החלטת תיוק: דורש קריאות, ביטחון מספק, ח.פ, ספק וסכום
         review_reasons = self._review_reasons(extract, tax_id, supplier_name, total)
@@ -218,6 +308,7 @@ class ExpenseOCRPipeline:
         result: Dict[str, Any] = {
             "expense_id": exp.id,
             "external_id": exp.external_id,
+            "source": exp.source,
             "supplier_name": supplier_name,
             "supplier_tax_id": tax_id,
             "registry_confirmed": bool(registry_match),
@@ -271,7 +362,19 @@ class ExpenseOCRPipeline:
         if self._extractor is not None:
             return await self._extractor(content)
         from .vision_extractor import extract_receipt
+        import inspect
 
+        parameters = inspect.signature(extract_receipt).parameters.values()
+        supports_context = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters) or (
+            "db" in inspect.signature(extract_receipt).parameters
+        )
+        if supports_context:
+            return await extract_receipt(
+                content, db=self.db, organization_id=self.organization_id,
+                purpose="ocr",
+            )
+        # Backward-compatible seam for injected offline extractors whose
+        # historical contract was extract_receipt(content).
         return await extract_receipt(content)
 
     async def _lookup_registry(self, tax_id: str):
@@ -282,6 +385,16 @@ class ExpenseOCRPipeline:
         if not hasattr(self, "_registry_instance"):
             self._registry_instance = CompanyRegistry()
         return await self._registry_instance.lookup(tax_id)
+
+    def _extract_is_trustworthy(self, extract: Dict[str, Any]) -> bool:
+        """האם החילוץ חזק מספיק כדי לגבור על נתון שכבר רשום.
+
+        זו ההחלטה היחידה ששולטת בכל הכתיבות ב-`_process_one`. חילוץ שאינו
+        עומד בה עדיין רשאי למלא שדות ריקים — הוא רק לא רשאי לדרוס.
+        """
+        if not extract.get("is_readable", True):
+            return False
+        return float(extract.get("confidence") or 0) >= self.min_confidence
 
     @staticmethod
     def _resolve_amounts(extract: Dict[str, Any]):
