@@ -39,6 +39,38 @@ def test_registry_references_existing_versioned_evidence():
     assert control_plane.validate_registry() == []
 
 
+def test_registry_evidence_is_tracked_in_git_not_just_present_on_disk():
+    """`validate_registry` בודק קיום על הדיסק — ולכן ראיה שקיימת אצל המפתח
+    אך מוחרגת ב-.gitignore עוברת מקומית ונופלת ב-CI בלבד. זה קרה בפועל
+    ב-08/08/2026: המרשם הצביע על דוח אודיט תחת `reports/`, שמוחרג משום
+    שהוא מכיל שמות לקוחות ומזהי חברות. השער הזה מזיז את הכשל למחשב של
+    המפתח, במקום להמתין ל-CI."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    if shutil.which("git") is None:
+        pytest.skip("git לא זמין בסביבה הזו")
+
+    result = subprocess.run(
+        ["git", "ls-files"], capture_output=True, text=True,
+        cwd=control_plane.REGISTRY_PATH.parent.parent,
+    )
+    if result.returncode != 0:
+        pytest.skip("לא ריפו git")
+
+    tracked = set(result.stdout.splitlines())
+    untracked_evidence = [
+        f"{item['id']}.{key}: {path}"
+        for item in control_plane.load_registry()["capabilities"]
+        for key in ("knowledge", "runtime", "tests")
+        for path in item.get(key, [])
+        if path not in tracked
+    ]
+    assert untracked_evidence == []
+
+
 def test_external_ingestion_is_cost_gated_and_tenant_scoped():
     by_id = control_plane.capabilities_by_id()
 

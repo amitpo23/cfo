@@ -38,8 +38,7 @@
       "knowledge": [
         "docs/SUMIT_KNOWLEDGE_BASE.md",
         "docs/SUMIT_API_REFERENCE.md",
-        "docs/sumit_swagger_v1_2026-07-10.json",
-        "reports/2026-08-05-cross-org-consistency-audit.md"
+        "docs/sumit_swagger_v1_2026-07-10.json"
       ],
       "runtime": [
         "src/cfo/config.py",
