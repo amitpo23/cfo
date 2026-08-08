@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-05",
+  "updated_at": "2026-08-08",
   "purpose": "Machine-readable contract connecting Rezef capabilities to knowledge, runtime evidence and safety gates.",
   "status_vocabulary": {
     "implemented": "Implemented and covered locally; production operation is a separate claim.",
