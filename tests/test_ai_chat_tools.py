@@ -958,3 +958,64 @@ def test_get_expense_intake_status_tool_is_read_and_reports_counts(fresh_org):
         assert "intake_enabled" in result
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------- #
+# find_capability — מושקו מגלה יכולות מעבר ל-50 הכלים הרשומים
+# ---------------------------------------------------------------------- #
+def test_find_capability_is_registered_as_a_read_tool():
+    """הכלי קורא את הקטלוג בלבד ואינו מפעיל דבר אצל הספק — לכן read."""
+    from cfo.services.ai_chat_tools import TOOLS
+
+    assert "find_capability" in TOOLS
+    assert TOOLS["find_capability"].category == "read"
+
+
+def test_find_capability_returns_parallel_capabilities_from_both_systems():
+    """משימה אחת מחזירה גם את הכלי של SUMIT וגם של Open Finance —
+    מושקו לא צריך לדעת מראש באיזו מערכת להסתכל."""
+    import asyncio
+
+    from cfo.services.ai_chat_tools import TOOLS
+
+    result = asyncio.run(TOOLS["find_capability"].fn(None, 1, task="transactions"))
+
+    assert result["count"] > 0
+    assert {item["system"] for item in result["capabilities"]} == {"sumit", "open_finance"}
+
+
+def test_find_capability_marks_which_results_need_owner_approval():
+    """מושקו חייב לראות מהתוצאה עצמה מה כותב — לא לזכור בעל-פה."""
+    import asyncio
+
+    from cfo.services.ai_chat_tools import TOOLS
+
+    result = asyncio.run(TOOLS["find_capability"].fn(None, 1, task="expense"))
+
+    assert result["capabilities"]
+    for item in result["capabilities"]:
+        assert "requires_approval" in item
+        assert item["requires_approval"] is (item["kind"] != "read")
+
+
+def test_find_capability_can_restrict_to_reads_for_safe_exploration():
+    import asyncio
+
+    from cfo.services.ai_chat_tools import TOOLS
+
+    result = asyncio.run(TOOLS["find_capability"].fn(None, 1, task="customer", reads_only=True))
+
+    assert result["capabilities"]
+    assert all(item["kind"] == "read" for item in result["capabilities"])
+
+
+def test_find_capability_returns_honest_empty_for_no_match():
+    """אין התאמה = אפס תוצאות, לא 'הכי קרוב' מנוחש שמושקו יפעיל בטעות."""
+    import asyncio
+
+    from cfo.services.ai_chat_tools import TOOLS
+
+    result = asyncio.run(TOOLS["find_capability"].fn(None, 1, task="זבחזבחזבח"))
+
+    assert result["count"] == 0
+    assert result["capabilities"] == []

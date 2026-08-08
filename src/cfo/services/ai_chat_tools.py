@@ -38,6 +38,41 @@ class ChatTool:
     needs_user: bool = False
 
 
+async def _find_capability(db, org_id: int, task: str = "", reads_only: bool = False, **_kwargs) -> dict:
+    """היכולות של SUMIT ו-Open Finance שמשרתות משימה נתונה.
+
+    הכלים הרשומים כאן מכסים 50 יכולות; ל-SumitIntegration ול-
+    OpenFinanceClient יש יחד 172. הכלי הזה נותן למושקו לגלות מה קיים
+    מעבר למה שנרשם ידנית, במקום להשיב "אין לי יכולת כזו" כשהיא קיימת.
+
+    זהו כלי גילוי בלבד: הוא קורא את הקטלוג (introspection על הקוד) ואינו
+    מפעיל דבר אצל הספק. `requires_approval` בכל תוצאה אומר למושקו מה
+    יחייב אישור בעלים אם יתבקש להפעיל אותה בהמשך.
+    """
+    from .capability_catalog import find_capabilities
+
+    matches = find_capabilities(task, reads_only=reads_only)
+    return {
+        "task": task,
+        "count": len(matches),
+        "capabilities": [
+            {
+                "system": entry["system"],
+                "name": entry["name"],
+                "parameters": entry["parameters"],
+                "summary": entry["summary"],
+                "kind": entry["kind"],
+                "requires_approval": entry["requires_approval"],
+            }
+            for entry in matches
+        ],
+        "note": (
+            "גילוי בלבד — היכולות האלה אינן ניתנות להפעלה ישירה מהשיחה. "
+            "כל יכולת עם requires_approval עוברת דרך מנגנון האישורים."
+        ),
+    }
+
+
 async def _get_ar_aging(db, org_id: int, **_kwargs) -> dict:
     from .dashboard_service import DashboardService
     return DashboardService(db, org_id).get_ar_aging()
@@ -962,6 +997,26 @@ async def _update_task(
 
 
 TOOLS: dict[str, ChatTool] = {
+    "find_capability": ChatTool(
+        name="find_capability",
+        description=(
+            "חיפוש יכולות של SUMIT ו-Open Finance שמשרתות משימה נתונה. "
+            "השתמש בזה כשמבקשים ממך משהו שאין לו כלי ייעודי ברשימה, כדי "
+            "לבדוק אם היכולת בכל זאת קיימת במערכות. מחזיר יכולות מקבילות "
+            "משתי המערכות יחד. זהו כלי גילוי — הוא אינו מפעיל דבר; תוצאה "
+            "עם requires_approval תדרוש אישור בעלים כדי לפעול בפועל."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "המשימה או המונח לחיפוש (למשל: expense, transactions, customer)"},
+                "reads_only": {"type": "boolean", "description": "להחזיר יכולות קוראות בלבד", "default": False},
+            },
+            "required": ["task"],
+        },
+        category="read",
+        fn=_find_capability,
+    ),
     "get_ar_aging": ChatTool(
         name="get_ar_aging",
         description="קבלת דוח גיול חובות לקוחות (aging) — יתרות פתוחות לפי טווחי איחור.",
