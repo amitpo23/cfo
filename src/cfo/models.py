@@ -1684,6 +1684,35 @@ class ChannelProcessedUpdate(Base):
     )
 
 
+class TenantDatabase(Base):
+    """מיפוי ארגון → מסד ייעודי משלו (תוכנית ה-DB פר-ארגון, שלב 1).
+
+    הטבלה יושבת במסד הבקרה, שהוא היחיד שיודע מי קיים. ארגון בלי שורה
+    כאן — או עם שורה שאינה `active` — ממשיך לעבוד מול המסד המשותף, וכך
+    הפיצול נעשה ארגון-אחד-בכל-פעם עם rollback לכל אחד בנפרד.
+
+    `dsn_encrypted` הוא סוד ברמת קרדנשל ספק: הוא נושא שם משתמש וסיסמה
+    למסד של לקוח. הוא מוצפן באותו מנגנון של `credentials_vault` ואינו
+    מוחזר לעולם ברשימות תצוגה.
+    """
+    __tablename__ = "tenant_databases"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False, unique=True
+    )
+    dsn_encrypted = Column(Text, nullable=False)
+    provider = Column(String(30), nullable=False, default="neon")
+    # active = מנותב; inactive = הופסק (למשל אחרי rollback) והתנועה חוזרת
+    # למסד המשותף בלי שהרשומה נמחקת.
+    status = Column(String(20), nullable=False, default="active")
+    schema_revision = Column(String(64), nullable=True)
+    last_verified_at = Column(DateTime, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # Pydantic Models for API
 
 # ============= Organization Models =============
