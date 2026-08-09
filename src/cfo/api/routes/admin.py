@@ -4,7 +4,7 @@ Admin API routes
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 import secrets
@@ -19,6 +19,7 @@ from ...models import (
     UserRole, IntegrationType, SumitCompany, Invoice, Bill, BankTransaction,
     Alert, Task, OnboardingTask, AlertStatus, TaskStatus,
     OrganizationSigningAuthority, Account,
+    ChatMessage, LLMUsage, MoshkoToolCall, MoshkoMemory,
 )
 from ...auth import verify_password, get_password_hash, create_access_token
 from ...config import settings
@@ -1598,6 +1599,558 @@ async def test_connection(
 class OwnershipResolveRequest(BaseModel):
     account_id: int
     tax_id: Optional[str] = None
+
+
+class MoshkoMemoryCreateRequest(BaseModel):
+    organization_id: int
+    user_id: Optional[int] = None
+    content: str
+    category: str = "business_fact"
+
+
+class MoshkoMemoryUpdateRequest(BaseModel):
+    content: Optional[str] = None
+    category: Optional[str] = None
+    approved: Optional[bool] = None
+
+
+_MOSHKO_MEMORY_CATEGORIES = {
+    "preference", "business_fact", "correction", "convention",
+}
+_MOSHKO_MEMORY_SOURCES = {"conversation", "admin", "inferred"}
+
+
+def _memory_payload(row: MoshkoMemory) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "organization_id": row.organization_id,
+        "user_id": row.user_id,
+        "scope": "org" if row.user_id is None else "user",
+        "content": row.content,
+        "category": row.category,
+        "source": row.source,
+        "approved_at": row.approved_at,
+        "approved_by": row.approved_by,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+        "last_used_at": row.last_used_at,
+    }
+
+
+def _memory_audit_snapshot(row: MoshkoMemory) -> dict[str, Any]:
+    payload = _memory_payload(row)
+    for field in ("approved_at", "created_at", "updated_at", "last_used_at"):
+        value = payload[field]
+        payload[field] = value.isoformat() if value is not None else None
+    return payload
+
+
+def _memory_row_for_actor(
+    db: Session, memory_id: int, current_user: User,
+) -> MoshkoMemory:
+    query = db.query(MoshkoMemory).filter(MoshkoMemory.id == memory_id)
+    if current_user.role != UserRole.SUPER_ADMIN:
+        query = query.filter(
+            MoshkoMemory.organization_id == current_user.organization_id,
+            or_(MoshkoMemory.user_id.is_(None), MoshkoMemory.user_id == current_user.id),
+        )
+    row = query.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return row
+
+
+def _validate_memory_category(category: str) -> str:
+    if category not in _MOSHKO_MEMORY_CATEGORIES:
+        raise HTTPException(status_code=400, detail="Invalid memory category")
+    return category
+
+
+def _validate_memory_capacity(
+    db: Session,
+    *,
+    organization_id: int,
+    user_id: Optional[int],
+    content: str,
+    exclude_id: Optional[int] = None,
+) -> None:
+    from ...services.moshko_memory import ORG_MEMORY_CHAR_CAP, USER_MEMORY_CHAR_CAP
+
+    query = db.query(MoshkoMemory).filter(MoshkoMemory.organization_id == organization_id)
+    if user_id is None:
+        query = query.filter(MoshkoMemory.user_id.is_(None))
+        cap = ORG_MEMORY_CHAR_CAP
+    else:
+        query = query.filter(MoshkoMemory.user_id == user_id)
+        cap = USER_MEMORY_CHAR_CAP
+    if exclude_id is not None:
+        query = query.filter(MoshkoMemory.id != exclude_id)
+    used = sum(len(row.content) for row in query.all())
+    if used + len(content) > cap:
+        raise HTTPException(
+            status_code=409,
+            detail="Memory character cap reached; shorten or delete another memory first",
+        )
+
+
+def _moshko_channel(session_id: str) -> str:
+    if session_id.startswith("wa-"):
+        return "whatsapp"
+    if session_id.startswith("tg-"):
+        return "telegram"
+    return "web"
+
+
+def _apply_moshko_filters(
+    query,
+    model,
+    *,
+    organization_id: Optional[int],
+    user_id: Optional[int],
+    channel: Optional[str],
+    date_from: Optional[datetime],
+    date_to: Optional[datetime],
+):
+    if organization_id is not None:
+        query = query.filter(model.organization_id == organization_id)
+    if user_id is not None:
+        query = query.filter(model.user_id == user_id)
+    if channel:
+        prefix = {"whatsapp": "wa-", "telegram": "tg-"}.get(channel)
+        if prefix:
+            query = query.filter(model.session_id.like(f"{prefix}%"))
+        elif channel == "web":
+            query = query.filter(
+                ~model.session_id.like("wa-%"), ~model.session_id.like("tg-%")
+            )
+        else:
+            raise HTTPException(status_code=400, detail="channel must be web, telegram or whatsapp")
+    if date_from is not None:
+        query = query.filter(model.created_at >= date_from)
+    if date_to is not None:
+        query = query.filter(model.created_at <= date_to)
+    return query
+
+
+@router.get("/moshko/conversations", tags=["Moshko"])
+async def get_moshko_conversations(
+    organization_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    channel: Optional[str] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    query = db.query(
+        ChatMessage.organization_id,
+        ChatMessage.user_id,
+        ChatMessage.session_id,
+        func.min(ChatMessage.created_at).label("started_at"),
+        func.max(ChatMessage.created_at).label("last_message_at"),
+        func.count(ChatMessage.id).label("message_count"),
+    )
+    query = _apply_moshko_filters(
+        query, ChatMessage, organization_id=organization_id, user_id=user_id,
+        channel=channel, date_from=date_from, date_to=date_to,
+    ).group_by(ChatMessage.organization_id, ChatMessage.user_id, ChatMessage.session_id)
+    total = query.count()
+    rows = query.order_by(func.max(ChatMessage.created_at).desc()).offset(skip).limit(limit).all()
+    return {
+        "items": [
+            {
+                "organization_id": row.organization_id,
+                "user_id": row.user_id,
+                "session_id": row.session_id,
+                "channel": _moshko_channel(row.session_id),
+                "started_at": row.started_at,
+                "last_message_at": row.last_message_at,
+                "message_count": row.message_count,
+            }
+            for row in rows
+        ],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get("/moshko/conversations/{session_id}", tags=["Moshko"])
+async def get_moshko_conversation_transcript(
+    session_id: str,
+    organization_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=500),
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    base = db.query(ChatMessage).filter(ChatMessage.session_id == session_id)
+    if organization_id is not None:
+        base = base.filter(ChatMessage.organization_id == organization_id)
+    if user_id is not None:
+        base = base.filter(ChatMessage.user_id == user_id)
+    scopes = base.with_entities(
+        ChatMessage.organization_id, ChatMessage.user_id
+    ).distinct().all()
+    if not scopes:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if len(scopes) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="session_id is ambiguous; provide organization_id and user_id",
+        )
+    total = base.count()
+    rows = base.order_by(ChatMessage.id.asc()).offset(skip).limit(limit).all()
+    return {
+        "organization_id": scopes[0].organization_id,
+        "user_id": scopes[0].user_id,
+        "session_id": session_id,
+        "channel": _moshko_channel(session_id),
+        "messages": [
+            {
+                "id": row.id,
+                "role": row.role,
+                "content": row.content,
+                "pending_action": row.pending_action,
+                "executed": row.executed,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get("/moshko/tool-calls", tags=["Moshko"])
+async def get_moshko_tool_calls(
+    organization_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    channel: Optional[str] = None,
+    target_system: Optional[str] = None,
+    succeeded: Optional[bool] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    query = _apply_moshko_filters(
+        db.query(MoshkoToolCall), MoshkoToolCall,
+        organization_id=organization_id, user_id=user_id, channel=channel,
+        date_from=date_from, date_to=date_to,
+    )
+    if target_system is not None:
+        if target_system not in {"sumit", "open_finance", "rezef_db", "local"}:
+            raise HTTPException(status_code=400, detail="Invalid target_system")
+        query = query.filter(MoshkoToolCall.target_system == target_system)
+    if succeeded is not None:
+        query = query.filter(MoshkoToolCall.succeeded.is_(succeeded))
+    total = query.count()
+    rows = query.order_by(MoshkoToolCall.created_at.desc()).offset(skip).limit(limit).all()
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "organization_id": row.organization_id,
+                "user_id": row.user_id,
+                "session_id": row.session_id,
+                "channel": _moshko_channel(row.session_id),
+                "message_id": row.message_id,
+                "tool_name": row.tool_name,
+                "target_system": row.target_system,
+                "arguments": row.arguments,
+                "succeeded": row.succeeded,
+                "error": row.error,
+                "duration_ms": row.duration_ms,
+                "result_size_bytes": row.result_size_bytes,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+def _usage_aggregate_payload(row, *, key_name: Optional[str] = None) -> dict:
+    request_count = int(row.request_count or 0)
+    priced_count = int(row.priced_count or 0)
+    payload = {
+        "requests": request_count,
+        "input_tokens": int(row.input_tokens or 0),
+        "output_tokens": int(row.output_tokens or 0),
+        "cache_read_input_tokens": int(row.cache_read_input_tokens or 0),
+        "cache_creation_input_tokens": int(row.cache_creation_input_tokens or 0),
+        # A partial sum is deceptive. If any request in the bucket has an
+        # unknown price, the bucket cost is honestly unknown too.
+        "cost_usd": float(row.cost_usd) if request_count == priced_count and row.cost_usd is not None else None,
+    }
+    if key_name is not None:
+        payload[key_name] = row.group_key
+    return payload
+
+
+def _usage_columns():
+    return (
+        func.count(LLMUsage.id).label("request_count"),
+        func.count(LLMUsage.cost_usd).label("priced_count"),
+        func.sum(LLMUsage.input_tokens).label("input_tokens"),
+        func.sum(LLMUsage.output_tokens).label("output_tokens"),
+        func.sum(LLMUsage.cache_read_input_tokens).label("cache_read_input_tokens"),
+        func.sum(LLMUsage.cache_creation_input_tokens).label("cache_creation_input_tokens"),
+        func.sum(LLMUsage.cost_usd).label("cost_usd"),
+    )
+
+
+@router.get("/moshko/usage", tags=["Moshko"])
+async def get_moshko_usage(
+    organization_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    channel: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    purpose: Optional[str] = None,
+    group_by: str = Query("day", pattern="^(day|organization|model)$"),
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    def filtered(query):
+        query = _apply_moshko_filters(
+            query, LLMUsage, organization_id=organization_id, user_id=user_id,
+            channel=channel, date_from=date_from, date_to=date_to,
+        )
+        if provider is not None:
+            query = query.filter(LLMUsage.provider == provider)
+        if model is not None:
+            query = query.filter(LLMUsage.model == model)
+        if purpose is not None:
+            query = query.filter(LLMUsage.purpose == purpose)
+        return query
+
+    summary_row = filtered(db.query(*_usage_columns())).one()
+    group_column, key_name = {
+        "day": (func.date(LLMUsage.created_at), "day"),
+        "organization": (LLMUsage.organization_id, "organization_id"),
+        "model": (LLMUsage.model, "model"),
+    }[group_by]
+    grouped = filtered(db.query(group_column.label("group_key"), *_usage_columns())).group_by(group_column)
+    total = grouped.count()
+    rows = grouped.order_by(group_column.desc()).offset(skip).limit(limit).all()
+    return {
+        "summary": _usage_aggregate_payload(summary_row),
+        "group_by": group_by,
+        "groups": [_usage_aggregate_payload(row, key_name=key_name) for row in rows],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get("/moshko/memory", tags=["Moshko"])
+async def list_moshko_memory(
+    organization_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    category: Optional[str] = None,
+    source: Optional[str] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_organization_admin),
+):
+    query = db.query(MoshkoMemory)
+    if current_user.role == UserRole.SUPER_ADMIN:
+        if organization_id is not None:
+            query = query.filter(MoshkoMemory.organization_id == organization_id)
+        if user_id is not None:
+            query = query.filter(MoshkoMemory.user_id == user_id)
+    else:
+        if organization_id is not None and organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+        if user_id is not None and user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Personal memory is private")
+        query = query.filter(MoshkoMemory.organization_id == current_user.organization_id)
+        if user_id is None:
+            query = query.filter(
+                or_(MoshkoMemory.user_id.is_(None), MoshkoMemory.user_id == current_user.id)
+            )
+        else:
+            query = query.filter(MoshkoMemory.user_id == current_user.id)
+    if category is not None:
+        query = query.filter(MoshkoMemory.category == _validate_memory_category(category))
+    if source is not None:
+        if source not in _MOSHKO_MEMORY_SOURCES:
+            raise HTTPException(status_code=400, detail="Invalid memory source")
+        query = query.filter(MoshkoMemory.source == source)
+    total = query.count()
+    rows = query.order_by(MoshkoMemory.updated_at.desc(), MoshkoMemory.id.desc()).offset(skip).limit(limit).all()
+    return {
+        "items": [_memory_payload(row) for row in rows],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.post("/moshko/memory", status_code=status.HTTP_201_CREATED, tags=["Moshko"])
+async def create_moshko_memory(
+    body: MoshkoMemoryCreateRequest,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_organization_admin),
+):
+    if (
+        current_user.role != UserRole.SUPER_ADMIN
+        and body.organization_id != current_user.organization_id
+    ):
+        raise HTTPException(status_code=403, detail="Access denied")
+    org = db.query(Organization).filter(Organization.id == body.organization_id).first()
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    if body.user_id is not None:
+        target = db.query(User).filter(
+            User.id == body.user_id,
+            User.organization_id == body.organization_id,
+        ).first()
+        if target is None:
+            raise HTTPException(status_code=403, detail="User does not belong to organization")
+        if current_user.role != UserRole.SUPER_ADMIN and body.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Personal memory is private")
+    content = (body.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Memory content is required")
+    category = _validate_memory_category(body.category)
+    _validate_memory_capacity(
+        db,
+        organization_id=body.organization_id,
+        user_id=body.user_id,
+        content=content,
+    )
+    now = datetime.utcnow()
+    row = MoshkoMemory(
+        organization_id=body.organization_id,
+        user_id=body.user_id,
+        content=content,
+        category=category,
+        source="admin",
+        approved_at=now,
+        approved_by=current_user.id,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    db.flush()
+    db.add(AuditLog(
+        user_id=current_user.id,
+        organization_id=body.organization_id,
+        action="MOSHKO_MEMORY_CREATE",
+        entity_type="MoshkoMemory",
+        entity_id=row.id,
+        details={"old": None, "new": _memory_audit_snapshot(row)},
+    ))
+    db.commit()
+    db.refresh(row)
+    return _memory_payload(row)
+
+
+@router.patch("/moshko/memory/{memory_id}", tags=["Moshko"])
+async def update_moshko_memory(
+    memory_id: int,
+    body: MoshkoMemoryUpdateRequest,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_organization_admin),
+):
+    row = _memory_row_for_actor(db, memory_id, current_user)
+    old = _memory_audit_snapshot(row)
+    changed = False
+    if body.content is not None:
+        content = body.content.strip()
+        if not content:
+            raise HTTPException(status_code=400, detail="Memory content is required")
+        _validate_memory_capacity(
+            db,
+            organization_id=row.organization_id,
+            user_id=row.user_id,
+            content=content,
+            exclude_id=row.id,
+        )
+        row.content = content
+        changed = True
+    if body.category is not None:
+        row.category = _validate_memory_category(body.category)
+        changed = True
+    if body.approved is not None:
+        row.approved_at = datetime.utcnow() if body.approved else None
+        row.approved_by = current_user.id if body.approved else None
+        changed = True
+    if not changed:
+        raise HTTPException(status_code=400, detail="No memory changes supplied")
+    row.updated_at = datetime.utcnow()
+    db.flush()
+    db.add(AuditLog(
+        user_id=current_user.id,
+        organization_id=row.organization_id,
+        action="MOSHKO_MEMORY_UPDATE",
+        entity_type="MoshkoMemory",
+        entity_id=row.id,
+        details={"old": old, "new": _memory_audit_snapshot(row)},
+    ))
+    db.commit()
+    db.refresh(row)
+    return _memory_payload(row)
+
+
+@router.delete("/moshko/memory/{memory_id}", tags=["Moshko"])
+async def delete_moshko_memory(
+    memory_id: int,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_organization_admin),
+):
+    row = _memory_row_for_actor(db, memory_id, current_user)
+    old = _memory_audit_snapshot(row)
+    organization_id = row.organization_id
+    db.add(AuditLog(
+        user_id=current_user.id,
+        organization_id=organization_id,
+        action="MOSHKO_MEMORY_DELETE",
+        entity_type="MoshkoMemory",
+        entity_id=row.id,
+        details={"old": old, "new": None},
+    ))
+    db.delete(row)
+    db.commit()
+    return {"status": "deleted", "id": memory_id}
+
+
+@router.get("/moshko/knowledge", tags=["Moshko"])
+async def get_moshko_knowledge_index(
+    current_user: User = Depends(get_organization_admin),
+):
+    from ...services.moshko_knowledge import list_topics
+
+    return list_topics()
+
+
+@router.get("/moshko/knowledge/{topic_id}", tags=["Moshko"])
+async def get_moshko_knowledge_topic(
+    topic_id: str,
+    current_user: User = Depends(get_organization_admin),
+):
+    from ...services.moshko_knowledge import get_topic
+
+    result = get_topic(topic_id)
+    if result.get("found") is False:
+        raise HTTPException(status_code=404, detail="Knowledge topic not found")
+    return result
 
 
 @router.get("/moshko/ownership-review", tags=["Moshko"])

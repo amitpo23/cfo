@@ -217,10 +217,14 @@ class FinancialReportsService:
         Generate Profit & Loss Statement
         """
         # שליפת כל העסקאות בתקופה
+        # Transaction.transaction_date is DateTime; report bounds are dates.
+        # Half-open intervals include every timestamp on end_date on both
+        # SQLite and PostgreSQL, including midnight on the first of a month.
+        end_exclusive = end_date + timedelta(days=1)
         transactions = self.db.query(Transaction).filter(
             Transaction.organization_id == organization_id,
             Transaction.transaction_date >= start_date,
-            Transaction.transaction_date <= end_date
+            Transaction.transaction_date < end_exclusive,
         ).all()
         
         # חישוב תקופה קודמת להשוואה
@@ -230,10 +234,11 @@ class FinancialReportsService:
         
         prev_transactions = []
         if compare_previous:
+            prev_end_exclusive = prev_end + timedelta(days=1)
             prev_transactions = self.db.query(Transaction).filter(
                 Transaction.organization_id == organization_id,
                 Transaction.transaction_date >= prev_start,
-                Transaction.transaction_date <= prev_end
+                Transaction.transaction_date < prev_end_exclusive,
             ).all()
         
         # ארגון נתונים לפי קטגוריה — מקור אמת: שכבת ה-ledger (Invoice/Bill/Expense)
@@ -1089,11 +1094,12 @@ class FinancialReportsService:
         """סכומי תנועות ידניות (Transaction שאינו הד-מסמך של ledger) לפי קטגוריה.
         מונע ספירה כפולה: מסמך שכבר נספר ב-Invoice/Bill/Expense מדולג."""
         ledger_ids = self._ledger_external_ids(organization_id)
+        hi_exclusive = hi + timedelta(days=1)
         rows = self.db.query(Transaction).filter(
             Transaction.organization_id == organization_id,
             Transaction.transaction_type == tx_type,
             Transaction.transaction_date >= lo,
-            Transaction.transaction_date <= hi,
+            Transaction.transaction_date < hi_exclusive,
         ).all()
         sums: Dict[str, float] = {}
         for t in rows:

@@ -101,6 +101,7 @@ async def intake_receipt_bytes(
     media_type: Optional[str] = None,
     source: str = "telegram",
     uploaded_by_user_id: Optional[int] = None,
+    session_id: Optional[str] = None,
 ) -> dict:
     """בייטים -> הוצאה (טיוטה), או סטטוס כנה של אי-יצירה. לעולם לא זורק —
     כל מצב כשל (שגיאת LLM, לא קריא, כפילות, מיצוי תקרה) הוא dict מוחזר עם
@@ -125,7 +126,11 @@ async def intake_receipt_bytes(
     from .vision_extractor import VisionExtractionError, extract_receipt
 
     try:
-        extract = await extract_receipt(content, media_type, user_initiated=True)
+        extract = await extract_receipt(
+            content, media_type, user_initiated=True, db=db,
+            organization_id=organization_id, user_id=uploaded_by_user_id,
+            session_id=session_id, purpose="vision",
+        )
     except VisionExtractionError as exc:
         return {"status": "error", "message": f"חילוץ נתוני הקבלה נכשל: {exc}"}
 

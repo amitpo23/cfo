@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     whatsapp_verify_token: Optional[str] = None
     whatsapp_app_secret: Optional[str] = None
     whatsapp_api_version: str = "v21.0"
+    # Approved Meta template used for proactive pushes outside the 24-hour
+    # customer-service window.  Unset means fail honestly with
+    # outside_service_window; free-form text is never attempted there.
+    whatsapp_push_template_name: Optional[str] = None
+    whatsapp_push_template_language: str = "he"
 
     # Google Sign-In
     google_client_id: Optional[str] = None
@@ -140,6 +145,12 @@ class Settings(BaseSettings):
     chat_receipt_daily_limit: int = 20
     # AI chat assistant (Wave 2 Step 9) — same anthropic_api_key as OCR above.
     ai_chat_model: str = "claude-sonnet-5"
+    # JSON object keyed by exact model id. Rates are USD per one million
+    # tokens: input_per_million_usd, output_per_million_usd and, when cache
+    # tokens occur, cache_read_per_million_usd/cache_creation_per_million_usd.
+    # Deliberately empty by default: pricing changes and an unconfigured or
+    # unknown model must produce cost=NULL, never a guessed amount.
+    llm_pricing_json: str = "{}"
     # Companies-registry (רשם החברות) lookup over data.gov.il CKAN.
     companies_registry_resource_id: str = "f004176c-b85f-4542-8901-7b3176f9a054"
     companies_registry_base_url: str = "https://data.gov.il/api/3/action/datastore_search"

@@ -52,6 +52,10 @@ class AccountType(str, Enum):
     BANK = "bank"
     ACCOUNTS_RECEIVABLE = "accounts_receivable"
     ACCOUNTS_PAYABLE = "accounts_payable"
+    # Source charts can contain control/system accounts whose debit/credit
+    # nature cannot be inferred safely from the source classification alone
+    # (for example VAT current accounts and tax institutions).
+    OTHER = "other"
 
 
 class ContactType(str, Enum):
@@ -322,6 +326,26 @@ class Account(Base):
     # Provenance — distinguishes SUMIT synthesized accounts from real Open Finance
     # bank accounts so the two sources coexist without external_id collisions.
     source = Column(String(50), default="manual")
+    # Source chart-of-accounts provenance.  These columns intentionally live on
+    # Account (the existing connector chart data plane), not ExpenseCategory and
+    # not a parallel ledger-account table.
+    source_account_code = Column(String(100), nullable=True)
+    source_name = Column(String(255), nullable=True)
+    source_classification = Column(String(50), nullable=True)
+    sort_code = Column(String(50), nullable=True)
+    vat_key = Column(String(50), nullable=True)
+    tax_id = Column(String(20), nullable=True)
+    withholding_rate = Column(Numeric(precision=7, scale=4), nullable=True)
+    withholding_valid_until = Column(Date, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_historical = Column(Boolean, nullable=False, default=False)
+    source_status_code = Column(String(10), nullable=True)
+    row_hash = Column(String(64), nullable=True)
+    source_file_hash = Column(String(64), nullable=True)
+    observed_at = Column(DateTime(timezone=True), nullable=True)
+    synced_at = Column(DateTime(timezone=True), nullable=True)
+    # Filled only by the later SUMIT readback; offline source importers preserve it.
+    sumit_account_code = Column(String(100), nullable=True)
     # חותמת טריות ליתרה — referenceDate של רשומת ה-balance שנבחרה מ-Open
     # Finance (closingBooked/expected/interimAvailable, האחרון מבין הזמינים).
     # NULL לחשבונות שלא הגיעו מ-OF (SUMIT מסונתז, ידני).
@@ -354,7 +378,37 @@ class Account(Base):
 
     __table_args__ = (
         Index("ix_account_org_ext_source", "organization_id", "external_id", "source", unique=True),
+        UniqueConstraint(
+            "organization_id",
+            "source_account_code",
+            name="uq_account_org_source_account_code",
+        ),
     )
+
+
+class AccountImportChange(Base):
+    """Immutable audit evidence for source chart changes detected on re-import."""
+
+    __tablename__ = "account_import_changes"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    source_account_code = Column(String(100), nullable=False)
+    source_file_hash = Column(String(64), nullable=False)
+    old_row_hash = Column(String(64), nullable=True)
+    new_row_hash = Column(String(64), nullable=False)
+    changes = Column(JSON, nullable=False)
+    changed_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    organization = relationship("Organization")
+    account = relationship("Account")
 
 
 class Transaction(Base):
@@ -968,6 +1022,55 @@ class ChatMessage(Base):
     )
 
 
+class LLMUsage(Base):
+    """One immutable usage observation for one provider LLM request."""
+    __tablename__ = "llm_usage"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    session_id = Column(String(128), nullable=True)
+    provider = Column(String(30), nullable=False)
+    model = Column(String(120), nullable=False)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    cache_read_input_tokens = Column(Integer, nullable=True)
+    cache_creation_input_tokens = Column(Integer, nullable=True)
+    cost_usd = Column(Numeric(18, 8), nullable=True)
+    purpose = Column(String(20), nullable=False)  # chat | vision | ocr
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_llm_usage_org_created", "organization_id", "created_at"),
+        Index("ix_llm_usage_session", "session_id"),
+    )
+
+
+class MoshkoToolCall(Base):
+    """Auditable execution of a Moshko tool (read and confirmed write)."""
+    __tablename__ = "moshko_tool_calls"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    session_id = Column(String(128), nullable=False)
+    message_id = Column(Integer, ForeignKey("ai_chat_messages.id"), nullable=True)
+    tool_name = Column(String(100), nullable=False)
+    target_system = Column(String(30), nullable=False)
+    arguments = Column(JSON, nullable=False, default=dict)
+    succeeded = Column(Boolean, nullable=False)
+    error = Column(Text, nullable=True)
+    duration_ms = Column(Integer, nullable=False, default=0)
+    result_size_bytes = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_moshko_tool_calls_org_created", "organization_id", "created_at"),
+        Index("ix_moshko_tool_calls_session", "session_id"),
+        Index("ix_moshko_tool_calls_target_success", "target_system", "succeeded"),
+    )
+
+
 class InventoryItem(Base):
     """Inventory / stock item — מלאי"""
     __tablename__ = "inventory_items"
@@ -1508,6 +1611,11 @@ class ChannelIdentity(Base):
     # push_enabled.isnot(False), not push_enabled.is_(True)).
     push_enabled = Column(Boolean, nullable=True, default=True)
     last_push_at = Column(DateTime, nullable=True)
+    # Updated for every inbound WhatsApp event before routing. This is the
+    # authoritative Meta 24-hour service-window clock; chat history cannot
+    # substitute because media/persona/interactive messages may not create a
+    # ChatMessage row.
+    last_inbound_at = Column(DateTime(timezone=True), nullable=True)
 
     organization = relationship("Organization")
 
@@ -1547,6 +1655,8 @@ class MoshkoMemory(Base):
     content = Column(Text, nullable=False)
     category = Column(String(30), nullable=True)  # preference | business_fact | correction | convention
     source = Column(String(50), nullable=True)  # conversation | admin | inferred
+    approved_at = Column(DateTime, nullable=True)
+    approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_used_at = Column(DateTime, nullable=True)
@@ -1572,6 +1682,35 @@ class ChannelProcessedUpdate(Base):
     __table_args__ = (
         UniqueConstraint("provider", "update_id", name="uq_channel_processed_update"),
     )
+
+
+class TenantDatabase(Base):
+    """מיפוי ארגון → מסד ייעודי משלו (תוכנית ה-DB פר-ארגון, שלב 1).
+
+    הטבלה יושבת במסד הבקרה, שהוא היחיד שיודע מי קיים. ארגון בלי שורה
+    כאן — או עם שורה שאינה `active` — ממשיך לעבוד מול המסד המשותף, וכך
+    הפיצול נעשה ארגון-אחד-בכל-פעם עם rollback לכל אחד בנפרד.
+
+    `dsn_encrypted` הוא סוד ברמת קרדנשל ספק: הוא נושא שם משתמש וסיסמה
+    למסד של לקוח. הוא מוצפן באותו מנגנון של `credentials_vault` ואינו
+    מוחזר לעולם ברשימות תצוגה.
+    """
+    __tablename__ = "tenant_databases"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False, unique=True
+    )
+    dsn_encrypted = Column(Text, nullable=False)
+    provider = Column(String(30), nullable=False, default="neon")
+    # active = מנותב; inactive = הופסק (למשל אחרי rollback) והתנועה חוזרת
+    # למסד המשותף בלי שהרשומה נמחקת.
+    status = Column(String(20), nullable=False, default="active")
+    schema_revision = Column(String(64), nullable=True)
+    last_verified_at = Column(DateTime, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 # Pydantic Models for API

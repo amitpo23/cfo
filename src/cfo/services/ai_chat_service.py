@@ -13,6 +13,8 @@ supplied data), scoped to the caller's organization, and only once
 from __future__ import annotations
 
 import json
+import logging
+from time import perf_counter
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
@@ -20,7 +22,11 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import ChatMessage
 from . import moshko_memory
-from .ai_chat_tools import TOOLS, anthropic_tool_schemas
+from .ai_chat_tools import TOOLS, anthropic_tool_schemas, tool_target_system
+from .moshko_observability import (
+    record_llm_usage_best_effort,
+    record_tool_call_best_effort,
+)
 from .ai_chat_personas import (
     BASE_SYSTEM_PROMPT,
     build_system_prompt,
@@ -31,6 +37,7 @@ from .ai_chat_personas import (
 # owns the prompt strings; re-exported here under the original name because
 # existing callers/tests reference ai_chat_service.SYSTEM_PROMPT directly.
 SYSTEM_PROMPT = BASE_SYSTEM_PROMPT
+logger = logging.getLogger(__name__)
 
 _MAX_TOOL_TURNS = 6
 
@@ -117,6 +124,77 @@ class AIChatService:
             )
         return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
+    def _record_usage(self, session_id: str, response: Any) -> None:
+        """Extra guard around the best-effort recorder for monkeypatches and
+        future implementations: observability is never on the chat's critical
+        path."""
+        try:
+            record_llm_usage_best_effort(
+                self.db,
+                organization_id=self.organization_id,
+                user_id=self.user_id,
+                session_id=session_id,
+                provider="anthropic",
+                model=settings.ai_chat_model,
+                usage=getattr(response, "usage", None),
+                purpose="chat",
+            )
+        except Exception:
+            logger.exception("LLM usage recorder failed outside its best-effort boundary")
+
+    async def _execute_tool_observed(
+        self,
+        *,
+        tool,
+        call_kwargs: dict[str, Any],
+        logged_arguments: dict[str, Any],
+        session_id: str,
+        message_id: int | None,
+        propagate: bool,
+    ) -> Any:
+        started = perf_counter()
+        try:
+            result = await tool.fn(self.db, self.organization_id, **call_kwargs)
+        except Exception as exc:
+            elapsed = round((perf_counter() - started) * 1000)
+            record_tool_call_best_effort(
+                self.db,
+                organization_id=self.organization_id,
+                user_id=self.user_id,
+                session_id=session_id,
+                message_id=message_id,
+                tool_name=tool.name,
+                target_system=tool_target_system(tool.name, arguments=logged_arguments),
+                arguments=logged_arguments,
+                succeeded=False,
+                error=str(exc),
+                duration_ms=elapsed,
+            )
+            if propagate:
+                raise
+            return {"error": str(exc), "tool": tool.name}
+
+        elapsed = round((perf_counter() - started) * 1000)
+        record_tool_call_best_effort(
+            self.db,
+            organization_id=self.organization_id,
+            user_id=self.user_id,
+            session_id=session_id,
+            message_id=message_id,
+            tool_name=tool.name,
+            target_system=tool_target_system(
+                tool.name,
+                arguments=logged_arguments,
+                result=result if isinstance(result, dict) else None,
+            ),
+            arguments=logged_arguments,
+            succeeded=True,
+            error=None,
+            duration_ms=elapsed,
+            result=result,
+        )
+        return result
+
     async def send_message(
         self, session_id: str, text: str, persona: Optional[str] = None,
     ) -> dict[str, Any]:
@@ -174,6 +252,8 @@ class AIChatService:
                     f"עוזר ה-AI לא זמין כרגע (שגיאת Anthropic API): {exc}"
                 ) from exc
 
+            self._record_usage(session_id, response)
+
             if response.stop_reason != "tool_use":
                 final_text = "".join(
                     b.text for b in response.content if b.type == "text"
@@ -223,6 +303,19 @@ class AIChatService:
                     # for read office tools: never execute, never leak data,
                     # even if somehow requested by name.
                     result = {"error": _OFFICE_REFUSAL_TEXT}
+                    record_tool_call_best_effort(
+                        self.db,
+                        organization_id=self.organization_id,
+                        user_id=self.user_id,
+                        session_id=session_id,
+                        message_id=user_msg.id,
+                        tool_name=tool.name,
+                        target_system=tool_target_system(tool.name, arguments=dict(block.input)),
+                        arguments=dict(block.input),
+                        succeeded=False,
+                        error=_OFFICE_REFUSAL_TEXT,
+                        duration_ms=0,
+                    )
                 else:
                     # Merge into a dict first (not **a, **b in the call) so a
                     # duplicate key can never raise "multiple values for
@@ -232,7 +325,14 @@ class AIChatService:
                     call_kwargs = dict(block.input)
                     if tool.needs_user:
                         call_kwargs["_user_id"] = self.user_id
-                    result = await tool.fn(self.db, self.organization_id, **call_kwargs)
+                    result = await self._execute_tool_observed(
+                        tool=tool,
+                        call_kwargs=call_kwargs,
+                        logged_arguments=dict(block.input),
+                        session_id=session_id,
+                        message_id=user_msg.id,
+                        propagate=False,
+                    )
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -286,7 +386,14 @@ class AIChatService:
             call_kwargs = dict(msg.pending_action["input"])
             if tool.needs_user:
                 call_kwargs["_user_id"] = self.user_id
-            result = await tool.fn(self.db, self.organization_id, **call_kwargs)
+            result = await self._execute_tool_observed(
+                tool=tool,
+                call_kwargs=call_kwargs,
+                logged_arguments=dict(msg.pending_action["input"]),
+                session_id=msg.session_id,
+                message_id=msg.id,
+                propagate=True,
+            )
         except ValueError as exc:
             # Never fake success: a business-validation failure (e.g.
             # register_office_client with no SUMIT key configured) must

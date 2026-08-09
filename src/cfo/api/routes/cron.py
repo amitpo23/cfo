@@ -670,7 +670,7 @@ def run_bank_gap_scan(db: Session = Depends(get_db_session)):
 
 @router.get("/cron/channel-alerts", dependencies=[Depends(_verify_cron_secret)])
 async def run_channel_alerts(db: Session = Depends(get_db_session)):
-    """דוחף ל-Telegram (package B, 2026-07-27 moshko-full-bot plan) את ה-
+    """דוחף לערוצי השיחה המקושרים (Telegram/WhatsApp) את ה-
     CfoInsight החדשים בסיכון high/critical, פר ארגון פעיל.
 
     דדופ אמיתי: הסינון הוא לפי created_at ביחס ל-last_push_at המקסימלי בין
@@ -690,7 +690,7 @@ async def run_channel_alerts(db: Session = Depends(get_db_session)):
 
     for org in orgs:
         try:
-            identities = recipients_for(db, org.id, provider="telegram")
+            identities = recipients_for(db, org.id)
             if not identities:
                 continue
 
@@ -727,3 +727,41 @@ async def run_channel_alerts(db: Session = Depends(get_db_session)):
             db.rollback()
 
     return {"organizations": len(orgs), "pushed": total_pushed, "insights": total_insights}
+
+
+@router.get("/cron/roster-health", dependencies=[Depends(_verify_cron_secret)])
+async def scheduled_roster_health(db: Session = Depends(get_db_session)):
+    """יומי: מוודא שכל תיק בפנקס המשרד באמת משתתף בלולאת הסנכרון.
+
+    `scheduled_sync_sumit` בונה את היעדים מ-`IntegrationConnection.status ==
+    "active"`. חיבור שעבר ל-`paused`/`inactive` מפיל את הארגון מה-cron
+    **בשקט** — אין ריצה כושלת, פשוט אין ריצה. באודיט 05/08/2026 נמצא ש-org 2
+    נשר ב-17/07 ו-org 3 ב-06/07, שבועות בלי שאיש ידע.
+
+    השער הזה קורא בלבד ואינו מחייה חיבורים — החייאה היא החלטת בעלים.
+    """
+    from ...services.channel_notifier import push_to_organization
+    from ...services.roster_coverage import (
+        coverage_alert_lines,
+        roster_coverage_report,
+    )
+
+    # ארגון המשרד. `roster_coverage_report` מקבל פרמטר, אבל היעד של ה-push
+    # חייב להיות אותו ארגון שעליו דיווחנו — לכן מוגדר פעם אחת ומשותף לשניהם.
+    office_org_id = 1
+
+    report = roster_coverage_report(db, office_organization_id=office_org_id)
+    lines = coverage_alert_lines(report)
+
+    pushed = False
+    if lines:
+        try:
+            result = await push_to_organization(
+                db, office_org_id, "\n".join(lines), severity="high",
+            )
+            pushed = bool(result.get("sent"))
+        except Exception as exc:  # ההתרעה לא מפילה את הבקרה
+            logger.error("Roster health push failed: %s", exc)
+            db.rollback()
+
+    return {"report": report, "alerted": pushed, "alert_lines": lines}

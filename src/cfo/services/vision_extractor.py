@@ -18,6 +18,8 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
+from sqlalchemy.orm import Session
+
 from ..config import settings
 
 logger = logging.getLogger(__name__)
@@ -107,6 +109,11 @@ async def extract_receipt(
     media_type: Optional[str] = None,
     *,
     user_initiated: bool = False,
+    db: Session | None = None,
+    organization_id: int | None = None,
+    user_id: int | None = None,
+    session_id: str | None = None,
+    purpose: str = "vision",
 ) -> Dict[str, Any]:
     """מחלץ נתוני קבלה מבייטים של קובץ (PDF או תמונה).
 
@@ -141,9 +148,15 @@ async def extract_receipt(
         media_type = "application/pdf" if _looks_like_pdf(content) else "image/png"
 
     if settings.anthropic_api_key:
-        raw = await _extract_anthropic(content, media_type)
+        raw = await _extract_anthropic(
+            content, media_type, db=db, organization_id=organization_id,
+            user_id=user_id, session_id=session_id, purpose=purpose,
+        )
     elif settings.openai_api_key:
-        raw = await _extract_openai(content, media_type)
+        raw = await _extract_openai(
+            content, media_type, db=db, organization_id=organization_id,
+            user_id=user_id, session_id=session_id, purpose=purpose,
+        )
     else:
         raise VisionExtractionError(
             "לא מוגדר מפתח LLM. הגדר ANTHROPIC_API_KEY (מומלץ) או OPENAI_API_KEY "
@@ -152,7 +165,11 @@ async def extract_receipt(
     return _normalize(raw)
 
 
-async def _extract_anthropic(content: bytes, media_type: str) -> Dict[str, Any]:
+async def _extract_anthropic(
+    content: bytes, media_type: str, *, db: Session | None = None,
+    organization_id: int | None = None, user_id: int | None = None,
+    session_id: str | None = None, purpose: str = "vision",
+) -> Dict[str, Any]:
     try:
         from anthropic import AsyncAnthropic
     except ImportError as exc:
@@ -184,6 +201,14 @@ async def _extract_anthropic(content: bytes, media_type: str) -> Dict[str, Any]:
         )
     except Exception as exc:
         raise VisionExtractionError(f"קריאת Anthropic נכשלה: {exc}") from exc
+    if db is not None:
+        from .moshko_observability import record_llm_usage_best_effort
+        record_llm_usage_best_effort(
+            db, organization_id=organization_id, user_id=user_id,
+            session_id=session_id, provider="anthropic",
+            model=settings.ocr_vision_model, usage=getattr(message, "usage", None),
+            purpose=purpose,
+        )
     text = "".join(
         block.text for block in message.content if getattr(block, "type", None) == "text"
     )
@@ -193,7 +218,11 @@ async def _extract_anthropic(content: bytes, media_type: str) -> Dict[str, Any]:
         raise VisionExtractionError(f"פלט Anthropic אינו JSON תקין: {text[:200]}") from exc
 
 
-async def _extract_openai(content: bytes, media_type: str) -> Dict[str, Any]:
+async def _extract_openai(
+    content: bytes, media_type: str, *, db: Session | None = None,
+    organization_id: int | None = None, user_id: int | None = None,
+    session_id: str | None = None, purpose: str = "vision",
+) -> Dict[str, Any]:
     try:
         from openai import AsyncOpenAI
     except ImportError as exc:
@@ -222,6 +251,14 @@ async def _extract_openai(content: bytes, media_type: str) -> Dict[str, Any]:
         )
     except Exception as exc:
         raise VisionExtractionError(f"קריאת OpenAI נכשלה: {exc}") from exc
+    if db is not None:
+        from .moshko_observability import record_llm_usage_best_effort
+        record_llm_usage_best_effort(
+            db, organization_id=organization_id, user_id=user_id,
+            session_id=session_id, provider="openai",
+            model=settings.ocr_vision_model_openai, usage=getattr(resp, "usage", None),
+            purpose=purpose,
+        )
     text = resp.choices[0].message.content or ""
     try:
         return _decode_json(text)

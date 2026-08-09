@@ -353,6 +353,7 @@ async def _handle_receipt_message(
     triggered automatically here."""
     from ...services.telegram_files import TelegramFileError, download_telegram_file
     from ...services.chat_expense_intake import intake_receipt_bytes
+    import inspect
 
     file_id, media_type = receipt_file
     try:
@@ -361,11 +362,17 @@ async def _handle_receipt_message(
         await gateway.send_text(external_id, f"לא הצלחתי להוריד את הקובץ: {exc}")
         return
 
-    result = await intake_receipt_bytes(
-        db, identity.organization_id, content,
-        media_type=media_type, source="telegram",
-        uploaded_by_user_id=identity.user_id,
-    )
+    kwargs = {
+        "media_type": media_type,
+        "source": "telegram",
+        "uploaded_by_user_id": identity.user_id,
+    }
+    parameters = inspect.signature(intake_receipt_bytes).parameters.values()
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters) or (
+        "session_id" in inspect.signature(intake_receipt_bytes).parameters
+    ):
+        kwargs["session_id"] = f"tg-{external_id}"
+    result = await intake_receipt_bytes(db, identity.organization_id, content, **kwargs)
 
     status = result.get("status")
     text = result.get("message") or _INTAKE_STATUS_FALLBACK_MESSAGE.get(

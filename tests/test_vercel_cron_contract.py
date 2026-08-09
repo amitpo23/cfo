@@ -22,6 +22,10 @@ EXPECTED_DAILY_SCHEDULES = {
     "/api/cron/bank-gap-scan": "15 3 * * *",
     "/api/cron/bookkeeper-morning": "45 3 * * *",
     "/api/cron/collection-reminders": "0 4 * * *",
+    # בקרת כיסוי: רצה אחרי שכל שערי הסנכרון סיימו, כדי שהיא תשפוט את
+    # תוצאת הבוקר הנוכחי ולא את זו של אתמול; ולפני התרעות הערוצים, כדי
+    # שנשירת תיק תגיע לבעלים באותו מחזור.
+    "/api/cron/roster-health": "30 5 * * *",
     "/api/cron/channel-alerts": "0 6 * * *",
 }
 

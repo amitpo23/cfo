@@ -38,7 +38,7 @@ def _good_extract(**overrides):
 def _mock_extract(monkeypatch, result=None, exc=None):
     calls = {"n": 0}
 
-    async def fake_extract_receipt(content, media_type=None, *, user_initiated=False):
+    async def fake_extract_receipt(content, media_type=None, *, user_initiated=False, **_context):
         calls["n"] += 1
         if exc is not None:
             raise exc

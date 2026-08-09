@@ -115,6 +115,19 @@ def register_client(
         .first()
     )
 
+    # שער לפני קליטה — לפני שנוצר משהו. ארגון-דייר שייך לתיק אחד; בלי
+    # הבדיקה הזאת נקשרה בפרוד חברה 895072659 ("may way") ל-org 5 של עומר
+    # ועודד, ו-office_rollup ספר את המע"מ שלו כפול. ארגון חדש לעולם אינו
+    # מתנגש, ולכן די לבדוק את המקרה שבו משתמשים בארגון קיים — וכך אין
+    # שורה שנוצרה לשווא כשהקליטה נחסמת.
+    if existing and existing.target_organization_id:
+        _guard_intake(
+            db,
+            office_organization_id=office_organization_id,
+            company_id=str(sumit_company_id),
+            target_organization_id=existing.target_organization_id,
+        )
+
     if existing and existing.target_organization_id:
         client_org = db.get(Organization, existing.target_organization_id)
     else:
@@ -287,6 +300,7 @@ async def run_client_sync(
     db.commit()
     return {
         "company_id": client.company_id,
+        "source": source,
         "sync_run_id": sync_run.id,
         "status": sync_run.status.value,
         "counts": sync_run.counts,
@@ -396,3 +410,24 @@ def _upsert_integration(db, org_id: int, source: str, credentials: dict) -> None
             credentials_encrypted=encrypt_credentials(credentials),
             config={},
         ))
+
+
+def _guard_intake(
+    db,
+    *,
+    office_organization_id: int,
+    company_id: str,
+    target_organization_id: int,
+) -> None:
+    """שער לפני קליטה — ר' roster_coverage.assert_intake_allowed.
+
+    עטיפה דקה כדי לשמור על יבוא עצל: `roster_coverage` נטען רק כשקולטים.
+    """
+    from .roster_coverage import assert_intake_allowed
+
+    assert_intake_allowed(
+        db,
+        office_organization_id=office_organization_id,
+        company_id=company_id,
+        target_organization_id=target_organization_id,
+    )
