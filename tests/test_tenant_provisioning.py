@@ -109,7 +109,13 @@ def test_readiness_reports_control_plane_even_with_no_tenants():
     assert "all_or_nothing" in report
 
 
-def test_readiness_is_green_only_when_every_database_is_at_head(tmp_path, fresh_org):
+def test_a_provisioned_tenant_is_clean_and_carries_a_known_revision(tmp_path, fresh_org):
+    """עוסק שהוקצה כראוי מדווח בלי drift ועם revision ידוע.
+
+    הדוח הכולל נשאר אדום כאן, ובצדק: מסד הבקרה בסביבת ההרצה נבנה
+    ב-`create_all` ולכן אינו מנוהל ב-alembic. אחרי התיקון של 09/08
+    מסד לא-מנוהל מכשיל את השער במקום לעבור בשקט.
+    """
     org_id = fresh_org()["org_id"]
     dsn = f"sqlite:///{tmp_path/'tenant.db'}"
     db = SessionLocal()
@@ -119,7 +125,8 @@ def test_readiness_is_green_only_when_every_database_is_at_head(tmp_path, fresh_
 
         mine = [t for t in report["tenants"] if t["organization_id"] == org_id]
         assert mine and mine[0]["drift"] == []
-        assert report["all_or_nothing"] is True
+        assert mine[0]["revision"]
+        assert org_id not in report["unmanaged"]
     finally:
         _cleanup(db, org_id)
         db.close()
@@ -190,4 +197,91 @@ def test_two_tenants_on_different_revisions_turn_the_report_red(tmp_path, fresh_
     finally:
         _cleanup(db, current_id)
         _cleanup(db, lagging_id)
+        db.close()
+
+
+# ---------------------------------------------------------------------- #
+# תיקוני ביקורת (Codex QA, 09/08/2026)
+# ---------------------------------------------------------------------- #
+def test_all_none_revisions_are_not_green(tmp_path, fresh_org):
+    """fail-open שנתפס בביקורת: `len(known_revisions) <= 1` החזיר True
+    על סט ריק, כלומר מצב שבו אף מסד אינו מנוהל ב-alembic דווח ירוק.
+    מסד לא מנוהל אינו "תקין" — הוא מסד שאיש לא יודע באיזו גרסה הוא."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        from cfo.services.tenant_control_plane import register_tenant_database
+        import sqlalchemy as sa
+        from cfo.models import Base
+
+        # מסד שנבנה ב-create_all — סכימה מלאה, בלי alembic_version.
+        dsn = f"sqlite:///{tmp_path/'unmanaged.db'}"
+        eng = sa.create_engine(dsn)
+        Base.metadata.create_all(eng)
+        eng.dispose()
+
+        register_tenant_database(db, org_id, dsn)
+        report = migration_readiness(db)
+
+        assert report["all_or_nothing"] is False, "מסד לא מנוהל דווח ירוק"
+        assert org_id in report["unmanaged"]
+    finally:
+        _cleanup(db, org_id)
+        db.close()
+
+
+def test_unreachable_tenant_is_reported_red_not_raised(fresh_org):
+    """תיק שלא ניתן להגיע אליו חייב להופיע בדוח כאדום. אם האימות זורק,
+    הדוח כולו קורס ואי אפשר לדעת מי הבעייתי."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        from cfo.services.tenant_control_plane import register_tenant_database
+
+        register_tenant_database(
+            db, org_id, "postgresql+psycopg://u:p@127.0.0.1:1/nonexistent"
+        )
+        report = migration_readiness(db)
+
+        assert report["all_or_nothing"] is False
+        mine = [t for t in report["tenants"] if t["organization_id"] == org_id]
+        assert mine and mine[0]["drift"]
+    finally:
+        _cleanup(db, org_id)
+        db.close()
+
+
+def test_provisioning_error_never_echoes_the_dsn(tmp_path, fresh_org):
+    """הודעת שגיאה מגיעה ללוגים ולמסך. סיסמת מסד של לקוח לא נכנסת
+    לשם — גם כשהיא הגיעה מ-stdout של alembic."""
+    org_id = fresh_org()["org_id"]
+    dsn = "postgresql+psycopg://user:top-secret-pw@127.0.0.1:1/db"
+    db = SessionLocal()
+    try:
+        with pytest.raises(ProvisioningError) as exc:
+            provision_tenant_database(db, org_id, dsn)
+        assert "top-secret-pw" not in str(exc.value)
+    finally:
+        _cleanup(db, org_id)
+        db.close()
+
+
+def test_provisioning_refuses_a_dsn_already_used_by_another_organization(
+    tmp_path, fresh_org
+):
+    """force אינו רישיון לאלייסינג: שני ארגונים על אותו מסד פיזי מבטלים
+    את הבידוד שלשמו כל המהלך נעשה."""
+    first = fresh_org()["org_id"]
+    second = fresh_org()["org_id"]
+    dsn = f"sqlite:///{tmp_path/'shared.db'}"
+    db = SessionLocal()
+    try:
+        provision_tenant_database(db, first, dsn)
+
+        with pytest.raises(ProvisioningError) as exc:
+            provision_tenant_database(db, second, dsn, force=True)
+        assert str(first) in str(exc.value)
+    finally:
+        _cleanup(db, first)
+        _cleanup(db, second)
         db.close()

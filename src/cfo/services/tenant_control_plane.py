@@ -23,6 +23,16 @@ from .credentials_vault import decrypt_credentials, encrypt_credentials
 _DSN_KEY = "dsn"
 
 
+class RoutingLoadError(RuntimeError):
+    """טעינת הניתוב נכשלה — ולכן לא הופעלה כלל.
+
+    fail-closed במכוון: אילו הטעינה הייתה מדלגת על שורה פגומה, הארגון
+    היה נופל **בשקט** למסד המשותף. אחרי סיבוב מפתח הצפנה זה מחזיר את כל
+    העוסקים למסד אחד בלי שאיש יידע — דליפת נתונים בין תיקי לקוחות בלי
+    אף סימן. (Codex QA 09/08)
+    """
+
+
 def register_tenant_database(
     db: Session,
     organization_id: int,
@@ -89,19 +99,32 @@ def load_routing_from_control_plane(db: Session) -> list[int]:
     rollback של פיצול — מחזירה את התנועה למסד המשותף בלי שהרשומה
     תימחק, כך שהמידע ההיסטורי נשמר.
     """
-    tenant_routing.reset_routing()
-    activated: list[int] = []
+    rows = db.query(TenantDatabase).filter(TenantDatabase.status == "active").all()
 
-    for row in db.query(TenantDatabase).filter(TenantDatabase.status == "active").all():
+    # מפענחים הכול **לפני** שנוגעים בניתוב הקיים. שורה פגומה עוצרת את
+    # הטעינה כשהמצב הישן עדיין בתוקף, במקום להשאיר מפה חלקית.
+    resolved: list[tuple[int, str]] = []
+    broken: list[int] = []
+    for row in rows:
         dsn = decrypt_credentials(row.dsn_encrypted).get(_DSN_KEY)
         if not dsn:
-            # הצפנה פגומה או שורה ריקה — לא מנחשים יעד. הארגון נשאר על
-            # המסד המשותף, וזה המצב הבטוח.
-            continue
-        tenant_routing.register_tenant_dsn(row.organization_id, dsn)
-        activated.append(row.organization_id)
+            broken.append(row.organization_id)
+        else:
+            resolved.append((row.organization_id, dsn))
 
-    return sorted(activated)
+    if broken:
+        raise RoutingLoadError(
+            "לא ניתן לפענוח DSN עבור הארגונים: "
+            f"{', '.join(str(org_id) for org_id in broken)}. "
+            "הניתוב לא הופעל — בדוק את מפתח ההצפנה. "
+            "המשך בלי הארגונים האלה היה מפיל אותם בשקט למסד המשותף."
+        )
+
+    tenant_routing.reset_routing()
+    for organization_id, dsn in resolved:
+        tenant_routing.register_tenant_dsn(organization_id, dsn)
+
+    return sorted(organization_id for organization_id, _ in resolved)
 
 
 def tenant_database_rows(db: Session) -> list[dict[str, Any]]:

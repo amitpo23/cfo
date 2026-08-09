@@ -87,4 +87,27 @@ def test_session_is_closed_even_when_the_body_raises():
             session = db
             raise ValueError("כשל מכוון")
 
-    assert not session.is_active or True  # הסשן נסגר; לא נותר פתוח
+    # `or True` היה כאן וגרם לטסט לעבור תמיד (Codex QA 09/08). הבדיקה
+    # האמיתית: אין חיבור פתוח שנותר תלוי בסשן.
+    assert session.get_bind() is not None
+    assert not session.in_transaction()
+
+
+# ---------------------------------------------------------------------- #
+# תיקוני ביקורת (Codex QA, 09/08/2026)
+# ---------------------------------------------------------------------- #
+def test_re_registering_disposes_the_previous_engine():
+    """החלפת DSN חייבת לסגור את ה-engine הישן. pool נטוש מחזיק חיבורים
+    פתוחים מול Neon עד סוף התהליך, ובמסלול החינמי המכסה קטנה."""
+    tenant_routing.register_tenant_dsn(51, "sqlite://")
+    first = tenant_routing.engine_for(51)
+    original_pool = first.pool
+    try:
+        tenant_routing.register_tenant_dsn(51, "sqlite://")
+
+        assert tenant_routing.engine_for(51) is not first
+        # `dispose()` מחליף את ה-pool באובייקט חדש — זו העדות שהישן נסגר
+        # ולא נותר תלוי עם חיבורים פתוחים.
+        assert first.pool is not original_pool
+    finally:
+        tenant_routing.reset_routing()

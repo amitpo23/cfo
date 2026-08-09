@@ -15,12 +15,20 @@
 """
 from __future__ import annotations
 
+import threading
 from contextlib import contextmanager
 from typing import Generator
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
+
+# המצב כאן הוא process-local. בפריסה מרובת-workers כל worker מחזיק עותק
+# משלו, ולכן **טעינת הניתוב חייבת לקרות באתחול כל worker** ולא רק פעם
+# אחת גלובלית; אחרת worker אחד ינתב לפי מפה ישנה (Codex QA 09/08).
+# הנעילה מגנה מפני מרוץ בתוך worker: שני threads שמבקשים אותו ארגון
+# בו-זמנית עלולים לבנות שני engines ולשמור רק אחד, ולהדליף pool.
+_LOCK = threading.RLock()
 
 # ארגון → DSN ייעודי. ריק עד שארגון ראשון מפוצל בפועל.
 _TENANT_DSN: dict[int, str] = {}
@@ -60,19 +68,20 @@ def engine_for(organization_id: int | None) -> Engine:
     if organization_id is None:
         return _shared_engine()
 
-    cached = _TENANT_ENGINES.get(organization_id)
-    if cached is not None:
-        return cached
+    with _LOCK:
+        cached = _TENANT_ENGINES.get(organization_id)
+        if cached is not None:
+            return cached
 
-    dsn = _TENANT_DSN.get(organization_id)
-    if dsn is None:
-        return _shared_engine()
+        dsn = _TENANT_DSN.get(organization_id)
+        if dsn is None:
+            return _shared_engine()
 
-    from ..database import _engine_kwargs
+        from ..database import _engine_kwargs
 
-    engine = create_engine(dsn, **_engine_kwargs())
-    _TENANT_ENGINES[organization_id] = engine
-    return engine
+        engine = create_engine(dsn, **_engine_kwargs())
+        _TENANT_ENGINES[organization_id] = engine
+        return engine
 
 
 def _session_factory(organization_id: int | None) -> sessionmaker:
@@ -102,10 +111,17 @@ def session_for(organization_id: int | None) -> Generator[Session, None, None]:
 
 def register_tenant_dsn(organization_id: int, dsn: str) -> None:
     """מפנה ארגון למסד ייעודי. רק הוא מושפע; שאר הארגונים ממשיכים
-    למסד המשותף — כך הפיצול נעשה ארגון-אחד-בכל-פעם."""
-    _TENANT_DSN[organization_id] = dsn
-    _TENANT_ENGINES.pop(organization_id, None)
-    _TENANT_SESSION_FACTORIES.pop(organization_id, None)
+    למסד המשותף — כך הפיצול נעשה ארגון-אחד-בכל-פעם.
+
+    ה-engine הקודם נסגר במפורש: pool נטוש מחזיק חיבורים פתוחים מול
+    Neon עד סוף התהליך, ובמסלול החינמי המכסה קטנה (Codex QA 09/08).
+    """
+    with _LOCK:
+        _TENANT_DSN[organization_id] = dsn
+        stale = _TENANT_ENGINES.pop(organization_id, None)
+        _TENANT_SESSION_FACTORIES.pop(organization_id, None)
+    if stale is not None:
+        stale.dispose()
 
 
 def split_organization_ids() -> list[int]:
@@ -119,8 +135,10 @@ def split_organization_ids() -> list[int]:
 
 def reset_routing() -> None:
     """מנקה ניתוב ומשליך engines. לשימוש טסטים ואתחול מחדש."""
-    for engine in _TENANT_ENGINES.values():
+    with _LOCK:
+        engines = list(_TENANT_ENGINES.values())
+        _TENANT_DSN.clear()
+        _TENANT_ENGINES.clear()
+        _TENANT_SESSION_FACTORIES.clear()
+    for engine in engines:
         engine.dispose()
-    _TENANT_DSN.clear()
-    _TENANT_ENGINES.clear()
-    _TENANT_SESSION_FACTORIES.clear()

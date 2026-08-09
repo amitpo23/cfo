@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -39,6 +40,20 @@ class ProvisioningError(RuntimeError):
     """הקצאה נעצרה לפני שביצעה שינוי בלתי-הפיך."""
 
 
+# סיסמה בתוך DSN: postgresql://user:PASSWORD@host/db
+_CREDENTIALS_IN_URL = re.compile(r"(?P<scheme>[a-z0-9+]+://)(?P<user>[^:/@\s]+):[^@\s]*@")
+
+
+def _redact(text: str) -> str:
+    """מסתיר סיסמאות בתוך כל URL שמופיע בטקסט.
+
+    הודעות שגיאה מגיעות ללוגים ולמסך. alembic, דרייברים ו-SQLAlchemy
+    מדפיסים לעיתים את מחרוזת החיבור המלאה, וסיסמת מסד של לקוח לא
+    אמורה להגיע לשם (Codex QA 09/08).
+    """
+    return _CREDENTIALS_IN_URL.sub(r"\g<scheme>\g<user>:***@", text or "")
+
+
 def _run_upgrade(dsn: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
@@ -51,9 +66,14 @@ def _run_upgrade(dsn: str) -> subprocess.CompletedProcess:
 
 
 def _table_names(dsn: str) -> list[str]:
-    engine = sa.create_engine(dsn)
+    try:
+        engine = sa.create_engine(dsn)
+    except Exception as exc:  # noqa: BLE001
+        raise ProvisioningError(f"DSN אינו תקין: {_redact(str(exc))}") from None
     try:
         return sa.inspect(engine).get_table_names()
+    except sa.exc.SQLAlchemyError as exc:
+        raise ProvisioningError(f"המסד אינו נגיש: {_redact(str(exc))}") from None
     finally:
         engine.dispose()
 
@@ -63,10 +83,24 @@ def verify_tenant_schema(dsn: str) -> list[str]:
 
     מסד ריק לגמרי מחזיר את כל הטבלאות כחסרות ולא "תקין" — שער שמדווח
     OK על מסד שלא הוקצה גרוע מאין שער.
+
+    מסד שלא ניתן להגיע אליו מוחזר כבעיה ולא כחריגה: אילו זרקנו, דוח
+    ה-readiness כולו היה קורס ואי אפשר היה לדעת איזה תיק בעייתי
+    (Codex QA 09/08).
+
+    **מגבלה ידועה:** `compute_missing` משווה טבלאות ועמודות בלבד. הוא
+    אינו בודק טיפוסים, nullability, ברירות מחדל, מפתחות זרים,
+    אילוצי ייחוד או אינדקסים. מסד שחסר בו אילוץ ייחוד יעבור את השער.
     """
-    engine = sa.create_engine(dsn)
+    try:
+        engine = sa.create_engine(dsn)
+    except Exception as exc:  # noqa: BLE001 — כולל ArgumentError על DSN פגום
+        return [f"DSN אינו תקין: {_redact(str(exc))}"]
+
     try:
         missing = compute_missing(engine)
+    except sa.exc.SQLAlchemyError as exc:
+        return [f"המסד אינו נגיש: {_redact(str(exc))}"]
     finally:
         engine.dispose()
 
@@ -119,6 +153,18 @@ def provision_tenant_database(
     הרישום במסד הבקרה נעשה **רק אחרי** שהאימות עבר, כדי שלא ייווצר
     מצב שבו ארגון מנותב למסד שאינו שלם.
     """
+    # אלייסינג: שני ארגונים על אותו מסד פיזי מבטלים את הבידוד שלשמו כל
+    # המהלך נעשה. `force` הוא רישיון לדרוס מסד ריק — לא לשתף מסד של
+    # ארגון אחר (Codex QA 09/08).
+    for row in db.query(TenantDatabase).filter(
+        TenantDatabase.organization_id != organization_id
+    ).all():
+        if dsn_for_organization(db, row.organization_id) == dsn:
+            raise ProvisioningError(
+                f"ה-DSN הזה כבר רשום לארגון {row.organization_id}. "
+                "שני ארגונים על אותו מסד מבטלים את הבידוד."
+            )
+
     existing = _table_names(dsn)
     substantive = [name for name in existing if name != "alembic_version"]
     if substantive and not force:
@@ -131,7 +177,7 @@ def provision_tenant_database(
     if result.returncode != 0:
         raise ProvisioningError(
             f"alembic upgrade head נכשל עבור ארגון {organization_id}:\n"
-            f"{result.stdout}\n{result.stderr}"
+            f"{_redact(result.stdout)}\n{_redact(result.stderr)}"
         )
 
     drift = verify_tenant_schema(dsn)
@@ -210,10 +256,16 @@ def migration_readiness(db: Session) -> dict[str, Any]:
     if control_revision is None:
         unmanaged.append("control_plane")
 
+    # מסד שאינו מנוהל ב-alembic אינו "תקין" — הוא מסד שאיש לא יודע
+    # באיזו גרסה הוא, ולכן אי אפשר לטעון שהפריסה עקבית. הגרסה הקודמת
+    # השתמשה ב-`len(known_revisions) <= 1`, שהחזיר True גם על סט ריק
+    # והפך מצב שבו אף מסד אינו מנוהל לירוק (Codex QA 09/08). כאן זה
+    # fail-closed: דורשים revision ידוע אחד ויחיד, ואפס מסדים לא-מנוהלים.
     all_green = (
         not control_problems
         and all(not tenant["drift"] for tenant in tenants)
-        and len(known_revisions) <= 1
+        and not unmanaged
+        and len(known_revisions) == 1
     )
 
     return {

@@ -4,7 +4,10 @@
     python scripts/tenants.py list                     # מי מפוצל ומה הסטטוס
     python scripts/tenants.py readiness                # דוח "הכול או כלום"
     python scripts/tenants.py verify <org_id>          # drift על מסד של עוסק
-    python scripts/tenants.py provision <org_id> <dsn> # הקצאה על מסד ריק
+    TENANT_DSN=... python scripts/tenants.py provision <org_id>  # הקצאה
+
+ה-DSN נקרא מ-`TENANT_DSN` או בהקלדה שאינה מהדהדת — לא כארגומנט,
+כדי שסיסמת מסד של לקוח לא תישאר בהיסטוריית ה-shell וב-`ps`.
 
 `provision` מריץ `alembic upgrade head` על מסד **ריק** ומאמת מול המודלים
 לפני שהוא רושם. הוא נעצר על מסד שכבר מכיל טבלאות — הקצאה חוזרת בטעות
@@ -95,10 +98,30 @@ def cmd_verify(args) -> int:
         db.close()
 
 
+def _read_dsn(args) -> str:
+    """קורא את ה-DSN בלי להשאיר סיסמה בהיסטוריית ה-shell או ב-`ps`.
+
+    DSN כארגומנט מיקומי היה מותיר את הסיסמה בהיסטוריה ובטבלת התהליכים
+    (Codex QA 09/08). לכן: משתנה סביבה, או הקלדה שאינה מהדהדת.
+    """
+    import getpass
+    import os
+
+    from_env = os.environ.get("TENANT_DSN")
+    if from_env:
+        return from_env
+    return getpass.getpass(f"DSN עבור org{args.org_id} (לא מוצג): ")
+
+
 def cmd_provision(args) -> int:
+    dsn = _read_dsn(args)
+    if not dsn:
+        print("לא התקבל DSN.")
+        return 1
+
     db = SessionLocal()
     try:
-        result = provision_tenant_database(db, args.org_id, args.dsn, force=args.force)
+        result = provision_tenant_database(db, args.org_id, dsn, force=args.force)
         print(
             f"org{result['organization_id']}: הוקצה — {result['tables_created']} טבלאות, "
             f"revision={result['revision']}, drift={len(result['drift'])}"
@@ -124,7 +147,6 @@ def main() -> int:
 
     p_prov = sub.add_parser("provision", help="הקצאת מסד ריק לעוסק")
     p_prov.add_argument("org_id", type=int)
-    p_prov.add_argument("dsn")
     p_prov.add_argument("--force", action="store_true", help="לאשר הקצאה על מסד לא ריק")
     p_prov.set_defaults(func=cmd_provision)
 

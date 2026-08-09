@@ -142,3 +142,33 @@ def json_dump(value) -> str:
     import json
 
     return json.dumps(value, default=str, ensure_ascii=False)
+
+
+def test_undecryptable_dsn_fails_closed_instead_of_falling_back(fresh_org):
+    """תיקון ביקורת (Codex QA 09/08): DSN שאינו ניתן לפענוח **חייב**
+    להיכשל, לא להפיל את הארגון בשקט למסד המשותף.
+
+    התרחיש: סיבוב מפתח הצפנה. אם הטעינה מדלגת בשקט, כל העוסקים חוזרים
+    למסד אחד ואיש לא יודע — זה fail-open, וההפך מהדוקטרינה.
+    """
+    import pytest
+
+    from cfo.models import TenantDatabase
+    from cfo.services.tenant_control_plane import RoutingLoadError
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        register_tenant_database(db, org_id, "sqlite://")
+        row = db.query(TenantDatabase).filter(
+            TenantDatabase.organization_id == org_id
+        ).one()
+        row.dsn_encrypted = "לא-ניתן-לפענוח"
+        db.commit()
+
+        with pytest.raises(RoutingLoadError) as exc:
+            load_routing_from_control_plane(db)
+        assert str(org_id) in str(exc.value)
+    finally:
+        _cleanup(db, org_id)
+        db.close()
