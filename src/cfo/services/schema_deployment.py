@@ -19,7 +19,15 @@ import sqlalchemy as sa
 from alembic import command as alembic_command
 from sqlalchemy.engine import Engine
 
-from .schema_sync import apply_additive, compute_missing
+# מיובא כמודול ולא כשמות מועתקים. `from .schema_sync import apply_additive`
+# מקפיא את ההפניה בזמן ה-import הראשון: אם המודול נטען לראשונה בזמן שטסט
+# החליף את הפונקציה (monkeypatch), העותק כאן נשאר על התחליף **לצמיתות**
+# גם אחרי ש-monkeypatch ניקה את המקור. זה הפיל את
+# test_migrate_endpoint_reports_and_fixes_drift ואת כל מה שרץ אחריו,
+# והתגלה בביקורת Codex ב-09/08/2026. גישה דרך המודול נקראת בכל קריאה
+# ולכן משקפת תמיד את המצב הנוכחי.
+from . import schema_sync
+from .schema_sync import compute_missing
 
 
 class SchemaDeploymentError(RuntimeError):
@@ -61,7 +69,7 @@ def reconcile_schema_to_head(
                 raise
             migration_conflict = exc
 
-    schema_sync_report = apply_additive(engine)
+    schema_sync_report = schema_sync.apply_additive(engine)
     remaining = compute_missing(engine)
     if _has_drift(remaining):
         raise SchemaDeploymentError(

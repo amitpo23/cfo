@@ -53,8 +53,12 @@ def test_legacy_database_is_repaired_and_verified_before_head_stamp(tmp_path):
 def test_unclosed_drift_prevents_false_head_stamp(tmp_path, monkeypatch):
     engine = _legacy_engine(tmp_path)
     stamp_calls = []
+    # ה-patch נעשה על המודול המקורי ולא על שם מועתק ב-schema_deployment.
+    # `schema_deployment` ניגש דרך `schema_sync.apply_additive` בכל קריאה
+    # (שונה ב-09/08/2026), ולכן ה-patch נתפס — ומתנקה כראוי בסוף הטסט
+    # במקום לקפוא על התחליף ולהפיל טסטים שרצים אחריו.
     monkeypatch.setattr(
-        schema_deployment,
+        schema_deployment.schema_sync,
         "apply_additive",
         lambda _engine: {"tables": [], "columns": {}},
     )

@@ -76,23 +76,38 @@ def test_migrate_endpoint_reports_and_fixes_drift(
     client,
     migration_super_admin,
 ):
-    """מדמים drift של עמודה ואז מוודאים שה-endpoint סוגר אותו ומדווח."""
+    """מדמים drift של עמודה ואז מוודאים שה-endpoint סוגר אותו ומדווח.
+
+    הטסט הרסני במכוון — הוא מוחק עמודה אמיתית. ה-`finally` מחזיר אותה גם
+    כשה-endpoint נכשל; בלעדיו העמודה נשארת מחוקה וכל טסט שנוגע ב-
+    `organizations` אחריו קורס. זה קרה בפועל ותועד בביקורת Codex 09/08/2026.
+    """
     with engine.begin() as conn:
         conn.execute(sa.text("ALTER TABLE organizations DROP COLUMN collection_sms_sender"))
 
-    resp = client.post(
-        "/api/admin/db/migrate",
-        json={"confirmation": CONFIRMATION},
-        headers=migration_super_admin,
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "schema_sync" in body
-    assert "collection_sms_sender" in body["schema_sync"]["columns"].get("organizations", [])
+    try:
+        resp = client.post(
+            "/api/admin/db/migrate",
+            json={"confirmation": CONFIRMATION},
+            headers=migration_super_admin,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "schema_sync" in body
+        assert "collection_sms_sender" in body["schema_sync"]["columns"].get("organizations", [])
 
-    insp = sa.inspect(engine)
-    cols = {c["name"] for c in insp.get_columns("organizations")}
-    assert "collection_sms_sender" in cols
+        insp = sa.inspect(engine)
+        cols = {c["name"] for c in insp.get_columns("organizations")}
+        assert "collection_sms_sender" in cols
+    finally:
+        insp = sa.inspect(engine)
+        if "collection_sms_sender" not in {
+            c["name"] for c in insp.get_columns("organizations")
+        }:
+            with engine.begin() as conn:
+                conn.execute(
+                    sa.text("ALTER TABLE organizations ADD COLUMN collection_sms_sender VARCHAR")
+                )
 
 
 def test_migrate_endpoint_falls_back_to_verified_repair_on_already_exists_conflict(
