@@ -1115,6 +1115,11 @@ class Expense(Base):
     total = Column(Numeric(precision=12, scale=2), default=0)
     expense_date = Column(Date, nullable=False)
     category = Column(String(100), nullable=True)
+    # כרטיס באינדקס החשבונות של הארגון שאליו ההוצאה מתויקת. זה מה
+    # שמחבר הוצאה שנכנסה ממודול העסק לאינדקס המיובא (חשבשבת/SUMIT),
+    # ומאפשר להפיק דוחות מול אותם כרטיסים שההנה"ח עבדה מולם.
+    # `category` נשאר תיאור חופשי; זה הקישור המבני.
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
     description = Column(Text, nullable=True)
     receipt_file = Column(Text, nullable=True)         # base64 receipt (optional)
     invoice_number = Column(String(100), nullable=True)
