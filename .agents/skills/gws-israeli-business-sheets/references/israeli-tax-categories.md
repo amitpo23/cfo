@@ -39,7 +39,7 @@ Source: Israel Tax Authority (Rashut HaMisim) guidelines for self-employed indiv
 
 ## VAT (Ma'am) Rules
 
-- Standard VAT rate: **17%** (since 2016)
+- Standard VAT rate: **18%** (since January 2025; was 17% from 2016)
 - VAT registration threshold: Revenue over 107,692 ILS/year (2024, updated annually)
 - Below threshold: "Patur" (exempt dealer), no VAT charged or reclaimed
 - Above threshold: "Osek Murshe" (authorized dealer), must charge and report VAT

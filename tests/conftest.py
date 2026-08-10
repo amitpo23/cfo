@@ -74,3 +74,15 @@ def tenant(client, owner):
     assert resp.status_code == 201, resp.text
     data = resp.json()
     return {"headers": {"Authorization": f"Bearer {data['access_token']}"}, "user": data["user"]}
+
+
+@pytest.fixture(scope="session")
+def mdb_dir():
+    """ייצוא ה-MDB של חשבשבת (עומר ועודד, org5). מדלג כשאינו זמין —
+    הקבצים מכילים נתוני לקוח ואינם ב-git."""
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "reports/omer_porat/hashavshevet_to_sumit/mdb_extract"
+    if not (path / "JurnalTrans.csv").is_file():
+        pytest.skip("ייצוא ה-MDB אינו זמין בסביבה הזו")
+    return path

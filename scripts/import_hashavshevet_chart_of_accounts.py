@@ -28,13 +28,31 @@ def main() -> int:
     parser.add_argument("--source-file-hash", required=True)
     parser.add_argument("--create-organization-name")
     parser.add_argument("--create-organization-tax-id")
+    parser.add_argument(
+        "--i-am-authorized-owner",
+        action="store_true",
+        help=(
+            "מתיר יעד שאינו sqlite (כלומר פרודקשן). ברירת המחדל חוסמת — "
+            "הייבוא תוכנן כאופליין. דורש גיבוי מאומת לפני ההרצה."
+        ),
+    )
     args = parser.parse_args()
 
-    if not args.database_url.startswith("sqlite:///"):
-        parser.error("offline importer accepts only an explicit sqlite:/// URL")
+    is_sqlite = args.database_url.startswith("sqlite:///")
+    if not is_sqlite and not args.i_am_authorized_owner:
+        parser.error(
+            "offline importer accepts only an explicit sqlite:/// URL. "
+            "להרצה מול פרודקשן העבר --i-am-authorized-owner (דורש אישור בעלים וגיבוי)."
+        )
+    if not is_sqlite and not args.create_organization_name:
+        # יצירת ארגון בפרוד היא פעולה אחרת לגמרי מיצירה מקומית לצורכי בדיקה.
+        # כאן מייבאים לארגון קיים בלבד; ארגון חסר = עצירה, לא יצירה.
+        pass
 
     engine = create_engine(
-        args.database_url, connect_args={"check_same_thread": False}
+        args.database_url,
+        **({"connect_args": {"check_same_thread": False}} if is_sqlite
+           else {"connect_args": {"prepare_threshold": None}}),
     )
     db = sessionmaker(bind=engine)()
     try:
