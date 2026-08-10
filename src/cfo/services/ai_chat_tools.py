@@ -73,6 +73,43 @@ async def _find_capability(db, org_id: int, task: str = "", reads_only: bool = F
     }
 
 
+async def _suggest_expense_accounts(db, org_id: int, expense_id: int, **_kwargs) -> dict:
+    """כרטיסים מועמדים לתיוק ההוצאה, מתוך אינדקס החשבונות של התיק."""
+    from .expense_account_filing import suggest_accounts_for_expense
+
+    matches = suggest_accounts_for_expense(db, org_id, expense_id)
+    return {
+        "expense_id": expense_id,
+        "count": len(matches),
+        "accounts": matches,
+        "note": "אין התאמה = רשימה ריקה. אל תתייק לכרטיס שלא הוצע.",
+    }
+
+
+async def _file_expense_to_account(db, org_id: int, expense_id: int, account_id: int, **_kwargs) -> dict:
+    """מתייק הוצאה לכרטיס באינדקס. תיוק חוזר מעביר לכרטיס אחר."""
+    from .expense_account_filing import file_expense_to_account
+
+    return file_expense_to_account(db, org_id, expense_id, account_id)
+
+
+async def _list_my_capabilities(db, org_id: int, **_kwargs) -> dict:
+    """מה מושקו יכול לבצע בתיק הזה, ומה חסום ולמה.
+
+    הרשימה מלאה תמיד: משימה חסומה מופיעה עם הסיבה במקום להיעלם, כדי
+    שהתשובה תהיה "היכולת קיימת אבל חסר חיבור X" ולא "אין לי יכולת כזו".
+    """
+    from .capability_tasks import executable_tasks_for_organization
+
+    tasks = executable_tasks_for_organization(org_id)
+    return {
+        "organization_id": org_id,
+        "executable": sum(1 for t in tasks if t["executable"]),
+        "blocked": sum(1 for t in tasks if not t["executable"]),
+        "tasks": tasks,
+    }
+
+
 async def _get_ar_aging(db, org_id: int, **_kwargs) -> dict:
     from .dashboard_service import DashboardService
     return DashboardService(db, org_id).get_ar_aging()
@@ -1016,6 +1053,50 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_find_capability,
+    ),
+    "suggest_expense_accounts": ChatTool(
+        name="suggest_expense_accounts",
+        description=(
+            "הצעת כרטיסים לתיוק הוצאה, מתוך אינדקס החשבונות של התיק "
+            "(למשל 1,004 כרטיסי חשבשבת שיובאו). השתמש בזה לפני תיוק — "
+            "רשימה ריקה משמעה שאין התאמה, ואז אין לתייק בניחוש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"expense_id": {"type": "integer", "description": "מזהה ההוצאה"}},
+            "required": ["expense_id"],
+        },
+        category="read",
+        fn=_suggest_expense_accounts,
+    ),
+    "file_expense_to_account": ChatTool(
+        name="file_expense_to_account",
+        description=(
+            "תיוק הוצאה לכרטיס באינדקס החשבונות. זה מה שמחבר הוצאה "
+            "שנקלטה מהעסק לספרים. תיוק חוזר מעביר לכרטיס אחר — תיקון "
+            "תיוק שגוי מותר. כרטיס של ארגון אחר נחסם."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "expense_id": {"type": "integer"},
+                "account_id": {"type": "integer", "description": "מזהה הכרטיס מ-suggest_expense_accounts"},
+            },
+            "required": ["expense_id", "account_id"],
+        },
+        category="write",
+        fn=_file_expense_to_account,
+    ),
+    "list_my_capabilities": ChatTool(
+        name="list_my_capabilities",
+        description=(
+            "מה אני יכול לבצע בתיק הזה ומה חסום ולמה. השתמש בזה כשנשאל "
+            "'מה אתה יכול לעשות' או כשמשימה נראית בלתי-אפשרית — התשובה "
+            "תהיה 'היכולת קיימת אבל חסר חיבור X' ולא 'אין לי יכולת כזו'."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_list_my_capabilities,
     ),
     "get_ar_aging": ChatTool(
         name="get_ar_aging",
