@@ -3,6 +3,7 @@
 
     python scripts/org.py list                 # כל התיקים + דגלים
     python scripts/org.py status 5             # תיק אחד, תמונה מלאה
+    python scripts/org.py books 5              # ספרים: עבר, הווה, חסמים
     python scripts/org.py list --prod          # מול מסד הפרודקשן
     python scripts/org.py status 1 --prod --json
 
@@ -112,6 +113,51 @@ def cmd_status(args) -> int:
     return 0 if not snap["issues"] else 1
 
 
+def cmd_books(args) -> int:
+    from src.cfo.services.org_books_view import org_books_view
+
+    view = org_books_view(args.org_id)
+    if view is None:
+        print(f"org{args.org_id} אינו קיים.")
+        return 1
+    if args.json:
+        print(json.dumps(view, ensure_ascii=False, indent=2, default=str))
+        return 0
+
+    print(f"\norg{view['organization_id']} — {view['name']}  (ח.פ {view['tax_id']})")
+    print(f"קו חיתוך: {view['cutoff']}\n")
+
+    past = view["imported_past"]
+    print("── העבר שיובא ──")
+    print(f"  פקודות יומן:  {past['journal_entries']:,}   מקור: {', '.join(past['sources']) or '—'}")
+    print(f"  טווח:         {past['first_date']} → {past['last_date']}")
+    print(f"  חובה:         {float(past['debit_total']):>18,.2f}")
+    print(f"  זכות:         {float(past['credit_total']):>18,.2f}")
+    mark = "✓ מאוזן" if past["balanced"] else f"✗ פער {float(past['imbalance']):,.2f}"
+    print(f"  איזון:        {mark}   (חד-צדיות: {past['one_sided']:,})")
+
+    live = view["live_period"]
+    print(f"\n── התקופה החיה (מ-{live['from']}) ──")
+    print(f"  הוצאות:       {live['expenses']}")
+    print(f"    לא מתויקות: {live['unfiled']}")
+    print(f"    בסכום 0:    {live['zero_sum']}")
+    print(f"  חשבוניות:     {live['invoices']}")
+
+    idx = view["index"]
+    print(f"\n── אינדקס החשבונות ──")
+    print(f"  כרטיסים:      {idx['accounts']:,}   מקור: {', '.join(idx['sources']) or '—'}")
+    if idx["by_sort_code"]:
+        print("  לפי מיון:     " + " · ".join(f"{k}={v}" for k, v in idx["by_sort_code"].items()))
+
+    if view["blockers"]:
+        print("\n── מה חוסם ──")
+        for b in view["blockers"]:
+            print(f"  ⚠ {b}")
+    else:
+        print("\n  אין חסמים ✓")
+    return 0 if not view["blockers"] else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="תשאול ובדיקה לפי ארגון")
     parser.add_argument("--prod", action="store_true", help="לקרוא ממסד הפרודקשן")
@@ -120,6 +166,10 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("list", help="כל התיקים").set_defaults(func=cmd_list)
+    p_books = sub.add_parser("books", help="ספרים: עבר שיובא, הווה חי, וחסמים")
+    p_books.add_argument("org_id", type=int)
+    p_books.set_defaults(func=cmd_books)
+
     p_status = sub.add_parser("status", help="תיק אחד")
     p_status.add_argument("org_id", type=int)
     p_status.set_defaults(func=cmd_status)
