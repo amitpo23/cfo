@@ -110,6 +110,54 @@ async def _list_my_capabilities(db, org_id: int, **_kwargs) -> dict:
     }
 
 
+async def _office_account_status(db, org_id: int, **_kwargs) -> dict:
+    """מכסות ומצב חשבון המשרד — כמה תיקים מחויבים, והאם יש חסימת אובליגו.
+
+    כלי משרד: מחזיר תמונה של פורטל ההנה"ח כולו, לא של תיק בודד. נגיש
+    ל-SUPER_ADMIN בלבד (`office=True`).
+    """
+    from .office_capabilities import office_tasks_status
+
+    status = office_tasks_status()
+    if not status["configured"]:
+        return {
+            "configured": False,
+            "reason": "חסרות הרשאות ברמת משרד (SUMIT_OFFICE_API_KEY / SUMIT_OFFICE_COMPANY_ID)",
+            "tasks": status["tasks"],
+        }
+
+    from .office_capabilities import office_credentials
+    from ..integrations.sumit_integration import SumitIntegration
+
+    creds = office_credentials()
+    client = SumitIntegration(api_key=creds["api_key"], company_id=creds["company_id"])
+    async with client:
+        quotas = await client.list_quotas()
+
+    rows = quotas.get("Data") or []
+    return {
+        "configured": True,
+        "company_id": creds["company_id"],
+        "quotas": [
+            {
+                "application": r.get("ApplicationName"),
+                "statistic": r.get("StatisticName"),
+                "usage": r.get("Usage"),
+                "quota": r.get("Quota"),
+            }
+            for r in rows
+        ],
+        "note": "ValidBilling = רישיונות הנה\"ח בשימוש. תיקים שאינם נספרים שם אינם מחויבים.",
+    }
+
+
+async def _office_capabilities(db, org_id: int, **_kwargs) -> dict:
+    """מה ניתן לבצע ברמת המשרד ומה חסום — בלי לחשוף את המפתח."""
+    from .office_capabilities import office_tasks_status
+
+    return office_tasks_status()
+
+
 async def _get_ar_aging(db, org_id: int, **_kwargs) -> dict:
     from .dashboard_service import DashboardService
     return DashboardService(db, org_id).get_ar_aging()
@@ -1053,6 +1101,29 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_find_capability,
+    ),
+    "office_account_status": ChatTool(
+        name="office_account_status",
+        description=(
+            "מכסות ומצב חשבון המשרד ב-SUMIT — כמה רישיונות הנה\"ח בשימוש, "
+            "מצב אובליגו, מיילים ואחסון. השתמש בזה כשנשאל אם תיק מסוים "
+            "מחויב, או אם יש חסימת אובליגו. מחזיר תמונה של הפורטל כולו."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        office=True,
+        fn=_office_account_status,
+    ),
+    "office_capabilities": ChatTool(
+        name="office_capabilities",
+        description=(
+            "מה אני יכול לבצע ברמת המשרד ומה חסום. כולל ציון מפורש של מה "
+            "ש-SUMIT לא חושפת בשום הרשאה (קריאת מנות ופקודות יומן)."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        office=True,
+        fn=_office_capabilities,
     ),
     "suggest_expense_accounts": ChatTool(
         name="suggest_expense_accounts",

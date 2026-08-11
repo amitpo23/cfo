@@ -69,6 +69,10 @@ def test_office_tools_are_flagged_office_and_others_are_not():
     office_tool_names = {
         "list_office_clients", "get_office_rollup", "get_client_overview",
         "run_client_sync", "register_office_client",
+        # נוספו במודע 11/08/2026 עם מפתח חברת המשרד (CompanyID 844329067).
+        # שניהם מחזירים תמונה של פורטל ההנה"ח כולו ולא של תיק בודד,
+        # ולכן office=True — מנהל ארגון לא אמור לראות את מכסות המשרד.
+        "office_account_status", "office_capabilities",
     }
     for name, tool in TOOLS.items():
         assert tool.office == (name in office_tool_names), name
