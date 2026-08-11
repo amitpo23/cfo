@@ -44,6 +44,75 @@ OFFICE_TASKS: dict[str, dict[str, Any]] = {
         "description_he": "מסמכים ברמת המשרד",
         "answers_he": "אילו מסמכים קיימים בתיקי המשרד",
     },
+    # --- פעולות כתיבה: כולן בלתי-הפיכות אצל הספק ---
+    "create_client_company": {
+        "capability": "create_company",
+        "endpoint": "/website/companies/create/",
+        "writes": True,
+        "description_he": "פתיחת עסק/ארגון חדש בפורטל המשרד",
+        "answers_he": "קליטת לקוח חדש בלי מסך",
+        "warning_he": (
+            "יוצר ישות חדשה ב-SUMIT. לפני יצירה יש לוודא שאין עסק קיים "
+            "לאותו ח.פ — ביבוא של עומר ועודד נבחר במכוון 'חיבור לעסק "
+            "קיים' כדי לא להקים כפיל."
+        ),
+    },
+    "update_client_company": {
+        "capability": "update_company",
+        "endpoint": "/website/companies/update/",
+        "writes": True,
+        "description_he": "עדכון פרטי עסק בפורטל",
+        "answers_he": "תיקון שם, ח.פ או פרטי קשר בלי מסך",
+    },
+    "install_applications": {
+        "capability": "install_applications",
+        "endpoint": "/website/companies/installapplications/",
+        "writes": True,
+        "description_he": "התקנת מודולים לעסק (הנה\"ח, חשבוניות, סליקה)",
+        "answers_he": "הפעלת יכולת חסרה אצל לקוח",
+        "warning_he": (
+            "התקנת מודול עשויה לשנות את המסלול והחיוב. `listquotas` לפני "
+            "ואחרי מראה את ההשפעה בפועל."
+        ),
+    },
+    "grant_permission": {
+        "capability": "set_permission",
+        "endpoint": "/website/permissions/set/",
+        "writes": True,
+        "description_he": "הענקת הרשאה למשתמש בעסק",
+        "answers_he": "חיבור משרד הנה\"ח או עובד לתיק",
+        "warning_he": (
+            "מרכז הידע: \"לא ניתן להעניק הרשאה לשני משרדי רו\"ח בו-זמנית — "
+            "חובה **להסיר** את הישן לפני הוספת החדש.\" הענקה לפני הסרה "
+            "תיכשל או תשאיר מצב שגוי."
+        ),
+    },
+    "revoke_permission": {
+        "capability": "remove_permission",
+        "endpoint": "/website/permissions/remove/",
+        "writes": True,
+        "description_he": "הסרת הרשאה ממשתמש",
+        "answers_he": "ניתוק משרד הנה\"ח קודם — התנאי להחלפת משרד",
+    },
+    "create_user": {
+        "capability": "create_user",
+        "endpoint": "/website/users/create/",
+        "writes": True,
+        "description_he": "יצירת משתמש והענקת הרשאות לעסק הנוכחי",
+        "answers_he": "פתיחת גישה ללקוח או לעובד",
+    },
+    "login_redirect": {
+        "capability": "user_login_redirect",
+        "endpoint": "/website/users/loginredirect/",
+        "writes": False,
+        "description_he": "כתובת כניסה למשתמש בלי חשיפת סיסמה ב-URL",
+        "answers_he": "מעבר לפורטל בהקשר של לקוח",
+        "warning_he": (
+            "דורש EmailAddress+Password של המשתמש — הוא אינו עוקף סיסמה "
+            "אלא רק לא חושף אותה בכתובת. ה-endpoint גם אינו מאמת את "
+            "הפרטים, ולכן טוקן ייווצר גם לפרטים שגויים."
+        ),
+    },
 }
 
 
@@ -102,8 +171,12 @@ def office_tasks_status() -> dict[str, Any]:
                 "description_he": task["description_he"],
                 "answers_he": task["answers_he"],
                 "writes": task["writes"],
+                # כתיבה ברמת משרד היא בלתי-הפיכה אצל הספק — יצירת ארגון,
+                # הענקת/הסרת הרשאה, התקנת מודול. אפס אוטונומיה.
+                "requires_approval": task["writes"],
                 "executable": configured,
                 "blocked_by": list(blocked),
+                **({"warning_he": task["warning_he"]} if "warning_he" in task else {}),
             }
             for name, task in OFFICE_TASKS.items()
         ],

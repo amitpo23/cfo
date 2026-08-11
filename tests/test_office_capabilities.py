@@ -93,3 +93,34 @@ def test_status_marks_everything_blocked_when_not_configured(monkeypatch):
     assert status["configured"] is False
     assert not any(t["executable"] for t in status["tasks"])
     assert all(t["blocked_by"] for t in status["tasks"])
+
+
+# ---------------------------------------------------------------------- #
+# כיסוי מלא — נמצא חסר בסקירה 11/08/2026
+# ---------------------------------------------------------------------- #
+def test_map_covers_every_office_level_endpoint_the_client_implements():
+    """הגרסה הראשונה מיפתה 3 יכולות מתוך 9 שהקליינט כבר מממש.
+    השער הזה מונע חזרה על כך: כל endpoint ברמת המשרד חייב להיות במפה,
+    אחרת מושקו יענה "אין לי יכולת" על משהו שקיים."""
+    expected = {
+        "account_quotas", "company_details", "office_documents",
+        "create_client_company", "update_client_company", "install_applications",
+        "grant_permission", "revoke_permission", "create_user", "login_redirect",
+    }
+    assert set(OFFICE_TASKS) == expected
+
+
+def test_write_operations_are_marked_and_require_approval():
+    """יצירת ארגון, הענקת הרשאה ויצירת משתמש הן פעולות בלתי-הפיכות
+    אצל הספק — אסור שיסווגו כקריאה."""
+    for name in ("create_client_company", "grant_permission", "revoke_permission",
+                 "create_user", "install_applications", "update_client_company"):
+        assert OFFICE_TASKS[name]["writes"] is True, name
+
+
+def test_replacing_an_accounting_office_requires_removing_the_old_one_first():
+    """כלל מרכז הידע: 'לא ניתן להעניק הרשאה לשני משרדי רו"ח בו-זמנית —
+    חובה להסיר את הישן לפני הוספת החדש.' מי שיקרא את המפה חייב לדעת."""
+    grant = OFFICE_TASKS["grant_permission"]
+    assert "warning_he" in grant
+    assert "להסיר" in grant["warning_he"]
