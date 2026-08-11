@@ -32,6 +32,11 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
         "memory",
         "create_task",
         "update_task",
+        # נוסף במודע 10/08/2026: תיוק הוצאה לכרטיס באינדקס משנה את
+        # הספרים (expense.account_id + status='filed'), ולכן write.
+        # `suggest_expense_accounts` ו-`list_my_capabilities` הם read —
+        # הם קוראים בלבד ואינם משנים דבר.
+        "file_expense_to_account",
     }
 
 
@@ -64,6 +69,10 @@ def test_office_tools_are_flagged_office_and_others_are_not():
     office_tool_names = {
         "list_office_clients", "get_office_rollup", "get_client_overview",
         "run_client_sync", "register_office_client",
+        # נוספו במודע 11/08/2026 עם מפתח חברת המשרד (CompanyID 844329067).
+        # שניהם מחזירים תמונה של פורטל ההנה"ח כולו ולא של תיק בודד,
+        # ולכן office=True — מנהל ארגון לא אמור לראות את מכסות המשרד.
+        "office_account_status", "office_capabilities",
     }
     for name, tool in TOOLS.items():
         assert tool.office == (name in office_tool_names), name
@@ -1019,3 +1028,58 @@ def test_find_capability_returns_honest_empty_for_no_match():
 
     assert result["count"] == 0
     assert result["capabilities"] == []
+
+
+# ---------------------------------------------------------------------- #
+# תיוק ומפת משימות — חיבור היכולות למושקו (10/08/2026)
+# ---------------------------------------------------------------------- #
+def test_moshko_can_suggest_and_file_expenses_to_index_accounts():
+    from cfo.services.ai_chat_tools import TOOLS
+
+    assert TOOLS["suggest_expense_accounts"].category == "read"
+    assert TOOLS["file_expense_to_account"].category == "write"
+
+
+def test_filing_tool_reports_what_it_linked(fresh_org):
+    import asyncio
+    from datetime import date
+    from decimal import Decimal
+
+    from cfo.database import SessionLocal
+    from cfo.models import Account, AccountType, Expense
+    from cfo.services.ai_chat_tools import TOOLS
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        acc = Account(organization_id=org_id, name="אנרגיה רפת",
+                      account_type=AccountType.EXPENSE, source="hashavshevet_mdb",
+                      source_account_code="701600")
+        db.add(acc)
+        exp = Expense(organization_id=org_id, supplier_name="ספק", amount=Decimal("10"),
+                      total=Decimal("10"), expense_date=date(2026, 7, 1), status="pending")
+        db.add(exp)
+        db.commit()
+
+        result = asyncio.run(
+            TOOLS["file_expense_to_account"].fn(db, org_id, expense_id=exp.id, account_id=acc.id)
+        )
+        assert result["source_account_code"] == "701600"
+        assert result["status"] == "filed"
+    finally:
+        db.close()
+
+
+def test_moshko_can_list_what_it_is_able_to_do_for_an_organization(fresh_org):
+    """מושקו צריך לדעת מה הוא יכול לבצע בתיק הזה — ומה חסום ולמה."""
+    import asyncio
+
+    from cfo.services.ai_chat_tools import TOOLS
+
+    org_id = fresh_org()["org_id"]
+    result = asyncio.run(TOOLS["list_my_capabilities"].fn(None, org_id))
+
+    assert result["tasks"]
+    blocked = [t for t in result["tasks"] if not t["executable"]]
+    assert blocked, "ארגון בלי חיבורים אמור להראות משימות חסומות"
+    assert all(t["blocked_by"] for t in blocked)

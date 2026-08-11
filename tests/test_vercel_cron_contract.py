@@ -17,8 +17,15 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 EXPECTED_DAILY_SCHEDULES = {
     "/api/cron/sync-sumit": "30 1 * * *",
     "/api/cron/sync-open-finance": "0 2 * * *",
-    "/api/cron/enrich-expenses": "15 2 * * *",
-    "/api/cron/process-ocr": "45 2 * * *",
+    # הוסרו 11/08/2026 — שניהם קוראים ל-/documents/getdetails, שהיא
+    # **פעולה בתשלום פר-מסמך** ש-SUMIT מחייבת על אמצעי התשלום של
+    # **חברת הלקוח**. הבעלים דיווח על חיובים של מאות שקלים לכל תיק
+    # ולחשבון המשרד. השערים בקוד (sumit_enrichment_daily_action_limit,
+    # ocr_llm_enabled) הועברו ל-0/false בפרוד, וה-cron הוסרו כדי
+    # שהשער לא יהיה ההגנה היחידה.
+    #
+    # להחזרה נדרש: אישור בעלים מפורש, אימות התעריף מול SUMIT, ותקרה
+    # יומית שנגזרת מהעלות בפועל ולא מהמספר 25 שנבחר בלי מחירון.
     "/api/cron/bank-gap-scan": "15 3 * * *",
     "/api/cron/bookkeeper-morning": "45 3 * * *",
     "/api/cron/collection-reminders": "0 4 * * *",
