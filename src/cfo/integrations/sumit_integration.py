@@ -65,6 +65,11 @@ class SumitAPIError(Exception):
     """Raised when SUMIT returns a business/API error envelope."""
 
 
+class PaidSumitActionDisabled(RuntimeError):
+    """A billed per-document SUMIT action was attempted while the cost budget
+    is zero. The request was never sent."""
+
+
 # Mapping from this codebase's document type names to SUMIT's
 # Accounting_Typed_DocumentType enum names.
 _DOCUMENT_TYPE_TO_SUMIT = {
@@ -233,6 +238,35 @@ class SumitIntegration(BaseIntegration):
         except Exception as e:
             self._log_error(e, f"Request failed on {endpoint}")
             raise
+
+    @staticmethod
+    def _assert_paid_actions_enabled(action: str) -> None:
+        """Kill-switch for billed per-document SUMIT actions.
+
+        `/accounting/documents/getdetails/` and `/getpdf/` are charged per
+        document, to the *client company's* payment method — not the office's.
+        On 2026-08-11 the owner reported that every client, and the office
+        account, had been billed hundreds of shekels.
+
+        The gate lives here rather than in each caller because the owner's
+        instruction was "no API charges from anyone". A per-caller gate closes
+        the callers you know about and leaves the next one open — on
+        2026-08-11 four manual routes bypassed the cron-level gate exactly
+        that way.
+
+        Zero means off. Any positive value means the per-day budget applies,
+        which is enforced by the callers that have DB access; this client is
+        deliberately stateless and cannot count.
+        """
+        from ..config import settings
+
+        if settings.sumit_enrichment_daily_action_limit == 0:
+            raise PaidSumitActionDisabled(
+                f"פעולת SUMIT בתשלום נחסמה ({action}): "
+                "SUMIT_ENRICHMENT_DAILY_ACTION_LIMIT=0. "
+                "כל קריאה כזו מחויבת לאמצעי התשלום של חברת הלקוח. "
+                "להפעלה מחדש יש להעלות את המשתנה מעל 0 — בידיעה שזה מחזיר חיוב."
+            )
 
     async def _post(
         self,
@@ -679,6 +713,7 @@ class SumitIntegration(BaseIntegration):
         Returns:
             PDF content as bytes
         """
+        self._assert_paid_actions_enabled("getpdf")
         return await self._post_binary(
             "/accounting/documents/getpdf/",
             {
@@ -697,6 +732,7 @@ class SumitIntegration(BaseIntegration):
         Returns:
             DocumentResponse with document details
         """
+        self._assert_paid_actions_enabled("getdetails")
         data = await self._post(
             "/accounting/documents/getdetails/",
             {"DocumentID": self._to_int(document_id)}
@@ -870,6 +906,7 @@ class SumitIntegration(BaseIntegration):
         """Return supplier name + tax id (CompanyNumber) + VAT + total for a
         document — everything PCN874 needs, only reachable via getdetails.
         """
+        self._assert_paid_actions_enabled("getdetails")
         data = await self._post(
             "/accounting/documents/getdetails/",
             {"DocumentID": self._to_int(document_id)}
