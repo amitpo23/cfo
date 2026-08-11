@@ -84,6 +84,24 @@
   מהספק נכשלת, `BankConnection` נשמר לפי ארגון, מזהה חיבור זר נחסם לפני הספק,
   ו־cron מדלג לפני budget/connector כל עוד consent מקומי ממתין. scope
   `create:connections`, השלמת consent ו־sync ראשון עדיין דורשים בעלים וספק חי.
+- **מעגל בנק↔תובנות↔SUMIT נסגר (2026-07-28), הוכח offline בלבד:** (1)
+  `ManualReconciliationService.suggest_matches()` היה קורס בכל קריאה אמיתית
+  (הפנה למשתנים לא מוגדרים) — תוקן לבנות את רשימות invoices/bills/expenses
+  מה-DB בפועל. (2) `bank_expense_gap.scan_and_alert()` עכשיו סורק גם את צד
+  ההכנסות (זיכויים ללא Invoice תואמת) ויוצר `CfoInsight(insight_type=
+  "unrecorded_income")`, במקביל לצד ההוצאות הקיים (`missing_document`) —
+  נחשף ב־`GET /api/open-finance/insights` דרך `BANK_INSIGHT_TYPES`. (3)
+  `SumitConnector.post_bank_reconciliation()` — writeback אמיתי ל-SUMIT
+  (הערת לקוח, `createremark`) לתנועת בנק שהותאמה — קיים עכשיו וממומש דרך
+  `IrreversibleActionService` (`sumit_writeback`): `reconciliation_dispatch`
+  מציע פעולה per-row, מסמן `pending_approval` עד אישור בעלים מפורש
+  (`POST /api/approvals/{id}/approve`), ורק אז מבצע וקורא ל-SUMIT בפועל
+  (`confirmed`); ללא contact מקושר או ללא actor מאומת — `unsupported`
+  (honest-null), לא הצלחה מדומה. SUMIT חסר readback עצמאי להערות, כך
+  ש-`mark_verified` לא נקרא במכוון — הפעולה נשארת ב-`executed`, מגבלת ספק
+  מתועדת, לא פרצה. מכוסה ב-`tests/test_manual_reconciliation.py`,
+  `tests/test_bank_expense_gap.py`, `tests/test_sumit_reconciliation_writeback.py`.
+  ראו `IRREVERSIBLE_ACTION_CONTROL.md` לפרטי ה-adapter. לא נפרס לפרוד.
 - **טרם הושלם:** הוכחה חיה באישור בעלים ושאר adapters
   (החזר/ביטול/מנדט/SUMIT/שידור/סגירה).
 

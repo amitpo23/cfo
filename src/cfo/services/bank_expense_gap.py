@@ -4,6 +4,10 @@
 שכר, הלוואות, העברות עצמיות, עמלות בנק), ובודק אם קיים כנגדה Bill/Expense
 תואם. מייצר דוח פער חודשי (`gap_report`) וסורק יומית תנועות חדשות ללא מסמך
 כדי ליצור התרעות (`scan_and_alert` -> CfoInsight, insight_type="missing_document").
+אותה סריקה גם בודקת את צד ההכנסות — תנועות זיכוי (amount>0) ללא Invoice
+תואמת (ראה `_find_invoice_match`) — ויוצרת CfoInsight מקביל
+(insight_type="unrecorded_income"), כדי לסגור את מעגל בנק↔תובנות↔SUMIT
+גם לכיוון ההכנסות ולא רק ההוצאות.
 
 יחס למודולים קיימים (ולא כפילות מקרית):
   * `bank_query_service.classify_missing_documents` — כלי בוט קיים (M8) עם
@@ -490,7 +494,13 @@ def suppliers_missing_invoices(db, org_id: int, date_from: date, date_to: date) 
 def scan_and_alert(db, org_id: int, lookback_days: int = 14) -> dict[str, int]:
     """סורק תנועות expense_candidate ללא מסמך מתוך lookback_days האחרונים,
     ויוצר CfoInsight (insight_type="missing_document") פר תנועה — עם dedup
-    לפי fingerprint ייחודי לתנועה (לא יוצר פעמיים לאותה תנועה)."""
+    לפי fingerprint ייחודי לתנועה (לא יוצר פעמיים לאותה תנועה). באותה
+    ריצה גם סורק את צד ההכנסות — זיכויים (amount>0) ללא Invoice תואמת
+    (ראה _find_invoice_match) — ויוצר CfoInsight (insight_type=
+    "unrecorded_income") כדי לסגור את מעגל הבנק↔תובנות גם לכיוון ההכנסות,
+    לא רק ההוצאות. שני הצדדים חולקים מונה created/skipped_existing/scanned
+    משותף (המספרים כאן הם אגרגט; אם צריך פילוח נפרד — evidence["direction"]
+    מבחין בין "outflow" ל-"inflow" בכל CfoInsight)."""
     from ..models import BankTransaction, CfoInsight
 
     since = date.today() - timedelta(days=lookback_days)
@@ -540,8 +550,51 @@ def scan_and_alert(db, org_id: int, lookback_days: int = 14) -> dict[str, int]:
             severity="medium",
             title=title,
             message=message,
-            evidence={"bank_txn_id": t.id, "amount": amount, "date": date_str, "description": t.description},
+            evidence={"bank_txn_id": t.id, "amount": amount, "date": date_str, "description": t.description, "direction": "outflow"},
             recommended_action="תייק הוצאה מתאימה ב-SUMIT או התאם לתנועה קיימת.",
+            status="active",
+        ))
+        created += 1
+
+    inflow_rows = (
+        db.query(BankTransaction)
+        .filter(
+            BankTransaction.organization_id == org_id,
+            BankTransaction.transaction_date >= since,
+            BankTransaction.amount > 0,
+        )
+        .all()
+    )
+    for t in inflow_rows:
+        scanned += 1
+        if _find_invoice_match(db, org_id, t) is not None:
+            continue
+
+        fingerprint = f"unrecorded_income:banktxn:{t.id}"
+        existing = db.query(CfoInsight).filter(
+            CfoInsight.organization_id == org_id,
+            CfoInsight.fingerprint == fingerprint,
+        ).first()
+        if existing:
+            skipped_existing += 1
+            continue
+
+        amount = float(t.amount or 0)
+        date_str = t.transaction_date.isoformat() if t.transaction_date else ""
+        title = f"הכנסה בבנק ללא חשבונית — {_money(amount)} ({date_str})"
+        message = (
+            f"תקבול מ-{date_str} על סך {_money(amount)} \"{t.description}\" "
+            f"אינו מקושר לחשבונית ב-SUMIT — ייתכן שההכנסה לא נרשמה."
+        )
+        db.add(CfoInsight(
+            organization_id=org_id,
+            fingerprint=fingerprint,
+            insight_type="unrecorded_income",
+            severity="medium",
+            title=title,
+            message=message,
+            evidence={"bank_txn_id": t.id, "amount": amount, "date": date_str, "description": t.description, "direction": "inflow"},
+            recommended_action="הפק חשבונית ב-SUMIT עבור התקבול או התאם לחשבונית קיימת.",
             status="active",
         ))
         created += 1
@@ -553,16 +606,18 @@ def scan_and_alert(db, org_id: int, lookback_days: int = 14) -> dict[str, int]:
 # --------------------------------------------------------------------- #
 # בוט — קריאת ההתרעות הפתוחות (למחשוב ai_chat_tools.get_bank_expense_gap_alerts)
 # --------------------------------------------------------------------- #
-def list_open_alerts(db, org_id: int, limit: int = 20) -> dict[str, Any]:
-    """התרעות missing_document פתוחות (status='active') שנוצרו ע"י
-    scan_and_alert — לא מריץ סיווג מחדש, רק קורא מה שכבר נשמר."""
+def list_open_alerts(db, org_id: int, limit: int = 20, insight_type: str = "missing_document") -> dict[str, Any]:
+    """התרעות פתוחות (status='active') שנוצרו ע"י scan_and_alert — לא מריץ
+    סיווג מחדש, רק קורא מה שכבר נשמר. ברירת מחדל insight_type="missing_document"
+    (צד ההוצאות, לתאימות לאחור); עבור צד ההכנסות יש להעביר
+    insight_type="unrecorded_income"."""
     from ..models import CfoInsight
 
     rows = (
         db.query(CfoInsight)
         .filter(
             CfoInsight.organization_id == org_id,
-            CfoInsight.insight_type == "missing_document",
+            CfoInsight.insight_type == insight_type,
             CfoInsight.status == "active",
         )
         .order_by(CfoInsight.created_at.desc())

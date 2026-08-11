@@ -158,7 +158,7 @@ class ManualReconciliationService:
 
     def suggest_matches(self, bank_txn_id: int, limit: int = 5) -> list[dict[str, Any]]:
         """Suggest potential matches for a transaction (top N candidates by score)."""
-        from .bank_reconciliation import BankTxnLite, DocLite, _score
+        from .bank_reconciliation import BankTxnLite, DocLite, _contact_name, _score, _vendor_name
 
         txn = self._load_transaction(bank_txn_id)
         if not txn or not txn.transaction_date:
@@ -172,7 +172,27 @@ class ManualReconciliationService:
             description=txn.description or "",
         )
 
-        pool = invoices + bills + expenses
+        # Build the candidate pools from the DB the same way
+        # bank_reconciliation.reconcile_organization() does, so this doesn't
+        # drift from the main matcher's shape/scoring inputs.
+        invoices = [
+            DocLite(id=r.id, entity_type="invoice", amount=float(r.total or 0),
+                    date=r.issue_date or r.due_date, name=_contact_name(r))
+            for r in self.db.query(Invoice).filter(Invoice.organization_id == self.organization_id).all()
+        ]
+        bills = [
+            DocLite(id=r.id, entity_type="bill", amount=float(r.total or 0),
+                    date=getattr(r, "issue_date", None) or getattr(r, "due_date", None),
+                    name=_vendor_name(r))
+            for r in self.db.query(Bill).filter(Bill.organization_id == self.organization_id).all()
+        ]
+        expenses = [
+            DocLite(id=r.id, entity_type="expense", amount=float(getattr(r, "amount", 0) or 0),
+                    date=getattr(r, "expense_date", None) or getattr(r, "date", None),
+                    name=getattr(r, "supplier_name", "") or getattr(r, "description", "") or "")
+            for r in self.db.query(Expense).filter(Expense.organization_id == self.organization_id).all()
+        ]
+
         candidates = []
 
         for doc_type, doc_list in [("invoice", invoices), ("bill", bills), ("expense", expenses)]:

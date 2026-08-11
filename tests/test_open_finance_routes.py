@@ -56,6 +56,35 @@ def test_generate_and_list_insights(client, seeded_bank_txns):
     assert "duplicate_charge" in types
 
 
+def test_unrecorded_income_insight_surfaces_via_insights_route(client, fresh_org):
+    """bank_expense_gap.scan_and_alert (inflow side) writes
+    CfoInsight(insight_type='unrecorded_income') directly to the DB — this
+    verifies it's included in BANK_INSIGHT_TYPES and surfaces through
+    GET /api/open-finance/insights, closing the bank<->insights loop for
+    money coming in without a matching invoice."""
+    from cfo.database import SessionLocal
+    from cfo.models import BankTransaction
+    from cfo.services import bank_expense_gap
+
+    org = fresh_org()
+    db = SessionLocal()
+    try:
+        db.add(BankTransaction(
+            organization_id=org["org_id"], external_id="of-income-1", source="open_finance",
+            transaction_date=date.today(), description="תקבול לקוח", amount=6600, currency="ILS",
+        ))
+        db.commit()
+        result = bank_expense_gap.scan_and_alert(db, org["org_id"], lookback_days=14)
+        assert result["created"] == 1
+    finally:
+        db.close()
+
+    r = client.get("/api/open-finance/insights", headers=org["headers"])
+    assert r.status_code == 200
+    types = {i["type"] for i in r.json()["items"]}
+    assert "unrecorded_income" in types
+
+
 def test_reconcile_runs(client, owner):
     r = client.post("/api/open-finance/reconcile?persist=false", headers=owner["headers"])
     assert r.status_code == 200

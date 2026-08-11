@@ -307,6 +307,94 @@ def test_scan_and_alert_skips_documented_and_excluded_transactions(fresh_org):
         db.close()
 
 
+def test_scan_and_alert_creates_unrecorded_income_insight_for_uninvoiced_credit(fresh_org):
+    """צד ההכנסות של הסריקה: תקבול (amount>0) ללא Invoice תואמת חייב ליצור
+    CfoInsight(insight_type='unrecorded_income') — סוגר את מעגל בנק↔תובנות↔SUMIT
+    גם לכיוון ההכנסות, לא רק ההוצאות."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _mk_txn(db, org_id, amount=3300, description="תקבול ללא חשבונית", days_ago=1)
+        db.commit()
+
+        result = svc.scan_and_alert(db, org_id, lookback_days=14)
+        assert result["created"] == 1
+
+        insights = db.query(CfoInsight).filter(
+            CfoInsight.organization_id == org_id, CfoInsight.insight_type == "unrecorded_income",
+        ).all()
+        assert len(insights) == 1
+        assert "3300" in insights[0].title or "3,300" in insights[0].title
+        assert insights[0].status == "active"
+        assert insights[0].evidence["direction"] == "inflow"
+    finally:
+        db.close()
+
+
+def test_scan_and_alert_does_not_duplicate_unrecorded_income_on_second_run(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _mk_txn(db, org_id, amount=4100, description="תקבול חוזר ללא חשבונית", days_ago=1)
+        db.commit()
+
+        first = svc.scan_and_alert(db, org_id, lookback_days=14)
+        second = svc.scan_and_alert(db, org_id, lookback_days=14)
+        assert first["created"] == 1
+        assert second["created"] == 0
+        assert second["skipped_existing"] == 1
+
+        count = db.query(CfoInsight).filter(
+            CfoInsight.organization_id == org_id, CfoInsight.insight_type == "unrecorded_income",
+        ).count()
+        assert count == 1
+    finally:
+        db.close()
+
+
+def test_scan_and_alert_skips_inflow_matched_to_invoice(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        inv = Invoice(
+            organization_id=org_id, external_id="SUMIT-INV-MATCHED", source="sumit",
+            issue_date=date.today(), status=InvoiceStatus.SENT, total=Decimal("777"), balance=Decimal("777"),
+        )
+        db.add(inv)
+        db.flush()
+        _mk_txn(db, org_id, amount=777, description="תקבול מותאם", days_ago=0)
+        db.commit()
+
+        result = svc.scan_and_alert(db, org_id, lookback_days=14)
+        assert result["created"] == 0
+
+        count = db.query(CfoInsight).filter(
+            CfoInsight.organization_id == org_id, CfoInsight.insight_type == "unrecorded_income",
+        ).count()
+        assert count == 0
+    finally:
+        db.close()
+
+
+def test_list_open_alerts_supports_unrecorded_income_type(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _mk_txn(db, org_id, amount=5200, description="תקבול לבדיקת list_open_alerts", days_ago=1)
+        db.commit()
+        svc.scan_and_alert(db, org_id, lookback_days=14)
+
+        result = svc.list_open_alerts(db, org_id, insight_type="unrecorded_income")
+        assert result["count"] == 1
+        assert result["alerts"][0]["evidence"]["direction"] == "inflow"
+
+        # default (missing_document) is unaffected — backward compatible.
+        default_result = svc.list_open_alerts(db, org_id)
+        assert default_result["count"] == 0
+    finally:
+        db.close()
+
+
 # --------------------------------------------------------------------- #
 # route
 # --------------------------------------------------------------------- #

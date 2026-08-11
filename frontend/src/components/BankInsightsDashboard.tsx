@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, RefreshCw, Banknote, Repeat, TrendingUp, PiggyBank,
   Copy, ShieldAlert, Sparkles, Link2, CheckCircle2, XCircle, Loader2,
-  Scale, LineChart, Briefcase, Send, FileCheck2,
+  Scale, LineChart, Briefcase, Send, FileCheck2, Wallet,
 } from 'lucide-react';
 import api from '../services/api';
 import ExportButtons from './ExportButtons';
@@ -40,11 +40,12 @@ interface SumitDispatchResult {
   confirmed: number;
   failed: number;
   unsupported: number;
+  pending_approval?: number;
   items: Array<{
     bank_transaction_id: number;
     matched_entity_type?: string;
     matched_entity_id?: number;
-    status: 'pending' | 'confirmed' | 'failed' | 'unsupported' | string;
+    status: 'pending' | 'pending_approval' | 'confirmed' | 'failed' | 'unsupported' | string;
     error?: string;
     skipped?: boolean;
   }>;
@@ -63,6 +64,7 @@ const TYPE_ICON: Record<string, any> = {
   aggregate_balance: Scale,
   portfolio_summary: Briefcase,
   portfolio_position: LineChart,
+  unrecorded_income: Wallet,
 };
 
 const SEVERITY_STYLE: Record<string, string> = {
@@ -169,6 +171,8 @@ export default function BankInsightsDashboard() {
       setReconciliation(res.local_reconciliation);
       if (dryRun) {
         setNotice(`בדיקה בלבד: נמצאו ${res.local_reconciliation.matched_count} התאמות מוכנות לשליחה.`);
+      } else if (res.pending_approval) {
+        setNotice(`${res.pending_approval} התאמות ממתינות לאישור בעלים לפני שליחה בפועל ל-SUMIT.`);
       } else if (res.unsupported) {
         setNotice(`ההתאמות נשמרו אצלנו. ${res.unsupported} התאמות דורשות חיבור write-back רשמי ל-SUMIT.`);
       } else {
@@ -279,6 +283,7 @@ export default function BankInsightsDashboard() {
             <StatusStat label="תנועות" value={reconciliation?.txn_count ?? 0} />
             <StatusStat label="הותאמו" value={reconciliation?.matched_count ?? 0} tone="emerald" />
             <StatusStat label="נשלחו" value={sumitDispatch?.dispatched ?? 0} tone="blue" />
+            <StatusStat label="ממתינות לאישור" value={sumitDispatch?.pending_approval ?? 0} tone="amber" />
             <StatusStat label="אושרו" value={sumitDispatch?.confirmed ?? 0} tone="emerald" />
             <StatusStat label="נכשלו" value={sumitDispatch?.failed ?? 0} tone="red" />
             <StatusStat label="לא נתמך" value={sumitDispatch?.unsupported ?? 0} tone="amber" />
@@ -401,12 +406,14 @@ function DispatchBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     confirmed: 'bg-emerald-100 text-emerald-700',
     pending: 'bg-blue-100 text-blue-700',
+    pending_approval: 'bg-amber-100 text-amber-800',
     failed: 'bg-red-100 text-red-700',
     unsupported: 'bg-amber-100 text-amber-800',
   };
   const labels: Record<string, string> = {
     confirmed: 'אושר',
     pending: 'ממתין',
+    pending_approval: 'ממתין לאישור בעלים',
     failed: 'נכשל',
     unsupported: 'לא נתמך',
   };
