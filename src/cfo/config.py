@@ -64,6 +64,16 @@ class Settings(BaseSettings):
     # SUMIT API
     sumit_api_key: Optional[str] = None
     sumit_company_id: Optional[str] = None
+    # פורטל ההנה"ח של המשרד (CompanyID 844329067) הוא ישות נפרדת מתיק
+    # לקוח בודד: הוא מחזיק את כל התיקים, ורק מפתח שלו מורשה לפעולות
+    # ברמת המשרד. `SUMIT_BOOKS_AMIT_PORAT.md` השאיר זאת כשאלה פתוחה —
+    # "איזה API key מורשה ל-DatabaseID, של חברת ה-org או של המשרד?"
+    #
+    # השדות נפרדים במכוון ואינם נופלים חזרה ל-`sumit_api_key`. נפילה
+    # כזו הייתה שולחת קריאה ברמת משרד עם מפתח של תיק בודד, או גרוע
+    # מכך — דורסת את המפתח של org1 ומפנה את הסנכרון שלו לחברה אחרת.
+    sumit_office_api_key: Optional[str] = None
+    sumit_office_company_id: Optional[str] = None
 
     # Open Finance API
     open_finance_client_id: Optional[str] = None
