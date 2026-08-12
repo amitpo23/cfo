@@ -143,7 +143,8 @@ def test_accepting_an_invitation_activates_it(client):
             role=UserRole.ACCOUNTANT, invited_by_user_id=inviter["user_id"],
         )
         membership_service.accept(
-            db, organization_id=inviter["own_org"], user_id=invitee["user_id"])
+            db, organization_id=inviter["own_org"], user_id=invitee["user_id"],
+            acting_user_id=invitee["user_id"])
         db.commit()
 
         assert membership_service.is_member(

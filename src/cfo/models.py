@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, EmailStr
 from sqlalchemy import (
     Column, Integer, String, Numeric, DateTime, Date,
     ForeignKey, Enum as SQLEnum, Boolean, Text, JSON,
-    Index, Float, UniqueConstraint, func, true, false
+    Index, Float, UniqueConstraint, CheckConstraint, func, true, false
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -256,6 +256,13 @@ class OrganizationMembership(Base):
     __table_args__ = (
         UniqueConstraint(
             "user_id", "organization_id", name="uq_membership_user_org",
+        ),
+        # `SUPER_ADMIN` הוא תפקיד פלטפורמה, לא תפקיד בתוך ארגון. חברות
+        # כזו הייתה מאפשרת למנהל ארגון להעניק סמכות-על בתיק שלו ולעקוף
+        # את ההפרדה בין מפעיל מערכת לבעל עסק. האילוץ יושב במסד ולא רק
+        # בשירות, כדי שגם כתיבה ישירה תיחסם.
+        CheckConstraint(
+            "role != 'SUPER_ADMIN'", name="ck_membership_role_not_super_admin",
         ),
         Index("ix_membership_user_status", "user_id", "status"),
         Index("ix_membership_org_status", "organization_id", "status"),

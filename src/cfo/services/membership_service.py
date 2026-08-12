@@ -35,18 +35,25 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _aware(dt: datetime) -> datetime:
+    """עמודות DateTime עשויות לחזור נאיביות מ-SQLite; השוואה מול tz-aware
+    זורקת TypeError. מנרמלים ל-UTC במקום להשוות שני טיפוסים שונים."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
 def _is_live(m: OrganizationMembership) -> bool:
     """האם החברות מקנה גישה **כרגע**."""
     if m.status != ACTIVE:
         return False
     if m.expires_at is None:
         return True
-    expires = m.expires_at
-    # עמודות DateTime עשויות לחזור נאיביות מ-SQLite; השוואה מול tz-aware
-    # זורקת TypeError. מנרמלים ל-UTC במקום להשוות שני טיפוסים שונים.
-    if expires.tzinfo is None:
-        expires = expires.replace(tzinfo=timezone.utc)
-    return expires > _now()
+    return _aware(m.expires_at) > _now()
+
+
+# `SUPER_ADMIN` הוא תפקיד **פלטפורמה**, לא תפקיד בתוך ארגון. חברות עם
+# התפקיד הזה הייתה מאפשרת למנהל ארגון להעניק סמכות-על בתוך התיק שלו,
+# ובכך לעקוף את ההפרדה בין מפעיל מערכת לבעל עסק.
+FORBIDDEN_MEMBERSHIP_ROLES = (UserRole.SUPER_ADMIN,)
 
 
 def grant(
@@ -66,6 +73,10 @@ def grant(
     """
     if status not in VALID_STATUSES:
         raise ValueError(f"סטטוס חברות לא מוכר: {status!r}")
+    if role in FORBIDDEN_MEMBERSHIP_ROLES:
+        raise ValueError(
+            f"{role.value} הוא תפקיד פלטפורמה ואינו תפקיד חברות בארגון"
+        )
 
     existing = (
         db.query(OrganizationMembership)
@@ -167,10 +178,16 @@ def accept(
     *,
     organization_id: int,
     user_id: int,
-    acting_user_id: Optional[int] = None,
+    acting_user_id: int,
 ) -> OrganizationMembership:
-    """קבלת הזמנה. **רק המוזמן עצמו** — קבלה בשם אחר היא הענקה עצמית."""
-    if acting_user_id is not None and acting_user_id != user_id:
+    """קבלת הזמנה. **רק המוזמן עצמו** — קבלה בשם אחר היא הענקה עצמית.
+
+    `acting_user_id` הוא פרמטר **חובה**. בגרסה הקודמת הוא היה
+    `Optional` עם ברירת מחדל `None`, ואז הבדיקה דולגה לגמרי — כלומר כל
+    קורא שלא טרח להעביר אותו יכול היה לקבל הזמנה בשם מישהו אחר. שער
+    שאפשר לדלג עליו בהשמטת ארגומנט אינו שער.
+    """
+    if acting_user_id != user_id:
         raise PermissionError(
             "רק המוזמן עצמו יכול לקבל את ההזמנה"
         )
@@ -209,7 +226,13 @@ def _assert_admin_of(db: Session, *, organization_id: int, acting_user_id: int) 
         )
 
 
-def _active_admin_ids(db: Session, organization_id: int) -> set[int]:
+def _reachable_admin_ids(db: Session, organization_id: int) -> set[int]:
+    """מנהלים ש**באמת אפשר להיכנס איתם** לתיק.
+
+    לא מספיק שהחברות `active`: אם המשתמש עצמו מושבת, או אם החברות פגה,
+    אין דרך להשתמש בה. שער שסופר כאלה מאמין שיש מנהל כשאין — ולכן מתיר
+    להסיר את האחרון שנותר, ומשאיר תיק שאיש אינו יכול לתפעל.
+    """
     rows = (
         db.query(OrganizationMembership)
         .filter(
@@ -219,16 +242,19 @@ def _active_admin_ids(db: Session, organization_id: int) -> set[int]:
         )
         .all()
     )
-    return {m.user_id for m in rows if _is_live(m)}
+    return {
+        m.user_id for m in rows
+        if _is_live(m) and _user_is_active(db, m.user_id)
+    }
 
 
 def _assert_not_last_admin(db: Session, *, organization_id: int, user_id: int) -> None:
-    """תיק בלי מנהל פעיל הוא תיק שאיש אינו יכול לתפעל — כולל להחזיר
-    לעצמו גישה. חוסם ביטול, השעיה והורדה בדרגה כאחד."""
-    admins = _active_admin_ids(db, organization_id)
+    """תיק בלי מנהל נגיש הוא תיק שאיש אינו יכול לתפעל — כולל להחזיר
+    לעצמו גישה. חוסם ביטול, השעיה, הורדה בדרגה ופקיעה כאחד."""
+    admins = _reachable_admin_ids(db, organization_id)
     if admins == {user_id}:
         raise ValueError(
-            "אי-אפשר להסיר את המנהל הפעיל האחרון בארגון"
+            "אי-אפשר להסיר את המנהל הנגיש האחרון בארגון"
         )
 
 
@@ -264,8 +290,18 @@ def grant_checked(
     """
     _assert_admin_of(db, organization_id=organization_id,
                      acting_user_id=acting_user_id)
-    if role not in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
-        # הורדה בדרגה משאירה את התיק בלי מנהל בדיוק כמו ביטול.
+
+    # שלושה מסלולים שכולם מסירים את המנהל בפועל:
+    #   · הורדה בדרגה  · השעיה/הזמנה במקום פעיל  · תוקף שכבר פג
+    # השלישי הוא המסלול שנשכח: החברות נשארת `active` אבל אינה נגישה,
+    # כלומר הסרה בתחפושת.
+    expiry_kills = expires_at is not None and _aware(expires_at) <= _now()
+    removes_admin = (
+        role not in (UserRole.ADMIN, UserRole.SUPER_ADMIN)
+        or status != ACTIVE
+        or expiry_kills
+    )
+    if removes_admin:
         existing = _find(db, organization_id=organization_id, user_id=user_id)
         if existing is not None and existing.role in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
             _assert_not_last_admin(db, organization_id=organization_id,

@@ -42,8 +42,11 @@ def _user_role_type():
 
     `sa.Enum` בתוך `create_table` גורם ל-Alembic להנפיק `CREATE TYPE
     userrole`. הטיפוס כבר קיים ב-PostgreSQL מהמיגרציה שיצרה את `users`,
-    ולכן ההרצה נופלת על `DuplicateObject` — **אחרי** ש-`CREATE TABLE`
-    כבר בוצע, כלומר במצב חצי-מיגרציה שדורש התערבות ידנית בפרוד.
+    ולכן ההרצה נופלת על `DuplicateObject`.
+
+    הכשל מתרחש ב**הצהרה הראשונה**, לפני `CREATE TABLE` (אומת ב-SQL
+    אופליין: `CREATE TYPE` בשורה 5, `CREATE TABLE` בשורה 7). כלומר
+    המיגרציה חסומה לחלוטין אך אינה משאירה מצב חצי-מיגרציה.
 
     SQLite אינו מכיר טיפוסי enum ומייצג אותם כ-VARCHAR + CHECK, ולכן
     הבאג אינו נראה בשום בדיקה מקומית.
@@ -82,6 +85,11 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("user_id", "organization_id",
                             name="uq_membership_user_org"),
+        # `SUPER_ADMIN` הוא תפקיד פלטפורמה ולא תפקיד בתוך ארגון. האילוץ
+        # יושב במסד ולא רק בשירות, כדי שגם כתיבה ישירה — סקריפט תיקון,
+        # קונסולה, מיגרציה עתידית — תיחסם.
+        sa.CheckConstraint("role != 'SUPER_ADMIN'",
+                           name="ck_membership_role_not_super_admin"),
     )
     op.create_index("ix_membership_user_status", "organization_memberships",
                     ["user_id", "status"])
@@ -108,8 +116,13 @@ def upgrade() -> None:
                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         FROM users u
         WHERE u.organization_id IS NOT NULL
+          AND u.role != 'SUPER_ADMIN'
         """
     )
+    # SUPER_ADMIN מוחרג מה-backfill: הוא תפקיד פלטפורמה, והאילוץ
+    # `ck_membership_role_not_super_admin` היה מפיל את המיגרציה על כל
+    # סופר-אדמין שיש לו `organization_id`. הוא בוחר ארגון מפורשות ואינו
+    # זקוק לחברות.
 
 
 def downgrade() -> None:
