@@ -397,6 +397,22 @@ def test_onboarding_start_requires_admin_before_provider_access(
         headers=owner["headers"],
     )
     assert created.status_code == 201, created.text
+
+    # `POST /admin/users` יוצר חברות `invited` מ-11/08/2026. בלי קבלה
+    # החסימה הייתה מגיעה מ-`membership_not_active` ולא מבדיקת ה-admin —
+    # כלומר הטסט היה עובר בלי לבדוק את מה שהוא מתאר.
+    from cfo.database import SessionLocal
+    from cfo.services import membership_service
+
+    db = SessionLocal()
+    try:
+        membership_service.accept(
+            db, organization_id=owner["user"]["organization_id"],
+            user_id=created.json()["id"], acting_user_id=created.json()["id"])
+        db.commit()
+    finally:
+        db.close()
+
     login = client.post(
         "/api/admin/auth/login",
         json={"email": email, "password": "securepass"},

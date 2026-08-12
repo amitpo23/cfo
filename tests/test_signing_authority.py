@@ -27,7 +27,26 @@ def _create_admin(client, owner, email: str):
         },
     )
     assert response.status_code == 201, response.text
-    return response.json()
+    created = response.json()
+
+    # מאז 11/08/2026 `POST /admin/users` יוצר חברות `invited`, לא `active`.
+    # משתמש שטרם קיבל אינו יכול לפעול — ולכן ה-helper משלים את הקבלה,
+    # כפי שהמשתמש האמיתי היה עושה.
+    from cfo.database import SessionLocal
+    from cfo.services import membership_service
+
+    db = SessionLocal()
+    try:
+        membership_service.accept(
+            db,
+            organization_id=owner["user"]["organization_id"],
+            user_id=created["id"],
+            acting_user_id=created["id"],
+        )
+        db.commit()
+    finally:
+        db.close()
+    return created
 
 
 def _propose(client, headers, *, action_type: str, key: str):

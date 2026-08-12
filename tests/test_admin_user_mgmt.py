@@ -509,7 +509,8 @@ def test_super_admin_can_create_cross_org(client, sec_actors):
         "full_name": "SA Cross Create",
         "organization_id": org_b_id,
         "role": "user",
-    }, headers=sec_actors["super_admin_headers"])
+    }, headers={**sec_actors["super_admin_headers"],
+                "X-Active-Org-Id": str(org_b_id)})
     assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
 
 
@@ -522,7 +523,8 @@ def test_super_admin_can_assign_super_admin_role(client, sec_actors):
         "full_name": "SA Role Assign",
         "organization_id": org_b_id,
         "role": "super_admin",
-    }, headers=sec_actors["super_admin_headers"])
+    }, headers={**sec_actors["super_admin_headers"],
+                "X-Active-Org-Id": str(org_b_id)})
     assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
 
 
@@ -531,5 +533,6 @@ def test_super_admin_can_patch_cross_org(client, sec_actors):
     org_b_user = sec_actors["org_b_admin_user"]
     resp = client.patch(f"/api/admin/users/{org_b_user['id']}", json={
         "full_name": "SA Patched",
-    }, headers=sec_actors["super_admin_headers"])
+    }, headers={**sec_actors["super_admin_headers"],
+                "X-Active-Org-Id": str(sec_actors["org_b_id"])})
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
