@@ -91,8 +91,15 @@ def test_non_super_override_does_not_leak_writes(client, owner, tenant):
 
 
 # --- super user: override honored for reads ---------------------------------
-def test_super_without_header_uses_own_org(client, superadmin):
-    assert _active_org(client, superadmin["headers"]) == superadmin["own_org"]
+def test_super_without_header_must_choose(client, superadmin):
+    """**היפוך 11/08/2026 (ערב).** קודם סופר-אדמין עם ארגון בית נכנס
+    אליו בלי כותרת. זה יצר שתי התנהגויות לאותו תפקיד — תלוי בשדה
+    `organization_id` שהוא שריד היסטורי — והחזיר בדלת האחורית פעולה
+    רוחבית שנוחתת בתיק שאיש לא בחר בו."""
+    resp = client.get("/api/integration/status", headers=superadmin["headers"])
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["error"] == "active_organization_required"
 
 
 def test_super_with_header_targets_org(client, superadmin):
@@ -247,10 +254,12 @@ def test_super_admin_can_trigger_client_sync_without_connections(client, fresh_o
 def test_super_admin_can_edit_organization_name_and_tax_id(client, fresh_org, superadmin):
     client_org = fresh_org()
 
+    # סופר-אדמין חייב לבחור ארגון מפורשות — כולל כשהוא עורך אותו.
+    headers = {**superadmin["headers"], "X-Active-Org-Id": str(client_org["org_id"])}
     resp = client.patch(
         f"/api/admin/organizations/{client_org['org_id']}",
         json={"name": "שם חדש בע\"מ", "tax_id": "512345678"},
-        headers=superadmin["headers"],
+        headers=headers,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -258,17 +267,18 @@ def test_super_admin_can_edit_organization_name_and_tax_id(client, fresh_org, su
     assert body["tax_id"] == "512345678"
 
     # Persisted, not just echoed back.
-    fetched = client.get(f"/api/admin/organizations/{client_org['org_id']}", headers=superadmin["headers"])
+    fetched = client.get(f"/api/admin/organizations/{client_org['org_id']}", headers=headers)
     assert fetched.json()["name"] == "שם חדש בע\"מ"
 
 
 def test_super_admin_can_deactivate_organization(client, fresh_org, superadmin):
     client_org = fresh_org()
 
+    headers = {**superadmin["headers"], "X-Active-Org-Id": str(client_org["org_id"])}
     resp = client.patch(
         f"/api/admin/organizations/{client_org['org_id']}",
         json={"is_active": False},
-        headers=superadmin["headers"],
+        headers=headers,
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["is_active"] is False

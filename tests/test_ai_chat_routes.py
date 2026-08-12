@@ -35,7 +35,15 @@ def chat_superadmin(client):
     assert resp.status_code == 201, resp.text
     data = resp.json()
     _promote_to_super("chat-super@example.com")
-    return {"headers": {"Authorization": f"Bearer {data['access_token']}"}}
+    # מ-11/08/2026 כל סופר-אדמין חייב לבחור ארגון מפורשות — גם כשיש לו
+    # ארגון בית. הכותרת מצורפת כאן כדי שהטסטים בקובץ יבדקו את מה שהם
+    # מתארים (כלי משרד) ולא ייעצרו על בחירת ארגון.
+    return {
+        "headers": {
+            "Authorization": f"Bearer {data['access_token']}",
+            "X-Active-Org-Id": str(data["user"]["organization_id"]),
+        }
+    }
 
 
 class FakeMessages:

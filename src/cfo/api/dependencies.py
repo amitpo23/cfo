@@ -334,15 +334,13 @@ async def resolve_access_context(
                 effective_role=UserRole.SUPER_ADMIN, is_super_admin=True,
                 selection_source=SOURCE_SUPER_ADMIN_HEADER, channel=channel,
             )
-        if current_user.organization_id is not None:
-            _assert_org_usable(db, current_user.organization_id)
-            return OrganizationAccessContext(
-                user=current_user, organization_id=current_user.organization_id,
-                membership=None, effective_role=UserRole.SUPER_ADMIN,
-                is_super_admin=True, selection_source=SOURCE_SUPER_ADMIN_OWN,
-                channel=channel,
-            )
-        # לשעבר: `return 1` — ברירת מחדל שקטה לתיק של לקוח אמיתי.
+        # **אין מסלול שני.** סופר-אדמין עם `organization_id` נכנס קודם
+        # לארגון הבית שלו בלי כותרת — שתי התנהגויות שונות לאותו תפקיד,
+        # תלוי בשדה שהוא שריד היסטורי. זה החזיר בדלת האחורית בדיוק את
+        # הבעיה שנסגרה: פעולה רוחבית שנוחתת בתיק שאיש לא בחר בו במפורש.
+        #
+        # מפעיל מערכת אינו "שייך" לתיק — הוא **נכנס** לתיק, וזו הכרעה
+        # שצריכה להיות מפורשת בכל סשן. (החלטת ברירת מחדל 11/08/2026.)
         raise _needs_selection(
             f"יש לבחור ארגון פעיל. שלח את הכותרת {ACTIVE_ORG_HEADER} "
             "עם מזהה הארגון.",
