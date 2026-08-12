@@ -2,7 +2,7 @@
  * Ledger dashboard — derived double-entry shadow ledger (מאזן בוחן + פקודות יומן + כרטסת).
  * All data is DERIVED from synced documents, NOT SUMIT's official books.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BookOpen, Loader2, Scale, AlertTriangle, FileText } from 'lucide-react';
 import api from '../services/api';
 import ExportButtons, { ExportSheet } from './ExportButtons';
@@ -42,25 +42,24 @@ export default function LedgerDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const qs = () => `?year=${year}${month ? `&month=${month}` : ''}`;
-
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true); setError(null);
+    const query = `?year=${year}${month ? `&month=${month}` : ''}`;
     try {
       if (tab === 'trial') {
-        setTb(await api.get<TrialBalance>(`/api/ledger/trial-balance${qs()}`));
+        setTb(await api.get<TrialBalance>(`/api/ledger/trial-balance${query}`));
       } else if (tab === 'balance') {
-        setBs(await api.get<BalanceSheet>(`/api/ledger/balance-sheet${qs()}`));
+        setBs(await api.get<BalanceSheet>(`/api/ledger/balance-sheet${query}`));
       } else {
-        const r = await api.get<{ entries: JournalEntry[] }>(`/api/ledger/journal${qs()}`);
+        const r = await api.get<{ entries: JournalEntry[] }>(`/api/ledger/journal${query}`);
         setEntries(r.entries || []);
       }
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'שגיאה בטעינת הנתונים');
     } finally { setLoading(false); }
-  };
+  }, [month, tab, year]);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [tab, year, month]);
+  useEffect(() => { void load(); }, [load]);
 
   const periodLabel = `תקופה: ${month ? `${month}/${year}` : `שנת ${year}`}`;
 

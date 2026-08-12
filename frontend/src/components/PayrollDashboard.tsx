@@ -2,7 +2,7 @@
  * Payroll dashboard — employees, monthly payroll run, payslips, and Form 102.
  * Deterministic salary math (backend services/calculators.payslip_components).
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Users, Plus, Play, Loader2, FileText } from 'lucide-react';
 import api from '../services/api';
 
@@ -39,7 +39,7 @@ export default function PayrollDashboard() {
     const r = await api.get<{ employees: Employee[] }>('/api/payroll/employees');
     setEmployees(r.employees || []);
   };
-  const loadPeriod = async () => {
+  const loadPeriod = useCallback(async () => {
     try {
       const [p, f] = await Promise.all([
         api.get<{ payslips: Payslip[] }>(`/api/payroll/payslips?year=${year}&month=${month}`),
@@ -48,10 +48,10 @@ export default function PayrollDashboard() {
       setPayslips(p.payslips || []);
       setForm102(f);
     } catch { /* empty period */ }
-  };
+  }, [month, year]);
 
   useEffect(() => { loadEmployees().catch(() => setError('שגיאה בטעינת עובדים')); }, []);
-  useEffect(() => { loadPeriod(); }, [year, month]);
+  useEffect(() => { void loadPeriod(); }, [loadPeriod]);
 
   const addEmployee = async () => {
     setBusy('add'); setError(null);

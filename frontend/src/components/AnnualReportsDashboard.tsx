@@ -2,7 +2,7 @@
  * Annual tax-return DRAFTS — 1301 (יחיד) / 1214 (חברה).
  * Draft-only, derived from the shadow ledger. Prominent "לבדיקת רו"ח" banner.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { FileWarning, Loader2 } from 'lucide-react';
 import api from '../services/api';
 
@@ -33,16 +33,16 @@ export default function AnnualReportsDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       setData(await api.get<ReportDraft>(`/api/annual-reports/${form}?year=${year}`));
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'שגיאה בטעינת הטיוטה');
     } finally { setLoading(false); }
-  };
+  }, [form, year]);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [form, year]);
+  useEffect(() => { void load(); }, [load]);
 
   return (
     <div className="p-6 max-w-3xl mx-auto" dir="rtl">

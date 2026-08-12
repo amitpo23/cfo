@@ -4,7 +4,7 @@
  * ותוכנות הנה"ח אחרות. הקבצים מסומנים טיוטה עד אימות חד-פעמי מול בודק
  * הקבצים של רשות המסים — המספרים עצמם מתואמים 1:1 לדוח המע"מ הקנוני.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Landmark, Loader2, Download, FileArchive } from 'lucide-react';
 import api from '../services/api';
 import ExportButtons, { ExportSheet } from './ExportButtons';
@@ -114,7 +114,7 @@ export default function VatReportScreen() {
 
   const verifyUrl = `/api/daily-reports/vat/verify?year=${year}&month=${month}&months=${months}&basis=${basis}`;
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -133,9 +133,9 @@ export default function VatReportScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [basis, month, months, verifyUrl, year]);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [year, month, months, basis]);
+  useEffect(() => { void load(); }, [load]);
 
   // הרגל שלישי של האימות המשולש: הצלבה מוקלטת מול ספרי SUMIT (תיק ההנה"ח),
   // במקום "הצלבה ידנית" סתמית. שולח את הערך שהוקלד ומרענן את האימות בלבד.

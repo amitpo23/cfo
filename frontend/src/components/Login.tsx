@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { Loader2, LogIn, UserPlus, TrendingUp } from 'lucide-react';
 
@@ -65,7 +65,7 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
     }
   };
 
-  const handleGoogleCredential = async (credential?: string) => {
+  const handleGoogleCredential = useCallback(async (credential?: string) => {
     if (!credential) return;
     setError(null);
     setLoading(true);
@@ -82,7 +82,7 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [onSuccess, registrationCode]);
 
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID || !googleButtonRef.current) return;
@@ -113,7 +113,7 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
     script.defer = true;
     script.onload = render;
     document.head.appendChild(script);
-  }, [mode, registrationCode]);
+  }, [handleGoogleCredential, mode]);
 
   const inputClass = `w-full px-4 py-2.5 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
     darkMode

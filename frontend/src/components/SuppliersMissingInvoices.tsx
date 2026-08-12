@@ -68,7 +68,10 @@ export default function SuppliersMissingInvoices() {
     }
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+  // Initial report uses the default 90-day range; subsequent date edits are
+  // applied only when the user explicitly presses the refresh button.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { void load(); }, []);
 
   const exportSheets: ExportSheet[] = report ? [
     {
