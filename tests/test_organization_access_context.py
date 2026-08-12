@@ -278,15 +278,16 @@ def test_selection_source_records_how_the_org_was_chosen(client):
     from cfo.api.dependencies import resolve_access_context
 
     person = _register(client, "selection-source@example.com")
-    org = _org("מקור בחירה")
-    _grant(org, person["user_id"])
+    # ההרשמה יוצרת חברות בית; כאן נבדק המסלול של חברות **יחידה**, ולכן
+    # החברות שנוצרת בהרשמה היא בדיוק זו שנבחנת.
+    home = person["own_org"]
 
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.id == person["user_id"]).first()
         ctx = asyncio.run(resolve_access_context(user, None, db))
         assert ctx.selection_source == "sole_membership"
-        assert ctx.organization_id == org
+        assert ctx.organization_id == home
         assert ctx.effective_role == UserRole.ADMIN
         assert ctx.membership is not None
     finally:

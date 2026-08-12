@@ -421,6 +421,26 @@ def _create_self_registered_user(
     
     db.add(new_user)
     db.flush()
+
+    # חברות באותה טרנזקציה כמו המשתמש והארגון.
+    #
+    # בלי זה, כל משתמש חדש היה שורד רק דרך מסלול התאימות
+    # `legacy_column` ב-`resolve_access_context` — מסלול שנועד להיעלם.
+    # ארגון שנוצר בלי חברות הוא גם תיק שאיש אינו יכול לפתוח.
+    #
+    # `flush` ולא `commit`: אם שלב מאוחר יותר ייכשל, המשתמש, הארגון
+    # והחברות מתגלגלים אחורה יחד.
+    from ...services import membership_service as _membership_service
+
+    _membership_service.grant(
+        db,
+        organization_id=organization_id,
+        user_id=new_user.id,
+        role=new_user.role,
+        granted_by_user_id=new_user.id,
+        status="active",
+    )
+
     if requested_organization_id is None:
         existing_authority = db.query(OrganizationSigningAuthority).filter(
             OrganizationSigningAuthority.organization_id == organization_id,

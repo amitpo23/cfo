@@ -141,6 +141,175 @@ def suspend(
     return m
 
 
+def invite(
+    db: Session,
+    *,
+    organization_id: int,
+    user_id: int,
+    role: UserRole,
+    invited_by_user_id: int,
+    expires_at: Optional[datetime] = None,
+) -> OrganizationMembership:
+    """הזמנה — `invited`, לא `active`.
+
+    ההפרדה מכוונת: מי שהוזמן טרם קיבל. הענקת גישה ברגע ההזמנה הופכת כל
+    הקלדת מייל שגויה לגישה לכספים של לקוח.
+    """
+    return grant(
+        db, organization_id=organization_id, user_id=user_id, role=role,
+        granted_by_user_id=invited_by_user_id, status=INVITED,
+        expires_at=expires_at,
+    )
+
+
+def accept(
+    db: Session,
+    *,
+    organization_id: int,
+    user_id: int,
+    acting_user_id: Optional[int] = None,
+) -> OrganizationMembership:
+    """קבלת הזמנה. **רק המוזמן עצמו** — קבלה בשם אחר היא הענקה עצמית."""
+    if acting_user_id is not None and acting_user_id != user_id:
+        raise PermissionError(
+            "רק המוזמן עצמו יכול לקבל את ההזמנה"
+        )
+    m = _find(db, organization_id=organization_id, user_id=user_id)
+    if m is None or m.status != INVITED:
+        raise ValueError("אין הזמנה ממתינה לצירוף הזה")
+    m.status = ACTIVE
+    m.verified_at = _now()
+    db.flush()
+    return m
+
+
+def _find(
+    db: Session, *, organization_id: int, user_id: int,
+) -> Optional[OrganizationMembership]:
+    return (
+        db.query(OrganizationMembership)
+        .filter(
+            OrganizationMembership.user_id == user_id,
+            OrganizationMembership.organization_id == organization_id,
+        )
+        .first()
+    )
+
+
+def _assert_admin_of(db: Session, *, organization_id: int, acting_user_id: int) -> None:
+    """הפעולה מותרת רק למנהל **בארגון הזה**.
+
+    ADMIN בארגון א' אינו רשאי להעניק חברות בארגון ב'. `User.role`
+    הגלובלי אינו נבדק כאן במכוון: הוא שדה פלטפורמה ואינו הרשאה ארגונית.
+    """
+    role = role_in(db, acting_user_id, organization_id)
+    if role not in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
+        raise PermissionError(
+            "נדרשת הרשאת ניהול בארגון הזה כדי לשנות חברות"
+        )
+
+
+def _active_admin_ids(db: Session, organization_id: int) -> set[int]:
+    rows = (
+        db.query(OrganizationMembership)
+        .filter(
+            OrganizationMembership.organization_id == organization_id,
+            OrganizationMembership.status == ACTIVE,
+            OrganizationMembership.role.in_([UserRole.ADMIN, UserRole.SUPER_ADMIN]),
+        )
+        .all()
+    )
+    return {m.user_id for m in rows if _is_live(m)}
+
+
+def _assert_not_last_admin(db: Session, *, organization_id: int, user_id: int) -> None:
+    """תיק בלי מנהל פעיל הוא תיק שאיש אינו יכול לתפעל — כולל להחזיר
+    לעצמו גישה. חוסם ביטול, השעיה והורדה בדרגה כאחד."""
+    admins = _active_admin_ids(db, organization_id)
+    if admins == {user_id}:
+        raise ValueError(
+            "אי-אפשר להסיר את המנהל הפעיל האחרון בארגון"
+        )
+
+
+def _audit(
+    db: Session, *, organization_id: int, acting_user_id: int, action: str,
+    target_user_id: int, details: dict,
+) -> None:
+    from ..models import AuditLog
+
+    db.add(AuditLog(
+        user_id=acting_user_id,
+        organization_id=organization_id,
+        action=action,
+        entity_type="OrganizationMembership",
+        entity_id=target_user_id,
+        details=details,
+    ))
+
+
+def grant_checked(
+    db: Session,
+    *,
+    organization_id: int,
+    user_id: int,
+    role: UserRole,
+    acting_user_id: int,
+    status: str = ACTIVE,
+    expires_at: Optional[datetime] = None,
+) -> OrganizationMembership:
+    """הענקה/שינוי תפקיד עם בדיקת סמכות ורישום ביקורת.
+
+    שינוי תפקיד הוא שינוי **חברות בארגון מסוים** — לא `User.role`.
+    """
+    _assert_admin_of(db, organization_id=organization_id,
+                     acting_user_id=acting_user_id)
+    if role not in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
+        # הורדה בדרגה משאירה את התיק בלי מנהל בדיוק כמו ביטול.
+        existing = _find(db, organization_id=organization_id, user_id=user_id)
+        if existing is not None and existing.role in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
+            _assert_not_last_admin(db, organization_id=organization_id,
+                                   user_id=user_id)
+    m = grant(
+        db, organization_id=organization_id, user_id=user_id, role=role,
+        granted_by_user_id=acting_user_id, status=status, expires_at=expires_at,
+    )
+    _audit(db, organization_id=organization_id, acting_user_id=acting_user_id,
+           action="MEMBERSHIP_GRANT", target_user_id=user_id,
+           details={"role": role.value, "status": status})
+    return m
+
+
+def revoke_checked(
+    db: Session, *, organization_id: int, user_id: int, acting_user_id: int,
+) -> OrganizationMembership:
+    _assert_admin_of(db, organization_id=organization_id,
+                     acting_user_id=acting_user_id)
+    _assert_not_last_admin(db, organization_id=organization_id, user_id=user_id)
+    m = revoke(db, organization_id=organization_id, user_id=user_id,
+               revoked_by_user_id=acting_user_id)
+    if m is None:
+        raise ValueError("אין חברות לביטול")
+    _audit(db, organization_id=organization_id, acting_user_id=acting_user_id,
+           action="MEMBERSHIP_REVOKE", target_user_id=user_id, details={})
+    return m
+
+
+def suspend_checked(
+    db: Session, *, organization_id: int, user_id: int, acting_user_id: int,
+) -> OrganizationMembership:
+    _assert_admin_of(db, organization_id=organization_id,
+                     acting_user_id=acting_user_id)
+    _assert_not_last_admin(db, organization_id=organization_id, user_id=user_id)
+    m = suspend(db, organization_id=organization_id, user_id=user_id,
+                suspended_by_user_id=acting_user_id)
+    if m is None:
+        raise ValueError("אין חברות להשעיה")
+    _audit(db, organization_id=organization_id, acting_user_id=acting_user_id,
+           action="MEMBERSHIP_SUSPEND", target_user_id=user_id, details={})
+    return m
+
+
 def memberships_for(db: Session, user_id: int) -> list[OrganizationMembership]:
     """כל רשומות החברות של אדם, בכל סטטוס. לתצוגת ניהול."""
     return (

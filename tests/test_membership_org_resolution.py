@@ -69,9 +69,21 @@ def _grant(org_id: int, user_id: int, role=UserRole.ADMIN, status="active"):
 
 
 def _clear_legacy_org(user_id: int):
-    """מנטרל את `users.organization_id` כדי לבדוק את מסלול החברות בלבד."""
+    """מנטרל את `users.organization_id` **ואת חברות הבית** שההרשמה יוצרת.
+
+    מאז שההרשמה יוצרת חברות `ADMIN` בטרנזקציה אחת, ניקוי העמודה לבדו
+    אינו מותיר את המשתמש בלי ארגון — ולכן הטסטים כאן היו בודקים מצב
+    אחר ממה שהם מתארים.
+    """
     db = SessionLocal()
     try:
+        user = db.query(User).filter(User.id == user_id).first()
+        home = user.organization_id if user else None
+        if home is not None:
+            membership_service.revoke(
+                db, organization_id=home, user_id=user_id,
+                revoked_by_user_id=user_id,
+            )
         db.query(User).filter(User.id == user_id).update({"organization_id": None})
         db.commit()
     finally:

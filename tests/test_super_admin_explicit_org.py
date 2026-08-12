@@ -166,7 +166,15 @@ def test_non_super_without_org_is_still_refused(client):
 
     db = SessionLocal()
     try:
+        from cfo.services import membership_service
+
         user = db.query(User).filter(User.email == "orgless-plain@example.com").first()
+        # ההרשמה יוצרת חברות בית; כדי לבדוק "בלי ארגון בכלל" צריך להסיר
+        # גם אותה — אחרת נבדק מסלול אחר לגמרי.
+        membership_service.revoke(
+            db, organization_id=user.organization_id, user_id=user.id,
+            revoked_by_user_id=user.id,
+        )
         user.organization_id = None
         db.commit()
     finally:
