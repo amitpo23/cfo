@@ -86,14 +86,23 @@ def test_existing_users_keep_their_organization_and_role(migrated_db):
 
 def test_no_role_is_upgraded_by_the_migration(migrated_db):
     """שדרוג תפקיד במיגרציה הוא הענקת הרשאה בלי אישור."""
+    originals = {10: "ADMIN", 11: "VIEWER", 12: "ACCOUNTANT", 13: "ADMIN"}
     for user_id, _org, role, _status, _by in _memberships(migrated_db):
-        original = {10: "ADMIN", 11: "VIEWER", 12: "ACCOUNTANT"}[user_id]
-        assert role == original, f"תפקיד המשתמש {user_id} שונה: {original} → {role}"
+        assert role == originals[user_id], (
+            f"תפקיד המשתמש {user_id} שונה: {originals[user_id]} → {role}"
+        )
 
 
-def test_disabled_user_gets_no_membership(migrated_db):
-    """משתמש מושבת אינו מקבל גישה חדשה דרך הדלת האחורית של המיגרציה."""
-    assert 13 not in {r[0] for r in _memberships(migrated_db)}
+def test_disabled_user_gets_a_suspended_membership(migrated_db):
+    """שונה 11/08/2026: קודם דילגנו על משתמש מושבת לגמרי.
+
+    דילוג השאיר אותו בלי רשומה, ולכן הפעלה מחדש (`is_active=True`) הייתה
+    מפילה אותו חזרה ל-`users.organization_id` ומחזירה גישה **בשקט**.
+    רשומה `suspended` הופכת את ההחזרה לפעולה מפורשת."""
+    rows = {r[0]: r for r in _memberships(migrated_db)}
+
+    assert 13 in rows, "משתמש מושבת נותר בלי רשומת חברות"
+    assert rows[13][3] == "suspended"
 
 
 def test_orgless_super_admin_gets_no_membership(migrated_db):
