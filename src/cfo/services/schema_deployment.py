@@ -38,6 +38,131 @@ def _has_drift(report: dict[str, Any]) -> bool:
     return schema_sync.has_schema_drift(report)
 
 
+# --------------------------------------------------------------------- #
+# תיקון סמנטי — נתונים, לא רק מבנה
+# --------------------------------------------------------------------- #
+# `apply_additive` יוצר טבלאות ועמודות חסרות. זה מספיק כשהמיגרציה שנעקפה
+# היא מבנית בלבד. `organization_memberships` אינה כזו: המיגרציה שלה
+# נושאת backfill שממיר את `users.organization_id` לרשומות חברות.
+#
+# בלי הקוד כאן, `apply_additive` היה יוצר טבלה **ריקה**, `compute_missing`
+# היה מרוצה, ו-`head` היה נחתם — כלומר המערכת מאמינה שהמיגרציה רצה
+# כשהנתונים מעולם לא הועברו. התוצאה בפרוד: הבטחת ה-`suspended` מתבטלת,
+# ומשתמש מושבת שיופעל מחדש מקבל גישה בשקט.
+
+_BACKFILL_SQL = """
+    INSERT INTO organization_memberships
+        (organization_id, user_id, role, status, verified_at,
+         created_at, updated_at)
+    SELECT u.organization_id, u.id, u.role,
+           CASE WHEN u.is_active THEN 'active' ELSE 'suspended' END,
+           CASE WHEN u.is_active THEN CURRENT_TIMESTAMP ELSE NULL END,
+           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    FROM users u
+    WHERE u.organization_id IS NOT NULL
+      AND u.role != 'SUPER_ADMIN'
+      AND NOT EXISTS (
+          SELECT 1 FROM organization_memberships m
+          WHERE m.user_id = u.id AND m.organization_id = u.organization_id
+      )
+"""
+
+
+def backfill_memberships(engine: Engine) -> int:
+    """ממלא חברויות חסרות מ-`users.organization_id`. אידמפוטנטי.
+
+    זהה בסמנטיקה ל-backfill שבמיגרציה `d2e3f4a5b6c7`; `NOT EXISTS`
+    מאפשר הרצה חוזרת בלי כפילות.
+    """
+    with engine.begin() as conn:
+        result = conn.execute(sa.text(_BACKFILL_SQL))
+        return result.rowcount or 0
+
+
+def _pending_backfill_keys(engine: Engine) -> set[tuple[int, int]]:
+    """משתמשים שעדיין אין להם חברות — כלומר מי שה-backfill עומד ליצור.
+
+    נדרש כדי לאמת התאמת תפקיד **רק על מה שנוצר עכשיו**. חברות שמנהל
+    שינה במכוון אחרי ה-backfill (למשל הורדה ל-VIEWER בתיק אחד) סוטה
+    בכוונה מ-`User.role`, ובדיקה גורפת הייתה מכשילה עליה את הפריסה.
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(sa.text(
+            "SELECT u.id, u.organization_id FROM users u "
+            "WHERE u.organization_id IS NOT NULL AND u.role != 'SUPER_ADMIN' "
+            "AND NOT EXISTS (SELECT 1 FROM organization_memberships m "
+            "  WHERE m.user_id = u.id AND m.organization_id = u.organization_id)"
+        )).fetchall()
+    return {(r[0], r[1]) for r in rows}
+
+
+def verify_membership_backfill(
+    engine: Engine, created_keys: set[tuple[int, int]] | None = None,
+) -> list[str]:
+    """postconditions סמנטיים. מחזיר רשימת פערים — ריקה = תקין.
+
+    `created_keys` מגביל את בדיקת התאמת התפקיד לשורות שנוצרו בריצה הזו.
+    חברות ששונתה במכוון אחרי ה-backfill סוטה מ-`User.role` כדין.
+    """
+    gaps: list[str] = []
+    inspector = sa.inspect(engine)
+    if "organization_memberships" not in inspector.get_table_names():
+        return ["organization_memberships table is missing"]
+
+    with engine.connect() as conn:
+        missing = conn.execute(sa.text(
+            "SELECT COUNT(*) FROM users u WHERE u.organization_id IS NOT NULL "
+            "AND u.role != 'SUPER_ADMIN' AND NOT EXISTS ("
+            "  SELECT 1 FROM organization_memberships m "
+            "  WHERE m.user_id = u.id AND m.organization_id = u.organization_id)"
+        )).scalar_one()
+        if missing:
+            gaps.append(f"{missing} legacy users have no membership")
+
+        duplicated = conn.execute(sa.text(
+            "SELECT COUNT(*) FROM (SELECT user_id, organization_id "
+            "FROM organization_memberships GROUP BY user_id, organization_id "
+            "HAVING COUNT(*) > 1) d"
+        )).scalar_one()
+        if duplicated:
+            gaps.append(f"{duplicated} duplicated memberships")
+
+        if created_keys:
+            rows = conn.execute(sa.text(
+                "SELECT u.id, u.organization_id FROM users u "
+                "JOIN organization_memberships m ON m.user_id = u.id "
+                "  AND m.organization_id = u.organization_id "
+                "WHERE m.role != u.role"
+            )).fetchall()
+            drifted = [r for r in rows if (r[0], r[1]) in created_keys]
+            if drifted:
+                gaps.append(
+                    f"{len(drifted)} backfilled memberships do not match the "
+                    "user's role"
+                )
+
+        wrongly_active = conn.execute(sa.text(
+            "SELECT COUNT(*) FROM users u JOIN organization_memberships m "
+            "ON m.user_id = u.id AND m.organization_id = u.organization_id "
+            "WHERE u.is_active = 0 AND m.status = 'active'"
+        )).scalar_one()
+        if wrongly_active:
+            gaps.append(
+                f"{wrongly_active} inactive users hold an active membership"
+            )
+
+    return gaps
+
+
+def _signing_authority_count(engine: Engine) -> int:
+    if "organization_signing_authorities" not in sa.inspect(engine).get_table_names():
+        return 0
+    with engine.connect() as conn:
+        return conn.execute(sa.text(
+            "SELECT COUNT(*) FROM organization_signing_authorities"
+        )).scalar_one()
+
+
 def reconcile_schema_to_head(
     engine: Engine,
     *,
@@ -69,12 +194,33 @@ def reconcile_schema_to_head(
                 raise
             migration_conflict = exc
 
+    authorities_before = _signing_authority_count(engine)
+
     schema_sync_report = schema_sync.apply_additive(engine)
     remaining = compute_schema_drift(engine)
     if _has_drift(remaining):
         raise SchemaDeploymentError(
             "schema drift remains after additive reconciliation; "
             "refusing to mark Alembic head"
+        )
+
+    # תיקון סמנטי — לפני החתימה, לא אחריה.
+    pending = _pending_backfill_keys(engine)
+    created = backfill_memberships(engine) or 0
+    gaps = verify_membership_backfill(engine, created_keys=pending)
+    if gaps:
+        raise SchemaDeploymentError(
+            "membership backfill is incomplete; refusing to mark Alembic head: "
+            + "; ".join(gaps)
+        )
+
+    # התיקון אינו מעניק בעלות עסקית. מורשה חתימה שנוצר בדרך הוא סמכות
+    # לאשר תשלומים, בלי שאיש ביקש אותה.
+    authorities_after = _signing_authority_count(engine)
+    if authorities_after != authorities_before:
+        raise SchemaDeploymentError(
+            "reconciliation changed organization_signing_authorities "
+            f"({authorities_before} -> {authorities_after}); refusing to stamp"
         )
 
     if legacy_database:
@@ -95,4 +241,5 @@ def reconcile_schema_to_head(
         "action": action,
         "schema_sync": schema_sync_report,
         "remaining": remaining,
+        "membership_backfill": {"created": created, "gaps": gaps},
     }
