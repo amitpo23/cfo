@@ -326,13 +326,19 @@ def test_callback_cancel_does_not_execute_anything(client, telegram_configured, 
     iso = fresh_org()
     _link(iso["org_id"], "chat-cancel-1")
 
-    called = {"n": 0}
+    called = {"confirm": 0, "cancel": 0, "message_id": None}
 
     async def fake_confirm_action(self, message_id):
-        called["n"] += 1
+        called["confirm"] += 1
         return {"result": {}, "message_id": message_id}
 
+    def fake_cancel_action(self, message_id):
+        called["cancel"] += 1
+        called["message_id"] = message_id
+        return {"message_id": message_id, "status": "cancelled"}
+
     monkeypatch.setattr(AIChatService, "confirm_action", fake_confirm_action)
+    monkeypatch.setattr(AIChatService, "cancel_action", fake_cancel_action, raising=False)
 
     r = _post(client, {
         "update_id": 700,
@@ -343,7 +349,7 @@ def test_callback_cancel_does_not_execute_anything(client, telegram_configured, 
         },
     })
     assert r.status_code == 200
-    assert called["n"] == 0
+    assert called == {"confirm": 0, "cancel": 1, "message_id": 77}
     assert any("בוטל" in text for _, text in fake_gateway["send_text"])
 
 

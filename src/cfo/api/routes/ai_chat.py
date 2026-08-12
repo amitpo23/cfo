@@ -54,6 +54,24 @@ async def confirm_chat_action(
         raise HTTPException(400, str(exc))
 
 
+@router.post("/chat/cancel")
+async def cancel_chat_action(
+    body: dict = Body(...),
+    org_id: int = Depends(get_current_org_id),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session),
+):
+    message_id = body.get("message_id")
+    if not isinstance(message_id, int):
+        raise HTTPException(400, "message_id נדרש")
+
+    service = _service_for(db, org_id, user)
+    try:
+        return service.cancel_action(message_id)
+    except ChatConfirmationError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @router.get("/chat/{session_id}")
 async def get_chat_history(
     session_id: str,
@@ -77,6 +95,9 @@ async def get_chat_history(
         {
             "id": m.id, "role": m.role, "content": m.content,
             "pending_action": m.pending_action, "executed": m.executed,
+            "action_status": m.action_status or (
+                "executed" if m.executed else ("pending" if m.pending_action else None)
+            ),
             "created_at": m.created_at.isoformat() if m.created_at else None,
         }
         for m in rows

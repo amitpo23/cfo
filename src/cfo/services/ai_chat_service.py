@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -24,6 +26,7 @@ from ..models import ChatMessage
 from . import moshko_memory
 from .ai_chat_tools import TOOLS, anthropic_tool_schemas, tool_target_system
 from .moshko_observability import (
+    redact_sensitive_text,
     record_llm_usage_best_effort,
     record_tool_call_best_effort,
 )
@@ -73,6 +76,12 @@ class AIChatUpstreamError(RuntimeError):
 _OFFICE_REFUSAL_TEXT = (
     "אין הרשאה לפעולה זו — כלי משרד זמינים רק במצב מנהל משרד (SUPER_ADMIN)."
 )
+
+_ACTION_PENDING = "pending"
+_ACTION_EXECUTING = "executing"
+_ACTION_EXECUTED = "executed"
+_ACTION_CANCELLED = "cancelled"
+_ACTION_UNKNOWN = "unknown"
 
 
 class AIChatService:
@@ -346,6 +355,7 @@ class AIChatService:
             organization_id=self.organization_id, user_id=self.user_id,
             session_id=session_id, role="assistant", content=final_text,
             pending_action=pending_action,
+            action_status=_ACTION_PENDING if pending_action else None,
         )
         self.db.add(assistant_msg)
         self.db.commit()
@@ -371,16 +381,69 @@ class AIChatService:
             raise ChatConfirmationError(f"הודעה {message_id} לא נמצאה")
         if not msg.pending_action:
             raise ChatConfirmationError("אין פעולה ממתינה לאישור בהודעה זו")
-        if msg.executed:
+        if msg.executed or msg.action_status == _ACTION_EXECUTED:
             raise ChatConfirmationError("הפעולה כבר בוצעה")
 
-        tool = TOOLS[msg.pending_action["tool"]]
+        if msg.action_status == _ACTION_CANCELLED:
+            raise ChatConfirmationError("הפעולה בוטלה ואינה ניתנת לביצוע")
+        if msg.action_status == _ACTION_EXECUTING:
+            raise ChatConfirmationError("הפעולה כבר בתהליך ביצוע; לא תופעל שוב")
+        if msg.action_status == _ACTION_UNKNOWN:
+            raise ChatConfirmationError(
+                "תוצאת הפעולה אינה ידועה ודורשת אימות ידני לפני כל ניסיון נוסף"
+            )
+        if msg.action_status not in (None, _ACTION_PENDING):
+            raise ChatConfirmationError("מצב הפעולה אינו מאפשר ביצוע")
+
+        tool_name = msg.pending_action.get("tool")
+        tool = TOOLS.get(tool_name)
+        if tool is None:
+            raise ChatConfirmationError("הפעולה הממתינה אינה מוכרת עוד למערכת")
         if tool.office and not self.is_super_admin:
             # Defense in depth: role is re-derived on THIS request, not
             # trusted from whatever it was when the action was proposed. A
             # demoted/former-super-admin user (or any other caller) must not
             # be able to execute an office write via a stale pending_action.
             raise ChatConfirmationError(_OFFICE_REFUSAL_TEXT)
+
+        # Compare-and-set claim committed BEFORE invoking the tool.  This is
+        # the exactly-once boundary inside Rezef: only one worker can move a
+        # proposal from pending/legacy-NULL to executing.  A process crash or
+        # ambiguous provider response leaves it executing/unknown, which is
+        # deliberately not replayable without manual verification.
+        claimed_at = datetime.now(timezone.utc)
+        claimed = (
+            self.db.query(ChatMessage)
+            .filter(
+                ChatMessage.id == message_id,
+                ChatMessage.organization_id == self.organization_id,
+                ChatMessage.user_id == self.user_id,
+                ChatMessage.pending_action.is_not(None),
+                or_(ChatMessage.executed.is_(False), ChatMessage.executed.is_(None)),
+                or_(
+                    ChatMessage.action_status.is_(None),
+                    ChatMessage.action_status == _ACTION_PENDING,
+                ),
+            )
+            .update(
+                {
+                    ChatMessage.action_status: _ACTION_EXECUTING,
+                    ChatMessage.action_claimed_at: claimed_at,
+                    ChatMessage.action_error: None,
+                },
+                synchronize_session=False,
+            )
+        )
+        if claimed != 1:
+            self.db.rollback()
+            raise ChatConfirmationError("הפעולה כבר נתפסה, בוצעה או בוטלה")
+        self.db.commit()
+        self.db.expire_all()
+        msg = self.db.query(ChatMessage).filter(
+            ChatMessage.id == message_id,
+            ChatMessage.organization_id == self.organization_id,
+            ChatMessage.user_id == self.user_id,
+        ).one()
 
         try:
             call_kwargs = dict(msg.pending_action["input"])
@@ -399,8 +462,37 @@ class AIChatService:
             # register_office_client with no SUMIT key configured) must
             # surface as an honest refusal — msg.executed stays False and no
             # "בוצע" confirmation is posted, exactly as if nothing happened.
+            # ValueError is the service layer's precondition/business-rule
+            # failure contract; rollback any partial local work and return the
+            # proposal to pending so the operator can correct configuration.
+            self.db.rollback()
+            self._set_action_state(
+                message_id,
+                status=_ACTION_PENDING,
+                error=str(exc),
+                completed_at=None,
+                clear_claim=True,
+            )
             raise ChatConfirmationError(str(exc)) from exc
+        except Exception as exc:
+            # A transport/process error may occur after an external provider
+            # accepted the write.  Never retry automatically: record UNKNOWN
+            # (with redacted diagnostics) and require reconciliation.
+            self.db.rollback()
+            self._set_action_state(
+                message_id,
+                status=_ACTION_UNKNOWN,
+                error=str(exc),
+                completed_at=datetime.now(timezone.utc),
+            )
+            raise ChatConfirmationError(
+                "תוצאת הפעולה אינה ידועה; נדרש אימות ידני לפני ניסיון נוסף"
+            ) from exc
+
         msg.executed = True
+        msg.action_status = _ACTION_EXECUTED
+        msg.action_completed_at = datetime.now(timezone.utc)
+        msg.action_error = None
 
         confirmation_msg = ChatMessage(
             organization_id=self.organization_id, user_id=self.user_id,
@@ -408,7 +500,98 @@ class AIChatService:
             content=f"בוצע: {tool.description}",
         )
         self.db.add(confirmation_msg)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except Exception as exc:
+            # The provider may already have completed the write.  If local
+            # finalization fails, preserve the earlier durable claim and lock
+            # the action UNKNOWN instead of creating a duplicate on retry.
+            self.db.rollback()
+            self._set_action_state(
+                message_id,
+                status=_ACTION_UNKNOWN,
+                error=str(exc),
+                completed_at=datetime.now(timezone.utc),
+            )
+            raise ChatConfirmationError(
+                "הפעולה ייתכן שבוצעה, אך שמירת האישור נכשלה; נדרש אימות ידני"
+            ) from exc
         self.db.refresh(confirmation_msg)
 
         return {"result": result, "message_id": confirmation_msg.id}
+
+    def _set_action_state(
+        self,
+        message_id: int,
+        *,
+        status: str,
+        error: str | None,
+        completed_at: datetime | None,
+        clear_claim: bool = False,
+    ) -> None:
+        """Persist a post-claim terminal/retry state after rolling back any
+        partial tool transaction.  This update is always tenant+user scoped."""
+        values: dict[Any, Any] = {
+            ChatMessage.action_status: status,
+            ChatMessage.action_error: redact_sensitive_text(error)[:1000] if error else None,
+            ChatMessage.action_completed_at: completed_at,
+        }
+        if clear_claim:
+            values[ChatMessage.action_claimed_at] = None
+        self.db.query(ChatMessage).filter(
+            ChatMessage.id == message_id,
+            ChatMessage.organization_id == self.organization_id,
+            ChatMessage.user_id == self.user_id,
+            ChatMessage.action_status == _ACTION_EXECUTING,
+        ).update(values, synchronize_session=False)
+        self.db.commit()
+        self.db.expire_all()
+
+    def cancel_action(self, message_id: int) -> dict[str, Any]:
+        """Atomically cancel a proposal owned by the current user.
+
+        Only pending (including legacy NULL-status) actions can be cancelled;
+        executing/unknown/executed actions remain locked to prevent a UI tap
+        from misrepresenting an external side effect as cancelled.
+        """
+        completed_at = datetime.now(timezone.utc)
+        cancelled = (
+            self.db.query(ChatMessage)
+            .filter(
+                ChatMessage.id == message_id,
+                ChatMessage.organization_id == self.organization_id,
+                ChatMessage.user_id == self.user_id,
+                ChatMessage.pending_action.is_not(None),
+                or_(ChatMessage.executed.is_(False), ChatMessage.executed.is_(None)),
+                or_(
+                    ChatMessage.action_status.is_(None),
+                    ChatMessage.action_status == _ACTION_PENDING,
+                ),
+            )
+            .update(
+                {
+                    ChatMessage.action_status: _ACTION_CANCELLED,
+                    ChatMessage.action_completed_at: completed_at,
+                    ChatMessage.action_error: None,
+                },
+                synchronize_session=False,
+            )
+        )
+        if cancelled != 1:
+            self.db.rollback()
+            msg = self.db.query(ChatMessage).filter(
+                ChatMessage.id == message_id,
+                ChatMessage.organization_id == self.organization_id,
+                ChatMessage.user_id == self.user_id,
+            ).first()
+            if msg is None:
+                raise ChatConfirmationError(f"הודעה {message_id} לא נמצאה")
+            if not msg.pending_action:
+                raise ChatConfirmationError("אין פעולה ממתינה לביטול בהודעה זו")
+            if msg.action_status == _ACTION_CANCELLED:
+                raise ChatConfirmationError("הפעולה כבר בוטלה")
+            if msg.executed or msg.action_status == _ACTION_EXECUTED:
+                raise ChatConfirmationError("הפעולה כבר בוצעה ואינה ניתנת לביטול")
+            raise ChatConfirmationError("הפעולה כבר בתהליך או דורשת אימות ידני")
+        self.db.commit()
+        return {"message_id": message_id, "status": _ACTION_CANCELLED}

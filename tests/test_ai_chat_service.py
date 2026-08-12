@@ -9,6 +9,8 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from cfo.database import SessionLocal
 from cfo.models import ChatMessage, Contact, ContactType, Invoice, InvoiceStatus
 from cfo.services import ai_chat_service, document_issuance_service
@@ -115,6 +117,194 @@ def test_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
         msg = db.query(ChatMessage).filter(ChatMessage.id == result["message_id"]).first()
         assert msg.pending_action is not None
         assert msg.executed is False
+        assert msg.action_status == "pending"
+    finally:
+        db.close()
+
+
+def test_confirm_action_rejects_an_action_already_claimed_for_execution(
+    monkeypatch, fresh_org,
+):
+    """A second worker must never replay a write after the first worker's
+    atomic claim, even while the external result is not known yet."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=1,
+            session_id="atomic-claim",
+            role="assistant",
+            content="לאשר?",
+            pending_action={
+                "tool": "create_expense_category",
+                "input": {"name": "בדיקה"},
+                "description": "יצירת קטגוריה",
+            },
+            action_status="executing",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+
+        called = {"count": 0}
+
+        async def forbidden_execute(*_args, **_kwargs):
+            called["count"] += 1
+            return {"ok": True}
+
+        monkeypatch.setattr(AIChatService, "_execute_tool_observed", forbidden_execute)
+
+        with pytest.raises(ChatConfirmationError):
+            asyncio.run(AIChatService(db, org_id, user_id=1).confirm_action(msg.id))
+
+        assert called["count"] == 0
+    finally:
+        db.close()
+
+
+def test_atomic_claim_blocks_a_second_session_before_tool_execution(
+    monkeypatch, fresh_org,
+):
+    """The first confirmer commits its CAS claim before entering the tool.
+    A second independent DB session arriving from inside that execution must
+    observe `executing` and be rejected without invoking the tool twice."""
+    org_id = fresh_org()["org_id"]
+    db_a = SessionLocal()
+    db_b = SessionLocal()
+    try:
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=1,
+            session_id="real-race",
+            role="assistant",
+            content="לאשר?",
+            pending_action={
+                "tool": "create_expense_category",
+                "input": {"name": "פעם אחת"},
+                "description": "יצירת קטגוריה",
+            },
+            action_status="pending",
+        )
+        db_a.add(msg)
+        db_a.commit()
+        db_a.refresh(msg)
+
+        calls = {"tool": 0, "second_rejected": False}
+        service_b = AIChatService(db_b, org_id, user_id=1)
+
+        async def execute_once(*_args, **_kwargs):
+            calls["tool"] += 1
+            try:
+                await service_b.confirm_action(msg.id)
+            except ChatConfirmationError:
+                calls["second_rejected"] = True
+            return {"ok": True}
+
+        monkeypatch.setattr(AIChatService, "_execute_tool_observed", execute_once)
+        result = asyncio.run(
+            AIChatService(db_a, org_id, user_id=1).confirm_action(msg.id)
+        )
+
+        assert result["result"] == {"ok": True}
+        assert calls == {"tool": 1, "second_rejected": True}
+        db_b.expire_all()
+        stored = db_b.query(ChatMessage).filter(ChatMessage.id == msg.id).one()
+        assert stored.action_status == "executed"
+        assert stored.executed is True
+    finally:
+        db_b.close()
+        db_a.close()
+
+
+def test_cancel_action_persists_and_blocks_later_confirmation(monkeypatch, fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=1,
+            session_id="cancelled-action",
+            role="assistant",
+            content="לאשר?",
+            pending_action={
+                "tool": "create_expense_category",
+                "input": {"name": "לא ליצור"},
+                "description": "יצירת קטגוריה",
+            },
+            action_status="pending",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+
+        service = AIChatService(db, org_id, user_id=1)
+        cancelled = service.cancel_action(msg.id)
+        assert cancelled["status"] == "cancelled"
+
+        db.refresh(msg)
+        assert msg.action_status == "cancelled"
+        assert msg.executed is False
+
+        called = {"count": 0}
+
+        async def forbidden_execute(*_args, **_kwargs):
+            called["count"] += 1
+            return {"ok": True}
+
+        monkeypatch.setattr(AIChatService, "_execute_tool_observed", forbidden_execute)
+        with pytest.raises(ChatConfirmationError):
+            asyncio.run(service.confirm_action(msg.id))
+        assert called["count"] == 0
+    finally:
+        db.close()
+
+
+def test_ambiguous_execution_failure_is_locked_unknown_and_not_replayed(
+    monkeypatch, fresh_org,
+):
+    """A transport/process failure can happen after the provider accepted
+    the write.  The safe state is UNKNOWN and requires verification, never
+    an automatic retry that could duplicate the external side effect."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=1,
+            session_id="unknown-result",
+            role="assistant",
+            content="לאשר?",
+            pending_action={
+                "tool": "create_expense_category",
+                "input": {"name": "תוצאה לא ידועה"},
+                "description": "יצירת קטגוריה",
+            },
+            action_status="pending",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+
+        calls = {"count": 0}
+
+        async def ambiguous_failure(*_args, **_kwargs):
+            calls["count"] += 1
+            raise RuntimeError("provider accepted? bearer very-secret-token")
+
+        monkeypatch.setattr(AIChatService, "_execute_tool_observed", ambiguous_failure)
+        service = AIChatService(db, org_id, user_id=1)
+
+        with pytest.raises(ChatConfirmationError):
+            asyncio.run(service.confirm_action(msg.id))
+
+        db.refresh(msg)
+        assert msg.action_status == "unknown"
+        assert "very-secret-token" not in (msg.action_error or "")
+
+        with pytest.raises(ChatConfirmationError):
+            asyncio.run(service.confirm_action(msg.id))
+        assert calls["count"] == 1
     finally:
         db.close()
 
@@ -643,6 +833,7 @@ def test_confirm_action_reports_honest_error_when_register_office_client_fails(m
 
         msg = db.query(ChatMessage).filter(ChatMessage.id == pending_id).first()
         assert msg.executed is False
+        assert msg.action_status == "pending"
         assert db.query(SumitCompany).filter(
             SumitCompany.company_id == "444555666",
         ).count() == 0

@@ -54,6 +54,7 @@ class FakeAnthropicClient:
 def test_routes_require_auth(client):
     assert client.post("/api/ai/chat", json={"session_id": "s", "message": "hi"}).status_code == 403
     assert client.post("/api/ai/chat/confirm", json={"message_id": 1}).status_code == 403
+    assert client.post("/api/ai/chat/cancel", json={"message_id": 1}).status_code == 403
     assert client.get("/api/ai/chat/s").status_code == 403
 
 
@@ -85,6 +86,28 @@ def test_confirm_route_rejects_unknown_message(client, fresh_org):
     iso = fresh_org()
     r = client.post("/api/ai/chat/confirm", headers=iso["headers"], json={"message_id": 999999})
     assert r.status_code == 400
+
+
+def test_cancel_route_invokes_scoped_service(monkeypatch, client, fresh_org):
+    iso = fresh_org()
+    called = {}
+
+    def fake_cancel(self, message_id):
+        called["org_id"] = self.organization_id
+        called["user_id"] = self.user_id
+        called["message_id"] = message_id
+        return {"message_id": message_id, "status": "cancelled"}
+
+    monkeypatch.setattr(AIChatService, "cancel_action", fake_cancel, raising=False)
+    r = client.post(
+        "/api/ai/chat/cancel",
+        headers=iso["headers"],
+        json={"message_id": 123},
+    )
+
+    assert r.status_code == 200, r.text
+    assert called["message_id"] == 123
+    assert called["org_id"] == iso["org_id"]
 
 
 def test_chat_history_is_org_isolated(monkeypatch, client, fresh_org):

@@ -22,6 +22,7 @@ interface ChatMessageDto {
   content: string;
   pending_action: PendingAction | null;
   executed: boolean;
+  action_status: 'pending' | 'executing' | 'executed' | 'cancelled' | 'unknown' | null;
   created_at: string | null;
 }
 
@@ -108,6 +109,16 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
   const confirmMutation = useMutation({
     mutationFn: (messageId: number) =>
       apiService.post('/ai/chat/confirm', { message_id: messageId }),
+    onSuccess: () => {
+      setErrorMessage(null);
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
+    },
+    onError: (err) => setErrorMessage(extractErrorMessage(err)),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: (messageId: number) =>
+      apiService.post('/ai/chat/cancel', { message_id: messageId }),
     onSuccess: () => {
       setErrorMessage(null);
       queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
@@ -207,17 +218,33 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
                   <pre className="mb-2 overflow-x-auto rounded bg-black/5 p-2 text-[11px] dir-ltr text-left">
                     {JSON.stringify(m.pending_action.input, null, 2)}
                   </pre>
-                  {m.executed ? (
+                  {m.executed || m.action_status === 'executed' ? (
                     <span className="text-green-600 font-medium">✓ בוצע</span>
+                  ) : m.action_status === 'cancelled' ? (
+                    <span className="text-gray-500 font-medium">בוטל</span>
+                  ) : m.action_status === 'executing' ? (
+                    <span className="text-blue-600 font-medium">בביצוע — לא יופעל שוב</span>
+                  ) : m.action_status === 'unknown' ? (
+                    <span className="text-red-600 font-medium">תוצאה לא ידועה — נדרש אימות ידני</span>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => confirmMutation.mutate(m.id)}
-                      disabled={confirmMutation.isPending}
-                      className="px-3 py-1.5 rounded-lg bg-yellow-500 text-white text-xs font-semibold hover:bg-yellow-600 disabled:opacity-50"
-                    >
-                      {confirmMutation.isPending ? 'מבצע...' : 'אשר וביצוע'}
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => confirmMutation.mutate(m.id)}
+                        disabled={confirmMutation.isPending || cancelMutation.isPending}
+                        className="px-3 py-1.5 rounded-lg bg-yellow-500 text-white text-xs font-semibold hover:bg-yellow-600 disabled:opacity-50"
+                      >
+                        {confirmMutation.isPending ? 'מבצע...' : 'אשר וביצוע'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => cancelMutation.mutate(m.id)}
+                        disabled={confirmMutation.isPending || cancelMutation.isPending}
+                        className="px-3 py-1.5 rounded-lg border border-gray-400 text-xs font-semibold hover:bg-black/5 disabled:opacity-50"
+                      >
+                        {cancelMutation.isPending ? 'מבטל...' : 'ביטול'}
+                      </button>
+                    </div>
                   )}
                 </div>
               )}

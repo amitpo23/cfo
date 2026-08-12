@@ -413,10 +413,16 @@ async def _handle_callback(db: Session, callback_query: dict) -> None:
         if callback_id:
             await gateway.answer_callback_query(callback_id)
     elif data.startswith("cancel:"):
-        # No cancellation mechanism exists on ChatMessage/pending_action
-        # today (frontend ChatAssistant.tsx only ever confirms) — acknowledge
-        # without executing anything, rather than inventing new DB state.
-        await gateway.send_text(external_id, "בוטל.")
+        message_id = _parse_message_id(data)
+        if message_id is not None:
+            service = AIChatService(
+                db, identity.organization_id, identity.user_id, is_super_admin=False,
+            )
+            try:
+                service.cancel_action(message_id)
+                await gateway.send_text(external_id, "בוטל.")
+            except ChatConfirmationError as exc:
+                await gateway.send_text(external_id, str(exc))
         if callback_id:
             await gateway.answer_callback_query(callback_id)
     else:

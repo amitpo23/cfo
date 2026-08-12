@@ -1015,10 +1015,18 @@ class ChatMessage(Base):
     content = Column(Text, nullable=False)
     pending_action = Column(JSON, nullable=True)  # {"tool": str, "input": dict, "description": str}
     executed = Column(Boolean, default=False)
+    # Durable confirmation state.  NULL remains a supported legacy value:
+    # pending_action + executed=False + action_status=NULL is interpreted as
+    # "pending" so an additive migration never strands existing proposals.
+    action_status = Column(String(20), nullable=True)  # pending | executing | executed | cancelled | unknown
+    action_claimed_at = Column(DateTime(timezone=True), nullable=True)
+    action_completed_at = Column(DateTime(timezone=True), nullable=True)
+    action_error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index("ix_aichat_org_session", "organization_id", "session_id"),
+        Index("ix_aichat_org_action_status", "organization_id", "action_status"),
     )
 
 

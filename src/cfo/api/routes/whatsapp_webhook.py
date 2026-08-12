@@ -442,7 +442,13 @@ async def _handle_interactive(db: Session, message: dict) -> None:
             except ChatConfirmationError as exc:
                 await gateway.send_text(external_id, str(exc))
     elif button_id.startswith("cancel:"):
-        # No cancellation mechanism exists on ChatMessage/pending_action
-        # (same as telegram_webhook) — acknowledge without executing
-        # anything, rather than inventing new DB state.
-        await gateway.send_text(external_id, "בוטל.")
+        message_id = _parse_message_id(button_id)
+        if message_id is not None:
+            service = AIChatService(
+                db, identity.organization_id, identity.user_id, is_super_admin=False,
+            )
+            try:
+                service.cancel_action(message_id)
+                await gateway.send_text(external_id, "בוטל.")
+            except ChatConfirmationError as exc:
+                await gateway.send_text(external_id, str(exc))
