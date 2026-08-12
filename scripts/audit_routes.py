@@ -134,7 +134,7 @@ def main():
                                  counters["CONFIG"], counters["FAIL"])
         print("\n" + "=" * 70)
         print(summary_line(total=total, ok=ok, warn=warn, config=config, bad=bad))
-        print("CONF = 400 מהיעדר קרדנשלים בסביבת האודיט — התנהגות נכונה, לא ממצא.")
+        print("CONF = תשובת not-configured בסביבת האודיט — התנהגות נכונה, לא ממצא.")
         print("=" * 70)
         return bad
 

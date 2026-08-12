@@ -14,7 +14,7 @@ spec.loader.exec_module(qa_gate)
 
 
 _BASELINE_STDOUT = (
-    "סהכ: 248 | תקין(200): 172 | אזהרה(4xx): 39 | מוגדר-סביבה(400): 36 | "
+    "סהכ: 248 | תקין(200): 172 | אזהרה(4xx): 39 | מוגדר-סביבה: 36 | "
     f"כשל: {qa_gate.ROUTE_AUDIT_BASELINE_FAILURES}"
 )
 
@@ -41,6 +41,9 @@ def test_all_checks_pass_reports_overall_pass():
     assert any(_cmd_contains(c, "pytest") for c in calls)
     assert any(_cmd_contains(c, "audit_routes.py") for c in calls)
     assert any(_cmd_contains(c, "colscan.py") for c in calls)
+    assert any(_cmd_contains(c, "test_capability_control_plane.py") for c in calls)
+    assert any(_cmd_contains(c, "test_repo_financial_skills.py") for c in calls)
+    assert any("lint" in c for c in calls)
 
 
 def test_a_single_failure_fails_the_whole_gate():
@@ -107,7 +110,7 @@ def test_env_file_runs_remote_drift_check():
     assert any("--env-file" in c and "/tmp/fake.env" in c for c in calls)
 
 
-def test_skip_frontend_skips_tsc_and_build():
+def test_skip_frontend_skips_lint_tsc_and_build():
     calls = []
 
     def fake_run(cmd, cwd=None):
@@ -115,8 +118,10 @@ def test_skip_frontend_skips_tsc_and_build():
         return _ok(0)
 
     results = qa_gate.run_gate(skip_frontend=True, run=fake_run)
-    assert results["4a. Frontend tsc"] is None
-    assert results["4b. Frontend build"] is None
+    assert results["4a. Frontend lint"] is None
+    assert results["4b. Frontend tsc"] is None
+    assert results["4c. Frontend build"] is None
+    assert not any("lint" in c for c in calls)
     assert not any("tsc" in c for c in calls)
     assert qa_gate.print_summary(results) is True
 
@@ -128,5 +133,5 @@ def test_frontend_build_failure_fails_the_gate():
         return _ok(0)
 
     results = qa_gate.run_gate(run=fake_run)
-    assert results["4b. Frontend build"] is False
+    assert results["4c. Frontend build"] is False
     assert qa_gate.print_summary(results) is False

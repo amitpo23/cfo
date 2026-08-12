@@ -2,7 +2,7 @@
 
 Legacy production databases were originally created by ``create_all`` and may
 contain current tables without matching Alembic history.  Declaring such a
-database to be at ``head`` before checking the complete ORM table/column shape
+database to be at ``head`` before checking the complete ORM structural shape
 creates false migration evidence.  This service always repairs additive drift,
 verifies it is closed, and only then stamps a legacy/conflicted database.
 
@@ -27,7 +27,7 @@ from sqlalchemy.engine import Engine
 # והתגלה בביקורת Codex ב-09/08/2026. גישה דרך המודול נקראת בכל קריאה
 # ולכן משקפת תמיד את המצב הנוכחי.
 from . import schema_sync
-from .schema_sync import compute_missing
+from .schema_sync import compute_schema_drift
 
 
 class SchemaDeploymentError(RuntimeError):
@@ -35,7 +35,7 @@ class SchemaDeploymentError(RuntimeError):
 
 
 def _has_drift(report: dict[str, Any]) -> bool:
-    return bool(report["tables"] or report["columns"])
+    return schema_sync.has_schema_drift(report)
 
 
 def reconcile_schema_to_head(
@@ -50,8 +50,8 @@ def reconcile_schema_to_head(
     ``upgrade`` remains the canonical path for an Alembic-managed database.
     Databases predating Alembic, and databases where an already-created object
     conflicts with migration history, use the additive model reconciliation.
-    A legacy/conflicted database is stamped only after ``compute_missing`` is
-    empty.
+    A legacy/conflicted database is stamped only after the full structural
+    drift report is empty.
     """
 
     upgrade = upgrade or alembic_command.upgrade
@@ -70,7 +70,7 @@ def reconcile_schema_to_head(
             migration_conflict = exc
 
     schema_sync_report = schema_sync.apply_additive(engine)
-    remaining = compute_missing(engine)
+    remaining = compute_schema_drift(engine)
     if _has_drift(remaining):
         raise SchemaDeploymentError(
             "schema drift remains after additive reconciliation; "

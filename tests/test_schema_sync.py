@@ -2,7 +2,13 @@
 import sqlalchemy as sa
 
 from cfo.database import Base
-from cfo.services.schema_sync import apply_additive, compute_missing
+from cfo.services.schema_sync import (
+    apply_additive,
+    compute_missing,
+    compute_schema_drift,
+    empty_schema_drift,
+    has_schema_drift,
+)
 
 
 def _fresh_engine(tmp_path):
@@ -16,6 +22,48 @@ def test_no_drift_on_full_schema(tmp_path):
     missing = compute_missing(engine)
     assert missing["tables"] == []
     assert missing["columns"] == {}
+
+
+def test_full_schema_verifier_is_clean_after_create_all(tmp_path):
+    engine = _fresh_engine(tmp_path)
+    Base.metadata.create_all(engine)
+
+    drift = compute_schema_drift(engine)
+
+    assert drift == empty_schema_drift()
+    assert has_schema_drift(drift) is False
+
+
+def test_full_schema_verifier_detects_type_and_nullability_drift(tmp_path):
+    engine = _fresh_engine(tmp_path)
+    with engine.begin() as conn:
+        # Both deviations are deliberate: ORM expects name VARCHAR NOT NULL.
+        conn.execute(sa.text(
+            "CREATE TABLE organizations (id INTEGER PRIMARY KEY, name INTEGER NULL)"
+        ))
+
+    drift = compute_schema_drift(engine)
+
+    assert "name" in drift["types"]["organizations"]
+    assert drift["nullability"]["organizations"]["name"] == {
+        "expected": False,
+        "actual": True,
+    }
+    assert has_schema_drift(drift) is True
+
+
+def test_full_schema_verifier_detects_missing_index(tmp_path):
+    engine = _fresh_engine(tmp_path)
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(sa.text("DROP INDEX ix_aichat_org_session"))
+
+    drift = compute_schema_drift(engine)
+
+    assert {
+        "columns": ["organization_id", "session_id"],
+        "unique": False,
+    } in drift["indexes"]["ai_chat_messages"]
 
 
 def test_detects_missing_table_and_column(tmp_path):

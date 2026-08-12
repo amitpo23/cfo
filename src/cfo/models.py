@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, EmailStr
 from sqlalchemy import (
     Column, Integer, String, Numeric, DateTime, Date,
     ForeignKey, Enum as SQLEnum, Boolean, Text, JSON,
-    Index, Float, UniqueConstraint
+    Index, Float, UniqueConstraint, func, true, false
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -139,17 +139,16 @@ class Organization(Base):
     # Email is on by default (it's free); SMS costs money per message, so it
     # stays opt-in and — per morning_brief_service — is only ever sent when
     # the brief is red, one line, regardless of this flag being on.
-    # Nullable (like `is_active` above, unlike `collection_reminders_enabled`):
-    # a Python-side-only default= never reaches a raw SQL INSERT/ALTER TABLE
-    # backfill, so a NOT NULL column here would reject any row that doesn't
-    # set it explicitly (see tests/test_schema_sync.py's drift-simulation
-    # tests, which insert organizations rows with a minimal raw column list).
-    # morning_brief_service treats NULL the same as the column's intended
-    # default (see _deliver_email/_deliver_sms) rather than misreading it as
-    # an explicit opt-out.
-    morning_brief_email_enabled = Column(Boolean, default=True, nullable=True)
+    # Server defaults keep raw SQL/additive paths aligned with the original
+    # Alembic migration's NOT NULL contract; service code still treats legacy
+    # NULL rows conservatively during a staged repair.
+    morning_brief_email_enabled = Column(
+        Boolean, default=True, nullable=False, server_default=true(),
+    )
     morning_brief_recipients = Column(String(500), nullable=True)
-    morning_brief_sms_enabled = Column(Boolean, default=False, nullable=True)
+    morning_brief_sms_enabled = Column(
+        Boolean, default=False, nullable=False, server_default=false(),
+    )
 
     # --- חבילה H (התאמת בעלות אוטומטית) --- #
     # חותמת שהבעלים (מנהל המערכת היחיד — אין "אדמין ארגון") הכריע ידנית מי
@@ -1615,7 +1614,9 @@ class ChannelIdentity(Base):
     default_persona = Column(String(20), default="cfo")
     verified_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(
+        DateTime, default=datetime.utcnow, nullable=False, server_default=func.now(),
+    )
 
     # --- package B (2026-07-27 moshko-full-bot plan) — proactive push opt-in --- #
     # Nullable, default True, same pattern as Organization.morning_brief_email_enabled
@@ -1649,7 +1650,9 @@ class ChannelLinkCode(Base):
     code_hash = Column(String(64), nullable=False, index=True)
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(
+        DateTime, default=datetime.utcnow, nullable=False, server_default=func.now(),
+    )
 
 
 class MoshkoMemory(Base):
@@ -1690,7 +1693,9 @@ class ChannelProcessedUpdate(Base):
     id = Column(Integer, primary_key=True)
     provider = Column(String(20), nullable=False)
     update_id = Column(String(64), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(
+        DateTime, default=datetime.utcnow, nullable=False, server_default=func.now(),
+    )
 
     __table_args__ = (
         UniqueConstraint("provider", "update_id", name="uq_channel_processed_update"),

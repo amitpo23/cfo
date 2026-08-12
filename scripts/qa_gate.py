@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parent.parent
 RunFn = Callable[[list], "subprocess.CompletedProcess"]
 
 # scripts/audit_routes.py marks any non-200/401/403/404/422 status as "FAIL"
-# — including 400, which in this codebase is the correct, intentional
+# — including environment-gated 400/503 responses, which in this codebase are
+# correct and intentional
 # response for "integration not configured" (SumitNotConfiguredError,
 # AIChatNotConfiguredError, etc.), not a bug. docs/audits/2026-07-03-route-
 # audit.md investigated 39 of these individually and confirmed they're
@@ -31,7 +32,7 @@ RunFn = Callable[[list], "subprocess.CompletedProcess"]
 # The real qa_gate criterion (per the Step 10 plan) is "zero NEW undocumented
 # failures", not "script exit code == 0" — so we compare the reported count
 # against this documented baseline instead.
-# עודכן 2026-07-25: עד כה הסף היה 40, כי audit_routes ספר 400 מוגדרי-סביבה כ"כשל".
+# עודכן 2026-07-25: עד כה הסף היה 40, כי audit_routes ספר מוגדרי-סביבה כ"כשל".
 # מאז ההפרדה לדליים (scripts/route_audit_report.py) הכשלים נספרים נקי, ונשאר אחד
 # בלבד: /api/financial/ai/predict/revenue מחזיר 400 "דורש היסטוריית נתונים אמיתית"
 # — תשובת honest-null נכונה, לא תקלה. כל כשל נוסף מעבר לו = רגרסיה.
@@ -80,7 +81,7 @@ def run_gate(
     print("\n=== 2. Route audit ===")
     route_audit_result = run([sys.executable, "scripts/audit_routes.py"])
     ok = route_audit_within_baseline(getattr(route_audit_result, "stdout", "") or "")
-    print(f"{'PASS' if ok else 'FAIL'} — 2. Route audit (baseline: {ROUTE_AUDIT_BASELINE_FAILURES} known env-gated 400s)")
+    print(f"{'PASS' if ok else 'FAIL'} — 2. Route audit (baseline: {ROUTE_AUDIT_BASELINE_FAILURES} known honest-null failures)")
     results["2. Route audit"] = ok
     check("3a. Schema drift (local)", [sys.executable, "scripts/schema_drift_check.py"])
     if env_file:
@@ -90,14 +91,27 @@ def run_gate(
         )
     else:
         skip("3b. Schema drift (Neon)", "no --env-file given")
+    check(
+        "3c. Capability/skill control-plane drift",
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/test_capability_control_plane.py",
+            "tests/test_repo_financial_skills.py",
+            "-q",
+        ],
+    )
 
     if skip_frontend:
-        skip("4a. Frontend tsc", "--skip-frontend")
-        skip("4b. Frontend build", "--skip-frontend")
+        skip("4a. Frontend lint", "--skip-frontend")
+        skip("4b. Frontend tsc", "--skip-frontend")
+        skip("4c. Frontend build", "--skip-frontend")
     else:
         frontend_dir = ROOT / "frontend"
-        check("4a. Frontend tsc", ["npx", "tsc", "--noEmit"], frontend_dir)
-        check("4b. Frontend build", ["npm", "run", "build"], frontend_dir)
+        check("4a. Frontend lint", ["npm", "run", "lint"], frontend_dir)
+        check("4b. Frontend tsc", ["npx", "tsc", "--noEmit"], frontend_dir)
+        check("4c. Frontend build", ["npm", "run", "build"], frontend_dir)
 
     check("5. Colscan (phantom column references)", [sys.executable, "scripts/colscan.py"])
     check(

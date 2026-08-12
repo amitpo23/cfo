@@ -28,18 +28,31 @@ def main() -> int:
     # already defaults to the local sqlite db when DATABASE_URL isn't set —
     # that's what makes "no --env-file" mean "check the local db".
     from cfo.database import engine
-    from cfo.services.schema_sync import compute_missing
+    from cfo.services.schema_sync import compute_schema_drift, has_schema_drift
 
-    missing = compute_missing(engine)
-    if not missing["tables"] and not missing["columns"]:
-        print("OK — אין drift: הסכמה החיה תואמת את המודלים")
+    drift = compute_schema_drift(engine)
+    if not has_schema_drift(drift):
+        print("OK — אין drift מבני: הסכמה החיה תואמת את המודלים")
+        for table_name, exemptions in drift["dialect_exemptions"].items():
+            print(f"WARN — חריגת dialect מתועדת ב-{table_name}: {exemptions}")
         return 0
 
     print("DRIFT נמצא:")
-    for t in missing["tables"]:
+    for t in drift["tables"]:
         print(f"  טבלה חסרה: {t}")
-    for t, cols in missing["columns"].items():
+    for t, cols in drift["columns"].items():
         print(f"  עמודות חסרות ב-{t}: {', '.join(cols)}")
+    labels = {
+        "types": "אי-התאמות טיפוס",
+        "nullability": "אי-התאמות nullability",
+        "primary_keys": "מפתחות ראשיים חסרים/שונים",
+        "foreign_keys": "מפתחות זרים חסרים",
+        "unique_constraints": "אילוצי unique חסרים",
+        "indexes": "אינדקסים חסרים",
+    }
+    for key, label in labels.items():
+        for table_name, details in drift[key].items():
+            print(f"  {label} ב-{table_name}: {details}")
     return 1
 
 

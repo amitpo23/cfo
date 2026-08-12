@@ -30,10 +30,9 @@ def test_legacy_database_is_repaired_and_verified_before_head_stamp(tmp_path):
     events = []
 
     def stamp(_config, revision):
-        assert schema_deployment.compute_missing(engine) == {
-            "tables": [],
-            "columns": {},
-        }
+        assert schema_deployment.compute_schema_drift(engine) == (
+            schema_deployment.schema_sync.empty_schema_drift()
+        )
         events.append(("stamp", revision))
 
     result = schema_deployment.reconcile_schema_to_head(
@@ -46,7 +45,7 @@ def test_legacy_database_is_repaired_and_verified_before_head_stamp(tmp_path):
     assert result["schema_sync"]["columns"]["organizations"] == [
         "collection_sms_sender"
     ]
-    assert result["remaining"] == {"tables": [], "columns": {}}
+    assert result["remaining"] == schema_deployment.schema_sync.empty_schema_drift()
     assert events == [("stamp", "head")]
 
 

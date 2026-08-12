@@ -39,6 +39,11 @@ def test_400_missing_credentials_is_config_gated_not_a_failure():
     ) == "CONFIG"
 
 
+def test_503_for_an_unconfigured_webhook_is_config_gated_not_a_failure():
+    assert classify(503, "ערוץ WhatsApp לא מוגדר") == "CONFIG"
+    assert classify(503, "Anthropic upstream timeout") == "FAIL"
+
+
 def test_400_from_a_real_bug_is_still_a_failure():
     """400 שאינו על תצורה חסרה — למשל ולידציה שבורה — נשאר כשל."""
     assert classify(400, "invalid date range: end before start") == "FAIL"
@@ -56,5 +61,5 @@ def test_summary_line_reports_the_four_buckets_separately():
     assert "סהכ: 248" in line
     assert "תקין(200): 172" in line
     assert "אזהרה(4xx): 39" in line
-    assert "מוגדר-סביבה(400): 37" in line
+    assert "מוגדר-סביבה: 37" in line
     assert "כשל: 0" in line
