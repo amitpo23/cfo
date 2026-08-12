@@ -65,20 +65,29 @@ def _active_org(client, headers):
     return client.get("/api/integration/status", headers=headers).json()["organization_id"]
 
 
-# --- non-super users: header is completely ignored (P0 isolation) ------------
+# --- non-super users: header for a foreign org FAILS (P0 isolation) ----------
+# **היפוך התנהגות 11/08/2026.** קודם הכותרת פשוט נבלעה והבקשה בוצעה
+# בארגון של המשתמש. הכוונה — לא להרחיב scope — נשמרת במלואה; מה שהשתנה
+# הוא שהבקשה נכשלת במקום להתבצע ביעד אחר. החלפת יעד בשקט היא בדיוק
+# התקלה שהוסרה מסופר-אדמין באותו סבב.
 def test_non_super_user_cannot_override_org(client, tenant):
     headers = {**tenant["headers"], "X-Active-Org-Id": "1"}
-    assert _active_org(client, headers) == tenant["user"]["organization_id"]
+    resp = client.get("/api/integration/status", headers=headers)
+
+    assert resp.status_code in (403, 409), resp.text
+    assert resp.json().get("organization_id") != 1, "scope הורחב לארגון 1"
 
 
 def test_non_super_override_does_not_leak_writes(client, owner, tenant):
-    """A non-super tenant with the header must not write into another org."""
+    """כתיבה עם כותרת לארגון זר נכשלת — ובוודאי אינה נוחתת שם."""
     headers = {**tenant["headers"], "X-Active-Org-Id": str(owner["user"]["organization_id"])}
     r = client.post("/api/tasks", json={"title": "tenant note"}, headers=headers)
-    assert r.status_code == 200, r.text
-    # The task must belong to the tenant's own org, NOT org 1.
+
+    assert r.status_code in (403, 409), r.text
     owner_titles = {t["title"] for t in client.get("/api/tasks", headers=owner["headers"]).json()}
     assert "tenant note" not in owner_titles
+    tenant_titles = {t["title"] for t in client.get("/api/tasks", headers=tenant["headers"]).json()}
+    assert "tenant note" not in tenant_titles, "הכתיבה בוצעה בארגון של המשתמש במקום להיכשל"
 
 
 # --- super user: override honored for reads ---------------------------------

@@ -1,6 +1,8 @@
 """
 Authentication and authorization dependencies
 """
+from dataclasses import dataclass
+
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional, Generator
@@ -236,92 +238,200 @@ def _requested_org(request: Optional[Request]) -> Optional[int]:
         )
 
 
-async def get_current_org_id(
+@dataclass
+class OrganizationAccessContext:
+    """כל מה שנדרש כדי להכריע גישה ארגונית — בהקשר אחד.
+
+    ההכרעה הייתה מפוזרת בין `get_current_org_id` (איזה ארגון),
+    `require_admin` (`User.role`) ו-`users.organization_id` (fallback שקט).
+    שלוש שכבות שאינן מדברות זו עם זו, ולכן אפשר היה לעבור ביניהן.
+
+    `effective_role` הוא התפקיד **בארגון הזה**, לא בפלטפורמה. אדם יכול
+    להיות ADMIN בעסק שלו ו-VIEWER בעסק של שותף; `User.role` אינו רשאי
+    להקנות לו כתיבה בעסק השני.
+
+    `selection_source` הוא ראיית ביקורת: "מאיפה הגיע הארגון" הוא בדיוק
+    מה שצריך לדעת אחרי כתיבה לתיק הלא-נכון.
+    """
+    user: User
+    organization_id: int
+    membership: Optional["OrganizationMembership"]
+    effective_role: UserRole
+    is_super_admin: bool
+    selection_source: str
+    channel: str
+
+
+CHANNEL_HEADER = "X-Rezef-Channel"
+
+# מקורות בחירה אפשריים
+SOURCE_SUPER_ADMIN_HEADER = "super_admin_header"
+SOURCE_SUPER_ADMIN_OWN = "super_admin_own_org"
+SOURCE_HEADER = "explicit_header"
+SOURCE_SOLE = "sole_membership"
+SOURCE_LEGACY = "legacy_column"
+
+
+def _needs_selection(detail_msg: str, organizations: list[dict]) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "active_organization_required",
+            "message_he": detail_msg,
+            "header": ACTIVE_ORG_HEADER,
+            "organizations": organizations,
+        },
+    )
+
+
+def _forbidden(reason: str) -> HTTPException:
+    """403 בלי שם ארגון.
+
+    סירוב אינו מקום לפרסם את קטלוג הלקוחות: מי שקיבל שם ארגון שאינו שלו
+    למד משהו שאסור היה לו לדעת.
+    """
+    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
+
+
+def _assert_org_usable(db: Session, organization_id: int) -> None:
+    """ארגון מושבת חוסם תמיד — גם לסופר-אדמין וגם לחבר פעיל."""
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == organization_id)
+        .first()
+    )
+    if org is None:
+        raise _forbidden("organization_not_found")
+    if org.is_active is False:
+        raise _forbidden("organization_inactive")
+
+
+async def resolve_access_context(
+    current_user: User,
+    request: Optional[Request],
+    db: Session,
+) -> OrganizationAccessContext:
+    """נקודת ההכרעה היחידה. נבנית מחדש בכל בקשה.
+
+    אין cache ואין הסתמכות על claim בטוקן: ביטול חברות, השעיה, פקיעה
+    והשבתת ארגון חייבים להיכנס לתוקף בבקשה הבאה, לא אחרי logout.
+    """
+    from ..models import OrganizationMembership  # noqa: F401  (typing only)
+
+    channel = (
+        request.headers.get(CHANNEL_HEADER, "web") if request is not None else "web"
+    )
+    requested = _requested_org(request)
+    is_super = current_user.role == UserRole.SUPER_ADMIN
+
+    # --- SUPER_ADMIN: מפעיל מערכת, בוחר ארגון מפורשות ------------------ #
+    if is_super:
+        target = _resolve_super_admin_active_org(request, current_user)
+        if target is not None:
+            _assert_org_usable(db, target)
+            return OrganizationAccessContext(
+                user=current_user, organization_id=target, membership=None,
+                effective_role=UserRole.SUPER_ADMIN, is_super_admin=True,
+                selection_source=SOURCE_SUPER_ADMIN_HEADER, channel=channel,
+            )
+        if current_user.organization_id is not None:
+            _assert_org_usable(db, current_user.organization_id)
+            return OrganizationAccessContext(
+                user=current_user, organization_id=current_user.organization_id,
+                membership=None, effective_role=UserRole.SUPER_ADMIN,
+                is_super_admin=True, selection_source=SOURCE_SUPER_ADMIN_OWN,
+                channel=channel,
+            )
+        # לשעבר: `return 1` — ברירת מחדל שקטה לתיק של לקוח אמיתי.
+        raise _needs_selection(
+            f"יש לבחור ארגון פעיל. שלח את הכותרת {ACTIVE_ORG_HEADER} "
+            "עם מזהה הארגון.",
+            _selectable_organizations(db),
+        )
+
+    # --- משתמש רגיל: החברות היא מקור הסמכות -------------------------- #
+    memberships = membership_service.memberships_for(db, current_user.id)
+    live = {
+        m.organization_id: m
+        for m in memberships
+        if membership_service.is_member(db, current_user.id, m.organization_id)
+    }
+
+    if requested is not None:
+        # כותרת מפורשת לעולם אינה מוחלפת בשקט: מי שביקש ארגון א' וקיבל
+        # את ב' קורא תיק אחר בלי לדעת.
+        m = live.get(requested)
+        if m is None:
+            raise _forbidden("no_active_membership_for_requested_organization")
+        _assert_org_usable(db, requested)
+        return OrganizationAccessContext(
+            user=current_user, organization_id=requested, membership=m,
+            effective_role=m.role, is_super_admin=False,
+            selection_source=SOURCE_HEADER, channel=channel,
+        )
+
+    if len(live) == 1:
+        org_id, m = next(iter(live.items()))
+        _assert_org_usable(db, org_id)
+        return OrganizationAccessContext(
+            user=current_user, organization_id=org_id, membership=m,
+            effective_role=m.role, is_super_admin=False,
+            selection_source=SOURCE_SOLE, channel=channel,
+        )
+
+    if len(live) > 1:
+        raise _needs_selection(
+            "יש לך גישה לכמה ארגונים. בחר את הארגון הפעיל ושלח אותו "
+            f"בכותרת {ACTIVE_ORG_HEADER}.",
+            _organizations_by_ids(db, sorted(live)),
+        )
+
+    # אין חברות פעילה. **רשומה קיימת שאינה פעילה היא סירוב מפורש**, לא
+    # היעדר מידע: מי שבוטל או הושעה אינו רשאי ליפול חזרה לעמודה הישנה.
+    # בלי ההבחנה הזו, `bb5365c` (חברות `suspended` למשתמש מושבת) היה
+    # חסר משמעות — הפעלה מחדש הייתה מחזירה גישה בשקט.
+    if memberships:
+        raise _forbidden("membership_not_active")
+
+    # מסלול תאימות זמני: משתמש שמעולם לא קיבל שום חברות. נמדד ב-
+    # `selection_source="legacy_column"` כדי שאפשר יהיה להסיר אותו.
+    if current_user.organization_id is None:
+        raise _forbidden("user_is_not_scoped_to_an_organization")
+    _assert_org_usable(db, current_user.organization_id)
+    return OrganizationAccessContext(
+        user=current_user, organization_id=current_user.organization_id,
+        membership=None, effective_role=current_user.role,
+        is_super_admin=False, selection_source=SOURCE_LEGACY, channel=channel,
+    )
+
+
+async def get_access_context(
     current_user: User = Depends(get_current_user),
     request: Request = None,
     db: Session = Depends(get_db_session),
-) -> int:
-    """Organization scope of the authenticated user.
-
-    Routes must derive the tenant from the token, never from a
-    caller-controlled query parameter.
-
-    Exception — a SUPER_ADMIN may target any organization by sending the
-    ``X-Active-Org-Id`` header (validated and audited in
-    _resolve_super_admin_active_org). This is the deliberate "select an org
-    explicitly via an admin path" mechanism, and it reaches every org-scoped
-    route (reads, writes, sync) through this one dependency.
-
-    A non-super user with no organization (e.g. a stray row) must NOT silently
-    fall back to org 1 — that would read/write another tenant's data. Reject.
-    """
+) -> OrganizationAccessContext:
+    ctx = await resolve_access_context(current_user, request, db)
+    # שער הכתיבה של viewer נשען על `effective_role` — התפקיד בארגון הזה,
+    # לא בפלטפורמה. אדם עם `User.role=ADMIN` שהוא VIEWER בעסק הנוכחי
+    # נחסם כאן; אדם עם `User.role=VIEWER` שהוא ADMIN בעסק שלו — לא.
     if (
         request is not None
-        and current_user.role == UserRole.VIEWER
+        and ctx.effective_role == UserRole.VIEWER
         and request.method not in ("GET", "HEAD", "OPTIONS")
     ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Viewer role is read-only",
-        )
+        raise _forbidden("Viewer role is read-only")
+    return ctx
 
-    active = _resolve_super_admin_active_org(request, current_user)
-    if active is not None:
-        return active
 
-    # --- חברות רב-ארגונית ------------------------------------------- #
-    # קודמת ל-`users.organization_id`: אדם יכול להיות חבר בכמה עסקים עם
-    # תפקיד שונה בכל אחד, ומי שיש לו חברויות — הן הקובעות.
-    member_orgs = membership_service.active_organization_ids(db, current_user.id)
-    if member_orgs:
-        requested = _requested_org(request)
-        if requested is not None and requested in member_orgs:
-            return requested
-        # כותרת לארגון שאינו שלו: **מתעלמים**. הכותרת מגיעה מ-localStorage
-        # ולכן היא קלט לא מהימן; היא רשאית לבחור מתוך מה שכבר מותר, ולעולם
-        # לא להרחיב scope. סירוב היה גם הוא בטוח, אבל היה שובר את החוזה
-        # הקיים ב-test_non_super_user_cannot_override_org.
-        if len(member_orgs) == 1:
-            return member_orgs[0]
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error": "active_organization_required",
-                "message_he": (
-                    "יש לך גישה לכמה ארגונים. בחר את הארגון הפעיל ושלח "
-                    f"אותו בכותרת {ACTIVE_ORG_HEADER}."
-                ),
-                "header": ACTIVE_ORG_HEADER,
-                # הרשימה מצומצמת לארגונים של המשתמש בלבד — היא אינה
-                # קטלוג הלקוחות של המשרד.
-                "organizations": _organizations_by_ids(db, member_orgs),
-            },
-        )
+async def get_current_org_id(
+    ctx: OrganizationAccessContext = Depends(get_access_context),
+) -> int:
+    """מזהה הארגון הפעיל — עטיפה דקה מעל ההקשר.
 
-    if current_user.organization_id is None:
-        if current_user.role == UserRole.SUPER_ADMIN:
-            # לשעבר: `return 1`. ברירת מחדל שקטה לתיק של לקוח אמיתי —
-            # החזית קוראת את הכותרת מ-localStorage, ולכן דפדפן חדש, מצב
-            # פרטי, ניקוי אחסון או קריאת API ישירה מייצרים בקשה בלי
-            # כותרת, והבקשה הבאה נכתבת לארגון 1 בלי שאיש בחר בו.
-            # עצירה גלויה עדיפה על כתיבה לתיק הלא-נכון.
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error": "active_organization_required",
-                    "message_he": (
-                        "יש לבחור ארגון פעיל. שלח את הכותרת "
-                        f"{ACTIVE_ORG_HEADER} עם מזהה הארגון."
-                    ),
-                    "header": ACTIVE_ORG_HEADER,
-                    "organizations": _selectable_organizations(db),
-                },
-            )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is not scoped to an organization",
-        )
-    return current_user.organization_id
+    נשארת כדי ש-400+ מסלולים קיימים לא ישתנו; ההכרעה עצמה עברה כולה ל-
+    `resolve_access_context`.
+    """
+    return ctx.organization_id
 
 
 async def get_current_active_user(
@@ -345,14 +455,18 @@ def require_role(*allowed_roles: UserRole):
         async def admin_endpoint(user: User = Depends(require_role(UserRole.ADMIN))):
             ...
     """
-    async def role_checker(current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role not in allowed_roles:
+    async def role_checker(
+        ctx: OrganizationAccessContext = Depends(get_access_context),
+    ) -> User:
+        # `effective_role` ולא `User.role`: התפקיד בארגון הפעיל הוא הקובע.
+        # אדם יכול להיות ADMIN בעסק שלו ו-VIEWER בעסק של שותף.
+        if ctx.effective_role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Access denied. Required roles: {[r.value for r in allowed_roles]}"
             )
-        return current_user
-    
+        return ctx.user
+
     return role_checker
 
 
@@ -369,10 +483,15 @@ async def get_super_admin(
 
 
 async def get_organization_admin(
-    current_user: User = Depends(get_current_user)
+    ctx: OrganizationAccessContext = Depends(get_access_context),
 ) -> User:
-    """בדיקה שהמשתמש הוא מנהל ארגון או מנהל על"""
-    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.ADMIN]:
+    """מנהל **בארגון הפעיל**, או מנהל-על.
+
+    נשען על `effective_role`. `User.role=ADMIN` אינו מקנה ניהול בעסק
+    שבו האדם הוא VIEWER — זה בדיוק הפער שהמודל הרב-ארגוני פותח.
+    """
+    current_user = ctx.user
+    if ctx.effective_role not in [UserRole.SUPER_ADMIN, UserRole.ADMIN]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"
@@ -439,20 +558,14 @@ def sumit_for_org(db: Session, org_id: int):
     return SumitIntegration(api_key=api_key, company_id=company_id)
 
 
-def require_admin(current_user: dict = Depends(get_current_user)):
-    """
-    Require admin role
-    
-    Args:
-        current_user: Current user from JWT
-        
-    Returns:
-        User object
+def require_admin(ctx: OrganizationAccessContext = Depends(get_access_context)):
+    """מנהל **בארגון הפעיל** (44 מסלולים תלויים בזה).
 
-    Raises:
-        HTTPException: If user is not admin
+    נשען על `effective_role` ולא על `User.role`: תפקיד גלובלי אינו מקנה
+    ניהול בעסק של מישהו אחר.
     """
-    if current_user.role not in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
+    current_user = ctx.user
+    if ctx.effective_role not in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required"

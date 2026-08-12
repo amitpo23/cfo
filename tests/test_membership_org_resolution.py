@@ -134,9 +134,15 @@ def test_header_selects_among_own_memberships(client):
     assert resp.json()["organization_id"] == b
 
 
-def test_header_for_a_non_member_org_never_widens_scope(client):
-    """התקפת ההרחבה: חבר בארגון אחד מבקש ארגון אחר. הכותרת אינה
-    מרחיבה scope — היא רק בוחרת מתוך מה שכבר מותר."""
+def test_header_for_a_non_member_org_fails_instead_of_substituting(client):
+    """**היפוך התנהגות מכוון, 11/08/2026.**
+
+    קודם התעלמנו מהכותרת והחזרנו את הארגון של המשתמש. זה נראה בטוח —
+    scope לא הורחב — אבל הוא גרוע בדרך אחרת: מי שביקש ארגון א' וקיבל את
+    ב' קורא וכותב לתיק אחר **בלי לדעת**. החלפה שקטה של יעד היא בדיוק
+    סוג התקלה שהסרנו מסופר-אדמין.
+
+    הכלל עכשיו: כותרת מפורשת מכובדת או נכשלת — לעולם לא מוחלפת."""
     person = _register(client, "scope-attack@example.com")
     mine, theirs = _new_org("שלי"), _new_org("שלהם")
     _clear_legacy_org(person["user_id"])
@@ -144,8 +150,10 @@ def test_header_for_a_non_member_org_never_widens_scope(client):
 
     resp = _active_org(client, {**person["headers"], "X-Active-Org-Id": str(theirs)})
 
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["organization_id"] == mine, "הכותרת הרחיבה scope"
+    assert resp.status_code in (403, NEEDS_ORG_STATUS), resp.text
+    assert resp.json().get("organization_id") not in (mine, theirs), (
+        "הכותרת הוחלפה בשקט או שהורחב scope"
+    )
 
 
 def test_revoked_membership_loses_access_immediately(client):

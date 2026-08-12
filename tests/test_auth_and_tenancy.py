@@ -259,21 +259,28 @@ def test_cannot_read_another_orgs_sync_run(client, owner, fresh_org):
 def test_null_org_id_is_rejected():
     import asyncio
     from fastapi import HTTPException
-    from cfo.api.dependencies import get_current_org_id
+    from cfo.api.dependencies import resolve_access_context
     from cfo.database import SessionLocal
-    from cfo.models import User
+    from cfo.models import Organization, User, UserRole
 
-    # מאז חיווט `organization_memberships` התלות זקוקה ל-session אמיתי כדי
-    # לבדוק חברויות. המשתמשים כאן אינם שמורים (id=None) ולכן אין להם
-    # חברויות, והמסלול שנבדק הוא בדיוק זה שנבדק קודם: העמודה הישנה.
+    # ההכרעה עברה כולה ל-`resolve_access_context`; `get_current_org_id`
+    # היא עטיפה דקה מעליה. המשתמשים כאן אינם שמורים (id=None) ולכן אין
+    # להם חברויות, והמסלול שנבדק הוא בדיוק זה שנבדק קודם: העמודה הישנה.
     db = SessionLocal()
     try:
         with pytest.raises(HTTPException) as exc:
-            asyncio.run(get_current_org_id(User(organization_id=None), None, db))
+            asyncio.run(resolve_access_context(
+                User(organization_id=None, role=UserRole.USER), None, db))
         assert exc.value.status_code == 403
 
-        # a real org passes through unchanged
-        assert asyncio.run(get_current_org_id(User(organization_id=5), None, db)) == 5
+        # ארגון אמיתי ופעיל עובר ללא שינוי
+        org = Organization(name="null-org-id-test", is_active=True)
+        db.add(org)
+        db.commit()
+        ctx = asyncio.run(resolve_access_context(
+            User(organization_id=org.id, role=UserRole.USER), None, db))
+        assert ctx.organization_id == org.id
+        assert ctx.selection_source == "legacy_column"
     finally:
         db.close()
 
