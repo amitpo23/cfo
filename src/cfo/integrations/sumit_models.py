@@ -172,6 +172,33 @@ class ScheduledDocumentResult(BaseModel):
     total: Decimal
 
 
+class BooksBatchTransaction(BaseModel):
+    """One journal transaction in SUMIT's official books batch contract."""
+
+    reference1: Optional[str] = None
+    reference2: Optional[str] = None
+    reference_date: Optional[datetime] = None
+    value_date: Optional[datetime] = None
+    debit_account_code: str = Field(min_length=1)
+    credit_account_code: str = Field(min_length=1)
+    amount_ils: Decimal = Field(gt=0)
+    details: Optional[str] = None
+
+
+class BooksBatchRequest(BaseModel):
+    """Create an open SUMIT journal batch from an owner-approved payload."""
+
+    database_id: int = Field(gt=0)
+    batch_description: Optional[str] = None
+    transactions: List[BooksBatchTransaction] = Field(min_length=1)
+
+
+class BooksBatchResponse(BaseModel):
+    """Provider acknowledgement; it is not evidence that the batch is closed."""
+
+    batch_url: str = Field(min_length=1)
+
+
 # ==================== Payment Models ====================
 
 class PaymentMethodCard(BaseModel):

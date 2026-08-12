@@ -12,28 +12,29 @@
 2. [Connection / Misc](#connection--misc)
 3. [Accounting — Customers](#accounting--customers)
 4. [Accounting — Documents & Invoices](#accounting--documents--invoices)
-5. [Accounting — Expenses](#accounting--expenses)
-6. [Accounting — General](#accounting--general)
-7. [Accounting — Income Items](#accounting--income-items)
-8. [Billing — Payments](#billing--payments)
-9. [Billing — Payment Methods](#billing--payment-methods)
-10. [Billing — Recurring Payments](#billing--recurring-payments)
-11. [Credit Card Terminal — Gateway](#credit-card-terminal--gateway)
-12. [Credit Card Terminal — Billing Batch](#credit-card-terminal--billing-batch)
-13. [Credit Card Terminal — Vault (Tokenization)](#credit-card-terminal--vault-tokenization)
-14. [CRM — Data](#crm--data)
-15. [CRM — Schema](#crm--schema)
-16. [CRM — Views](#crm--views)
-17. [Customer Service — Tickets](#customer-service--tickets)
-18. [Email Subscriptions](#email-subscriptions)
-19. [SMS](#sms)
-20. [Fax](#fax)
-21. [Stock](#stock)
-22. [Triggers / Webhooks](#triggers--webhooks)
-23. [Website — Companies](#website--companies)
-24. [Website — Permissions](#website--permissions)
-25. [Website — Users](#website--users)
-26. [Not-Supported Stubs](#not-supported-stubs)
+5. [Books — Journal Batches](#books--journal-batches)
+6. [Accounting — Expenses](#accounting--expenses)
+7. [Accounting — General](#accounting--general)
+8. [Accounting — Income Items](#accounting--income-items)
+9. [Billing — Payments](#billing--payments)
+10. [Billing — Payment Methods](#billing--payment-methods)
+11. [Billing — Recurring Payments](#billing--recurring-payments)
+12. [Credit Card Terminal — Gateway](#credit-card-terminal--gateway)
+13. [Credit Card Terminal — Billing Batch](#credit-card-terminal--billing-batch)
+14. [Credit Card Terminal — Vault (Tokenization)](#credit-card-terminal--vault-tokenization)
+15. [CRM — Data](#crm--data)
+16. [CRM — Schema](#crm--schema)
+17. [CRM — Views](#crm--views)
+18. [Customer Service — Tickets](#customer-service--tickets)
+19. [Email Subscriptions](#email-subscriptions)
+20. [SMS](#sms)
+21. [Fax](#fax)
+22. [Stock](#stock)
+23. [Triggers / Webhooks](#triggers--webhooks)
+24. [Website — Companies](#website--companies)
+25. [Website — Permissions](#website--permissions)
+26. [Website — Users](#website--users)
+27. [Not-Supported Stubs](#not-supported-stubs)
 
 ---
 
@@ -350,6 +351,24 @@ Always raises `Exception`. SUMIT has no account-balance endpoint. Use `get_debt_
 | Purpose | Return all fields needed for PCN874 VAT filing: supplier name, tax ID, VAT, total, and item name |
 | Request body | `{"DocumentID": <int>}` |
 | Returns | `{"name", "tax_id", "vat", "total", "no_vat", "item_name"}` |
+
+---
+
+## Books — Journal Batches
+
+### `create_books_batch(request: BooksBatchRequest) -> BooksBatchResponse`
+
+| Field | Value |
+|---|---|
+| Endpoint | `POST /books/transactions/createbatch/` |
+| Purpose | Create an **open** official-books journal batch from approved transactions |
+| Request body | `DatabaseID`, optional `BatchDescription`, and `Transactions[]` containing optional references/dates plus `DebitAccountCode`, `CreditAccountCode`, positive `AmountILS`, and optional `Details` |
+| Returns | `BooksBatchResponse(batch_url=Data.BatchURL)` |
+
+The method fails closed if `BatchURL` is absent. The versioned OpenAPI exposes
+no batch readback or close endpoint. Consequently, provider acceptance is stored
+as `executed_unverified`; a human must verify open/closed status in the SUMIT
+batches portal, and closing remains an owner-only action.
 
 ---
 
@@ -1167,8 +1186,8 @@ The following methods exist in the client but always raise `Exception` because t
 
 ---
 
-*Total documented public methods: 68*
-*(Includes 7 not-supported stubs, 61 operational methods)*
+*Total documented public methods: 69*
+*(Includes 7 not-supported stubs, 62 operational methods)*
 
 ---
 

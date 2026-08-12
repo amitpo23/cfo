@@ -27,6 +27,7 @@ from .sumit_models import (
     DocumentRequest, DocumentResponse, SendDocumentRequest,
     DocumentListRequest, ExpenseRequest, DebtReportRequest,
     DocumentPayment, ScheduledDocumentResult,
+    BooksBatchRequest, BooksBatchResponse,
     # Payment models
     ChargeRequest, PaymentResponse, PaymentMethodResponse, PaymentLinkResponse,
     # Transaction models
@@ -907,6 +908,57 @@ class SumitIntegration(BaseIntegration):
             date=issue,
             currency=document.currency or "ILS",
         )
+
+    async def create_books_batch(
+        self,
+        request: BooksBatchRequest,
+    ) -> BooksBatchResponse:
+        """Create an open journal batch using SUMIT's versioned Books API.
+
+        The published contract returns only ``BatchURL``. It does not expose
+        batch readback or close, so this acknowledgement must not be treated as
+        evidence that the batch is closed or independently verified.
+        """
+        transactions: List[Dict[str, Any]] = []
+        for transaction in request.transactions:
+            item: Dict[str, Any] = {
+                "DebitAccountCode": transaction.debit_account_code,
+                "CreditAccountCode": transaction.credit_account_code,
+                "AmountILS": float(transaction.amount_ils),
+            }
+            optional_fields = {
+                "Reference1": transaction.reference1,
+                "Reference2": transaction.reference2,
+                "ReferenceDate": (
+                    transaction.reference_date.isoformat()
+                    if transaction.reference_date else None
+                ),
+                "ValueDate": (
+                    transaction.value_date.isoformat()
+                    if transaction.value_date else None
+                ),
+                "Details": transaction.details,
+            }
+            item.update({
+                key: value for key, value in optional_fields.items()
+                if value is not None
+            })
+            transactions.append(item)
+
+        payload: Dict[str, Any] = {
+            "DatabaseID": request.database_id,
+            "Transactions": transactions,
+        }
+        if request.batch_description is not None:
+            payload["BatchDescription"] = request.batch_description
+
+        data = await self._post("/books/transactions/createbatch/", payload)
+        batch_url = data.get("BatchURL") if isinstance(data, dict) else None
+        if not isinstance(batch_url, str) or not batch_url.strip():
+            raise SumitAPIError(
+                "SUMIT books batch response omitted BatchURL",
+            )
+        return BooksBatchResponse(batch_url=batch_url)
 
     async def add_expense(self, expense: ExpenseRequest) -> Dict[str, Any]:
         """

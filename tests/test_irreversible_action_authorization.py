@@ -7,6 +7,18 @@ from cfo.models import User, UserRole
 
 
 IRREVERSIBLE_ACTIONS = [
+    (
+        "post",
+        "/api/accounting/books/batches",
+        {
+            "database_id": 777,
+            "transactions": [{
+                "debit_account_code": "6000",
+                "credit_account_code": "10001",
+                "amount_ils": "118.00",
+            }],
+        },
+    ),
     ("post", "/api/payments/charge", {"amount": 10}),
     ("post", "/api/payments/recurring/r1/cancel", None),
     ("post", "/api/payments/upay/setup", {"email": "a@b.com", "password": "x"}),
@@ -39,6 +51,7 @@ def _network_must_not_be_reached(monkeypatch):
     monkeypatch.setattr(SumitIntegration, "charge_customer", forbidden_sumit_call)
     monkeypatch.setattr(SumitIntegration, "cancel_recurring", forbidden_sumit_call)
     monkeypatch.setattr(SumitIntegration, "setup_upay_credentials", forbidden_sumit_call)
+    monkeypatch.setattr(SumitIntegration, "create_books_batch", forbidden_sumit_call)
     monkeypatch.setattr(
         open_finance, "get_open_finance_client", forbidden_open_finance_client,
     )
