@@ -182,9 +182,26 @@ def _resolve_super_admin_active_org(request: Request, current_user: User) -> Opt
     return target
 
 
+def _selectable_organizations(db: Session) -> list[dict]:
+    """הארגונים שסופר-אדמין יכול לבחור מהם.
+
+    נקרא **רק** במסלול הסירוב לסופר-אדמין. זו רשימה חוצת-ארגונים, ולכן
+    אסור שתגיע למשתמש אחר — הטסט
+    `test_non_super_without_org_is_still_refused` שומר על כך.
+    """
+    rows = (
+        db.query(Organization.id, Organization.name)
+        .filter(Organization.is_active.is_(True))
+        .order_by(Organization.id.asc())
+        .all()
+    )
+    return [{"id": r.id, "name": r.name} for r in rows]
+
+
 async def get_current_org_id(
     current_user: User = Depends(get_current_user),
     request: Request = None,
+    db: Session = Depends(get_db_session),
 ) -> int:
     """Organization scope of the authenticated user.
 
@@ -216,7 +233,23 @@ async def get_current_org_id(
 
     if current_user.organization_id is None:
         if current_user.role == UserRole.SUPER_ADMIN:
-            return 1  # SUPER_ADMIN without explicit header defaults to org 1
+            # לשעבר: `return 1`. ברירת מחדל שקטה לתיק של לקוח אמיתי —
+            # החזית קוראת את הכותרת מ-localStorage, ולכן דפדפן חדש, מצב
+            # פרטי, ניקוי אחסון או קריאת API ישירה מייצרים בקשה בלי
+            # כותרת, והבקשה הבאה נכתבת לארגון 1 בלי שאיש בחר בו.
+            # עצירה גלויה עדיפה על כתיבה לתיק הלא-נכון.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "active_organization_required",
+                    "message_he": (
+                        "יש לבחור ארגון פעיל. שלח את הכותרת "
+                        f"{ACTIVE_ORG_HEADER} עם מזהה הארגון."
+                    ),
+                    "header": ACTIVE_ORG_HEADER,
+                    "organizations": _selectable_organizations(db),
+                },
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is not scoped to an organization",

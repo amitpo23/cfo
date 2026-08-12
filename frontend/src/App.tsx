@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } f
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import api from './services/api';
 import OrgSwitcher, { CurrentUser } from './components/OrgSwitcher';
+import ActiveOrgRequired from './components/ActiveOrgRequired';
 import {
   LayoutDashboard,
   Users,
@@ -302,6 +303,8 @@ function App() {
               <div className="flex items-center gap-4">
                 {/* Super-admin: act-as-client organization switcher */}
                 {currentUser && <OrgSwitcher currentUser={currentUser} darkMode={darkMode} />}
+                {/* חוסם כשהשרת מחזיר 409 active_organization_required */}
+                <ActiveOrgRequired darkMode={darkMode} />
 
                 {/* Dark Mode Toggle */}
                 <button

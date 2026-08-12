@@ -5,7 +5,6 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
-const AUTH_BYPASS = import.meta.env.VITE_AUTH_BYPASS === 'true';
 
 class ApiService {
   private client: AxiosInstance;
@@ -30,7 +29,10 @@ class ApiService {
         // ONLY for SUPER_ADMIN (silently ignored for everyone else), so it is
         // always safe to send. This drives the whole app — dashboards, AR/AP,
         // sync — to the chosen client org.
-        const activeOrg = localStorage.getItem('active_org_id') || (AUTH_BYPASS ? '1' : null);
+        // אין נפילה ל-'1' תחת AUTH_BYPASS: זו הייתה ברירת מחדל שקטה לתיק
+        // של לקוח אמיתי בצד הלקוח, מקבילה לזו שהוסרה מהשרת ב-11/08/2026.
+        // בלי בחירה מפורשת השרת מחזיר 409 והמסך החוסם נפתח.
+        const activeOrg = localStorage.getItem('active_org_id');
         if (activeOrg) {
           config.headers['X-Active-Org-Id'] = activeOrg;
         }
@@ -66,6 +68,20 @@ class ApiService {
         if (error.response?.status === 401) {
           localStorage.removeItem('auth_token');
           window.location.href = '/';
+        }
+        // 409 active_organization_required — סופר-אדמין בלי ארגון פעיל.
+        // השרת מצרף את רשימת הארגונים; המסך החוסם מציג בורר במקום
+        // שהאפליקציה תיכשל בשקט או תיפול לתיק שרירותי.
+        const detail = error.response?.data?.detail;
+        if (
+          error.response?.status === 409 &&
+          detail?.error === 'active_organization_required'
+        ) {
+          window.dispatchEvent(
+            new CustomEvent('rezef:active-org-required', {
+              detail: { organizations: detail.organizations ?? [] },
+            })
+          );
         }
         return Promise.reject(error);
       }
