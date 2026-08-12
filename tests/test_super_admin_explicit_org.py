@@ -112,6 +112,47 @@ def test_super_admin_with_own_org_is_unaffected(client):
     assert resp.json()["organization_id"] == own_org
 
 
+def test_auth_bypass_still_reaches_org_scoped_routes_after_choosing(client, owner, monkeypatch):
+    """QA מקומי חייב להישאר עביר.
+
+    משתמש ה-bypass הוא SUPER_ADMIN בלי `organization_id` — כלומר בדיוק
+    המסלול שנחסם. הוא נחסם **פעם אחת**, בוחר, וממשיך. אם זה היה נשבר,
+    `AUTH_BYPASS` היה מפסיק לשמש כמסלול QA (ראו docs/AUTH_ROADMAP.md).
+    """
+    from cfo.api import dependencies
+    from cfo.models import UserRole as _Role
+
+    monkeypatch.setattr(dependencies.settings, "auth_bypass_enabled", True)
+    target = owner["user"]["organization_id"]
+
+    # `_get_or_create_auth_bypass_user` מחזיר את ה-SUPER_ADMIN הראשון
+    # הקיים, ולכן ייתכן שיש לו ארגון משלו. שתי ההתנהגויות תקינות —
+    # קיבוע אחת מהן היה יוצר טסט תלוי-סדר.
+    db = SessionLocal()
+    try:
+        resolved = (
+            db.query(User)
+            .filter(User.role == _Role.SUPER_ADMIN, User.is_active.is_(True))
+            .first()
+        )
+        has_own_org = resolved is not None and resolved.organization_id is not None
+    finally:
+        db.close()
+
+    first = client.get("/api/integration/status")
+    if has_own_org:
+        assert first.status_code == 200, first.text
+    else:
+        assert first.status_code == NEEDS_ORG_STATUS, first.text
+
+    # מה שחייב להתקיים תמיד: אחרי בחירה מפורשת, QA מקומי עביר.
+    chosen = client.get("/api/integration/status",
+                        headers={"X-Active-Org-Id": str(target)})
+
+    assert chosen.status_code == 200, chosen.text
+    assert chosen.json()["organization_id"] == target
+
+
 def test_non_super_without_org_is_still_refused(client):
     """משתמש רגיל בלי ארגון נחסם כמקודם — ולא מקבל את בורר הארגונים,
     שהוא מידע חוצה-ארגונים."""

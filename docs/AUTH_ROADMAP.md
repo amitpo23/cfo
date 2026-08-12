@@ -19,6 +19,18 @@ When enabled:
 This mode is for local development and QA only. It must not be enabled on a
 public production deployment with live financial data.
 
+### שינוי התנהגות 2026-08-11 — bypass דורש כעת בחירת ארגון
+
+משתמש ה-bypass הוא `SUPER_ADMIN` עם `organization_id=None`, ולכן הוא
+המסלול שנחסם כשהוסרה ברירת המחדל השקטה ל-org 1. **הבקשה הראשונה לכל
+route ארגוני מחזירה `409 active_organization_required`**, והחזית פותחת
+את המסך החוסם `ActiveOrgRequired` עם רשימת הארגונים. אחרי בחירה אחת
+(נשמרת ב-`localStorage`) הכול עובד כרגיל.
+
+זו הכוונה ולא תקלה: QA מקומי שכותב לתיק שנבחר בשקט הוא בדיוק התרחיש
+שהתיקון נועד למנוע. `AUTH_BYPASS` לא מבטל את הצורך לבחור ארגון — הוא
+מבטל את הצורך להתחבר.
+
 ## Later Production Auth
 
 Use Logto as the external identity and access layer:
