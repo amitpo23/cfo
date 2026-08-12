@@ -209,6 +209,59 @@ class AuditLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class OrganizationMembership(Base):
+    """חברות של אדם בארגון, עם תפקיד — אחד לכל צירוף.
+
+    `User.organization_id` הוא FK יחיד, ולכן אדם יכול היה להשתייך לארגון
+    אחד בלבד. זה שגוי במציאות שהמערכת משרתת: בעל עסק יכול להיות ADMIN
+    בחברה שלו ו-VIEWER בחברה של שותף, ומנהלת חשבונות עובדת על עשרות תיקים.
+
+    הטבלה יושבת ב**מסד הבקרה** (ראו `docs/adr/0001`): היא זו שמכריעה
+    לאיזה מסד ארגוני מותר לפנות, ולכן אינה יכולה לשבת בתוכו.
+
+    `users.organization_id` **לא נמחק** — הוא מקור ה-backfill ונשאר
+    fallback לקריאה עד שכל הקוראים יעברו.
+
+    חברות נוצרת בהזמנה או ב-bootstrap מפורש בלבד. אין נתיב שיוצר אותה
+    מהתאמת מייל, דומיין או נתון מ-SUMIT: Google מאמת אדם, לא בעלות על
+    עסק. `tests/test_organization_membership.py` שומר על כך מבנית.
+    """
+    __tablename__ = "organization_memberships"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False,
+    )
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.USER)
+    # invited = הוזמן וטרם התקבל · active = פעיל · suspended = מושהה זמנית
+    # · revoked = בוטל. רק `active` מקנה גישה.
+    status = Column(String(20), nullable=False, default="invited")
+    invited_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    # גישה זמנית (למשל רו"ח חיצוני לתקופת ביקורת). נבדק בזמן השאילתה ולא
+    # במשימת ניקוי — כדי שפקיעה תיכנס לתוקף מיד ולא בהרצה הבאה של cron.
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "organization_id", name="uq_membership_user_org",
+        ),
+        Index("ix_membership_user_status", "user_id", "status"),
+        Index("ix_membership_org_status", "organization_id", "status"),
+    )
+
+
 class OrganizationSigningAuthority(Base):
     """Business-owner/signatory authority, separate from application RBAC.
 

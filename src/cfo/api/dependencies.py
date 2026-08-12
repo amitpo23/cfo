@@ -11,6 +11,7 @@ from ..database import get_db_session, SessionLocal
 from ..models import Organization, User, UserRole
 from ..auth import decode_access_token
 from ..auth import get_password_hash
+from ..services import membership_service
 
 security = HTTPBearer(auto_error=False)
 
@@ -198,6 +199,43 @@ def _selectable_organizations(db: Session) -> list[dict]:
     return [{"id": r.id, "name": r.name} for r in rows]
 
 
+def _organizations_by_ids(db: Session, org_ids: list[int]) -> list[dict]:
+    """שמות ארגונים לרשימת בחירה, מצומצמת למזהים שהותרו כבר.
+
+    נפרד מ-`_selectable_organizations` במכוון: זו מחזירה **רק** את מה
+    שנשלח אליה, ולכן אינה יכולה להדליף ארגון שהמשתמש אינו חבר בו — גם
+    אם ייקרא בטעות ממקום אחר.
+    """
+    if not org_ids:
+        return []
+    rows = (
+        db.query(Organization.id, Organization.name)
+        .filter(Organization.id.in_(org_ids))
+        .order_by(Organization.id.asc())
+        .all()
+    )
+    return [{"id": r.id, "name": r.name} for r in rows]
+
+
+def _requested_org(request: Optional[Request]) -> Optional[int]:
+    """הארגון שהלקוח **ביקש** בכותרת — בקשה בלבד, לא היתר.
+
+    ההיתר נבדק בנפרד מול `organization_memberships` בכל בקשה מחדש.
+    """
+    if request is None:
+        return None
+    raw = request.headers.get(ACTIVE_ORG_HEADER)
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {ACTIVE_ORG_HEADER} header",
+        )
+
+
 async def get_current_org_id(
     current_user: User = Depends(get_current_user),
     request: Request = None,
@@ -230,6 +268,35 @@ async def get_current_org_id(
     active = _resolve_super_admin_active_org(request, current_user)
     if active is not None:
         return active
+
+    # --- חברות רב-ארגונית ------------------------------------------- #
+    # קודמת ל-`users.organization_id`: אדם יכול להיות חבר בכמה עסקים עם
+    # תפקיד שונה בכל אחד, ומי שיש לו חברויות — הן הקובעות.
+    member_orgs = membership_service.active_organization_ids(db, current_user.id)
+    if member_orgs:
+        requested = _requested_org(request)
+        if requested is not None and requested in member_orgs:
+            return requested
+        # כותרת לארגון שאינו שלו: **מתעלמים**. הכותרת מגיעה מ-localStorage
+        # ולכן היא קלט לא מהימן; היא רשאית לבחור מתוך מה שכבר מותר, ולעולם
+        # לא להרחיב scope. סירוב היה גם הוא בטוח, אבל היה שובר את החוזה
+        # הקיים ב-test_non_super_user_cannot_override_org.
+        if len(member_orgs) == 1:
+            return member_orgs[0]
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "active_organization_required",
+                "message_he": (
+                    "יש לך גישה לכמה ארגונים. בחר את הארגון הפעיל ושלח "
+                    f"אותו בכותרת {ACTIVE_ORG_HEADER}."
+                ),
+                "header": ACTIVE_ORG_HEADER,
+                # הרשימה מצומצמת לארגונים של המשתמש בלבד — היא אינה
+                # קטלוג הלקוחות של המשרד.
+                "organizations": _organizations_by_ids(db, member_orgs),
+            },
+        )
 
     if current_user.organization_id is None:
         if current_user.role == UserRole.SUPER_ADMIN:

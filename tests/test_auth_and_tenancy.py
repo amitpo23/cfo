@@ -260,14 +260,22 @@ def test_null_org_id_is_rejected():
     import asyncio
     from fastapi import HTTPException
     from cfo.api.dependencies import get_current_org_id
+    from cfo.database import SessionLocal
     from cfo.models import User
 
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(get_current_org_id(User(organization_id=None)))
-    assert exc.value.status_code == 403
+    # מאז חיווט `organization_memberships` התלות זקוקה ל-session אמיתי כדי
+    # לבדוק חברויות. המשתמשים כאן אינם שמורים (id=None) ולכן אין להם
+    # חברויות, והמסלול שנבדק הוא בדיוק זה שנבדק קודם: העמודה הישנה.
+    db = SessionLocal()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(get_current_org_id(User(organization_id=None), None, db))
+        assert exc.value.status_code == 403
 
-    # a real org passes through unchanged
-    assert asyncio.run(get_current_org_id(User(organization_id=5))) == 5
+        # a real org passes through unchanged
+        assert asyncio.run(get_current_org_id(User(organization_id=5), None, db)) == 5
+    finally:
+        db.close()
 
 
 # --- SUMIT direct routes must use per-org vault, not env for other tenants (P0)
