@@ -48,16 +48,16 @@
 
 ## ✅ פקודות שאומתו כקיימות ובטוחות (offline)
 
-כל בסיס כאן **נמדד** ב-2026-07-25 על ענף העבודה. סטייה מהמספר = שינוי אמיתי, לא רעש.
+כל בסיס כאן **נמדד** ב-2026-08-09 על ענף העבודה. סטייה מהמספר = שינוי אמיתי, לא רעש.
 
 | פקודה | בסיס מדוד |
 | --- | --- |
-| `python -m pytest tests/ -q` | **1,459 עוברים**, 0 נכשלים, ~292 שנ', 20,850 אזהרות (נמדד 2026-07-27) |
-| `python scripts/audit_routes.py` | **250 routes**: 174 תקין · 39 אזהרה(4xx) · **36 מוגדר-סביבה(400)** · **1 כשל**. הכשל היחיד: `/api/financial/ai/predict/revenue` מחזיר 400 "דורש היסטוריית נתונים" — honest-null נכון. כל כשל נוסף = רגרסיה |
-| `python scripts/schema_drift_check.py` | **נכשל** על ה-DB המקומי: 4 טבלאות חסרות (`filing_crosschecks`, `morning_briefs`, `of_snapshot_cache`, `vehicle_profiles`) + עמודות ב-`organizations`/`accounts`/`daily_snapshots`/`expenses`. ה-SQLite המקומי מיושן — **לא רגרסיה** |
-| `python scripts/qa_gate.py` | נכשל בבסיס על שער אחד בלבד: `3a. Schema drift (local)` (DB מקומי מיושן). 7 השערים האחרים עוברים |
+| `python -m pytest tests/ -q` | **1,847 עוברים**, 0 נכשלים, ~369 שנ', 27,171 אזהרות |
+| `python scripts/audit_routes.py` | **260 routes**: 177 תקין · 45 אזהרה(4xx) · **37 מוגדר-סביבה** · **1 כשל**. הכשל היחיד: `/api/financial/ai/predict/revenue` מחזיר 400 "דורש היסטוריית נתונים" — honest-null נכון. כל כשל נוסף = רגרסיה |
+| `python scripts/schema_drift_check.py` | **נכשל** על ה-DB המקומי: ארבע עמודות action-state ואינדקס אחד חסרים ב-`ai_chat_messages`. ה-SQLite המקומי טרם הורץ למיגרציה `c1d2e3f4a5b6` — **לא רגרסיה בקוד** |
+| `python scripts/qa_gate.py` | נכשל בבסיס על שער אחד בלבד: `3a. Schema drift (local)` (DB מקומי מיושן). 8 השערים האחרים עוברים; Neon מדולג בלי `--env-file` |
 | `cd frontend && npm ci && npm run build` | עובר (tsc + vite) |
-| `cd frontend && npm run lint` | ⚠️ **שבור** — אין קובץ קונפיג של eslint ב-`frontend/`. ה-script קיים ב-`package.json` אבל נופל מיד. ה-CI לא מריץ lint ולכן זה לא נתפס. אל תדווח על זה כרגרסיה — זה פער ידוע |
+| `cd frontend && npm run lint` | עובר עם אפס אזהרות; רץ גם ב-`qa_gate.py` וב-CI |
 | `python scripts/render_bookkeeper_kb.py` | מייצר את `docs/bookkeeper_kb/03-classification-bridge.md` |
 
 **אין בריפו `ruff` ואין `mypy`** — לא מותקנים ולא ב-`pyproject.toml`. אל תמציא פקודת lint

@@ -1,6 +1,6 @@
 # סדר הריפו ושכבות ההנחיה לסוכנים (control plane)
 
-נכתב 2026-07-25, על בסיס `origin/main` @ `1844af7`. מתאר את המצב בפועל — מה נמדד, מה
+נכתב 2026-07-25 ועודכן במדידה 2026-08-09. מתאר את המצב בפועל — מה נמדד, מה
 שונה בסבב הסדר הזה, ומה נשאר פתוח.
 
 ## 1. מצב מדוד
@@ -9,14 +9,14 @@
 | --- | --- |
 | מודולי Python ב-`src/cfo/` | 152 (40 routers, 102 services) |
 | השורות הגדולות | `sumit_integration.py` 2,847 · `models.py` 1,734 · `routes/admin.py` 1,514 |
-| קבצי טסט / טסטים | 159 קבצים · **1,459 עוברים**, 0 נכשלים, ~292 שנ' |
-| אזהרות בסוויטה | 19,948 — כמעט כולן `datetime.utcnow()` deprecation |
-| `audit_routes.py` | **250 routes**: 174 תקין · 39 אזהרה(4xx) · 36 מוגדר-סביבה(400) · **1 כשל** (honest-null) |
-| `schema_drift_check.py` (מקומי) | **נכשל** — 4 טבלאות ועשרות עמודות חסרות ב-SQLite המקומי המיושן. לא רגרסיה בקוד |
+| קבצי טסט / טסטים | 184 קבצי `test_*.py` · **1,847 עוברים**, 0 נכשלים, ~369 שנ' |
+| אזהרות בסוויטה | 27,171 — כמעט כולן `datetime.utcnow()` deprecation |
+| `audit_routes.py` | **260 routes**: 177 תקין · 45 אזהרה(4xx) · 37 מוגדר-סביבה · **1 כשל** (honest-null) |
+| `schema_drift_check.py` (מקומי) | **נכשל** — ארבע עמודות action-state ואינדקס חסרים ב-`ai_chat_messages`; ה-SQLite המקומי טרם הורץ למיגרציה החדשה. לא רגרסיה בקוד |
 | `qa_gate.py` | אדום בבסיס על שער אחד: schema drift מקומי (DB מיושן) |
 | מסמכי `.md` בשורש (לפני) | 17 · **(אחרי) 3** — README, CLAUDE, AGENTS |
-| lint | frontend: `npm run lint` **שבור** — אין קובץ קונפיג של eslint. backend: **אין** ruff/mypy |
-| CI | `.github/workflows/ci.yml` — pytest + frontend build. lint לא רץ ב-CI, ולכן השבירה לא נתפסה |
+| lint | frontend: `npm run lint` עובר באפס אזהרות. backend: **אין** ruff/mypy |
+| CI | `.github/workflows/ci.yml` — pytest + frontend lint + frontend build |
 
 ## 2. שכבות ההנחיה — מה קיים ומה נוסף
 
@@ -130,7 +130,7 @@ cfo/
 | 19,948 אזהרות `utcnow()` | **לא נוגע** | `datetime.now(UTC)` מחזיר tz-aware; השוואה מול עמודות DB נאיביות זורקת `TypeError`. סבב גורף = שבירה. מודול-מודול, טסטים ירוקים כשער. |
 | אין lint ל-Python | פתוח | הוספת `ruff` היא שינוי מוסכמות לכל הריפו — החלטת בעלים, לא תוצר של סדר. |
 | שער התקציב היומי הפיל טסט | **תוקן** | `/api/cron/sync` מחזיר `{"skipped": "daily_budget"}` בלי מפתחות התוצאה כשל-org יש `SyncCheckpoint` צעיר מ-20h. שני טסטי ה-cron ב-`test_auth_and_tenancy.py` לא שלטו בתנאי הזה ונשענו על מזל. נצפה כשל בודד ב-`qa_gate` שלא שוחזר ב-5 ריצות. תוקן ב-fixture `clear_sumit_sync_budget` — הטסט שולט בתנאי במקום לרדוף אחרי המזהם. |
-| `npm run lint` שבור | **ממצא חדש** | אין קובץ קונפיג של eslint ב-`frontend/`; ה-script קיים ב-`package.json` ונופל מיד. ה-CI בונה frontend אך לא מריץ lint — ולכן זה לא נתפס. תיקון = יצירת `eslint.config.js` + הוספת השלב ל-CI, ואז ניקוי מה שיצוף. לא בוצע כאן: זו החלטת מוסכמות, לא סדר. |
+| `npm run lint` שבור | **נפתר 09/08/2026** | נוסף `.eslintrc.cjs`, נוקו שגיאות hooks, וה־lint רץ גם ב־`qa_gate.py` וב־CI. |
 | `main` מקומי 373 קומיטים מאחור | ידוע | הענף הזה נחתך מ-`origin/main`. `git checkout main && git pull` בהזדמנות. |
 | קבצים כבדים בעץ העבודה | ידוע | `cfo.db` (430KB), גיבוי `.bak` (520KB), `reports/` — כולם ב-`.gitignore`, לא במעקב. הריפו 760MB בעיקר מ-`.git` ו-`node_modules`. |
 | `models.py` 1,734 שורות / `sumit_integration.py` 2,847 | פתוח | מועמדים לפיצול, אבל פיצול בלי צורך תפעולי הוא רפקטור לשם רפקטור. |
@@ -138,14 +138,15 @@ cfo/
 ## 6. איך מריצים בדיקות
 
 ```bash
-python -m pytest tests/ -q            # 1,459 עוברים, ~292 שנ'
-python scripts/audit_routes.py        # 250 routes, 1 כשל (honest-null)
+python -m pytest tests/ -q            # 1,847 עוברים, ~369 שנ'
+python scripts/audit_routes.py        # 260 routes, 1 כשל (honest-null)
 python scripts/schema_drift_check.py  # נכשל מקומית — DB מיושן, לא רגרסיה
 python scripts/qa_gate.py             # עוטף את כל הנ"ל + frontend
-cd frontend && npm run build          # npm run lint שבור — אין קונפיג eslint
+cd frontend && npm run lint           # אפס אזהרות
+cd frontend && npm run build
 ```
 
-כל הבסיסים נמדדו 2026-07-25 על `1844af7`.
+הבסיסים המספריים לעיל נמדדו 2026-08-09 על ענף העבודה.
 
 - דרך Claude Code: הסוכן `qa-runner` מריץ את כל הרצף ומחזיר דוח תמציתי.
 - דרך Codex: `docs/prompts/codex-qa-run.md` — פרומפט מוכן להעתקה, עם הרשימה השחורה בפנים.

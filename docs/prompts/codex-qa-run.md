@@ -52,17 +52,15 @@ React ב-`frontend/`, פרוד ב-Vercel+Neon, אינטגרציות חיות ל-
 
 ```bash
 python -m pytest tests/ -q
-cd frontend && npm ci && npm run build
+cd frontend && npm ci && npm run lint && npm run build
 ```
 
-**בסיס מדוד (2026-07-25):** pytest = 1,401 עוברים, 0 נכשלים, ~247 שנ'. frontend build עובר.
+**בסיס מדוד (2026-08-09):** pytest = 1,847 עוברים, 0 נכשלים, ~369 שנ'. frontend lint ו-build עוברים.
 
-דווח את המספרים בדיוק. `pytest` שמחזיר מספר שונה מ-1,401 — עצור, בדוק מה נשבר, ודווח
+דווח את המספרים בדיוק. `pytest` שמחזיר מספר שונה מ-1,847 — עצור, בדוק מה נשבר, ודווח
 לפני שתמשיך. אם הסוויטה אדומה, זה הממצא היחיד שחשוב בשלב הזה.
 
-`npm run lint` **שבור מראש**: אין קובץ קונפיג של eslint ב-`frontend/`, ה-script נופל מיד,
-וה-CI לא מריץ lint ולכן זה לא נתפס. אל תריץ אותו כשער ואל תדווח כרגרסיה — הוא כבר רשום
-כפער ידוע.
+`npm run lint` הוא שער מחייב ורץ גם ב־CI. כל אזהרה או כשל הם רגרסיה.
 
 ### שלב ב' — שערים מקומיים
 
@@ -72,17 +70,17 @@ python scripts/schema_drift_check.py # דריפט מול ה-DB המקומי
 python scripts/qa_gate.py            # עוטף את שניהם + pytest + frontend (בלי --env-file)
 ```
 
-**בסיס מדוד (2026-07-25):**
+**בסיס מדוד (2026-08-09):**
 
-- `audit_routes`: 250 routes — 174 תקין · 39 אזהרה(4xx) · **36 מוגדר-סביבה(400)** · **1 כשל**.
+- `audit_routes`: 260 routes — 177 תקין · 45 אזהרה(4xx) · **37 מוגדר-סביבה** · **1 כשל**.
   ה"כשל" היחיד הוא `/api/financial/ai/predict/revenue` שמחזיר 400 "דורש היסטוריית נתונים
   אמיתית" — תשובת honest-null נכונה. **כל כשל נוסף = רגרסיה.**
-- `schema_drift_check`: **נכשל** מול ה-SQLite המקומי — 4 טבלאות חסרות
-  (`filing_crosschecks`, `morning_briefs`, `of_snapshot_cache`, `vehicle_profiles`) ועמודות
-  ב-`organizations`, `accounts`, `daily_snapshots`, `expenses`. זה DB מקומי מיושן, **לא
-  רגרסיה בקוד**. ממצא רק אם הרשימה גדלה.
+- `schema_drift_check`: **נכשל** מול ה-SQLite המקומי — ארבע עמודות action-state
+  (`action_status`, `action_claimed_at`, `action_completed_at`, `action_error`) ואינדקס
+  `(organization_id, action_status)` חסרים ב־`ai_chat_messages`. זה DB מקומי שטרם הורץ
+  למיגרציה `c1d2e3f4a5b6`, **לא רגרסיה בקוד**. ממצא רק אם הרשימה גדלה.
 - `qa_gate`: אדום בבסיס על שער אחד בלבד — `3a. Schema drift (local)` (אותו DB מיושן).
-  7 האחרים עוברים. **כל שער נוסף שנופל = רגרסיה.**
+  8 האחרים עוברים ו־Neon מדולג ללא `--env-file`. **כל שער נוסף שנופל = רגרסיה.**
 
 ### שלב ג' — אודיט סטטי, לפי דוקטרינות הריפו
 
@@ -116,8 +114,8 @@ python scripts/qa_gate.py            # עוטף את שניהם + pytest + front
 ענף: <branch> · HEAD: <sha7> · Python: <גרסה>
 
 ## 1. בסיס
-pytest        עוברים N / נכשלים N / דילוגים N · <שניות> · דלתא מ-1,401: ±N
-frontend      build PASS/FAIL   (lint שבור מראש — לא נבדק)
+pytest        עוברים N / נכשלים N / דילוגים N · <שניות> · דלתא מ-1,847: ±N
+frontend      lint PASS/FAIL · build PASS/FAIL
 audit_routes  N routes · M כשל · דלתא מ-1: ±M
 schema_drift  דלתא מהרשימה הידועה: <אין / מה נוסף>
 qa_gate       PASS/FAIL — <שורה מכרעת>

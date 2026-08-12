@@ -47,7 +47,10 @@
 3. ממשיכים רק אם התגובה כוללת:
 
    - `current_revision` השווה ל־Alembic head של הגרסה;
-   - `remaining.tables=[]` ו־`remaining.columns={}`;
+   - כל דליי `remaining` ריקים: `tables`, `columns`, `types`, `nullability`,
+     `primary_keys`, `foreign_keys`, `unique_constraints`, `indexes`;
+   - `dialect_exemptions` ריק ב־PostgreSQL (חריגות SQLite המקומיות אינן
+     היתר לפרוד);
    - `action` מוסבר;
    - רשומת `GLOBAL_SCHEMA_MIGRATION` ב־AuditLog.
 
@@ -64,6 +67,7 @@
   נסגר — עוצרים; אין `stamp head` ואין טענת הצלחה.
 - סקריפטי `apply_*_schema.py` הם תיקוני DDL חלקיים בלבד. הם אינם משנים עוד
   היסטוריית Alembic ואינם תחליף לזרימה המאומתת לעיל.
-- `remaining` מוכיח התאמת טבלאות/עמודות למודלי ORM. הוכחת פרוד מלאה עדיין דורשת
+- `remaining` מוכיח התאמה מבנית למודלי ORM: טבלאות, עמודות, טיפוסים,
+  nullability, מפתחות, unique constraints ואינדקסים. הוכחת פרוד מלאה עדיין דורשת
   smoke, טריות אינטגרציות ותצפית על מחזור הפיילוט.
 - אין להסיק תקינות SUMIT/Open Finance, נתוני בנק או ספרים רשמיים מהצלחת הסכימה.
