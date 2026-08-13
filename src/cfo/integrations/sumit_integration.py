@@ -70,6 +70,26 @@ class PaidSumitActionDisabled(RuntimeError):
     is zero. The request was never sent."""
 
 
+class PlaceholderCredentialsRefused(RuntimeError):
+    """A request was attempted with an obviously fake API key. Never sent."""
+
+
+# מחרוזות שמעידות שהמפתח אינו אמיתי. הרשימה מכוונת להיות צרה: חסימה
+# גורפת מדי הייתה משביתה את הפרוד, ולכן היא מכילה רק דפוסים שאין להם
+# שימוש לגיטימי כמפתח.
+_PLACEHOLDER_MARKERS = (
+    "test-", "test_", "dummy", "placeholder", "changeme", "change-me",
+    "your-api-key", "your_api_key", "xxxx", "fake", "example",
+)
+
+
+def _looks_like_placeholder(api_key: Optional[str]) -> bool:
+    if not api_key or not api_key.strip():
+        return True
+    lowered = api_key.strip().lower()
+    return any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
+
+
 # Mapping from this codebase's document type names to SUMIT's
 # Accounting_Typed_DocumentType enum names.
 _DOCUMENT_TYPE_TO_SUMIT = {
@@ -211,6 +231,10 @@ class SumitIntegration(BaseIntegration):
             Dict containing the full response envelope
             ({"Status": ..., "UserErrorMessage": ..., "Data": ...})
         """
+        # השער יושב כאן — בנקודה שבה הרשת באמת קורית — ולא ב-`_post`.
+        # טסט שממקק את `_make_request` ממילא אינו נוגע ברשת, וחסימתו
+        # הייתה חוסמת בדיקות לגיטימיות בלי להפחית סיכון.
+        self._assert_credentials_are_real(endpoint)
         self._log_request(method, endpoint, data)
 
         try:
@@ -238,6 +262,30 @@ class SumitIntegration(BaseIntegration):
         except Exception as e:
             self._log_error(e, f"Request failed on {endpoint}")
             raise
+
+    def _assert_credentials_are_real(self, endpoint: str) -> None:
+        """מסרב לצאת לרשת עם מפתח שנראה כמו placeholder.
+
+        **אירוע 13/08/2026.** `tests/conftest.py` מגדיר
+        `SUMIT_API_KEY="test-env-sumit-key"` כדי ש-"האם SUMIT מוגדר?"
+        יחזיר True. שום דבר לא מנע מהקוד להשתמש בו מול השרת האמיתי:
+        מדידה גילתה 116 ניסיונות חיבור ל-`api.sumit.co.il` בכל ריצת
+        סוויטה, ומעל אלף ביום — כלומר אלף ניסיונות אימות כושלים מאותה
+        כתובת IP. SUMIT חוסמת על הדפוס הזה, והחסימה פוגעת בבעלים.
+
+        חומת הרשת ב-conftest מגנה על הסוויטה; השער הזה מגן על כל השאר —
+        סקריפט ידני, קונסולה, notebook, סביבת dev מוגדרת חלקית.
+
+        זהו סיכון **שונה** מ-`_assert_paid_actions_enabled`: שם חיוב,
+        כאן חסימה. שניהם נדרשים.
+        """
+        if _looks_like_placeholder(self.api_key):
+            raise PlaceholderCredentialsRefused(
+                f"refusing to call SUMIT ({endpoint}) with a placeholder API "
+                "key. Repeated failed authentication gets the account and IP "
+                "blocked by the provider — which blocks the owner's real work "
+                "too. Configure a real key, or use a fake connector in tests."
+            )
 
     @staticmethod
     def _assert_paid_actions_enabled(action: str) -> None:
@@ -305,6 +353,7 @@ class SumitIntegration(BaseIntegration):
         POST to a SUMIT endpoint that returns raw binary content
         (e.g. /accounting/documents/getpdf/) and return the bytes.
         """
+        self._assert_credentials_are_real(endpoint)
         data = self._with_credentials(payload or {})
         response = await self.client.post(endpoint, json=data)
         try:

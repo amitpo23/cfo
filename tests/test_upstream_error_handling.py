@@ -123,7 +123,7 @@ def test_post_binary_upstream_4xx_raises_sumit_api_error():
     from cfo.integrations.sumit_integration import SumitIntegration, SumitAPIError
 
     async def _run():
-        sumit = SumitIntegration(api_key="test-key", company_id="1")
+        sumit = SumitIntegration(api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23", company_id="1")
         try:
             async def _fake_post(url, json=None, **kwargs):
                 request = httpx.Request("POST", "https://api.sumit.co.il" + url)
