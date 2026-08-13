@@ -1,5 +1,5 @@
 """End-to-end tests for the Open Finance routes (auth + insights generation)."""
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -163,3 +163,143 @@ def test_create_connection_is_org_scoped(client, of_configured_org, fresh_org, m
     # The other org has no Open Finance credentials configured -> 400, not a
     # leak of of_configured_org's connection.
     assert r.status_code == 400
+
+
+def test_status_rollup_keeps_each_connection_separate(client, of_configured_org):
+    from cfo.database import SessionLocal
+    from cfo.models import Account, AccountType, BankConnection, BankTransaction
+
+    org_id = of_configured_org["org_id"]
+    db = SessionLocal()
+    try:
+        db.add_all([
+            BankConnection(
+                organization_id=org_id, connection_id="conn-h", bank_name="הפועלים",
+                provider_id="hapoalim", status="ACTIVE",
+                last_refresh_at=datetime.utcnow() - timedelta(hours=2),
+            ),
+            BankConnection(
+                organization_id=org_id, connection_id="conn-m", bank_name="מזרחי",
+                provider_id="mizrahi", status="ACTIVE",
+                last_refresh_at=datetime.utcnow() - timedelta(hours=60),
+            ),
+        ])
+        h = Account(
+            organization_id=org_id, name="H", account_type=AccountType.BANK,
+            source="open_finance", external_id="open_finance:h",
+            open_finance_connection_id="conn-h", balance=100,
+            balance_as_of=datetime.utcnow() - timedelta(hours=2),
+        )
+        m = Account(
+            organization_id=org_id, name="M", account_type=AccountType.BANK,
+            source="open_finance", external_id="open_finance:m",
+            open_finance_connection_id="conn-m", balance=200,
+            balance_as_of=datetime.utcnow() - timedelta(hours=60),
+        )
+        db.add_all([h, m])
+        db.flush()
+        db.add(BankTransaction(
+            organization_id=org_id, source="open_finance", external_id="open_finance:status-tx",
+            account_id=h.id, transaction_date=date(2026, 8, 1), amount=-10,
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/api/open-finance/status", headers=of_configured_org["headers"])
+    assert response.status_code == 200, response.text
+    by_id = {row["connection_id"]: row for row in response.json()["connections"]}
+    assert by_id["conn-h"]["accounts_count"] == 1
+    assert by_id["conn-h"]["transactions_count"] == 1
+    assert by_id["conn-h"]["freshness"] == "fresh"
+    assert by_id["conn-m"]["accounts_count"] == 1
+    assert by_id["conn-m"]["transactions_count"] == 0
+    assert by_id["conn-m"]["freshness"] == "stale"
+
+
+def test_refresh_all_requires_exact_confirmation_before_provider(
+    client, of_configured_org, monkeypatch,
+):
+    from cfo.services.open_finance_client import OpenFinanceClient
+
+    async def must_not_call(self, *args, **kwargs):
+        raise AssertionError("provider reached without cost confirmation")
+
+    monkeypatch.setattr(OpenFinanceClient, "refresh_all_connections", must_not_call)
+    response = client.post(
+        "/api/open-finance/connections/refresh-all",
+        json={"confirmation": "yes"}, headers=of_configured_org["headers"],
+    )
+    assert response.status_code == 400
+
+
+def test_refresh_all_claims_budget_and_writes_audit(
+    client, of_configured_org, monkeypatch,
+):
+    from cfo.database import SessionLocal
+    from cfo.models import AuditLog, SyncCheckpoint
+    from cfo.services.open_finance_client import OpenFinanceClient
+
+    calls = {"n": 0}
+
+    async def fake_refresh(self, user_id=None):
+        calls["n"] += 1
+        return {"queued": True}
+
+    monkeypatch.setattr(OpenFinanceClient, "refresh_all_connections", fake_refresh)
+    payload = {
+        "confirmation": "I_CONFIRM_OPEN_FINANCE_REFRESH_20_CREDITS",
+        "reason": "owner-requested-test",
+    }
+    first = client.post(
+        "/api/open-finance/connections/refresh-all",
+        json=payload, headers=of_configured_org["headers"],
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["cost_credits"] == 20
+    assert calls["n"] == 1
+
+    second = client.post(
+        "/api/open-finance/connections/refresh-all",
+        json=payload, headers=of_configured_org["headers"],
+    )
+    assert second.status_code == 429
+    assert calls["n"] == 1
+
+    db = SessionLocal()
+    try:
+        assert db.query(SyncCheckpoint).filter(
+            SyncCheckpoint.organization_id == of_configured_org["org_id"],
+            SyncCheckpoint.source == "open_finance",
+            SyncCheckpoint.entity_type == "manual_refresh_all",
+        ).count() == 1
+        audit = db.query(AuditLog).filter(
+            AuditLog.organization_id == of_configured_org["org_id"],
+            AuditLog.action == "OPEN_FINANCE_REFRESH_ALL",
+        ).one()
+        assert audit.details["cost_credits"] == 20
+    finally:
+        db.close()
+
+
+def test_refresh_all_audits_configuration_failure(client, fresh_org):
+    from cfo.database import SessionLocal
+    from cfo.models import AuditLog
+
+    org = fresh_org()
+    response = client.post(
+        "/api/open-finance/connections/refresh-all",
+        json={"confirmation": "I_CONFIRM_OPEN_FINANCE_REFRESH_20_CREDITS"},
+        headers=org["headers"],
+    )
+    assert response.status_code == 400
+
+    db = SessionLocal()
+    try:
+        audit = db.query(AuditLog).filter(
+            AuditLog.organization_id == org["org_id"],
+            AuditLog.action == "OPEN_FINANCE_REFRESH_ALL_FAILED",
+        ).one()
+        assert audit.details["cost_credits"] == 20
+    finally:
+        db.close()

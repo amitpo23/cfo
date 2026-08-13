@@ -594,6 +594,8 @@ class SyncEngine:
                 existing.owner_national_id = item.owner_national_id
             if item.owner_name is not None:
                 existing.owner_name = item.owner_name
+            if item.open_finance_connection_id is not None:
+                existing.open_finance_connection_id = item.open_finance_connection_id
             existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
@@ -610,6 +612,7 @@ class SyncEngine:
             credit_limit=item.credit_limit,
             owner_national_id=item.owner_national_id,
             owner_name=item.owner_name,
+            open_finance_connection_id=item.open_finance_connection_id,
         )
         self.db.add(account)
         return "created"

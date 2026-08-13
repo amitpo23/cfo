@@ -89,13 +89,16 @@
         "src/cfo/services/open_finance_client.py",
         "src/cfo/services/open_finance_connector.py",
         "src/cfo/services/open_finance_onboarding.py",
-        "src/cfo/services/sync_engine.py"
+        "src/cfo/services/sync_engine.py",
+        "alembic/versions/05c6d7e8f9a0_add_of_account_connection.py"
       ],
       "tests": [
         "tests/test_open_finance_client.py",
         "tests/test_open_finance_connector.py",
         "tests/test_open_finance_onboarding.py",
         "tests/test_open_finance_routes.py",
+        "tests/test_of_snapshot_cache.py",
+        "tests/test_credit_line_persistence.py",
         "tests/test_sync_call_protection.py"
       ],
       "gates": [
@@ -105,7 +108,7 @@
         "customer_consent",
         "environment_configuration"
       ],
-      "honest_boundary": "Client, normalization and an admin-only consent journey exist locally. Provider responses missing id/connectUrl/status fail closed, connection operations are checked against the local organization before provider access, and daily sync stops before its budget claim while tracked consent is pending. A company without owner-completed consent, valid provider scopes and a successful live sync still has no bank truth.",
+      "honest_boundary": "Client, normalization and an admin-only consent journey exist locally. Provider responses missing id/connectUrl/status fail closed, connection operations are checked against the local organization before provider access, and daily sync stops before its budget claim while tracked consent is pending. Account sync now persists the provider's connectionId, and DB-first status/accounts/transactions keep every consent connection separate; transaction get, cached categories and local filtering/pagination are covered offline. Legacy accounts remain explicitly unmapped until a normal provider-backed sync supplies connectionId -- no name/account-number backfill guesses. Refresh-all requires admin, the exact 20-credit confirmation, a durable 20-hour claim and AuditLog. The old cfo CLI remains unsafe for business use and its replacement/MCP contract is parked in REZEF_CLI_ROADMAP.md. A company without owner-completed consent, valid provider scopes and a successful live sync still has no bank truth.",
       "next_gate": "MASTER_EXECUTION_PLAN gate 0.3: connect the pilot company and prove daily account ingestion."
     },
     {
@@ -491,7 +494,7 @@
         "whatsapp_service_window"
       ],
       "honest_boundary": "מושקו קולט קבלות מצילום, עונה מנתוני המערכת בלבד ופועל דרך ווב, Telegram ו-WhatsApp בקוד שנבדק אופליין. מסך הווב נגיש גם ב-/agent/{session_id}; ה-session מסונן תמיד לפי ארגון ומשתמש, וסופר-אדמין מנהל תמלולים רוחביים רק במסך הניטור הנפרד. כל קריאת LLM וכלי נרשמת best-effort עם tenant scope; עלות נשארת NULL כשאין מחיר מדויק בקונפיג, וארגומנטים רגישים מחוטאים. תמלולים וטלמטריה רוחבית זמינים רק ל-SUPER_ADMIN. משתמש יכול לסמן תשובה כמועילה, לא-מדויקת, לא-ידועה או לא-בטוחה; סופר-אדמין רואה תור איכות, מתקן ומקדם תשובה לידע ארגוני רק בפעולה מפורשת ומתועדת. זיכרון לומד ניתן לניהול אנושי עם אישור ו-AuditLog; מנהל ארגון רואה רק עובדות עסק משותפות ואת הזיכרון האישי שלו, בעוד SUPER_ADMIN יכול לבצע ביקורת רוחבית. זהות WhatsApp/Telegram מאומתת מחדש מול חברות פעילה בכל הודעה; אימות Google/אימייל מוכיח אדם בלבד ובמצב רב-ארגוני אינו מנחש ארגון. פעולת כתיבה נשמרת כ-pending_action ונבדקת מול מדיניות הארגון לפני ההצעה ושוב לפני הביצוע; אישור מבצע claim אטומי לפני הכלי, ביטול נשמר במסד בכל שלושת הערוצים, ותוצאה חיצונית עמומה ננעלת כ-unknown ולא מורצת שוב אוטומטית. שלושת כלי המשימות משתמשים בטבלת Task הקיימת ומבודדים לארגון. ה-KB המקצועי מוצג לקריאה בלבד ומחזיר unavailable מפורש כשמסמכי docs אינם ארוזים. דחיפה יזומה מכבדת opt-in, תצורה פר-provider וחלון שירות WhatsApp בן 24 שעות; מחוץ לחלון אין ניסיון free-form, ובהיעדר תבנית מאושרת מוחזר outside_service_window. פרסונה אינה הרשאה וכל כתיבה נעצרת לאישור מפורש. הגבול החד: **רצף אינו משדר לרשות המסים** — propose_vat_filing_approval מתעד אישור למספרים בלבד והשידור ידני ב-SUMIT. שום התנהגות ספק חיה, תבנית Meta מאושרת, אריזת docs או פריסת הקוד החדש בפרוד אינה מוכחת כאן; קול לא נבנה.",
-      "next_gate": "פעולת בעלים בשער 0: אישור deploy של Alembic head 04b5c6d7e8f9 לפי runbook, כולל חברות, policy_grants, מונה SUMIT משותף ותור איכות מושקו; הגדרת מחירי מודלים מדויקים ב-LLM_PRICING_JSON, סודות Telegram/WhatsApp, אימות אריזת docs ותבנית Meta מאושרת אופציונלית; לאחר מכן smoke חי מאושר שמוכיח בחירת ארגון, webhook, שיחה, policy/claim/confirm/cancel, feedback/review/promotion, usage, tool-call, זיכרון, משימה ודחיפה בכל ערוץ בלי לעקוף את חלון השירות."
+      "next_gate": "פעולת בעלים בשער 0: אישור deploy של Alembic head 05c6d7e8f9a0 לפי runbook, כולל חברות, policy_grants, מונה SUMIT משותף, תור איכות מושקו ושיוך חשבון Open Finance לחיבור; הגדרת מחירי מודלים מדויקים ב-LLM_PRICING_JSON, סודות Telegram/WhatsApp, אימות אריזת docs ותבנית Meta מאושרת אופציונלית; לאחר מכן smoke חי מאושר שמוכיח בחירת ארגון, webhook, שיחה, policy/claim/confirm/cancel, feedback/review/promotion, usage, tool-call, זיכרון, משימה ודחיפה בכל ערוץ בלי לעקוף את חלון השירות."
     }
   ]
 }

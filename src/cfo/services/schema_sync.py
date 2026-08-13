@@ -3,8 +3,9 @@
 משמש גם את scripts/schema_drift_check.py (קריאה בלבד) וגם את
 POST /api/admin/db/migrate (תיקון). additive בלבד: לעולם לא מוחק.
 
-``compute_missing`` נשמר כחוזה הצר של מנגנון התיקון: הוא יודע להוסיף רק
-טבלאות ועמודות. ``compute_schema_drift`` הוא שער האימות המלא יותר, ובודק גם
+``compute_missing`` נשמר כחוזה הצר של גילוי טבלאות ועמודות. מנגנון התיקון
+משלים גם אינדקסים additive שהמודל דורש. ``compute_schema_drift`` הוא שער
+האימות המלא יותר, ובודק גם
 טיפוסים, nullability, מפתחות ראשיים/זרים, unique constraints ואינדקסים. כך
 תיקון additive לעולם לא מתחזה להוכחה שאילוצים שלא תוקנו אכן קיימים.
 """
@@ -352,9 +353,11 @@ def compute_missing(engine: Engine) -> Dict:
 
 
 def apply_additive(engine: Engine) -> Dict:
-    """משלים את הסכמה החיה למודלים — additive בלבד (יצירת טבלאות/עמודות חסרות).
+    """משלים את הסכמה החיה למודלים — additive בלבד.
 
-    לעולם לא מוחק ולא משנה עמודות קיימות. בטוח להרצה חוזרת (idempotent).
+    יוצר טבלאות, עמודות ואינדקסים חסרים; לעולם לא מוחק ולא משנה עמודות
+    קיימות. בטוח להרצה חוזרת (idempotent). אילוצים שאינם ניתנים להוספה
+    בבטחה נשארים לשער ה-drift ולמיגרציית Alembic מפורשת.
     """
     from sqlalchemy.schema import CreateColumn
 
@@ -381,5 +384,29 @@ def apply_additive(engine: Engine) -> Dict:
                     # מוסיפים כ-nullable; אכיפת NOT NULL נשארת למיגרציית alembic מסודרת.
                     stmt = stmt.replace(" NOT NULL", "")
                 conn.execute(sa_text(stmt))
+
+    # An existing legacy table does not receive newly-declared ORM indexes
+    # from ``create_all``.  Add those explicitly after all missing columns are
+    # present; otherwise reconciliation sees the new column, still fails its
+    # structural proof on the index, and can never reach the semantic
+    # backfills.  ``checkfirst`` keeps retries idempotent.
+    index_drift = compute_schema_drift(engine)["indexes"]
+    applied_indexes: Dict[str, List[Dict[str, Any]]] = {}
+    for table_name, rows in index_drift.items():
+        table = Base.metadata.tables[table_name]
+        for row in rows:
+            signature = (tuple(row["columns"]), bool(row["unique"]))
+            model_index = next(
+                index for index in table.indexes
+                if (
+                    tuple(column.name for column in index.columns),
+                    bool(index.unique),
+                ) == signature
+            )
+            model_index.create(bind=engine, checkfirst=True)
+            applied_indexes.setdefault(table_name, []).append(row)
+
+    if applied_indexes:
+        missing["indexes"] = applied_indexes
 
     return missing

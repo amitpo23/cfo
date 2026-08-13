@@ -153,6 +153,7 @@ class OpenFinanceConnector(AccountingConnector):
             credit_limit=_credit_limit(item),
             owner_national_id=_owner_national_id(item),
             owner_name=_owner_name(item),
+            open_finance_connection_id=_first_str(item, "connectionId"),
         )
 
     def _normalize_transaction(self, item: dict[str, Any]) -> NormalizedBankTransaction:

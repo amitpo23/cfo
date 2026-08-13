@@ -302,6 +302,10 @@ class OpenFinanceClient:
     async def get_transaction(self, sk: str):
         return await self._v2_get(f"/data/transactions/{sk}")
 
+    async def list_transaction_categories(self):
+        """Return Open Finance's bilingual transaction taxonomy."""
+        return await self._v2_get("/data/transaction-categories")
+
     async def update_transaction(
         self,
         sk: str,

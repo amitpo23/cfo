@@ -497,6 +497,12 @@ class Account(Base):
     # Provenance — distinguishes SUMIT synthesized accounts from real Open Finance
     # bank accounts so the two sources coexist without external_id collisions.
     source = Column(String(50), default="manual")
+    # Open Finance consent connection that owns this account.  This is kept
+    # separate from IntegrationConnection.id: the latter is Rezef's encrypted
+    # org-level connector configuration, while this value is the provider's
+    # opaque per-bank consent id.  NULL for manual/SUMIT accounts and for old
+    # observations that predate the mapping (honest-null; never guessed).
+    open_finance_connection_id = Column(String(255), nullable=True)
     # Source chart-of-accounts provenance.  These columns intentionally live on
     # Account (the existing connector chart data plane), not ExpenseCategory and
     # not a parallel ledger-account table.
@@ -549,6 +555,10 @@ class Account(Base):
 
     __table_args__ = (
         Index("ix_account_org_ext_source", "organization_id", "external_id", "source", unique=True),
+        Index(
+            "ix_account_org_of_connection",
+            "organization_id", "open_finance_connection_id",
+        ),
         UniqueConstraint(
             "organization_id",
             "source_account_code",

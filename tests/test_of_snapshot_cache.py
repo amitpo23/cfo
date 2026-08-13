@@ -283,6 +283,121 @@ def test_accounts_route_is_org_scoped(client, fresh_org, monkeypatch):
     assert r.json()["count"] == 0
 
 
+def test_accounts_route_filters_by_persisted_connection_id(client, owner, monkeypatch):
+    import cfo.api.routes.open_finance as of_routes
+    monkeypatch.setattr(of_routes, "get_open_finance_client", _raise_if_client_built)
+
+    org_id = owner["user"]["organization_id"]
+    db = SessionLocal()
+    try:
+        db.add_all([
+            Account(
+                organization_id=org_id, name="Hapoalim",
+                account_type=AccountType.BANK, source="open_finance",
+                external_id="open_finance:acc-h", open_finance_connection_id="conn-h",
+            ),
+            Account(
+                organization_id=org_id, name="Mizrahi",
+                account_type=AccountType.BANK, source="open_finance",
+                external_id="open_finance:acc-m", open_finance_connection_id="conn-m",
+            ),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(
+        "/api/open-finance/accounts?connection_id=conn-h", headers=owner["headers"],
+    )
+    assert response.status_code == 200, response.text
+    assert [row["external_id"] for row in response.json()["items"]] == [
+        "open_finance:acc-h",
+    ]
+
+
+def test_transaction_get_and_list_filters_are_local_and_org_scoped(
+    client, fresh_org, monkeypatch,
+):
+    import cfo.api.routes.open_finance as of_routes
+    monkeypatch.setattr(of_routes, "get_open_finance_client", _raise_if_client_built)
+
+    org_a = fresh_org()
+    org_b = fresh_org()
+    db = SessionLocal()
+    try:
+        account = Account(
+            organization_id=org_a["org_id"], name="A bank",
+            account_type=AccountType.BANK, source="open_finance",
+            external_id="open_finance:acc-a", open_finance_connection_id="conn-a",
+        )
+        db.add(account)
+        db.flush()
+        tx_one = BankTransaction(
+            organization_id=org_a["org_id"], external_id="open_finance:tx-1",
+            source="open_finance", account_id=account.id,
+            transaction_date=datetime(2026, 6, 15).date(), description="Bank row",
+            amount=-50, currency="ILS",
+            raw_data={"type": "BANK", "providerId": "hapoalim", "connectionId": "conn-a"},
+        )
+        db.add_all([
+            tx_one,
+            BankTransaction(
+                organization_id=org_a["org_id"], external_id="open_finance:tx-2",
+                source="open_finance", account_id=account.id,
+                transaction_date=datetime(2026, 6, 14).date(), description="Card row",
+                amount=-25, currency="ILS",
+                raw_data={"type": "CARD", "providerId": "hapoalim", "connectionId": "conn-a"},
+            ),
+        ])
+        db.commit()
+        tx_one_id = tx_one.id
+    finally:
+        db.close()
+
+    one = client.get("/api/open-finance/transactions/tx-1", headers=org_a["headers"])
+    assert one.status_code == 200, one.text
+    assert one.json()["external_id"] == "open_finance:tx-1"
+    by_local_id = client.get(
+        f"/api/open-finance/transactions/{tx_one_id}", headers=org_a["headers"],
+    )
+    assert by_local_id.status_code == 200, by_local_id.text
+    assert by_local_id.json()["external_id"] == "open_finance:tx-1"
+    assert client.get(
+        "/api/open-finance/transactions/tx-1", headers=org_b["headers"],
+    ).status_code == 404
+
+    listing = client.get(
+        "/api/open-finance/transactions",
+        params={"connection_id": "conn-a", "provider_id": "hapoalim", "type": "BANK", "limit": 1},
+        headers=org_a["headers"],
+    )
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["count"] == 1
+    assert listing.json()["items"][0]["external_id"] == "open_finance:tx-1"
+
+
+def test_categories_route_is_cached(client, of_configured_org, monkeypatch):
+    from cfo.services.open_finance_client import OpenFinanceClient
+
+    calls = {"n": 0}
+
+    async def fake_categories(self):
+        calls["n"] += 1
+        return {"items": [{"main": "EXPENSES", "nameHe": "הוצאות"}]}
+
+    monkeypatch.setattr(OpenFinanceClient, "list_transaction_categories", fake_categories)
+    first = client.get(
+        "/api/open-finance/categories", headers=of_configured_org["headers"],
+    )
+    second = client.get(
+        "/api/open-finance/categories", headers=of_configured_org["headers"],
+    )
+    assert first.status_code == second.status_code == 200
+    assert first.json()["source"] == "live"
+    assert second.json()["source"] == "cache"
+    assert calls["n"] == 1
+
+
 # --------------------------------------------------------------------- #
 # route-level: cached GET endpoints
 # --------------------------------------------------------------------- #

@@ -103,3 +103,20 @@ def test_transactions_date_filter_drops_limit():
 
     assert captured["params"].get("dateFrom") == "2026-01-01"
     assert "limit" not in captured["params"]  # mutually exclusive with date filters
+
+
+def test_transaction_categories_use_v2_data_endpoint():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth/token":
+            return httpx.Response(200, json={"accessToken": "t", "expiresIn": 1000})
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"items": [{"main": "INCOME"}]})
+
+    client = _make_client(handler)
+    result = asyncio.run(client.list_transaction_categories())
+    asyncio.run(client.close())
+
+    assert seen == ["/v2/data/transaction-categories"]
+    assert result["items"][0]["main"] == "INCOME"

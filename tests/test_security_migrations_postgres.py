@@ -15,7 +15,7 @@ def _postgres_sql() -> str:
     result = subprocess.run(
         [
             sys.executable, "-m", "alembic", "upgrade",
-            "d2e3f4a5b6c7:04b5c6d7e8f9", "--sql",
+            "d2e3f4a5b6c7:05c6d7e8f9a0", "--sql",
         ],
         cwd=ROOT,
         env={
@@ -39,6 +39,8 @@ def test_security_migrations_emit_complete_postgres_ddl_without_enum_recreation(
     assert "ck_policy_grant_single_subject" in sql
     assert "ck_provider_budget_used_nonnegative" in sql
     assert "ck_moshko_feedback_category" in sql
+    assert "open_finance_connection_id" in sql
+    assert "ix_account_org_of_connection" in sql
     assert not re.search(r"CREATE TYPE\s+\S*userrole", sql, re.I)
 
 
