@@ -205,18 +205,7 @@ def reconcile_schema_to_head(
     if _has_drift(remaining):
         raise SchemaDeploymentError(
             "schema drift remains after additive reconciliation; "
-            "refusing to mark Alembic head"
-        )
-
-    # אילוצי CHECK — `compute_schema_drift` אינו בודק אותם, ו-
-    # `apply_additive` אינו יכול להוסיף אותם לטבלה קיימת ב-SQLite.
-    # מסד שסומן `head` בלי `ck_membership_role_not_super_admin` נושא
-    # הצהרה שקרית: ההגנה שמונעת חברות SUPER_ADMIN אינה קיימת בו.
-    check_drift = schema_sync.compute_check_constraint_drift(engine)
-    if check_drift:
-        raise SchemaDeploymentError(
-            "required check constraints are missing; refusing to mark Alembic "
-            f"head: {check_drift}"
+            f"refusing to mark Alembic head: {remaining}"
         )
 
     # תיקון סמנטי — לפני החתימה, לא אחריה.

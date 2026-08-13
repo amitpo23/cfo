@@ -18,7 +18,8 @@ import pytest
 
 from cfo.database import SessionLocal
 from cfo.models import (
-    AuditLog, MoshkoMemory, Organization, Task, User, UserRole,
+    AuditLog, MoshkoMemory, Organization, OrganizationMembership, Task, User,
+    UserRole,
 )
 from cfo.services import membership_service
 
@@ -235,3 +236,172 @@ def test_path_organization_id_for_another_org_fails(client, split_identity):
     assert resp.status_code >= 400, (
         "גישה לארגון הבית דרך הנתיב הצליחה למרות שההקשר הוא B"
     )
+
+
+def test_patch_organization_cannot_escape_the_selected_context(client, split_identity):
+    resp = client.patch(
+        f"/api/admin/organizations/{split_identity['home_org']}",
+        json={"name": "אסור לשנות את A מתוך B"},
+        headers=split_identity["headers"],
+    )
+
+    assert resp.status_code == 403, resp.text
+
+
+def test_get_user_cannot_read_a_home_org_identity_from_another_context(
+    client, split_identity,
+):
+    db = SessionLocal()
+    try:
+        target = User(
+            email="context-get-user-home@example.com", password_hash="x",
+            full_name="HOME ONLY USER", role=UserRole.USER,
+            organization_id=split_identity["home_org"], is_active=True,
+        )
+        db.add(target)
+        db.commit()
+        target_id = target.id
+    finally:
+        db.close()
+
+    resp = client.get(
+        f"/api/admin/users/{target_id}", headers=split_identity["headers"],
+    )
+
+    assert resp.status_code in (403, 404), resp.text
+
+
+def test_user_list_is_sourced_from_membership_not_legacy_home_org(
+    client, split_identity,
+):
+    db = SessionLocal()
+    try:
+        member = User(
+            email="member-of-b-home-a@example.com", password_hash="x",
+            full_name="MEMBER OF B", role=UserRole.USER,
+            organization_id=split_identity["home_org"], is_active=True,
+        )
+        db.add(member)
+        db.flush()
+        membership_service.grant(
+            db, organization_id=split_identity["target_org"], user_id=member.id,
+            role=UserRole.VIEWER, granted_by_user_id=split_identity["user_id"],
+        )
+        db.commit()
+        member_id = member.id
+    finally:
+        db.close()
+
+    resp = client.get("/api/admin/users", headers=split_identity["headers"])
+
+    assert resp.status_code == 200, resp.text
+    assert member_id in {row["id"] for row in resp.json()}, resp.text
+
+
+def test_memory_create_update_delete_are_scoped_to_selected_org(
+    client, split_identity,
+):
+    create = client.post(
+        "/api/admin/moshko/memory",
+        json={
+            "organization_id": split_identity["home_org"],
+            "content": "אסור לכתוב לזיכרון A מתוך B",
+            "category": "business_fact",
+        },
+        headers=split_identity["headers"],
+    )
+    assert create.status_code == 403, create.text
+
+    db = SessionLocal()
+    try:
+        row = MoshkoMemory(
+            organization_id=split_identity["home_org"], user_id=None,
+            content="זיכרון קיים ב-A", category="business_fact", source="admin",
+        )
+        db.add(row)
+        db.commit()
+        row_id = row.id
+    finally:
+        db.close()
+
+    patch = client.patch(
+        f"/api/admin/moshko/memory/{row_id}",
+        json={"content": "ניסיון שינוי מתוך B"},
+        headers=split_identity["headers"],
+    )
+    delete = client.delete(
+        f"/api/admin/moshko/memory/{row_id}",
+        headers=split_identity["headers"],
+    )
+
+    assert patch.status_code in (403, 404), patch.text
+    assert delete.status_code in (403, 404), delete.text
+
+
+def _home_user_with_membership_in_target(split_identity, email: str):
+    db = SessionLocal()
+    try:
+        user = User(
+            email=email, password_hash="x", full_name=email,
+            role=UserRole.USER, organization_id=split_identity["home_org"],
+            is_active=True,
+        )
+        db.add(user)
+        db.flush()
+        membership_service.grant(
+            db, organization_id=split_identity["target_org"], user_id=user.id,
+            role=UserRole.VIEWER, granted_by_user_id=split_identity["user_id"],
+        )
+        db.commit()
+        return user.id
+    finally:
+        db.close()
+
+
+def test_org_deactivation_suspends_membership_not_global_identity(
+    client, split_identity,
+):
+    user_id = _home_user_with_membership_in_target(
+        split_identity, "suspend-only-in-b@example.com",
+    )
+
+    resp = client.patch(
+        f"/api/admin/users/{user_id}", json={"is_active": False},
+        headers=split_identity["headers"],
+    )
+    assert resp.status_code == 200, resp.text
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).one()
+        membership = db.query(OrganizationMembership).filter(
+            OrganizationMembership.user_id == user_id,
+            OrganizationMembership.organization_id == split_identity["target_org"],
+        ).one()
+        assert user.is_active is True, "פעולת ארגון השביתה identity בכל הארגונים"
+        assert membership.status == "suspended"
+    finally:
+        db.close()
+
+
+def test_org_delete_revokes_membership_not_global_identity(client, split_identity):
+    user_id = _home_user_with_membership_in_target(
+        split_identity, "revoke-only-in-b@example.com",
+    )
+
+    resp = client.delete(
+        f"/api/admin/users/{user_id}", headers=split_identity["headers"],
+    )
+    assert resp.status_code == 204, resp.text
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).one()
+        membership = db.query(OrganizationMembership).filter(
+            OrganizationMembership.user_id == user_id,
+            OrganizationMembership.organization_id == split_identity["target_org"],
+        ).one()
+        assert user.is_active is True, "מחיקה ארגונית השביתה identity גלובלי"
+        assert membership.status == "revoked"
+    finally:
+        db.close()

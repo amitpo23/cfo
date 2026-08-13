@@ -1,7 +1,6 @@
 """חוזה הסכימה כולל CheckConstraints — ואי-אפשר לסמן head בלעדיהם.
 
-`compute_schema_drift` בודק טבלאות, עמודות, טיפוסים, nullability, PK/FK,
-unique ואינדקסים. הוא **אינו** בודק CheckConstraints.
+`compute_schema_drift` בודק גם CheckConstraints כחלק מאותו חוזה מרכזי.
 
 זה חשוב במיוחד ל-`ck_membership_role_not_super_admin`: הוא מה שמונע
 ממנהל ארגון להעניק חברות `SUPER_ADMIN` בתיק שלו ולעקוף את ההפרדה בין
@@ -22,7 +21,11 @@ import sqlalchemy as sa
 from cfo.services.schema_deployment import (
     SchemaDeploymentError, reconcile_schema_to_head,
 )
-from cfo.services.schema_sync import compute_check_constraint_drift
+from cfo.services.schema_sync import (
+    compute_check_constraint_drift,
+    compute_schema_drift,
+    has_schema_drift,
+)
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -91,6 +94,10 @@ def test_a_missing_check_constraint_is_reported_as_drift(fresh_db):
     drift = compute_check_constraint_drift(engine)
 
     assert any(REQUIRED[1] in str(d) for d in drift), drift
+
+    full_drift = compute_schema_drift(engine)
+    assert REQUIRED[1] in full_drift["check_constraints"][REQUIRED[0]]
+    assert has_schema_drift(full_drift)
 
 
 def test_reconciliation_refuses_to_stamp_when_the_constraint_is_missing(fresh_db):

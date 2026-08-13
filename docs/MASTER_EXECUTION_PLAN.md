@@ -87,6 +87,15 @@
   מהספק נכשלת, `BankConnection` נשמר לפי ארגון, מזהה חיבור זר נחסם לפני הספק,
   ו־cron מדלג לפני budget/connector כל עוד consent מקומי ממתין. scope
   `create:connections`, השלמת consent ו־sync ראשון עדיין דורשים בעלים וספק חי.
+- **הפרדה רב־ארגונית נסגרה אופליין 13/08:** כל בקשה ארגונית מוכרעת מחדש
+  מ־`OrganizationMembership`; אין fallback ל־`users.organization_id`, וסופר־אדמין
+  חייב לבחור ארגון במפורש. invite/accept/suspend/revoke מחוברים ל־HTTP ול־AuditLog,
+  השבתה ארגונית אינה משביתה זהות גלובלית, ופקיעה עתידית אינה יכולה להשאיר ארגון
+  בלי מנהל נגיש. חוזה ה־drift כולל כעת CheckConstraints וחוסם `stamp head` כשאילוץ
+  האבטחה חסר. מסך מושקו זמין גם ב־`/agent/{session_id}` עם שיחה חדשה וקישורי
+  ניטור/ידע לסופר־אדמין; נבדק ב־Playwright מקומי. QA מלא: 2,023 טסטים, route
+  audit ‏260·177·45·37·1, schema drift/frontend/tenancy ירוקים. **לא פרוס**;
+  מיגרציה `d2e3f4a5b6c7` ו־smoke בפרוד עדיין דורשים אישור בעלים לפי הרונבוק.
 - **טרם הושלם:** הוכחה חיה באישור בעלים ושאר adapters
   (החזר/ביטול/מנדט/SUMIT/שידור/סגירה).
 

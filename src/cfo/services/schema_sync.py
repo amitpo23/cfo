@@ -25,6 +25,7 @@ _FULL_DRIFT_KEYS = (
     "primary_keys",
     "foreign_keys",
     "unique_constraints",
+    "check_constraints",
     "indexes",
 )
 
@@ -54,6 +55,7 @@ def empty_schema_drift() -> Dict[str, Any]:
         "primary_keys": {},
         "foreign_keys": {},
         "unique_constraints": {},
+        "check_constraints": {},
         "indexes": {},
         "dialect_exemptions": {},
     }
@@ -104,6 +106,14 @@ def compute_check_constraint_drift(engine: Engine) -> list[dict]:
                 c.get("name") for c in inspector.get_check_constraints(table_name)
             }
         except NotImplementedError:  # pragma: no cover - ניב ללא תמיכה
+            # Fail closed: inability to prove a required security constraint
+            # exists is itself drift.  A database must never be stamped head
+            # merely because its dialect cannot introspect CHECK constraints.
+            drift.append({
+                "table": table_name,
+                "missing_check_constraints": sorted(expected_names),
+                "inspection_error": "check constraint introspection unsupported",
+            })
             continue
         missing = sorted(n for n in expected_names if n not in present)
         if missing:
@@ -209,6 +219,11 @@ def compute_schema_drift(engine: Engine) -> Dict[str, Any]:
     inspector = inspect(engine)
     live_tables = set(inspector.get_table_names())
     report = empty_schema_drift()
+
+    for check_drift in compute_check_constraint_drift(engine):
+        report["check_constraints"][check_drift["table"]] = (
+            check_drift["missing_check_constraints"]
+        )
 
     for table_name, table in Base.metadata.tables.items():
         if table_name not in live_tables:

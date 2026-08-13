@@ -11,8 +11,8 @@
 - כותרת `X-Active-Org-Id` מכובדת למי שהוא חבר פעיל בארגון היעד; לארגון
   שאינו חבר בו — **מתעלמים ממנה**, בדיוק כמו קודם. הכותרת לעולם לא
   מרחיבה scope, היא רק בוחרת מתוך מה שכבר מותר.
-- אין חברויות כלל ⇒ נפילה חזרה ל-`users.organization_id` (מצב מדור קודם),
-  ואם גם הוא ריק — 403.
+- אין חברויות כלל ⇒ 403. `users.organization_id` הוא מטא־דאטה ישנה,
+  ולעולם אינו מקור סמכות.
 
 `X-Active-Org-Id` מגיע מ-localStorage בלקוח, ולכן הוא **קלט לא מהימן**.
 הוא משמש כאן כ*בקשה* לבחירה; ההיתר עצמו נבדק מול `organization_memberships`
@@ -21,7 +21,7 @@
 import pytest
 
 from cfo.database import SessionLocal
-from cfo.models import Organization, User, UserRole
+from cfo.models import Organization, OrganizationMembership, User, UserRole
 from cfo.services import membership_service
 
 
@@ -202,12 +202,19 @@ def test_invited_membership_does_not_grant_access_yet(client):
     assert resp.json().get("organization_id") != org
 
 
-def test_user_without_memberships_falls_back_to_legacy_column(client):
-    """תאימות לאחור: מי שאין לו חברויות ממשיך לעבוד מול
-    `users.organization_id` — המיגרציה אינה תנאי להתחברות."""
+def test_user_without_memberships_is_denied_even_with_legacy_column(client):
+    """עמודת users.organization_id היא מטא־דאטה ישנה, לא מקור סמכות."""
     person = _register(client, "legacy-only@example.com")
+
+    db = SessionLocal()
+    try:
+        db.query(OrganizationMembership).filter(
+            OrganizationMembership.user_id == person["user_id"],
+        ).delete()
+        db.commit()
+    finally:
+        db.close()
 
     resp = _active_org(client, person["headers"])
 
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["organization_id"] == person["own_org"]
+    assert resp.status_code == 403, resp.text

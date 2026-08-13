@@ -118,7 +118,7 @@ const navigationConfig = [
     section: 'CFO',
     items: [
       { to: '/', icon: LayoutDashboard, label: 'Command Center', description: 'CFO overview' },
-      { to: '/ai-chat', icon: MessageCircle, label: 'עוזר AI', description: 'שיחה עם עוזר ה-CFO — פעולות כתיבה דורשות אישור' },
+      { to: '/ai-chat', icon: MessageCircle, label: 'מושקו', description: 'שיחה עם סוכן ה-CFO — פעולות כתיבה דורשות אישור' },
       { to: '/executive', icon: Gauge, label: 'דשבורד מנהלים', description: '8 פאנלים של מצב העסק' },
       { to: '/cashflow', icon: Wallet, label: 'Cash Flow', description: 'Projections & scenarios' },
       { to: '/cashflow-detail', icon: TrendingUp, label: 'תזרים — מפורט', description: 'חודשי/יומי, burn-rate ויחסי נזילות' },
@@ -368,6 +368,7 @@ function App() {
                 {/* CFO Command Center */}
                 <Route path="/" element={<CFOOverview darkMode={darkMode} />} />
                 <Route path="/ai-chat" element={<ChatAssistant darkMode={darkMode} currentUser={currentUser} />} />
+                <Route path="/agent/:sessionId" element={<ChatAssistant darkMode={darkMode} currentUser={currentUser} />} />
                 <Route path="/cashflow" element={<CFOCashFlowProjection darkMode={darkMode} />} />
                 <Route path="/cashflow-detail" element={<CashFlowDashboard />} />
                 <Route path="/ar" element={<CFOARDashboard darkMode={darkMode} />} />
@@ -439,7 +440,9 @@ interface NavItemProps {
 
 const NavItem: React.FC<NavItemProps> = ({ to, icon, label, description, collapsed, darkMode }) => {
   const location = useLocation();
-  const isActive = location.pathname === to;
+  const isActive = location.pathname === to || (
+    to === '/ai-chat' && location.pathname.startsWith('/agent/')
+  );
 
   return (
     <Link

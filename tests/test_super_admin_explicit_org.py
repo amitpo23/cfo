@@ -185,3 +185,58 @@ def test_non_super_without_org_is_still_refused(client):
     assert "organizations" not in str(resp.json().get("detail", "")), (
         "רשימת הארגונים דלפה למשתמש שאינו סופר-אדמין"
     )
+
+
+@pytest.mark.parametrize("path", [
+    "/api/admin/users",
+    "/api/admin/audit-logs",
+    "/api/admin/moshko/memory",
+])
+def test_query_org_cannot_override_super_admin_selected_context(
+    client, orgless_super, owner, path,
+):
+    selected = owner["user"]["organization_id"]
+    db = SessionLocal()
+    try:
+        other = Organization(name=f"override target for {path}", is_active=True)
+        db.add(other)
+        db.commit()
+        other_id = other.id
+    finally:
+        db.close()
+
+    resp = client.get(
+        path,
+        params={"organization_id": other_id},
+        headers={**orgless_super, "X-Active-Org-Id": str(selected)},
+    )
+
+    assert resp.status_code == 403, resp.text
+
+
+def test_body_org_cannot_override_super_admin_selected_context(
+    client, orgless_super, owner,
+):
+    selected = owner["user"]["organization_id"]
+    db = SessionLocal()
+    try:
+        other = Organization(name="body override target", is_active=True)
+        db.add(other)
+        db.commit()
+        other_id = other.id
+    finally:
+        db.close()
+
+    resp = client.post(
+        "/api/admin/users",
+        json={
+            "email": "super-body-override@example.com",
+            "password": "secret123",
+            "full_name": "Super Body Override",
+            "role": "viewer",
+            "organization_id": other_id,
+        },
+        headers={**orgless_super, "X-Active-Org-Id": str(selected)},
+    )
+
+    assert resp.status_code == 403, resp.text

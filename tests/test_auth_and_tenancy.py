@@ -273,14 +273,14 @@ def test_null_org_id_is_rejected():
                 User(organization_id=None, role=UserRole.USER), None, db))
         assert exc.value.status_code == 403
 
-        # ארגון אמיתי ופעיל עובר ללא שינוי
+        # גם עמודת ארגון שמצביעה לארגון אמיתי אינה סמכות. רק חברות.
         org = Organization(name="null-org-id-test", is_active=True)
         db.add(org)
         db.commit()
-        ctx = asyncio.run(resolve_access_context(
-            User(organization_id=org.id, role=UserRole.USER), None, db))
-        assert ctx.organization_id == org.id
-        assert ctx.selection_source == "legacy_column"
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(resolve_access_context(
+                User(organization_id=org.id, role=UserRole.USER), None, db))
+        assert exc.value.status_code == 403
     finally:
         db.close()
 

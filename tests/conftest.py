@@ -34,6 +34,7 @@ os.environ["CRON_SECRET"] = "test-cron-secret"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "testserver", ""}
 _real_getaddrinfo = socket.getaddrinfo
 _real_create_connection = socket.create_connection
+_real_socket = socket.socket
 _current_test = {"name": "<import/collection>"}
 
 
@@ -64,8 +65,34 @@ def _guarded_create_connection(address, *args, **kwargs):
     return _real_create_connection(address, *args, **kwargs)
 
 
+class _GuardedSocket(_real_socket):
+    """Close the raw-IP escape hatch left by DNS/create_connection guards.
+
+    AF_UNIX sockets use a string filesystem address and remain available.
+    Internet sockets must target an explicitly local host, even when a client
+    library already resolved the hostname and calls ``connect`` directly.
+    """
+
+    @staticmethod
+    def _guard_address(address):
+        if not isinstance(address, tuple) or not address:
+            return
+        name = _host_str(address[0])
+        if name not in _LOCAL_HOSTS:
+            raise _blocked(name)
+
+    def connect(self, address):
+        self._guard_address(address)
+        return super().connect(address)
+
+    def connect_ex(self, address):
+        self._guard_address(address)
+        return super().connect_ex(address)
+
+
 socket.getaddrinfo = _guarded_getaddrinfo
 socket.create_connection = _guarded_create_connection
+socket.socket = _GuardedSocket
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 

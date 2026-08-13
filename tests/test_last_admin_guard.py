@@ -99,6 +99,37 @@ def test_cannot_expire_the_only_reachable_admin(client):
         db.rollback(); db.close()
 
 
+def test_cannot_schedule_the_only_admin_to_expire_in_the_future(client):
+    """פקיעה עתידית היא הסרה מתוזמנת. בלי מנהל שישרוד אחריה, הארגון
+    יישאר נעול ברגע שהשעון יעבור את התאריך — בלי בקשת HTTP נוספת שבה
+    אפשר להפעיל את השער."""
+    solo = _register(client, "guard-future-expiry@example.com")
+    tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+    db = SessionLocal()
+    try:
+        with pytest.raises(ValueError):
+            membership_service.grant_checked(
+                db, organization_id=solo["org"], user_id=solo["user_id"],
+                role=UserRole.ADMIN, acting_user_id=solo["user_id"],
+                expires_at=tomorrow)
+    finally:
+        db.rollback(); db.close()
+
+
+def test_future_expiry_is_allowed_when_another_admin_survives_it(client):
+    solo = _register(client, "guard-future-covered@example.com")
+    tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+    db = SessionLocal()
+    try:
+        peer = _add_admin(db, solo["org"], "future-permanent-peer@example.com")
+        db.flush()
+        membership_service.grant_checked(
+            db, organization_id=solo["org"], user_id=solo["user_id"],
+            role=UserRole.ADMIN, acting_user_id=peer, expires_at=tomorrow)
+    finally:
+        db.rollback(); db.close()
+
+
 # ==================================================================== #
 # הספירה עצמה — active אינו מספיק
 # ==================================================================== #

@@ -18,7 +18,7 @@ from ...models import (
     OrganizationCreate, OrganizationUpdate, OrganizationResponse,
     UserRole, IntegrationType, SumitCompany, Invoice, Bill, BankTransaction,
     Alert, Task, OnboardingTask, AlertStatus, TaskStatus,
-    OrganizationSigningAuthority, Account,
+    OrganizationSigningAuthority, OrganizationMembership, Account,
     ChatMessage, LLMUsage, MoshkoToolCall, MoshkoMemory,
 )
 from ...auth import verify_password, get_password_hash, create_access_token
@@ -43,6 +43,16 @@ from ...integrations.sumit_models import (
 )
 
 router = APIRouter()
+
+
+def _require_selected_organization(ctx: OrganizationAccessContext, supplied: Optional[int]) -> None:
+    """נתיב ארגוני מקבל scope רק מ-OrganizationAccessContext.
+
+    פרמטר legacy מותר רק אם הוא מאשר את אותה בחירה; הוא לעולם אינו
+    selector שני, גם לא עבור SUPER_ADMIN.
+    """
+    if supplied is not None and supplied != ctx.organization_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
 
 # ==================== Authentication ====================
@@ -426,9 +436,8 @@ def _create_self_registered_user(
 
     # חברות באותה טרנזקציה כמו המשתמש והארגון.
     #
-    # בלי זה, כל משתמש חדש היה שורד רק דרך מסלול התאימות
-    # `legacy_column` ב-`resolve_access_context` — מסלול שנועד להיעלם.
-    # ארגון שנוצר בלי חברות הוא גם תיק שאיש אינו יכול לפתוח.
+    # בלי זה, המשתמש החדש היה נשאר בלי מקור סמכות ונחסם. ארגון שנוצר
+    # בלי חברות הוא גם תיק שאיש אינו יכול לפתוח.
     #
     # `flush` ולא `commit`: אם שלב מאוחר יותר ייכשל, המשתמש, הארגון
     # והחברות מתגלגלים אחורה יחד.
@@ -1049,14 +1058,11 @@ async def update_organization(
     org_id: int,
     org_data: OrganizationUpdate,
     db: Session = Depends(get_db_session),
-    current_user: User = Depends(get_organization_admin)
+    ctx: OrganizationAccessContext = Depends(get_access_context),
+    current_user: User = Depends(get_organization_admin),
 ):
     """עדכון ארגון"""
-    if current_user.role != UserRole.SUPER_ADMIN and current_user.organization_id != org_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
+    _require_selected_organization(ctx, org_id)
     
     org = db.query(Organization).filter(Organization.id == org_id).first()
     if not org:
@@ -1115,7 +1121,133 @@ async def delete_organization(
 
 # ==================== Users Management ====================
 
-@router.get("/users", response_model=List[UserResponse], tags=["Users"])
+
+class MembershipInviteRequest(BaseModel):
+    email: str
+    role: UserRole = UserRole.USER
+    expires_at: Optional[datetime] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class MembershipAcceptRequest(BaseModel):
+    organization_id: int
+
+    model_config = {"extra": "forbid"}
+
+
+def _membership_payload(membership: OrganizationMembership) -> dict[str, Any]:
+    return {
+        "id": membership.id,
+        "organization_id": membership.organization_id,
+        "user_id": membership.user_id,
+        "role": membership.role,
+        "status": membership.status,
+        "expires_at": membership.expires_at,
+        "verified_at": membership.verified_at,
+    }
+
+
+@router.post("/memberships/invite", status_code=201, tags=["Users"])
+async def invite_existing_identity(
+    body: MembershipInviteRequest,
+    db: Session = Depends(get_db_session),
+    ctx: OrganizationAccessContext = Depends(get_access_context),
+    current_user: User = Depends(require_admin),
+):
+    if body.role == UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="SUPER_ADMIN is not a membership role")
+    target = db.query(User).filter(User.email == body.email).first()
+    if target is None:
+        raise HTTPException(status_code=404, detail="User identity not found")
+    if not target.is_active:
+        raise HTTPException(status_code=409, detail="User identity is disabled")
+    from ...services import membership_service
+    try:
+        membership = membership_service.invite_checked(
+            db, organization_id=ctx.organization_id, user_id=target.id,
+            role=body.role, acting_user_id=current_user.id,
+            expires_at=body.expires_at,
+            acting_is_platform_super_admin=ctx.is_super_admin,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(membership)
+    return _membership_payload(membership)
+
+
+@router.post("/memberships/accept", tags=["Users"])
+async def accept_membership_invitation(
+    body: MembershipAcceptRequest,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """קבלת הזמנה אינה תלויה ב-get_access_context: לפני הקבלה החברות
+    עדיין invited ולכן, בצדק, אינה יכולה לבנות הקשר פעיל."""
+    from ...services import membership_service
+    try:
+        membership = membership_service.accept(
+            db, organization_id=body.organization_id, user_id=current_user.id,
+            acting_user_id=current_user.id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(membership)
+    return _membership_payload(membership)
+
+
+@router.post("/memberships/{user_id}/suspend", tags=["Users"])
+async def suspend_organization_membership(
+    user_id: int,
+    db: Session = Depends(get_db_session),
+    ctx: OrganizationAccessContext = Depends(get_access_context),
+    current_user: User = Depends(require_admin),
+):
+    from ...services import membership_service
+    try:
+        membership = membership_service.suspend_checked(
+            db, organization_id=ctx.organization_id, user_id=user_id,
+            acting_user_id=current_user.id,
+            acting_is_platform_super_admin=ctx.is_super_admin,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(membership)
+    return _membership_payload(membership)
+
+
+@router.post("/memberships/{user_id}/revoke", tags=["Users"])
+async def revoke_organization_membership(
+    user_id: int,
+    db: Session = Depends(get_db_session),
+    ctx: OrganizationAccessContext = Depends(get_access_context),
+    current_user: User = Depends(require_admin),
+):
+    from ...services import membership_service
+    try:
+        membership = membership_service.revoke_checked(
+            db, organization_id=ctx.organization_id, user_id=user_id,
+            acting_user_id=current_user.id,
+            acting_is_platform_super_admin=ctx.is_super_admin,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(membership)
+    return _membership_payload(membership)
+
+@router.get("/users", tags=["Users"])
 async def list_users(
     organization_id: int = None,
     skip: int = 0,
@@ -1130,48 +1262,57 @@ async def list_users(
     ארגון בית A וחברות ב-B היה מקבל את רשימת המשתמשים של A בזמן שכל
     שאר המסך מציג את B.
     """
-    query = db.query(User)
-
-    if not ctx.is_super_admin:
-        query = query.filter(User.organization_id == ctx.organization_id)
-    elif organization_id:
-        query = query.filter(User.organization_id == organization_id)
-    else:
-        # סופר-אדמין בלי סינון מפורש מוגבל להקשר שבחר, לא לכל המערכת.
-        query = query.filter(User.organization_id == ctx.organization_id)
-
-    users = query.offset(skip).limit(limit).all()
-    return [UserResponse.model_validate(user) for user in users]
+    _require_selected_organization(ctx, organization_id)
+    rows = (
+        db.query(User, OrganizationMembership)
+        .join(OrganizationMembership, OrganizationMembership.user_id == User.id)
+        .filter(OrganizationMembership.organization_id == ctx.organization_id)
+        .order_by(User.id.asc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    result = []
+    for user, membership in rows:
+        payload = UserResponse.model_validate(user).model_dump()
+        payload.update({
+            "role": membership.role,
+            "organization_id": ctx.organization_id,
+            "membership_status": membership.status,
+            "membership_expires_at": membership.expires_at,
+        })
+        result.append(payload)
+    return result
 
 
 @router.get("/users/{user_id}", response_model=UserResponse, tags=["Users"])
 async def get_user(
     user_id: int,
     db: Session = Depends(get_db_session),
-    current_user: User = Depends(get_current_user)
+    ctx: OrganizationAccessContext = Depends(get_access_context),
+    _admin: User = Depends(get_organization_admin),
 ):
     """קבלת פרטי משתמש"""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+    row = (
+        db.query(User, OrganizationMembership)
+        .join(OrganizationMembership, OrganizationMembership.user_id == User.id)
+        .filter(
+            User.id == user_id,
+            OrganizationMembership.organization_id == ctx.organization_id,
         )
-    
-    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.ADMIN]:
-        if current_user.id != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied"
-            )
-    elif current_user.role == UserRole.ADMIN:
-        if user.organization_id != current_user.organization_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied"
-            )
-    
-    return UserResponse.model_validate(user)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    user, membership = row
+    payload = UserResponse.model_validate(user).model_dump()
+    payload.update({
+        "role": membership.role,
+        "organization_id": ctx.organization_id,
+        "membership_status": membership.status,
+        "membership_expires_at": membership.expires_at,
+    })
+    return payload
 
 
 # ==================== SUMIT Companies Management ====================
@@ -1216,14 +1357,10 @@ async def get_audit_logs(
     audit הוא בדיוק המקום שבו הבאג הזה הרסני: מי שבודק מה קרה בתיק B
     היה רואה פעולות מתיק A, ומסיק מסקנות על התיק הלא-נכון.
     """
-    query = db.query(AuditLog)
-
-    if not ctx.is_super_admin:
-        query = query.filter(AuditLog.organization_id == ctx.organization_id)
-    elif organization_id:
-        query = query.filter(AuditLog.organization_id == organization_id)
-    else:
-        query = query.filter(AuditLog.organization_id == ctx.organization_id)
+    _require_selected_organization(ctx, organization_id)
+    query = db.query(AuditLog).filter(
+        AuditLog.organization_id == ctx.organization_id,
+    )
 
 
     if user_id:
@@ -1316,18 +1453,12 @@ async def create_app_user(
             detail="organization_id is required",
         )
 
-    is_super = ctx.is_super_admin
-    if not is_super:
-        if user_data.organization_id != ctx.organization_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot provision users in another organization",
-            )
-        if user_data.role == UserRole.SUPER_ADMIN:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only a super admin can grant super_admin",
-            )
+    _require_selected_organization(ctx, user_data.organization_id)
+    if user_data.role == UserRole.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="SUPER_ADMIN is a platform role, not an organization membership",
+        )
 
     # Enforce minimum password length
     if len(user_data.password) < 8:
@@ -1349,8 +1480,10 @@ async def create_app_user(
         password_hash=get_password_hash(user_data.password),
         full_name=user_data.full_name,
         phone=user_data.phone,
-        role=user_data.role,
-        organization_id=user_data.organization_id,
+        # התפקיד הארגוני נשמר רק בחברות. השדה הגלובלי נשאר תפקיד בסיס
+        # כדי שנתיב legacy שלא חובר עדיין לא יעניק בטעות סמכות רחבה.
+        role=UserRole.USER,
+        organization_id=ctx.organization_id,
         is_active=True,
     )
     db.add(new_user)
@@ -1361,23 +1494,25 @@ async def create_app_user(
     # של לקוח. `flush` ולא `commit`: כשל בהזמנה מגלגל גם את המשתמש,
     # אחרת נשאר חשבון התחברות בלי שום חברות — משתמש שאיש אינו יכול לנהל.
     #
-    # `SUPER_ADMIN` הוא היוצא מן הכלל: הוא תפקיד **פלטפורמה** ולא תפקיד
-    # בתוך ארגון, נשמר ב-`User.role` בלבד, ואינו מייצר חברות. (אילוץ
-    # `ck_membership_role_not_super_admin` היה דוחה אותה ממילא.)
+    # SUPER_ADMIN הוא תפקיד פלטפורמה ואינו מתקבל כלל בנתיב הארגוני הזה.
     from ...services import membership_service as _membership_service
 
-    if user_data.role != UserRole.SUPER_ADMIN:
-        _membership_service.invite(
-            db,
-            organization_id=user_data.organization_id,
-            user_id=new_user.id,
-            role=user_data.role,
-            invited_by_user_id=current_user.id,
-        )
+    _membership_service.invite_checked(
+        db,
+        organization_id=ctx.organization_id,
+        user_id=new_user.id,
+        role=user_data.role,
+        acting_user_id=current_user.id,
+        acting_is_platform_super_admin=ctx.is_super_admin,
+    )
 
     db.commit()
     db.refresh(new_user)
-    return UserResponse.model_validate(new_user)
+    payload = UserResponse.model_validate(new_user)
+    return payload.model_copy(update={
+        "role": user_data.role,
+        "organization_id": ctx.organization_id,
+    })
 
 
 @router.patch("/users/{user_id}", response_model=UserResponse, tags=["Users"])
@@ -1389,34 +1524,23 @@ async def update_app_user(
     current_user: User = Depends(require_admin),
 ):
     """עדכון משתמש. **שינוי תפקיד נוגע בחברות בארגון הפעיל בלבד.**"""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
+    row = (
+        db.query(User, OrganizationMembership)
+        .join(OrganizationMembership, OrganizationMembership.user_id == User.id)
+        .filter(
+            User.id == user_id,
+            OrganizationMembership.organization_id == ctx.organization_id,
+        )
+        .first()
+    )
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    is_super = ctx.is_super_admin
-    if not is_super:
-        from ...services import membership_service as _ms
-
-        # ההיקף נבדק מול החברות בארגון הפעיל — לא מול
-        # `user.organization_id`, שהוא ארגון הבית ההיסטורי.
-        target_orgs = {
-            m.organization_id for m in _ms.memberships_for(db, user.id)
-        }
-        if ctx.organization_id not in target_orgs and user.organization_id != ctx.organization_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied",
-            )
-        if user.role == UserRole.SUPER_ADMIN:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot modify a super admin user",
-            )
-        if user_update.role == UserRole.SUPER_ADMIN:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only a super admin can grant super_admin",
-            )
+    user, membership = row
+    if user.role == UserRole.SUPER_ADMIN or user_update.role == UserRole.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Platform roles cannot be changed from an organization route",
+        )
 
     # Self-guards (checked BEFORE last-admin protection)
     if user_update.is_active is False and current_user.id == user.id:
@@ -1431,7 +1555,7 @@ async def update_app_user(
         )
 
     active_signing_authority = db.query(OrganizationSigningAuthority).filter(
-        OrganizationSigningAuthority.organization_id == user.organization_id,
+        OrganizationSigningAuthority.organization_id == ctx.organization_id,
         OrganizationSigningAuthority.user_id == user.id,
         OrganizationSigningAuthority.is_active.is_(True),
     ).first()
@@ -1447,65 +1571,57 @@ async def update_app_user(
             ),
         )
 
-    # Last-admin protection — applies when:
-    #   (a) deactivating the user, or
-    #   (b) demoting from ADMIN/SUPER_ADMIN to a lower role
-    # התפקיד הנבדק הוא זה **שבארגון הפעיל**, לא `User.role` הגלובלי:
-    # אדם יכול להיות ADMIN גלובלי ו-VIEWER כאן, והורדתו אינה מסירה מנהל.
-    _admin_roles = (UserRole.ADMIN, UserRole.SUPER_ADMIN)
-    from ...services import membership_service as _ms_guard
+    # פרטי identity הם גלובליים ומשותפים לכל הארגונים. נתיב ארגוני אינו
+    # משנה אותם בשם תיק אחד.
+    if any(value is not None for value in (
+        user_update.email, user_update.full_name, user_update.phone,
+    )):
+        raise HTTPException(
+            status_code=403,
+            detail="Global identity fields require a platform identity endpoint",
+        )
 
-    _role_here = _ms_guard.role_in(db, user.id, ctx.organization_id) or user.role
-    _losing_admin = (
-        (user_update.is_active is False and _role_here in _admin_roles)
-        or (user_update.role is not None and _role_here in _admin_roles
-            and user_update.role not in _admin_roles)
-    )
-    if _losing_admin:
-        # ספירת מנהלים **נגישים** לפי חברות: משתמש פעיל + חברות פעילה
-        # ולא פגה. ספירה לפי `User.role` הייתה סופרת גם מי שאין לו
-        # חברות בארגון הזה בכלל.
-        reachable = _ms_guard._reachable_admin_ids(db, ctx.organization_id)
-        if len(reachable) <= 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Last admin protection: cannot remove the last active admin of the organization",
-            )
+    from ...services import membership_service as _membership_service
 
-    # Apply only provided fields
-    if user_update.full_name is not None:
-        user.full_name = user_update.full_name
-    if user_update.phone is not None:
-        user.phone = user_update.phone
+    def _membership_error(exc: Exception) -> HTTPException:
+        return HTTPException(
+            status_code=403 if isinstance(exc, PermissionError) else 409,
+            detail=str(exc),
+        )
+
     if user_update.role is not None:
-        # שינוי תפקיד הוא שינוי **החברות בארגון הפעיל**, לא `User.role`.
-        # `User.role` הוא שדה גלובלי: שינויו בתיק אחד היה משנה את התפקיד
-        # של אותו אדם בכל התיקים שבהם הוא חבר.
-        from ...services import membership_service as _membership_service
-
-        if user_update.role == UserRole.SUPER_ADMIN:
-            # תפקיד פלטפורמה — גלובלי במכוון, ואינו חברות.
-            user.role = user_update.role
-        else:
-            existing = _membership_service.memberships_for(db, user.id)
-            in_active_org = [
-                m for m in existing if m.organization_id == ctx.organization_id
-            ]
-            if not in_active_org:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User has no membership in the active organization",
-                )
+        try:
             _membership_service.grant_checked(
                 db,
                 organization_id=ctx.organization_id,
                 user_id=user.id,
                 role=user_update.role,
                 acting_user_id=current_user.id,
-                status=in_active_org[0].status,
+                status=membership.status,
+                expires_at=membership.expires_at,
+                acting_is_platform_super_admin=ctx.is_super_admin,
             )
+        except (ValueError, PermissionError) as exc:
+            raise _membership_error(exc) from exc
     if user_update.is_active is not None:
-        user.is_active = user_update.is_active
+        try:
+            if user_update.is_active:
+                _membership_service.grant_checked(
+                    db, organization_id=ctx.organization_id, user_id=user.id,
+                    role=user_update.role or membership.role,
+                    acting_user_id=current_user.id,
+                    status=_membership_service.ACTIVE,
+                    expires_at=membership.expires_at,
+                    acting_is_platform_super_admin=ctx.is_super_admin,
+                )
+            else:
+                _membership_service.suspend_checked(
+                    db, organization_id=ctx.organization_id, user_id=user.id,
+                    acting_user_id=current_user.id,
+                    acting_is_platform_super_admin=ctx.is_super_admin,
+                )
+        except (ValueError, PermissionError) as exc:
+            raise _membership_error(exc) from exc
 
     db.commit()
     db.refresh(user)
@@ -1518,9 +1634,12 @@ async def update_app_user(
     payload = UserResponse.model_validate(user)
     effective = _ms_resp.role_in(db, user.id, ctx.organization_id)
     if effective is None:
-        rows = [m for m in _ms_resp.memberships_for(db, user.id)
-                if m.organization_id == ctx.organization_id]
-        effective = rows[0].role if rows else None
+        refreshed_membership = next(
+            (m for m in _ms_resp.memberships_for(db, user.id)
+             if m.organization_id == ctx.organization_id),
+            None,
+        )
+        effective = refreshed_membership.role if refreshed_membership else None
     if effective is not None:
         payload = payload.model_copy(update={"role": effective})
     return payload
@@ -1530,26 +1649,24 @@ async def update_app_user(
 async def delete_app_user(
     user_id: int,
     db: Session = Depends(get_db_session),
-    current_user: User = Depends(require_admin)
+    ctx: OrganizationAccessContext = Depends(get_access_context),
+    current_user: User = Depends(require_admin),
 ):
-    """Soft-delete (deactivate) an app user. Cannot delete self or the last admin."""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
+    """ביטול חברות בארגון הפעיל; אינו משבית את ה-identity הגלובלי."""
+    row = (
+        db.query(User, OrganizationMembership)
+        .join(OrganizationMembership, OrganizationMembership.user_id == User.id)
+        .filter(
+            User.id == user_id,
+            OrganizationMembership.organization_id == ctx.organization_id,
+        )
+        .first()
+    )
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    # Multi-tenancy / privilege-ceiling guards (non-super admins only)
-    is_super = current_user.role == UserRole.SUPER_ADMIN
-    if not is_super:
-        if user.organization_id != current_user.organization_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied",
-            )
-        if user.role == UserRole.SUPER_ADMIN:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot delete a super admin user",
-            )
+    user, _membership = row
+    if user.role == UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="Cannot modify a platform super admin")
 
     # Self-guard (checked BEFORE last-admin)
     if current_user.id == user.id:
@@ -1559,7 +1676,7 @@ async def delete_app_user(
         )
 
     if db.query(OrganizationSigningAuthority).filter(
-        OrganizationSigningAuthority.organization_id == user.organization_id,
+        OrganizationSigningAuthority.organization_id == ctx.organization_id,
         OrganizationSigningAuthority.user_id == user.id,
         OrganizationSigningAuthority.is_active.is_(True),
     ).first() is not None:
@@ -1571,26 +1688,17 @@ async def delete_app_user(
             ),
         )
 
-    # Last-admin protection
-    _admin_roles = (UserRole.ADMIN, UserRole.SUPER_ADMIN)
-    if user.role in _admin_roles:
-        active_admin_count = (
-            db.query(User)
-            .filter(
-                User.organization_id == user.organization_id,
-                User.is_active == True,
-                User.role.in_(_admin_roles),
-            )
-            .count()
+    from ...services import membership_service as _membership_service
+    try:
+        _membership_service.revoke_checked(
+            db, organization_id=ctx.organization_id, user_id=user.id,
+            acting_user_id=current_user.id,
+            acting_is_platform_super_admin=ctx.is_super_admin,
         )
-        if active_admin_count <= 1:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Last admin protection: cannot remove the last active admin of the organization",
-            )
-
-    # Soft-delete
-    user.is_active = False
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     db.commit()
 
 
@@ -1763,13 +1871,15 @@ def _memory_audit_snapshot(row: MoshkoMemory) -> dict[str, Any]:
 
 
 def _memory_row_for_actor(
-    db: Session, memory_id: int, current_user: User,
+    db: Session, memory_id: int, ctx: OrganizationAccessContext,
 ) -> MoshkoMemory:
-    query = db.query(MoshkoMemory).filter(MoshkoMemory.id == memory_id)
-    if current_user.role != UserRole.SUPER_ADMIN:
+    query = db.query(MoshkoMemory).filter(
+        MoshkoMemory.id == memory_id,
+        MoshkoMemory.organization_id == ctx.organization_id,
+    )
+    if not ctx.is_super_admin:
         query = query.filter(
-            MoshkoMemory.organization_id == current_user.organization_id,
-            or_(MoshkoMemory.user_id.is_(None), MoshkoMemory.user_id == current_user.id),
+            or_(MoshkoMemory.user_id.is_(None), MoshkoMemory.user_id == ctx.user.id),
         )
     row = query.first()
     if row is None:
@@ -2089,12 +2199,10 @@ async def list_moshko_memory(
     # זיכרון מושקו נושא עובדות עסק — דליפה שלו היא דליפה חשבונאית.
     # ההיקף נגזר מההקשר, לא מ-`users.organization_id`.
     current_user = ctx.user
+    _require_selected_organization(ctx, organization_id)
     query = db.query(MoshkoMemory)
     if ctx.is_super_admin:
-        if organization_id is not None:
-            query = query.filter(MoshkoMemory.organization_id == organization_id)
-        else:
-            query = query.filter(MoshkoMemory.organization_id == ctx.organization_id)
+        query = query.filter(MoshkoMemory.organization_id == ctx.organization_id)
         if user_id is not None:
             query = query.filter(MoshkoMemory.user_id == user_id)
     else:
@@ -2129,24 +2237,26 @@ async def list_moshko_memory(
 async def create_moshko_memory(
     body: MoshkoMemoryCreateRequest,
     db: Session = Depends(get_db_session),
+    ctx: OrganizationAccessContext = Depends(get_access_context),
     current_user: User = Depends(get_organization_admin),
 ):
-    if (
-        current_user.role != UserRole.SUPER_ADMIN
-        and body.organization_id != current_user.organization_id
-    ):
-        raise HTTPException(status_code=403, detail="Access denied")
-    org = db.query(Organization).filter(Organization.id == body.organization_id).first()
+    _require_selected_organization(ctx, body.organization_id)
+    org = db.query(Organization).filter(Organization.id == ctx.organization_id).first()
     if org is None:
         raise HTTPException(status_code=404, detail="Organization not found")
     if body.user_id is not None:
-        target = db.query(User).filter(
-            User.id == body.user_id,
-            User.organization_id == body.organization_id,
-        ).first()
+        target = (
+            db.query(User)
+            .join(OrganizationMembership, OrganizationMembership.user_id == User.id)
+            .filter(
+                User.id == body.user_id,
+                OrganizationMembership.organization_id == ctx.organization_id,
+            )
+            .first()
+        )
         if target is None:
             raise HTTPException(status_code=403, detail="User does not belong to organization")
-        if current_user.role != UserRole.SUPER_ADMIN and body.user_id != current_user.id:
+        if not ctx.is_super_admin and body.user_id != current_user.id:
             raise HTTPException(status_code=403, detail="Personal memory is private")
     content = (body.content or "").strip()
     if not content:
@@ -2154,13 +2264,13 @@ async def create_moshko_memory(
     category = _validate_memory_category(body.category)
     _validate_memory_capacity(
         db,
-        organization_id=body.organization_id,
+        organization_id=ctx.organization_id,
         user_id=body.user_id,
         content=content,
     )
     now = datetime.utcnow()
     row = MoshkoMemory(
-        organization_id=body.organization_id,
+        organization_id=ctx.organization_id,
         user_id=body.user_id,
         content=content,
         category=category,
@@ -2174,7 +2284,7 @@ async def create_moshko_memory(
     db.flush()
     db.add(AuditLog(
         user_id=current_user.id,
-        organization_id=body.organization_id,
+        organization_id=ctx.organization_id,
         action="MOSHKO_MEMORY_CREATE",
         entity_type="MoshkoMemory",
         entity_id=row.id,
@@ -2190,9 +2300,10 @@ async def update_moshko_memory(
     memory_id: int,
     body: MoshkoMemoryUpdateRequest,
     db: Session = Depends(get_db_session),
+    ctx: OrganizationAccessContext = Depends(get_access_context),
     current_user: User = Depends(get_organization_admin),
 ):
-    row = _memory_row_for_actor(db, memory_id, current_user)
+    row = _memory_row_for_actor(db, memory_id, ctx)
     old = _memory_audit_snapshot(row)
     changed = False
     if body.content is not None:
@@ -2236,9 +2347,10 @@ async def update_moshko_memory(
 async def delete_moshko_memory(
     memory_id: int,
     db: Session = Depends(get_db_session),
+    ctx: OrganizationAccessContext = Depends(get_access_context),
     current_user: User = Depends(get_organization_admin),
 ):
-    row = _memory_row_for_actor(db, memory_id, current_user)
+    row = _memory_row_for_actor(db, memory_id, ctx)
     old = _memory_audit_snapshot(row)
     organization_id = row.organization_id
     db.add(AuditLog(

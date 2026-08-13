@@ -66,6 +66,20 @@ def test_routes_require_auth(client):
     assert client.get("/api/ai/chat/s").status_code == 403
 
 
+@pytest.mark.parametrize("session_id", ["bad/session", "x" * 65, "רווח לא חוקי"])
+def test_chat_session_id_is_validated_before_storage(client, fresh_org, session_id):
+    iso = fresh_org()
+
+    sent = client.post(
+        "/api/ai/chat",
+        headers=iso["headers"],
+        json={"session_id": session_id, "message": "היי"},
+    )
+
+    assert sent.status_code == 400
+    assert "session_id" in sent.json()["detail"]
+
+
 def test_send_message_route_and_history(monkeypatch, client, fresh_org):
     iso = fresh_org()
     monkeypatch.setattr(

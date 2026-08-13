@@ -57,3 +57,12 @@ def test_localhost_still_resolves():
 def test_creating_a_connection_to_an_external_host_is_blocked():
     with pytest.raises(RuntimeError):
         socket.create_connection(("api.sumit.co.il", 443), timeout=1)
+
+
+def test_raw_socket_connect_is_guarded_without_touching_the_network():
+    """ספרייה יכולה לעקוף DNS ו-create_connection עם כתובת IP מוכנה."""
+    assert socket.socket.__name__ == "_GuardedSocket"
+
+
+def test_raw_socket_connect_ex_is_guarded_without_touching_the_network():
+    assert "connect_ex" in socket.socket.__dict__

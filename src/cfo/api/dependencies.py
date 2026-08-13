@@ -269,7 +269,6 @@ SOURCE_SUPER_ADMIN_HEADER = "super_admin_header"
 SOURCE_SUPER_ADMIN_OWN = "super_admin_own_org"
 SOURCE_HEADER = "explicit_header"
 SOURCE_SOLE = "sole_membership"
-SOURCE_LEGACY = "legacy_column"
 
 
 def _needs_selection(detail_msg: str, organizations: list[dict]) -> HTTPException:
@@ -391,16 +390,10 @@ async def resolve_access_context(
     if memberships:
         raise _forbidden("membership_not_active")
 
-    # מסלול תאימות זמני: משתמש שמעולם לא קיבל שום חברות. נמדד ב-
-    # `selection_source="legacy_column"` כדי שאפשר יהיה להסיר אותו.
-    if current_user.organization_id is None:
-        raise _forbidden("user_is_not_scoped_to_an_organization")
-    _assert_org_usable(db, current_user.organization_id)
-    return OrganizationAccessContext(
-        user=current_user, organization_id=current_user.organization_id,
-        membership=None, effective_role=current_user.role,
-        is_super_admin=False, selection_source=SOURCE_LEGACY, channel=channel,
-    )
+    # אין fallback ל-users.organization_id. המיגרציה מבצעת backfill מאומת;
+    # אחרי כן העמודה הישנה היא מטא־דאטה בלבד, לא מקור סמכות. השארת fallback
+    # הייתה מאפשרת לזהות שלא קיבלה חברות לעקוף את כל מחזור החיים החדש.
+    raise _forbidden("no_organization_membership")
 
 
 async def get_access_context(

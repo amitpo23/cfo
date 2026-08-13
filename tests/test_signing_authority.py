@@ -228,6 +228,17 @@ def test_existing_org_requires_explicit_one_time_owner_bootstrap(client):
             is_active=True,
         )
         db.add(admin)
+        db.flush()
+        from cfo.services import membership_service
+
+        membership_service.grant(
+            db,
+            organization_id=organization.id,
+            user_id=admin.id,
+            role=UserRole.ADMIN,
+            granted_by_user_id=admin.id,
+            status=membership_service.ACTIVE,
+        )
         db.commit()
         db.refresh(admin)
         headers = _token_headers(admin.id)

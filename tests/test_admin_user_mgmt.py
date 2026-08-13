@@ -262,11 +262,11 @@ def test_patch_last_admin_protection(client, owner, fresh_org, sec_actors):
 
 
 # ---------------------------------------------------------------------------
-# 12. test_delete_soft_deactivates
+# 12. DELETE revokes organization membership
 # ---------------------------------------------------------------------------
 
-def test_delete_soft_deactivates(client, owner):
-    """DELETE /api/admin/users/{id} → 204, user becomes inactive."""
+def test_delete_revokes_only_the_selected_membership(client, owner):
+    """DELETE revokes org access without disabling the person's identity."""
     org_id = owner["user"]["organization_id"]
     # Create user to delete
     create_resp = client.post("/api/admin/users", json={
@@ -283,9 +283,15 @@ def test_delete_soft_deactivates(client, owner):
     del_resp = client.delete(f"/api/admin/users/{user_id}", headers=owner["headers"])
     assert del_resp.status_code == 204, del_resp.text
 
-    # Confirm user is now inactive (cannot login)
+    # The same identity may belong to other organizations, so login remains
+    # valid while access to the revoked organization is denied.
     login_resp = _login(client, "delete_soft_mgmt@example.com", "securepass")
-    assert login_resp.status_code == 403, f"Expected 403 (inactive), got {login_resp.status_code}"
+    assert login_resp.status_code == 200, login_resp.text
+    revoked_headers = {
+        "Authorization": f"Bearer {login_resp.json()['access_token']}",
+        "X-Active-Org-Id": str(org_id),
+    }
+    assert client.get("/api/admin/users", headers=revoked_headers).status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -436,12 +442,12 @@ def test_create_user_super_admin_role_blocked(client, owner):
 # ---------------------------------------------------------------------------
 
 def test_patch_cross_org_blocked(client, owner, sec_actors):
-    """ADMIN of org A cannot PATCH a user belonging to org B → 403."""
+    """ADMIN of org A cannot enumerate/PATCH a user in org B → 404."""
     org_b_user = sec_actors["org_b_admin_user"]
     resp = client.patch(f"/api/admin/users/{org_b_user['id']}", json={
         "full_name": "Hacked Name",
     }, headers=owner["headers"])
-    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +479,7 @@ def test_patch_escalate_to_super_admin_blocked(client, owner):
 # ---------------------------------------------------------------------------
 
 def test_patch_super_admin_user_blocked(client, owner, sec_actors):
-    """ADMIN cannot PATCH a user who is a SUPER_ADMIN → 403."""
+    """An out-of-org platform identity is not enumerable → 404."""
     # sec_actors.super_admin user id
     sa_me = client.get("/api/admin/auth/me", headers=sec_actors["super_admin_headers"])
     assert sa_me.status_code == 200
@@ -482,7 +488,7 @@ def test_patch_super_admin_user_blocked(client, owner, sec_actors):
     resp = client.patch(f"/api/admin/users/{sa_user_id}", json={
         "full_name": "Hacked SA",
     }, headers=owner["headers"])
-    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -490,10 +496,10 @@ def test_patch_super_admin_user_blocked(client, owner, sec_actors):
 # ---------------------------------------------------------------------------
 
 def test_delete_cross_org_blocked(client, owner, sec_actors):
-    """ADMIN of org A cannot DELETE a user belonging to org B → 403."""
+    """ADMIN of org A cannot enumerate/DELETE a user in org B → 404."""
     org_b_user = sec_actors["org_b_admin_user"]
     resp = client.delete(f"/api/admin/users/{org_b_user['id']}", headers=owner["headers"])
-    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -514,8 +520,8 @@ def test_super_admin_can_create_cross_org(client, sec_actors):
     assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
 
 
-def test_super_admin_can_assign_super_admin_role(client, sec_actors):
-    """SUPER_ADMIN can create a user with role=super_admin (sanity)."""
+def test_super_admin_cannot_assign_platform_role_as_org_membership(client, sec_actors):
+    """SUPER_ADMIN is a platform identity role, never an org membership."""
     org_b_id = sec_actors["org_b_id"]
     resp = client.post("/api/admin/users", json={
         "email": "sec_sa_role_assign@example.com",
@@ -525,14 +531,16 @@ def test_super_admin_can_assign_super_admin_role(client, sec_actors):
         "role": "super_admin",
     }, headers={**sec_actors["super_admin_headers"],
                 "X-Active-Org-Id": str(org_b_id)})
-    assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 403, resp.text
+    assert "platform role" in resp.json()["detail"]
 
 
-def test_super_admin_can_patch_cross_org(client, sec_actors):
-    """SUPER_ADMIN can PATCH a user in any org (sanity)."""
+def test_super_admin_cannot_patch_global_identity_through_org_route(client, sec_actors):
+    """Even platform operators must use an explicit identity endpoint."""
     org_b_user = sec_actors["org_b_admin_user"]
     resp = client.patch(f"/api/admin/users/{org_b_user['id']}", json={
         "full_name": "SA Patched",
     }, headers={**sec_actors["super_admin_headers"],
                 "X-Active-Org-Id": str(sec_actors["org_b_id"])})
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 403, resp.text
+    assert "identity" in resp.json()["detail"]

@@ -6,7 +6,8 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Send, ShieldAlert, Loader2, Bot, User as UserIcon, Building2 } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Send, ShieldAlert, Loader2, Bot, User as UserIcon, Building2, Plus, Activity, BookOpen } from 'lucide-react';
 import apiService from '../services/api';
 import type { CurrentUser } from './OrgSwitcher';
 
@@ -61,6 +62,18 @@ function getSessionId(): string {
   return id;
 }
 
+function newSessionId(): string {
+  return `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function resolveSessionId(routeSessionId?: string): string {
+  if (routeSessionId && /^[A-Za-z0-9_-]{1,64}$/.test(routeSessionId)) {
+    localStorage.setItem(SESSION_KEY, routeSessionId);
+    return routeSessionId;
+  }
+  return getSessionId();
+}
+
 function getStoredPersona(): PersonaKey {
   const stored = localStorage.getItem(PERSONA_KEY);
   if (stored === 'bookkeeper' || stored === 'cfo' || stored === 'accountant') return stored;
@@ -74,12 +87,21 @@ function extractErrorMessage(err: unknown): string {
 
 const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | null }> = ({ darkMode, currentUser }) => {
   const isOfficeManager = currentUser?.role === 'super_admin';
-  const [sessionId] = useState(getSessionId);
+  const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
+  const navigate = useNavigate();
+  const [sessionId, setSessionId] = useState(() => resolveSessionId(routeSessionId));
   const [input, setInput] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [persona, setPersona] = useState<PersonaKey>(getStoredPersona);
   const queryClient = useQueryClient();
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (routeSessionId && /^[A-Za-z0-9_-]{1,64}$/.test(routeSessionId)) {
+      localStorage.setItem(SESSION_KEY, routeSessionId);
+      setSessionId(routeSessionId);
+    }
+  }, [routeSessionId]);
 
   const handlePersonaChange = (key: PersonaKey) => {
     setPersona(key);
@@ -133,14 +155,21 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
     sendMutation.mutate(text);
   };
 
+  const handleNewConversation = () => {
+    const id = newSessionId();
+    localStorage.setItem(SESSION_KEY, id);
+    setSessionId(id);
+    navigate(`/agent/${id}`);
+  };
+
   const cardClass = `rounded-2xl border ${
     darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
   }`;
 
   return (
     <div className={`p-6 h-full flex flex-col ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-      <div className="flex items-center gap-3 mb-1">
-        <h1 className="text-3xl font-bold">עוזר CFO — AI</h1>
+      <div className="flex flex-wrap items-center gap-3 mb-1">
+        <h1 className="text-3xl font-bold">מושקו — סוכן ה־CFO</h1>
         {isOfficeManager && (
           <span className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full ${
             darkMode ? 'bg-purple-900/40 text-purple-200' : 'bg-purple-100 text-purple-700'
@@ -149,12 +178,35 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
             מצב מנהל משרד
           </span>
         )}
+        <button
+          type="button"
+          onClick={handleNewConversation}
+          className={`mr-auto flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
+            darkMode ? 'border-gray-700 hover:bg-gray-800' : 'border-gray-200 bg-white hover:bg-gray-50'
+          }`}
+        >
+          <Plus size={16} /> שיחה חדשה
+        </button>
       </div>
       <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
         שאל על מצב פיננסי, גיול חובות, תיקי גבייה ועוד. פעולות כתיבה (הפקת מסמך, רישום ניסיון גבייה)
         מוצגות לאישור מפורש לפני ביצוע.
         {isOfficeManager && ' במצב מנהל משרד יש לך גם כלים לצפייה בכל תיקי הלקוחות ורולאפ פיננסי חוצה-לקוחות.'}
       </p>
+
+      <div className={`mb-3 flex flex-wrap items-center gap-3 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+        <span dir="ltr">Session: {sessionId}</span>
+        {isOfficeManager && (
+          <>
+            <Link to="/admin-moshko" className="flex items-center gap-1 text-violet-600 hover:underline">
+              <Activity size={13} /> ניטור כל השיחות
+            </Link>
+            <Link to="/admin-moshko-knowledge" className="flex items-center gap-1 text-violet-600 hover:underline">
+              <BookOpen size={13} /> ניהול הידע של מושקו
+            </Link>
+          </>
+        )}
+      </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-1">
         {PERSONAS.map((p) => (

@@ -4,6 +4,7 @@ import pytest
 from cfo.auth import create_access_token, get_password_hash
 from cfo.database import SessionLocal
 from cfo.models import User, UserRole
+from cfo.services import membership_service
 
 
 IRREVERSIBLE_ACTIONS = [
@@ -69,6 +70,15 @@ def _create_role_headers(owner, *, role, email):
             is_active=True,
         )
         db.add(row)
+        db.flush()
+        membership_service.grant(
+            db,
+            organization_id=owner["user"]["organization_id"],
+            user_id=row.id,
+            role=role,
+            granted_by_user_id=owner["user"]["id"],
+            status=membership_service.ACTIVE,
+        )
         db.commit()
         db.refresh(row)
         token = create_access_token({"sub": row.id})

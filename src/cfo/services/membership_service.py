@@ -194,8 +194,15 @@ def accept(
     m = _find(db, organization_id=organization_id, user_id=user_id)
     if m is None or m.status != INVITED:
         raise ValueError("אין הזמנה ממתינה לצירוף הזה")
+    if m.expires_at is not None and _aware(m.expires_at) <= _now():
+        raise ValueError("ההזמנה פגה ואינה ניתנת לקבלה")
     m.status = ACTIVE
     m.verified_at = _now()
+    _audit(
+        db, organization_id=organization_id, acting_user_id=acting_user_id,
+        action="MEMBERSHIP_ACCEPT", target_user_id=user_id,
+        details={"role": m.role.value},
+    )
     db.flush()
     return m
 
@@ -213,12 +220,20 @@ def _find(
     )
 
 
-def _assert_admin_of(db: Session, *, organization_id: int, acting_user_id: int) -> None:
+def _assert_admin_of(
+    db: Session, *, organization_id: int, acting_user_id: int,
+    acting_is_platform_super_admin: bool = False,
+) -> None:
     """הפעולה מותרת רק למנהל **בארגון הזה**.
 
     ADMIN בארגון א' אינו רשאי להעניק חברות בארגון ב'. `User.role`
     הגלובלי אינו נבדק כאן במכוון: הוא שדה פלטפורמה ואינו הרשאה ארגונית.
     """
+    if acting_is_platform_super_admin:
+        actor = db.query(User).filter(User.id == acting_user_id).first()
+        if actor is None or not actor.is_active or actor.role != UserRole.SUPER_ADMIN:
+            raise PermissionError("סמכות מפעיל הפלטפורמה אינה תקפה")
+        return
     role = role_in(db, acting_user_id, organization_id)
     if role not in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
         raise PermissionError(
@@ -258,6 +273,36 @@ def _assert_not_last_admin(db: Session, *, organization_id: int, user_id: int) -
         )
 
 
+def _assert_admin_survives_after(
+    db: Session, *, organization_id: int, user_id: int, expires_at: datetime,
+) -> None:
+    """פקיעה עתידית היא הסרה מתוזמנת, ולכן חייב להיות מנהל אחר שיישאר
+    נגיש גם לאחר נקודת הזמן הזו. בדיקה בזמן הכתיבה מונעת מארגון להינעל
+    מאוחר יותר בלי שתתרחש בקשת HTTP נוספת שבה אפשר להפעיל guard."""
+    rows = (
+        db.query(OrganizationMembership)
+        .filter(
+            OrganizationMembership.organization_id == organization_id,
+            OrganizationMembership.user_id != user_id,
+            OrganizationMembership.status == ACTIVE,
+            OrganizationMembership.role == UserRole.ADMIN,
+        )
+        .all()
+    )
+    survives = any(
+        _user_is_active(db, row.user_id)
+        and (
+            row.expires_at is None
+            or _aware(row.expires_at) > _aware(expires_at)
+        )
+        for row in rows
+    )
+    if not survives:
+        raise ValueError(
+            "אי-אפשר לתזמן פקיעת מנהל בלי מנהל נגיש אחר שישרוד אחריה"
+        )
+
+
 def _audit(
     db: Session, *, organization_id: int, acting_user_id: int, action: str,
     target_user_id: int, details: dict,
@@ -283,13 +328,15 @@ def grant_checked(
     acting_user_id: int,
     status: str = ACTIVE,
     expires_at: Optional[datetime] = None,
+    acting_is_platform_super_admin: bool = False,
 ) -> OrganizationMembership:
     """הענקה/שינוי תפקיד עם בדיקת סמכות ורישום ביקורת.
 
     שינוי תפקיד הוא שינוי **חברות בארגון מסוים** — לא `User.role`.
     """
     _assert_admin_of(db, organization_id=organization_id,
-                     acting_user_id=acting_user_id)
+                     acting_user_id=acting_user_id,
+                     acting_is_platform_super_admin=acting_is_platform_super_admin)
 
     # שלושה מסלולים שכולם מסירים את המנהל בפועל:
     #   · הורדה בדרגה  · השעיה/הזמנה במקום פעיל  · תוקף שכבר פג
@@ -301,11 +348,21 @@ def grant_checked(
         or status != ACTIVE
         or expiry_kills
     )
+    existing = _find(db, organization_id=organization_id, user_id=user_id)
     if removes_admin:
-        existing = _find(db, organization_id=organization_id, user_id=user_id)
         if existing is not None and existing.role in (UserRole.ADMIN, UserRole.SUPER_ADMIN):
             _assert_not_last_admin(db, organization_id=organization_id,
                                    user_id=user_id)
+    elif (
+        expires_at is not None
+        and _aware(expires_at) > _now()
+        and existing is not None
+        and existing.role == UserRole.ADMIN
+    ):
+        _assert_admin_survives_after(
+            db, organization_id=organization_id, user_id=user_id,
+            expires_at=expires_at,
+        )
     m = grant(
         db, organization_id=organization_id, user_id=user_id, role=role,
         granted_by_user_id=acting_user_id, status=status, expires_at=expires_at,
@@ -318,9 +375,11 @@ def grant_checked(
 
 def revoke_checked(
     db: Session, *, organization_id: int, user_id: int, acting_user_id: int,
+    acting_is_platform_super_admin: bool = False,
 ) -> OrganizationMembership:
     _assert_admin_of(db, organization_id=organization_id,
-                     acting_user_id=acting_user_id)
+                     acting_user_id=acting_user_id,
+                     acting_is_platform_super_admin=acting_is_platform_super_admin)
     _assert_not_last_admin(db, organization_id=organization_id, user_id=user_id)
     m = revoke(db, organization_id=organization_id, user_id=user_id,
                revoked_by_user_id=acting_user_id)
@@ -333,9 +392,11 @@ def revoke_checked(
 
 def suspend_checked(
     db: Session, *, organization_id: int, user_id: int, acting_user_id: int,
+    acting_is_platform_super_admin: bool = False,
 ) -> OrganizationMembership:
     _assert_admin_of(db, organization_id=organization_id,
-                     acting_user_id=acting_user_id)
+                     acting_user_id=acting_user_id,
+                     acting_is_platform_super_admin=acting_is_platform_super_admin)
     _assert_not_last_admin(db, organization_id=organization_id, user_id=user_id)
     m = suspend(db, organization_id=organization_id, user_id=user_id,
                 suspended_by_user_id=acting_user_id)
@@ -343,6 +404,36 @@ def suspend_checked(
         raise ValueError("אין חברות להשעיה")
     _audit(db, organization_id=organization_id, acting_user_id=acting_user_id,
            action="MEMBERSHIP_SUSPEND", target_user_id=user_id, details={})
+    return m
+
+
+def invite_checked(
+    db: Session,
+    *,
+    organization_id: int,
+    user_id: int,
+    role: UserRole,
+    acting_user_id: int,
+    expires_at: Optional[datetime] = None,
+    acting_is_platform_super_admin: bool = False,
+) -> OrganizationMembership:
+    """הזמנה מבוקרת עם סמכות ארגונית ו-AuditLog."""
+    _assert_admin_of(
+        db, organization_id=organization_id, acting_user_id=acting_user_id,
+        acting_is_platform_super_admin=acting_is_platform_super_admin,
+    )
+    m = invite(
+        db, organization_id=organization_id, user_id=user_id, role=role,
+        invited_by_user_id=acting_user_id, expires_at=expires_at,
+    )
+    _audit(
+        db, organization_id=organization_id, acting_user_id=acting_user_id,
+        action="MEMBERSHIP_INVITE", target_user_id=user_id,
+        details={
+            "role": role.value,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        },
+    )
     return m
 
 
