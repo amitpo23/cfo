@@ -54,7 +54,7 @@
 | --- | --- |
 | `python -m pytest tests/ -q` | **1,459 עוברים**, 0 נכשלים, ~292 שנ', 20,850 אזהרות (נמדד 2026-07-27) |
 | `python scripts/audit_routes.py` | **250 routes**: 174 תקין · 39 אזהרה(4xx) · **36 מוגדר-סביבה(400)** · **1 כשל**. הכשל היחיד: `/api/financial/ai/predict/revenue` מחזיר 400 "דורש היסטוריית נתונים" — honest-null נכון. כל כשל נוסף = רגרסיה |
-| `python scripts/schema_drift_check.py` | **נכשל** על ה-DB המקומי: 4 טבלאות חסרות (`filing_crosschecks`, `morning_briefs`, `of_snapshot_cache`, `vehicle_profiles`) + עמודות ב-`organizations`/`accounts`/`daily_snapshots`/`expenses`. ה-SQLite המקומי מיושן — **לא רגרסיה** |
+| `python scripts/schema_drift_check.py` | **נכשל** על ה-DB המקומי: 4 טבלאות חסרות (`filing_crosschecks`, `morning_briefs`, `of_snapshot_cache`, `vehicle_profiles`) + עמודות ב-`organizations`/`accounts`/`daily_snapshots`/`expenses`. ה-SQLite המקומי מיושן — **לא רגרסיה**. הערה (נמדד 2026-08-05): זה תלוי-DB, לא תלוי-סכימה — על `cfo.db` **טרי** (worktree חדש, `alembic upgrade head` מאפס) התוצאה היא `OK — אין drift` (exit 0), ו-`alembic heads` מחזיר head יחיד ללא הסתעפות. הכשל המתועד כאן שייך ספציפית ל-`cfo.db` ישן שלא הורצו עליו migrations עדכניים — לא לבעיה במודלים/מיגרציות עצמם |
 | `python scripts/qa_gate.py` | נכשל בבסיס על שער אחד בלבד: `3a. Schema drift (local)` (DB מקומי מיושן). 7 השערים האחרים עוברים |
 | `cd frontend && npm ci && npm run build` | עובר (tsc + vite) |
 | `cd frontend && npm run lint` | ⚠️ **שבור** — אין קובץ קונפיג של eslint ב-`frontend/`. ה-script קיים ב-`package.json` אבל נופל מיד. ה-CI לא מריץ lint ולכן זה לא נתפס. אל תדווח על זה כרגרסיה — זה פער ידוע |
