@@ -29,7 +29,7 @@ from cfo.services.schema_deployment import (
 )
 
 
-PREVIOUS = "b0c1d2e3f4a5"
+PREVIOUS = "c1d2e3f4a5b6"
 REPO = Path(__file__).resolve().parents[1]
 
 

@@ -10,7 +10,7 @@ POST /api/admin/db/migrate (תיקון). additive בלבד: לעולם לא מו
 """
 from typing import Any, Dict, List
 
-from sqlalchemy import UniqueConstraint, inspect
+from sqlalchemy import CheckConstraint, UniqueConstraint, inspect
 from sqlalchemy import text as sa_text
 from sqlalchemy.engine import Engine
 
@@ -62,6 +62,54 @@ def empty_schema_drift() -> Dict[str, Any]:
 def has_schema_drift(report: Dict[str, Any]) -> bool:
     """True when any known structural drift bucket is non-empty."""
     return any(bool(report.get(key)) for key in _FULL_DRIFT_KEYS)
+
+
+def expected_check_constraints() -> Dict[str, set]:
+    """אילוצי CHECK ששמם מוגדר במפורש במודלים.
+
+    אילוץ בלי שם אינו נכלל: אי-אפשר לזהות אותו במסד באופן יציב, ובדיקה
+    לפי טקסט הביטוי הייתה מייצרת drift מדומה בין ניבים.
+    """
+    from ..models import Base
+
+    expected: Dict[str, set] = {}
+    for table in Base.metadata.sorted_tables:
+        names = {
+            c.name for c in table.constraints
+            if isinstance(c, CheckConstraint) and c.name
+        }
+        if names:
+            expected[table.name] = names
+    return expected
+
+
+def compute_check_constraint_drift(engine: Engine) -> list[dict]:
+    """אילוצי CHECK שהמודל דורש ואינם קיימים במסד.
+
+    `compute_schema_drift` בודק טבלאות, עמודות, טיפוסים, FK, unique
+    ואינדקסים — אך **לא** CHECK. הפער הזה מהותי עבור
+    `ck_membership_role_not_super_admin`: הוא מה שמונע ממנהל ארגון
+    להעניק חברות SUPER_ADMIN בתיק שלו. מסד שסומן `head` בלעדיו נושא
+    הצהרה שקרית על ההגנות שקיימות בו.
+    """
+    inspector = inspect(engine)
+    actual_tables = set(inspector.get_table_names())
+    drift: list[dict] = []
+
+    for table_name, expected_names in expected_check_constraints().items():
+        if table_name not in actual_tables:
+            continue  # טבלה חסרה מדווחת ממילא ב-compute_missing
+        try:
+            present = {
+                c.get("name") for c in inspector.get_check_constraints(table_name)
+            }
+        except NotImplementedError:  # pragma: no cover - ניב ללא תמיכה
+            continue
+        missing = sorted(n for n in expected_names if n not in present)
+        if missing:
+            drift.append({"table": table_name, "missing_check_constraints": missing})
+
+    return drift
 
 
 def _type_signature(column_type: Any) -> Dict[str, Any]:

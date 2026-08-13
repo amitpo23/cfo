@@ -144,7 +144,11 @@ def verify_membership_backfill(
         wrongly_active = conn.execute(sa.text(
             "SELECT COUNT(*) FROM users u JOIN organization_memberships m "
             "ON m.user_id = u.id AND m.organization_id = u.organization_id "
-            "WHERE u.is_active = 0 AND m.status = 'active'"
+            # `IS FALSE` ולא `= 0`: ב-PostgreSQL `boolean = 0` הוא שגיאת
+            # טיפוס, ולכן ה-postcondition הזה היה **קורס** בפרוד — כלומר
+            # החתימה הייתה נעצרת מסיבה שאינה קשורה לנתונים. ב-SQLite
+            # `IS FALSE` נתמך ומתנהג זהה.
+            "WHERE u.is_active IS FALSE AND m.status = 'active'"
         )).scalar_one()
         if wrongly_active:
             gaps.append(
@@ -202,6 +206,17 @@ def reconcile_schema_to_head(
         raise SchemaDeploymentError(
             "schema drift remains after additive reconciliation; "
             "refusing to mark Alembic head"
+        )
+
+    # אילוצי CHECK — `compute_schema_drift` אינו בודק אותם, ו-
+    # `apply_additive` אינו יכול להוסיף אותם לטבלה קיימת ב-SQLite.
+    # מסד שסומן `head` בלי `ck_membership_role_not_super_admin` נושא
+    # הצהרה שקרית: ההגנה שמונעת חברות SUPER_ADMIN אינה קיימת בו.
+    check_drift = schema_sync.compute_check_constraint_drift(engine)
+    if check_drift:
+        raise SchemaDeploymentError(
+            "required check constraints are missing; refusing to mark Alembic "
+            f"head: {check_drift}"
         )
 
     # תיקון סמנטי — לפני החתימה, לא אחריה.
