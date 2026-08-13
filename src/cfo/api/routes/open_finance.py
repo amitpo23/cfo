@@ -32,6 +32,7 @@ from ...services import bank_query_service
 from ...services import of_snapshot_service
 from ...services.of_snapshot_service import OfSnapshotRefreshCooldown
 from ...services.irreversible_action_service import (
+    ActionAuthorizationError,
     ActionConflictError,
     ActionStateError,
     ActionValidationError,
@@ -734,6 +735,8 @@ async def create_payment(
         ActionValidationError,
     ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActionAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     client = get_open_finance_client(db, org_id)
     try:
@@ -804,6 +807,8 @@ async def create_payment(
                     error=str(exc.detail),
                 )
             raise
+        except ActionAuthorizationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     finally:
         await client.close()
 

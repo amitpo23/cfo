@@ -310,6 +310,78 @@ class OrganizationSigningAuthority(Base):
     )
 
 
+class PolicyGrant(Base):
+    """Organization-scoped policy overlay for one role or one user.
+
+    Application RBAC remains the broad baseline.  These rows add explicit
+    denies and the financial boundaries that a role alone cannot express.
+    A grant can target exactly one user or one organization role, never both.
+    """
+    __tablename__ = "policy_grants"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False,
+    )
+    action = Column(String(80), nullable=False)
+    effect = Column(String(10), nullable=False, default="allow")
+    role = Column(SQLEnum(UserRole), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    max_amount = Column(Numeric(18, 2), nullable=True)
+    daily_limit_amount = Column(Numeric(18, 2), nullable=True)
+    monthly_limit_amount = Column(Numeric(18, 2), nullable=True)
+    currency = Column(String(3), nullable=False, default="ILS")
+    allowed_bank_accounts = Column(JSON, nullable=True)
+    allowed_counterparties = Column(JSON, nullable=True)
+    allowed_document_types = Column(JSON, nullable=True)
+    allowed_channels = Column(JSON, nullable=True)
+
+    valid_from = Column(DateTime(timezone=True), nullable=True)
+    valid_until = Column(DateTime(timezone=True), nullable=True)
+    requires_step_up = Column(Boolean, nullable=False, default=False)
+    required_approvals = Column(Integer, nullable=False, default=1)
+    separation_of_duties = Column(Boolean, nullable=False, default=False)
+    requires_reason = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    revoked_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "effect IN ('allow', 'deny')", name="ck_policy_grant_effect",
+        ),
+        CheckConstraint(
+            "((role IS NOT NULL AND user_id IS NULL) OR "
+            "(role IS NULL AND user_id IS NOT NULL))",
+            name="ck_policy_grant_single_subject",
+        ),
+        CheckConstraint(
+            "required_approvals >= 1", name="ck_policy_required_approvals",
+        ),
+        CheckConstraint(
+            "max_amount IS NULL OR max_amount > 0",
+            name="ck_policy_max_amount_positive",
+        ),
+        CheckConstraint(
+            "daily_limit_amount IS NULL OR daily_limit_amount > 0",
+            name="ck_policy_daily_limit_positive",
+        ),
+        CheckConstraint(
+            "monthly_limit_amount IS NULL OR monthly_limit_amount > 0",
+            name="ck_policy_monthly_limit_positive",
+        ),
+        Index("ix_policy_grant_org_action_active", "organization_id", "action", "is_active"),
+        Index("ix_policy_grant_org_user", "organization_id", "user_id"),
+    )
+
+
 class IrreversibleActionRequest(Base):
     """Durable proposal/approval/execution evidence for an external action.
 
@@ -328,6 +400,9 @@ class IrreversibleActionRequest(Base):
     payload = Column(JSON, nullable=False)
     payload_sha256 = Column(String(64), nullable=False)
     idempotency_key = Column(String(160), nullable=False)
+    origin_channel = Column(
+        String(30), nullable=False, default="internal", server_default="internal",
+    )
 
     status = Column(String(24), nullable=False, default="proposed")
     proposed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
@@ -344,6 +419,12 @@ class IrreversibleActionRequest(Base):
     execution_result = Column(JSON, nullable=True)
     verification_evidence = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
+
+    # Sanitized policy decisions are retained as evidence.  They contain the
+    # outcome/reason and requirements, not account allow-lists or secrets.
+    policy_proposed_decision = Column(JSON, nullable=True)
+    policy_approved_decision = Column(JSON, nullable=True)
+    policy_execution_decision = Column(JSON, nullable=True)
 
     proposed_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
@@ -366,6 +447,37 @@ class IrreversibleActionRequest(Base):
             "organization_id",
             "status",
         ),
+    )
+
+
+class IrreversibleActionApproval(Base):
+    """One distinct signatory approval for an immutable action request."""
+    __tablename__ = "irreversible_action_approvals"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False,
+    )
+    request_id = Column(
+        Integer, ForeignKey("irreversible_action_requests.id"), nullable=False,
+    )
+    approved_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    authority_id = Column(
+        Integer, ForeignKey("organization_signing_authorities.id"), nullable=False,
+    )
+    authority_type = Column(String(30), nullable=False)
+    policy_decision = Column(JSON, nullable=False)
+    approved_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "request_id", "approved_by_user_id",
+            name="uq_action_approval_request_user",
+        ),
+        Index("ix_action_approval_org_request", "organization_id", "request_id"),
     )
 
 
@@ -693,6 +805,39 @@ class SyncRun(Base):
 
     __table_args__ = (
         Index("ix_syncrun_org_status", "organization_id", "status"),
+    )
+
+
+class ProviderRequestBudget(Base):
+    """Atomic cross-instance provider request counter for one UTC window."""
+    __tablename__ = "provider_request_budgets"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(30), nullable=False)
+    # "global" protects provider/IP burst limits; "org:<id>" protects the
+    # customer's paid daily allowance.  A string avoids NULL uniqueness traps.
+    scope_key = Column(String(80), nullable=False)
+    organization_id = Column(Integer, nullable=True)
+    window_kind = Column(String(20), nullable=False)
+    window_start = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Integer, nullable=False, default=0)
+    limit_value = Column(Integer, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "scope_key", "window_kind", "window_start",
+            name="uq_provider_budget_window",
+        ),
+        CheckConstraint("used >= 0", name="ck_provider_budget_used_nonnegative"),
+        CheckConstraint("limit_value >= 0", name="ck_provider_budget_limit_nonnegative"),
+        Index(
+            "ix_provider_budget_provider_window",
+            "provider", "window_kind", "window_start",
+        ),
     )
 
 
@@ -1135,6 +1280,48 @@ class MoshkoToolCall(Base):
         Index("ix_moshko_tool_calls_org_created", "organization_id", "created_at"),
         Index("ix_moshko_tool_calls_session", "session_id"),
         Index("ix_moshko_tool_calls_target_success", "target_system", "succeeded"),
+    )
+
+
+class MoshkoFeedback(Base):
+    """User-reported quality evidence and its human-reviewed correction.
+
+    Question/answer snapshots are immutable evidence.  A correction is never
+    global training data: promotion creates an approved, organization-scoped
+    ``MoshkoMemory`` row and keeps the link for idempotency and audit.
+    """
+    __tablename__ = "moshko_feedback"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    message_id = Column(Integer, ForeignKey("ai_chat_messages.id"), nullable=False)
+    session_id = Column(String(64), nullable=False)
+    channel = Column(String(20), nullable=False, default="web")
+    category = Column(String(20), nullable=False)  # helpful | inaccurate | unknown | unsafe
+    comment = Column(Text, nullable=True)
+    question = Column(Text, nullable=True)
+    answer = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="open")
+    correction = Column(Text, nullable=True)
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    promoted_memory_id = Column(Integer, ForeignKey("moshko_memory.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "message_id", name="uq_moshko_feedback_user_message"),
+        CheckConstraint(
+            "category IN ('helpful','inaccurate','unknown','unsafe')",
+            name="ck_moshko_feedback_category",
+        ),
+        CheckConstraint(
+            "status IN ('open','reviewed','resolved','dismissed')",
+            name="ck_moshko_feedback_status",
+        ),
+        Index("ix_moshko_feedback_org_status_created", "organization_id", "status", "created_at"),
+        Index("ix_moshko_feedback_category_created", "category", "created_at"),
     )
 
 

@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from cfo.database import SessionLocal
-from cfo.models import ChannelIdentity, ChannelLinkCode, User
+from cfo.models import ChannelIdentity, ChannelLinkCode, User, UserRole
 from cfo.services import channel_link_service as svc
 from cfo.services.channel_link_service import (
     ChannelLinkError,
@@ -328,6 +328,43 @@ def test_inactive_user_cannot_be_linked(fresh_org, fake_smtp):
         result = _start(db, external_id="chat-inactive", email=known_email)
         assert result["status"] == "code_sent"
         assert len(calls) == 0
+    finally:
+        db.close()
+
+
+def test_email_verification_never_guesses_an_org_for_multi_org_user(
+    fresh_org, fake_smtp,
+):
+    calls, _ = fake_smtp
+    primary = fresh_org()
+    secondary = fresh_org()
+    email = _email_for_org(primary["org_id"])
+    db = SessionLocal()
+    try:
+        from cfo.models import OrganizationMembership
+        user = db.query(User).filter(User.email == email).one()
+        db.add(OrganizationMembership(
+            organization_id=secondary["org_id"],
+            user_id=user.id,
+            role=UserRole.VIEWER,
+            status="active",
+            invited_by_user_id=user.id,
+            verified_at=datetime.utcnow(),
+        ))
+        db.commit()
+
+        result = _start(
+            db, provider="whatsapp", external_id="972500009999", email=email,
+        )
+
+        assert result["status"] == "code_sent"
+        assert len(calls) == 1
+        assert _CODE_RE.search(calls[0]["body"]) is None
+        assert "לאפליקציה" in calls[0]["body"]
+        assert db.query(ChannelLinkCode).filter(
+            ChannelLinkCode.user_id == user.id,
+            ChannelLinkCode.used_at.is_(None),
+        ).count() == 0
     finally:
         db.close()
 

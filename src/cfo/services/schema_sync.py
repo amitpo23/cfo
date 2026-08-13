@@ -10,7 +10,7 @@ POST /api/admin/db/migrate (תיקון). additive בלבד: לעולם לא מו
 """
 from typing import Any, Dict, List
 
-from sqlalchemy import CheckConstraint, UniqueConstraint, inspect
+from sqlalchemy import CheckConstraint, Enum as SAEnum, UniqueConstraint, inspect
 from sqlalchemy import text as sa_text
 from sqlalchemy.engine import Engine
 
@@ -130,7 +130,13 @@ def _type_signature(column_type: Any) -> Dict[str, Any]:
     ORM explicitly specifies them.
     """
     affinity = getattr(column_type, "_type_affinity", type(column_type))
-    signature: Dict[str, Any] = {"affinity": affinity.__name__.lower()}
+    # PostgreSQL reflects native ENUM as ``postgresql.ENUM`` whose affinity
+    # is ``NamedType``; the equivalent ORM ``sa.Enum`` advertises String.
+    # Compare the declared values, not that dialect implementation detail.
+    if isinstance(column_type, SAEnum):
+        signature: Dict[str, Any] = {"affinity": "string"}
+    else:
+        signature = {"affinity": affinity.__name__.lower()}
     for attribute in ("length", "precision", "scale"):
         value = getattr(column_type, attribute, None)
         if value is not None:

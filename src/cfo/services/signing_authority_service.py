@@ -13,6 +13,7 @@ from .irreversible_action_service import (
     ActionValidationError,
     SUPPORTED_ACTION_TYPES,
 )
+from . import membership_service
 
 
 AUTHORITY_TYPES = frozenset({"owner", "authorized_signer"})
@@ -62,7 +63,9 @@ class SigningAuthorityService:
     ) -> OrganizationSigningAuthority | None:
         if (
             not user.is_active
-            or user.organization_id != self.organization_id
+            or not membership_service.is_member(
+                self.db, user.id, self.organization_id,
+            )
         ):
             return None
         rows = self._query().filter(
@@ -84,7 +87,9 @@ class SigningAuthorityService:
     ) -> OrganizationSigningAuthority:
         if (
             not user.is_active
-            or user.organization_id != self.organization_id
+            or not membership_service.is_member(
+                self.db, user.id, self.organization_id,
+            )
         ):
             raise ActionAuthorizationError(
                 "active organization owner authority is required",
@@ -113,8 +118,9 @@ class SigningAuthorityService:
             )
         if (
             not user.is_active
-            or user.organization_id != self.organization_id
-            or user.role != UserRole.ADMIN
+            or membership_service.role_in(
+                self.db, user.id, self.organization_id,
+            ) != UserRole.ADMIN
         ):
             raise ActionAuthorizationError(
                 "an active organization admin must bootstrap owner authority",
@@ -162,10 +168,11 @@ class SigningAuthorityService:
         scopes = _normalize_scopes(action_types)
         target = self.db.query(User).filter(
             User.id == user_id,
-            User.organization_id == self.organization_id,
             User.is_active.is_(True),
         ).first()
-        if target is None:
+        if target is None or not membership_service.is_member(
+            self.db, user_id, self.organization_id,
+        ):
             raise ActionStateError("target user not found in organization")
 
         row = self._query().filter(

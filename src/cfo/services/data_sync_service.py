@@ -84,7 +84,12 @@ class DataSyncService:
         if not api_key:
             raise SumitNotConfiguredError("SUMIT API key not configured for this organization")
 
-        return SumitIntegration(api_key=api_key, company_id=company_id)
+        from .sumit_request_budget import SumitRequestLimiter
+        return SumitIntegration(
+            api_key=api_key,
+            company_id=company_id,
+            request_limiter=SumitRequestLimiter(self.organization_id),
+        )
 
     async def close(self):
         """No-op: each sync step opens and closes its own client via async-with."""

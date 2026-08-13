@@ -1002,7 +1002,11 @@ def get_connector_for_org(
         if not api_key:
             from .data_sync_service import SumitNotConfiguredError
             raise SumitNotConfiguredError("SUMIT API key not configured")
-        connector = SumitConnector(api_key=api_key, company_id=company_id)
+        connector = SumitConnector(
+            api_key=api_key,
+            company_id=company_id,
+            organization_id=organization_id,
+        )
         return connector, conn.id if conn else None, source
 
     if source == "open_finance":

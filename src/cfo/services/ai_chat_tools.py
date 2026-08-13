@@ -36,6 +36,10 @@ class ChatTool:
     # tools with this flag set, so the other ~39 existing tools' call
     # signature is completely unaffected (Moshko plan 2026-07-27, package D1).
     needs_user: bool = False
+    # Stable policy-catalog action checked both when the write is proposed
+    # and immediately before the atomic execution claim. Office-only tools
+    # use the separate platform gate and deliberately leave this unset.
+    policy_action: str | None = None
 
 
 async def _find_capability(db, org_id: int, task: str = "", reads_only: bool = False, **_kwargs) -> dict:
@@ -128,9 +132,14 @@ async def _office_account_status(db, org_id: int, **_kwargs) -> dict:
 
     from .office_capabilities import office_credentials
     from ..integrations.sumit_integration import SumitIntegration
+    from .sumit_request_budget import SumitRequestLimiter
 
     creds = office_credentials()
-    client = SumitIntegration(api_key=creds["api_key"], company_id=creds["company_id"])
+    client = SumitIntegration(
+        api_key=creds["api_key"],
+        company_id=creds["company_id"],
+        request_limiter=SumitRequestLimiter(org_id),
+    )
     async with client:
         quotas = await client.list_quotas()
 
@@ -797,7 +806,8 @@ async def _propose_vat_filing_approval(
         }
 
     user = db.query(User).filter(User.id == _user_id).first() if _user_id else None
-    if user is None or user.organization_id != org_id:
+    from . import membership_service
+    if user is None or not membership_service.is_member(db, user.id, org_id):
         return {
             "status": "failed",
             "message": "לא ניתן לאמת את זהות המשתמש המבקש — הפעולה בוטלה.",
@@ -846,6 +856,7 @@ async def _propose_vat_filing_approval(
                 f"אישור בעלים למספרי דיווח מע\"מ לתקופה {period_label} "
                 f"(basis={basis}) — לא כולל שידור בפועל, שנעשה ידנית ב-SUMIT."
             ),
+            channel=str(_kwargs.get("_channel") or "web"),
         )
     except ValueError as exc:
         return {"status": "failed", "message": str(exc)}
@@ -1156,6 +1167,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["expense_id", "account_id"],
         },
         category="write",
+        policy_action="expenses.file",
         fn=_file_expense_to_account,
     ),
     "list_my_capabilities": ChatTool(
@@ -1245,6 +1257,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["document_type", "customer_id", "customer_name", "items"],
         },
         category="write",
+        policy_action="invoices.issue",
         fn=_issue_document,
     ),
     "log_collection_attempt": ChatTool(
@@ -1265,6 +1278,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["case_id", "channel", "outcome"],
         },
         category="write",
+        policy_action="collections.contact",
         fn=_log_collection_attempt,
     ),
     "search_contacts": ChatTool(
@@ -1341,6 +1355,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["invoice_id"],
         },
         category="write",
+        policy_action="payment_link.create",
         fn=_create_payment_link,
     ),
     "create_bank_payment_request": ChatTool(
@@ -1370,6 +1385,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["amount", "description", "creditor_name", "creditor_account_number"],
         },
         category="write",
+        policy_action="bank_payment.propose",
         fn=_create_bank_payment_request,
     ),
     "connect_bank_account": ChatTool(
@@ -1392,6 +1408,7 @@ TOOLS: dict[str, ChatTool] = {
             },
         },
         category="write",
+        policy_action="bank_connection.create",
         fn=_connect_bank_account,
     ),
     "list_expenses": ChatTool(
@@ -1440,6 +1457,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["key", "name_he"],
         },
         category="write",
+        policy_action="expenses.manage_categories",
         fn=_create_expense_category,
     ),
     "set_expense_category": ChatTool(
@@ -1457,6 +1475,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["expense_id", "category"],
         },
         category="write",
+        policy_action="expenses.review",
         fn=_set_expense_category,
     ),
     "get_learned_rules": ChatTool(
@@ -1480,6 +1499,7 @@ TOOLS: dict[str, ChatTool] = {
         ),
         input_schema={"type": "object", "properties": {}},
         category="write",
+        policy_action="expenses.classify",
         fn=_classify_pending_expenses,
     ),
     "file_expense": ChatTool(
@@ -1498,6 +1518,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["expense_id"],
         },
         category="write",
+        policy_action="expenses.file",
         fn=_file_expense,
     ),
     "get_expense_intake_status": ChatTool(
@@ -1764,6 +1785,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["report_type", "recipient_email"],
         },
         category="write",
+        policy_action="reports.email",
         fn=_email_report,
     ),
     "propose_vat_filing_approval": ChatTool(
@@ -1787,6 +1809,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["year", "month"],
         },
         category="write",
+        policy_action="filing.prepare",
         fn=_propose_vat_filing_approval,
         needs_user=True,
     ),
@@ -1918,6 +1941,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["action"],
         },
         category="write",
+        policy_action="moshko.memory.write",
         fn=_memory,
         needs_user=True,
     ),
@@ -1945,6 +1969,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["title"],
         },
         category="write",
+        policy_action="tasks.write",
         fn=_create_task,
     ),
     "list_tasks": ChatTool(
@@ -1982,6 +2007,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["task_id"],
         },
         category="write",
+        policy_action="tasks.write",
         fn=_update_task,
     ),
     "search_history": ChatTool(

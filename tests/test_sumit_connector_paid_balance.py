@@ -39,7 +39,7 @@ class _Client:
 def _fetch(monkeypatch, docs):
     from cfo.services.sumit_connector import SumitConnector
 
-    connector = SumitConnector(api_key="k", company_id="c")
+    connector = SumitConnector(api_key="k", company_id="c", organization_id=1)
     client = _Client(docs)
 
     async def _fake_get_client(self):

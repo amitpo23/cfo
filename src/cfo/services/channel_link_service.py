@@ -32,7 +32,8 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from ..models import ChannelIdentity, ChannelLinkCode, ChannelProcessedUpdate, User
+from ..models import ChannelIdentity, ChannelLinkCode, ChannelProcessedUpdate, User, UserRole
+from . import membership_service
 from .email_sender import send_email_smtp
 
 LINK_CODE_TTL_MINUTES = 15
@@ -143,6 +144,10 @@ def redeem_link_code(
         raise ChannelLinkError("קוד הקישור כבר נוצל — יש להנפיק קוד חדש")
     if row.expires_at < datetime.utcnow():
         raise ChannelLinkError("קוד הקישור פג תוקף — יש להנפיק קוד חדש")
+    if not membership_service.is_member(db, row.user_id, row.organization_id):
+        raise ChannelLinkError(
+            "קוד הקישור אינו תקף עוד — נדרשת חברות פעילה בארגון"
+        )
 
     row.used_at = datetime.utcnow()
 
@@ -177,7 +182,7 @@ def resolve_identity(db: Session, provider: str, external_id: str) -> Optional[C
     """Return the verified, non-revoked identity for (provider, external_id),
     or None. A revoked or never-verified row must behave identically to "no
     identity" everywhere a caller checks this — never partially trusted."""
-    return (
+    identity = (
         db.query(ChannelIdentity)
         .filter(
             ChannelIdentity.provider == provider,
@@ -187,6 +192,13 @@ def resolve_identity(db: Session, provider: str, external_id: str) -> Optional[C
         )
         .first()
     )
+    if identity is None:
+        return None
+    if not membership_service.is_member(
+        db, identity.user_id, identity.organization_id,
+    ):
+        return None
+    return identity
 
 
 # --- package G: email-based verification --- #
@@ -286,13 +298,41 @@ async def start_email_verification(
         .filter(
             User.email == normalized_email,
             User.is_active.is_(True),
-            User.organization_id.isnot(None),  # excludes super admins (decision: package G)
+            User.role != UserRole.SUPER_ADMIN,
         )
         .first()
     )
     if user is None:
         await _pad_to_floor(started_at)
         return dict(_ENUMERATION_SAFE_RESPONSE)
+
+    active_org_ids = membership_service.active_organization_ids(db, user.id)
+    if not active_org_ids:
+        await _pad_to_floor(started_at)
+        return dict(_ENUMERATION_SAFE_RESPONSE)
+    if len(active_org_ids) > 1:
+        # Email proves the person, not which business they intend to expose
+        # to this phone/chat.  Never guess the legacy home organization.
+        from ..config import settings
+        sent = await send_email_smtp(
+            normalized_email,
+            "נדרשת בחירת עסק לחיבור מושקו",
+            (
+                "לחשבון שלך יש גישה ליותר מעסק אחד ברצף. מטעמי סודיות לא "
+                "בחרנו עסק אוטומטית. יש להיכנס לאפליקציה, לבחור את העסק "
+                "הפעיל ולהנפיק קוד קישור במסך ההגדרות."
+            ),
+            settings,
+        )
+        await _pad_to_floor(started_at)
+        return (
+            dict(_ENUMERATION_SAFE_RESPONSE)
+            if sent else {
+                "status": "email_unavailable",
+                "message": "לא הצלחנו לשלוח מייל כרגע — נסה שוב מאוחר יותר.",
+            }
+        )
+    selected_organization_id = active_org_ids[0]
 
     now = datetime.utcnow()
     # Invalidate the user's previous open codes (app-issued or email) —
@@ -310,7 +350,7 @@ async def start_email_verification(
     code = f"{secrets.randbelow(1_000_000):06d}"
     expires_at = now + timedelta(minutes=EMAIL_CODE_TTL_MINUTES)
     row = ChannelLinkCode(
-        organization_id=user.organization_id, user_id=user.id,
+        organization_id=selected_organization_id, user_id=user.id,
         code_hash=_hash_email_code(provider, external_id, code),
         expires_at=expires_at,
     )
@@ -372,6 +412,10 @@ def complete_email_verification(
     if row.expires_at < datetime.utcnow():
         _record_failed_attempt(db, provider, external_id)
         raise ChannelLinkError("קוד האימות פג תוקף — יש לבקש קוד חדש")
+    if not membership_service.is_member(db, row.user_id, row.organization_id):
+        raise ChannelLinkError(
+            "קוד האימות אינו תקף עוד — נדרשת חברות פעילה בארגון"
+        )
 
     row.used_at = datetime.utcnow()
 

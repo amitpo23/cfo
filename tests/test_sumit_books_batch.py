@@ -23,6 +23,11 @@ from cfo.integrations.sumit_models import (
 from cfo.models import IrreversibleActionRequest
 
 
+class _UnlimitedTestBudget:
+    def claim(self, _kind):
+        return None
+
+
 def _request() -> BooksBatchRequest:
     return BooksBatchRequest(
         database_id=777,
@@ -59,7 +64,11 @@ def test_books_batch_model_refuses_unbalanced_or_empty_sides():
 
 
 def test_create_books_batch_uses_the_versioned_swagger_contract_exactly():
-    sumit = SumitIntegration(api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23", company_id="123")
+    sumit = SumitIntegration(
+        api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23",
+        company_id="123",
+        request_limiter=_UnlimitedTestBudget(),
+    )
     captured = {}
 
     async def _run():
@@ -99,7 +108,11 @@ def test_create_books_batch_uses_the_versioned_swagger_contract_exactly():
 
 
 def test_create_books_batch_refuses_success_without_batch_url():
-    sumit = SumitIntegration(api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23", company_id="123")
+    sumit = SumitIntegration(
+        api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23",
+        company_id="123",
+        request_limiter=_UnlimitedTestBudget(),
+    )
 
     async def _run():
         async def _fake_post(method=None, url=None, json=None, **kwargs):

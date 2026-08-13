@@ -200,6 +200,12 @@ class Settings(BaseSettings):
     # sync per org per this many hours — the cron schedule alone is not a
     # guarantee.
     sumit_sync_min_interval_hours: int = 20
+    # Hard request-boundary ceilings shared through Postgres. SUMIT documents
+    # a temporary block at roughly 100 requests/minute, so Rezef stays below
+    # that with a non-configurably-higher maximum of 80. The daily value is an
+    # internal paid-action safety budget per organization, not a provider quota.
+    sumit_global_requests_per_minute: int = 80
+    sumit_org_daily_request_limit: int = 300
     # /documents/getdetails is one paid SUMIT action per document. Supplier
     # enrichment is therefore capped independently from the once-daily job
     # cadence. This is an internal cost budget, not a claimed provider quota;
@@ -243,6 +249,12 @@ class Settings(BaseSettings):
             self.of_sync_min_interval_hours = 20
         if self.sumit_sync_min_interval_hours < 20:
             self.sumit_sync_min_interval_hours = 20
+        self.sumit_global_requests_per_minute = min(
+            80, max(0, self.sumit_global_requests_per_minute),
+        )
+        self.sumit_org_daily_request_limit = min(
+            300, max(0, self.sumit_org_daily_request_limit),
+        )
         self.sumit_enrichment_daily_action_limit = min(
             25,
             max(0, self.sumit_enrichment_daily_action_limit),

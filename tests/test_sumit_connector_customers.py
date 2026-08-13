@@ -55,7 +55,7 @@ def test_fetch_customers_derives_real_names_from_documents(monkeypatch):
         _FakeDoc("d2", "cust-2", "מדיצי שיווק בתי מלון בעמ"),
         _FakeDoc("d3", "cust-1", "אליהב כהן"),  # same customer, second invoice
     ]
-    connector = SumitConnector(api_key="k", company_id="c")
+    connector = SumitConnector(api_key="k", company_id="c", organization_id=1)
     async def _fake_get_client():
         return _FakeClient(docs)
     monkeypatch.setattr(connector, "_get_client", _fake_get_client)
@@ -73,7 +73,7 @@ def test_fetch_customers_skips_documents_without_customer_id(monkeypatch):
     from cfo.services.sumit_connector import SumitConnector
 
     docs = [_FakeDoc("d1", None, None), _FakeDoc("d2", "cust-1", "לקוח אמיתי")]
-    connector = SumitConnector(api_key="k", company_id="c")
+    connector = SumitConnector(api_key="k", company_id="c", organization_id=1)
     async def _fake_get_client():
         return _FakeClient(docs)
     monkeypatch.setattr(connector, "_get_client", _fake_get_client)

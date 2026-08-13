@@ -3,6 +3,7 @@ import pytest
 
 from cfo.database import SessionLocal
 from cfo.models import User, UserRole
+from cfo.services import membership_service
 from cfo.services.irreversible_action_service import (
     ActionAuthorizationError,
     ActionConflictError,
@@ -107,10 +108,18 @@ def test_non_signer_cannot_approve_and_cross_org_cannot_observe(owner, tenant):
             email="approval-regular@example.com",
             password_hash="not-used",
             full_name="Regular",
-            role=UserRole.USER,
+            role=UserRole.ADMIN,
             is_active=True,
         )
         db.add(regular)
+        db.flush()
+        membership_service.grant(
+            db,
+            organization_id=owner_row.organization_id,
+            user_id=regular.id,
+            role=UserRole.ADMIN,
+            granted_by_user_id=owner_row.id,
+        )
         db.commit()
         db.refresh(regular)
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-09",
+  "updated_at": "2026-08-13",
   "purpose": "Machine-readable contract connecting Rezef capabilities to knowledge, runtime evidence and safety gates.",
   "status_vocabulary": {
     "implemented": "Implemented and covered locally; production operation is a separate claim.",
@@ -45,6 +45,7 @@
         "src/cfo/api/routes/cron.py",
         "src/cfo/services/expense_filing_service.py",
         "src/cfo/services/sumit_connector.py",
+        "src/cfo/services/sumit_request_budget.py",
         "src/cfo/services/sync_engine.py",
         "src/cfo/integrations/sumit_integration.py",
         "src/cfo/api/routes/accounting.py",
@@ -53,6 +54,7 @@
       ],
       "tests": [
         "tests/test_sumit_connector_no_wasted_calls.py",
+        "tests/test_sumit_hard_request_budget.py",
         "tests/test_sync_call_protection.py",
         "tests/test_expense_filing.py",
         "tests/test_expense_ocr_scheduler.py",
@@ -63,11 +65,12 @@
       "gates": [
         "organization_scope",
         "daily_sync_budget",
+        "cross_instance_request_budget",
         "idempotency",
         "verify_first",
         "owner_approval_for_write"
       ],
-      "honest_boundary": "Read synchronization and several document/payment actions exist. Scheduled detail enrichment claims a separate 20-hour budget before provider access, caps paid getdetails calls at 25 per org/day and reuses CustomerName from the list response. OCR stops before SUMIT while disabled; when enabled it claims a separate 20-hour budget and defaults to 10 documents with a hard cap of 25. The official-books createbatch adapter now consumes an immutable owner-approved payload, claims execution once, requires BatchURL and records executed_unverified. The versioned OpenAPI exposes neither batch readback nor close, so the adapter creates an open batch only and cannot prove posting/closure; portal verification and owner-only close remain external. Measured 2026-08-05: an organization silently drops out of the daily cron when its IntegrationConnection turns paused/inactive, because both scheduled_sync_sumit and roster_sync_targets select on status=='active' -- org2 was out for 467h and org3 for 762h with no error raised. roster_coverage now reports this per source (a healthy open_finance connection must not mask a paused sumit one) but deliberately does not reactivate anything: reconnecting a client file is an owner decision.",
+      "honest_boundary": "Read synchronization and several document/payment actions exist. Every production SUMIT client now requires a durable database-backed request budget before network access: an atomic global-per-minute ceiling plus an organization-per-day ceiling shared across instances; an unavailable counter fails closed. This was verified offline and on local PostgreSQL, not against the paid provider. Scheduled detail enrichment still claims a separate 20-hour budget, caps paid getdetails calls at 25 per org/day and reuses CustomerName from the list response. OCR stops before SUMIT while disabled; when enabled it claims a separate 20-hour budget and defaults to 10 documents with a hard cap of 25. The official-books createbatch adapter consumes an immutable owner-approved payload, claims execution once, requires BatchURL and records executed_unverified. The versioned OpenAPI exposes neither batch readback nor close, so the adapter creates an open batch only and cannot prove posting/closure; portal verification and owner-only close remain external. Measured 2026-08-05: an organization silently drops out of the daily cron when its IntegrationConnection turns paused/inactive, because both scheduled_sync_sumit and roster_sync_targets select on status=='active' -- org2 was out for 467h and org3 for 762h with no error raised. roster_coverage reports this per source but deliberately does not reactivate anything: reconnecting a client file is an owner decision.",
       "next_gate": "MASTER_EXECUTION_PLAN gate 3: operator-approved createbatch dry-run, portal readback evidence and owner-approved batch close."
     },
     {
@@ -382,10 +385,14 @@
         "src/cfo/api/routes/open_finance.py",
         "src/cfo/api/routes/phase10_12.py",
         "src/cfo/services/irreversible_action_service.py",
+        "src/cfo/services/policy_engine.py",
+        "src/cfo/services/policy_service.py",
         "src/cfo/services/signing_authority_service.py",
         "src/cfo/services/ai_chat_service.py",
         "src/cfo/services/payment_orchestration.py",
-        "src/cfo/services/filing_verification.py"
+        "src/cfo/services/filing_verification.py",
+        "frontend/src/components/PolicyManagementDashboard.tsx",
+        "alembic/versions/e3f4a5b6c7d8_add_policy_enforcement.py"
       ],
       "tests": [
         "tests/test_irreversible_action_workflow.py",
@@ -394,16 +401,18 @@
         "tests/test_irreversible_action_authorization.py",
         "tests/test_ai_chat_service.py",
         "tests/test_open_finance_payments.py",
-        "tests/test_filing_verification.py"
+        "tests/test_filing_verification.py",
+        "tests/test_policy_persistence_and_enforcement.py"
       ],
       "gates": [
         "organization_scope",
         "owner_approval",
         "idempotency",
         "audit_trail",
-        "post_action_verification"
+        "post_action_verification",
+        "policy_recheck_at_proposal_approval_execution"
       ],
-      "honest_boundary": "Owner/signatory authority is separate from RBAC, scoped per action and cannot be bypassed by super-admin. The Open Finance create-payment adapter consumes the persisted payload, claims once and stores readback in offline tests. The SUMIT createbatch adapter follows the same immutable-intent and execute-once control plane but stops honestly at executed_unverified because SUMIT exposes no batch readback/close API. No live provider behavior is claimed, and refund, cancellation, mandate, filing and close adapters are not yet wired.",
+      "honest_boundary": "Owner/signatory authority is separate from RBAC, scoped per action and cannot be bypassed by super-admin. Organization policy is now persisted and audited with subject, amount/day/month ceilings, channels, step-up, reason, approval count and separation-of-duties; it is re-evaluated at proposal, approval and execution, so revocation or role changes stop an in-flight action. A super-admin may configure non-signing policy only inside an explicitly selected organization; that does not create owner/signatory authority. The Open Finance create-payment adapter consumes the persisted payload, claims once and stores readback in offline tests. The SUMIT createbatch adapter follows the same immutable-intent and execute-once control plane but stops honestly at executed_unverified because SUMIT exposes no batch readback/close API. No live provider behavior is claimed, and refund, cancellation, mandate, filing and close adapters are not yet wired.",
       "next_gate": "Bootstrap an explicitly verified owner for each existing organization, then wire and prove the remaining irreversible action types one by one."
     },
     {
@@ -430,6 +439,7 @@
         "src/cfo/services/chat_expense_intake.py",
         "src/cfo/services/channel_notifier.py",
         "src/cfo/services/channel_link_service.py",
+        "src/cfo/services/policy_service.py",
         "src/cfo/services/channel_gateway.py",
         "src/cfo/services/whatsapp_gateway.py",
         "src/cfo/services/telegram_files.py",
@@ -446,7 +456,8 @@
         "alembic/versions/d6e7f8a9b0c1_add_moshko_observability.py",
         "alembic/versions/e7f8a9b0c1d2_add_moshko_memory_approval.py",
         "frontend/src/components/MoshkoObservabilityDashboard.tsx",
-        "frontend/src/components/MoshkoKnowledgeDashboard.tsx"
+        "frontend/src/components/MoshkoKnowledgeDashboard.tsx",
+        "alembic/versions/04b5c6d7e8f9_add_moshko_feedback.py"
       ],
       "tests": [
         "tests/test_ai_chat_personas.py",
@@ -459,6 +470,8 @@
         "tests/test_telegram_webhook.py",
         "tests/test_whatsapp_webhook.py",
         "tests/test_channel_link.py",
+        "tests/test_channel_email_verification.py",
+        "tests/test_policy_persistence_and_enforcement.py",
         "tests/test_kb_loader.py",
         "tests/test_email_attachments.py",
         "tests/test_fresh_database_migrations.py"
@@ -473,10 +486,12 @@
         "personal_memory_privacy",
         "memory_audit_trail",
         "super_admin_observability",
+        "human_feedback_review_and_promotion",
+        "live_membership_revalidation",
         "whatsapp_service_window"
       ],
-      "honest_boundary": "מושקו קולט קבלות מצילום, עונה מנתוני המערכת בלבד ופועל דרך ווב, Telegram ו-WhatsApp בקוד שנבדק אופליין. מסך הווב נגיש גם ב-/agent/{session_id}; ה-session מסונן תמיד לפי ארגון ומשתמש, וסופר-אדמין מנהל תמלולים רוחביים רק במסך הניטור הנפרד. כל קריאת LLM וכלי נרשמת best-effort עם tenant scope; עלות נשארת NULL כשאין מחיר מדויק בקונפיג, וארגומנטים רגישים מחוטאים. תמלולים וטלמטריה רוחבית זמינים רק ל-SUPER_ADMIN. זיכרון לומד ניתן לניהול אנושי עם אישור ו-AuditLog; מנהל ארגון רואה רק עובדות עסק משותפות ואת הזיכרון האישי שלו, בעוד SUPER_ADMIN יכול לבצע ביקורת רוחבית. פעולת כתיבה נשמרת כ-pending_action; אישור מבצע claim אטומי לפני הכלי, ביטול נשמר במסד בכל שלושת הערוצים, ותוצאה חיצונית עמומה ננעלת כ-unknown ולא מורצת שוב אוטומטית. שלושת כלי המשימות משתמשים בטבלת Task הקיימת ומבודדים לארגון. ה-KB המקצועי מוצג לקריאה בלבד ומחזיר unavailable מפורש כשמסמכי docs אינם ארוזים. דחיפה יזומה מכבדת opt-in, תצורה פר-provider וחלון שירות WhatsApp בן 24 שעות; מחוץ לחלון אין ניסיון free-form, ובהיעדר תבנית מאושרת מוחזר outside_service_window. פרסונה אינה הרשאה וכל כתיבה נעצרת לאישור מפורש. הגבול החד: **רצף אינו משדר לרשות המסים** — propose_vat_filing_approval מתעד אישור למספרים בלבד והשידור ידני ב-SUMIT. שום התנהגות ספק חיה, תבנית Meta מאושרת, אריזת docs או פריסת הקוד החדש בפרוד אינה מוכחת כאן; קול לא נבנה.",
-      "next_gate": "פעולת בעלים בשער 0: אישור deploy של Alembic head d2e3f4a5b6c7 לפי runbook, כולל backfill חברות מאומת ו-CheckConstraint; הגדרת מחירי מודלים מדויקים ב-LLM_PRICING_JSON, סודות Telegram/WhatsApp, אימות אריזת docs ותבנית Meta מאושרת אופציונלית; לאחר מכן smoke חי מאושר שמוכיח בחירת ארגון, webhook, שיחה, claim/confirm/cancel, usage, tool-call, זיכרון, משימה ודחיפה בכל ערוץ בלי לעקוף את חלון השירות."
+      "honest_boundary": "מושקו קולט קבלות מצילום, עונה מנתוני המערכת בלבד ופועל דרך ווב, Telegram ו-WhatsApp בקוד שנבדק אופליין. מסך הווב נגיש גם ב-/agent/{session_id}; ה-session מסונן תמיד לפי ארגון ומשתמש, וסופר-אדמין מנהל תמלולים רוחביים רק במסך הניטור הנפרד. כל קריאת LLM וכלי נרשמת best-effort עם tenant scope; עלות נשארת NULL כשאין מחיר מדויק בקונפיג, וארגומנטים רגישים מחוטאים. תמלולים וטלמטריה רוחבית זמינים רק ל-SUPER_ADMIN. משתמש יכול לסמן תשובה כמועילה, לא-מדויקת, לא-ידועה או לא-בטוחה; סופר-אדמין רואה תור איכות, מתקן ומקדם תשובה לידע ארגוני רק בפעולה מפורשת ומתועדת. זיכרון לומד ניתן לניהול אנושי עם אישור ו-AuditLog; מנהל ארגון רואה רק עובדות עסק משותפות ואת הזיכרון האישי שלו, בעוד SUPER_ADMIN יכול לבצע ביקורת רוחבית. זהות WhatsApp/Telegram מאומתת מחדש מול חברות פעילה בכל הודעה; אימות Google/אימייל מוכיח אדם בלבד ובמצב רב-ארגוני אינו מנחש ארגון. פעולת כתיבה נשמרת כ-pending_action ונבדקת מול מדיניות הארגון לפני ההצעה ושוב לפני הביצוע; אישור מבצע claim אטומי לפני הכלי, ביטול נשמר במסד בכל שלושת הערוצים, ותוצאה חיצונית עמומה ננעלת כ-unknown ולא מורצת שוב אוטומטית. שלושת כלי המשימות משתמשים בטבלת Task הקיימת ומבודדים לארגון. ה-KB המקצועי מוצג לקריאה בלבד ומחזיר unavailable מפורש כשמסמכי docs אינם ארוזים. דחיפה יזומה מכבדת opt-in, תצורה פר-provider וחלון שירות WhatsApp בן 24 שעות; מחוץ לחלון אין ניסיון free-form, ובהיעדר תבנית מאושרת מוחזר outside_service_window. פרסונה אינה הרשאה וכל כתיבה נעצרת לאישור מפורש. הגבול החד: **רצף אינו משדר לרשות המסים** — propose_vat_filing_approval מתעד אישור למספרים בלבד והשידור ידני ב-SUMIT. שום התנהגות ספק חיה, תבנית Meta מאושרת, אריזת docs או פריסת הקוד החדש בפרוד אינה מוכחת כאן; קול לא נבנה.",
+      "next_gate": "פעולת בעלים בשער 0: אישור deploy של Alembic head 04b5c6d7e8f9 לפי runbook, כולל חברות, policy_grants, מונה SUMIT משותף ותור איכות מושקו; הגדרת מחירי מודלים מדויקים ב-LLM_PRICING_JSON, סודות Telegram/WhatsApp, אימות אריזת docs ותבנית Meta מאושרת אופציונלית; לאחר מכן smoke חי מאושר שמוכיח בחירת ארגון, webhook, שיחה, policy/claim/confirm/cancel, feedback/review/promotion, usage, tool-call, זיכרון, משימה ודחיפה בכל ערוץ בלי לעקוף את חלון השירות."
     }
   ]
 }

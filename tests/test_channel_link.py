@@ -176,6 +176,48 @@ def test_resolve_identity_filters_revoked(fresh_org):
         db.close()
 
 
+def test_resolve_identity_rechecks_live_membership_on_every_message(fresh_org):
+    iso = fresh_org()
+    db = SessionLocal()
+    try:
+        from cfo.services import membership_service
+        user_id = _row_user_id(db, iso["org_id"])
+        result = issue_link_code(db, iso["org_id"], user_id)
+        redeem_link_code(
+            db, result["code"], provider="telegram", external_id="chat-membership-revoked",
+        )
+        membership_service.suspend(
+            db, organization_id=iso["org_id"], user_id=user_id,
+            suspended_by_user_id=user_id,
+        )
+        db.commit()
+
+        assert resolve_identity(db, "telegram", "chat-membership-revoked") is None
+    finally:
+        db.close()
+
+
+def test_link_code_cannot_be_redeemed_after_membership_is_suspended(fresh_org):
+    iso = fresh_org()
+    db = SessionLocal()
+    try:
+        from cfo.services import membership_service
+        user_id = _row_user_id(db, iso["org_id"])
+        result = issue_link_code(db, iso["org_id"], user_id)
+        membership_service.suspend(
+            db, organization_id=iso["org_id"], user_id=user_id,
+            suspended_by_user_id=user_id,
+        )
+        db.commit()
+
+        with pytest.raises(ChannelLinkError, match="חברות פעילה"):
+            redeem_link_code(
+                db, result["code"], provider="telegram", external_id="chat-stale-code",
+            )
+    finally:
+        db.close()
+
+
 def test_resolve_identity_returns_none_for_unknown_external_id():
     db = SessionLocal()
     try:

@@ -19,7 +19,7 @@ from ...models import (
     UserRole, IntegrationType, SumitCompany, Invoice, Bill, BankTransaction,
     Alert, Task, OnboardingTask, AlertStatus, TaskStatus,
     OrganizationSigningAuthority, OrganizationMembership, Account,
-    ChatMessage, LLMUsage, MoshkoToolCall, MoshkoMemory,
+    ChatMessage, LLMUsage, MoshkoToolCall, MoshkoMemory, MoshkoFeedback,
 )
 from ...auth import verify_password, get_password_hash, create_access_token
 from ...config import settings
@@ -1839,6 +1839,12 @@ class MoshkoMemoryUpdateRequest(BaseModel):
     approved: Optional[bool] = None
 
 
+class MoshkoFeedbackReviewRequest(BaseModel):
+    correction: Optional[str] = None
+    status: Optional[str] = None
+    promote_to_memory: bool = False
+
+
 _MOSHKO_MEMORY_CATEGORIES = {
     "preference", "business_fact", "correction", "convention",
 }
@@ -2182,6 +2188,171 @@ async def get_moshko_usage(
         "skip": skip,
         "limit": limit,
     }
+
+
+def _feedback_admin_payload(row: MoshkoFeedback) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "organization_id": row.organization_id,
+        "user_id": row.user_id,
+        "message_id": row.message_id,
+        "session_id": row.session_id,
+        "channel": row.channel,
+        "category": row.category,
+        "comment": row.comment,
+        "question": row.question,
+        "answer": row.answer,
+        "status": row.status,
+        "correction": row.correction,
+        "reviewed_by": row.reviewed_by,
+        "reviewed_at": row.reviewed_at,
+        "promoted_memory_id": row.promoted_memory_id,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+@router.get("/moshko/feedback", tags=["Moshko"])
+async def list_moshko_feedback(
+    organization_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    category: Optional[str] = None,
+    feedback_status: Optional[str] = Query(None, alias="status"),
+    channel: Optional[str] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db_session),
+    _current_user: User = Depends(get_super_admin),
+):
+    """Platform-owner quality queue; conversation content is never public."""
+    query = db.query(MoshkoFeedback)
+    if organization_id is not None:
+        query = query.filter(MoshkoFeedback.organization_id == organization_id)
+    if user_id is not None:
+        query = query.filter(MoshkoFeedback.user_id == user_id)
+    if category is not None:
+        if category not in {"helpful", "inaccurate", "unknown", "unsafe"}:
+            raise HTTPException(400, "Invalid feedback category")
+        query = query.filter(MoshkoFeedback.category == category)
+    if feedback_status is not None:
+        if feedback_status not in {"open", "reviewed", "resolved", "dismissed"}:
+            raise HTTPException(400, "Invalid feedback status")
+        query = query.filter(MoshkoFeedback.status == feedback_status)
+    if channel is not None:
+        if channel not in {"web", "whatsapp", "telegram"}:
+            raise HTTPException(400, "Invalid feedback channel")
+        query = query.filter(MoshkoFeedback.channel == channel)
+    total = query.count()
+    rows = query.order_by(
+        MoshkoFeedback.created_at.desc(), MoshkoFeedback.id.desc(),
+    ).offset(skip).limit(limit).all()
+    return {
+        "items": [_feedback_admin_payload(row) for row in rows],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.patch("/moshko/feedback/{feedback_id}", tags=["Moshko"])
+async def review_moshko_feedback(
+    feedback_id: int,
+    body: MoshkoFeedbackReviewRequest,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    row = db.query(MoshkoFeedback).filter(MoshkoFeedback.id == feedback_id).first()
+    if row is None:
+        raise HTTPException(404, "Feedback not found")
+    if body.status is not None and body.status not in {
+        "open", "reviewed", "resolved", "dismissed",
+    }:
+        raise HTTPException(400, "Invalid feedback status")
+    correction = body.correction.strip()[:8000] if body.correction is not None else None
+    if body.correction is not None and not correction:
+        raise HTTPException(400, "Correction cannot be empty")
+    if body.promote_to_memory and not (correction or row.correction):
+        raise HTTPException(400, "A correction is required before promotion")
+
+    old = _feedback_admin_payload(row)
+    if correction is not None:
+        row.correction = correction
+    if body.status is not None:
+        row.status = body.status
+    elif correction is not None:
+        row.status = "reviewed"
+    now = datetime.utcnow()
+    row.reviewed_by = current_user.id
+    row.reviewed_at = now
+    row.updated_at = now
+
+    if body.promote_to_memory:
+        content = row.correction or ""
+        _validate_memory_capacity(
+            db,
+            organization_id=row.organization_id,
+            user_id=None,
+            content=content,
+            exclude_id=row.promoted_memory_id,
+        )
+        memory = None
+        if row.promoted_memory_id is not None:
+            memory = db.query(MoshkoMemory).filter(
+                MoshkoMemory.id == row.promoted_memory_id,
+                MoshkoMemory.organization_id == row.organization_id,
+            ).first()
+        memory_old = _memory_audit_snapshot(memory) if memory is not None else None
+        if memory is None:
+            memory = MoshkoMemory(
+                organization_id=row.organization_id,
+                user_id=None,
+                content=content,
+                category="correction",
+                source="admin",
+                approved_at=now,
+                approved_by=current_user.id,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(memory)
+            db.flush()
+            row.promoted_memory_id = memory.id
+        else:
+            memory.content = content
+            memory.category = "correction"
+            memory.source = "admin"
+            memory.approved_at = now
+            memory.approved_by = current_user.id
+            memory.updated_at = now
+            db.flush()
+        row.status = "resolved"
+        db.add(AuditLog(
+            user_id=current_user.id,
+            organization_id=row.organization_id,
+            action="MOSHKO_MEMORY_CREATE" if memory_old is None else "MOSHKO_MEMORY_UPDATE",
+            entity_type="MoshkoMemory",
+            entity_id=memory.id,
+            details={"old": memory_old, "new": _memory_audit_snapshot(memory),
+                     "source_feedback_id": row.id},
+        ))
+
+    db.flush()
+    new = _feedback_admin_payload(row)
+    for payload in (old, new):
+        for key in ("reviewed_at", "created_at", "updated_at"):
+            if payload[key] is not None:
+                payload[key] = payload[key].isoformat()
+    db.add(AuditLog(
+        user_id=current_user.id,
+        organization_id=row.organization_id,
+        action="MOSHKO_FEEDBACK_REVIEW",
+        entity_type="MoshkoFeedback",
+        entity_id=row.id,
+        details={"old": old, "new": new},
+    ))
+    db.commit()
+    db.refresh(row)
+    return _feedback_admin_payload(row)
 
 
 @router.get("/moshko/memory", tags=["Moshko"])

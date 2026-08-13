@@ -15,11 +15,14 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..models import (
+    IrreversibleActionApproval,
     IrreversibleActionRequest,
     OrganizationSigningAuthority,
     User,
     UserRole,
 )
+from . import membership_service
+from .policy_service import PolicyService
 
 
 SUPPORTED_ACTION_TYPES = frozenset({
@@ -82,9 +85,10 @@ class IrreversibleActionService:
         self.organization_id = organization_id
 
     def _actor_in_scope(self, actor: User) -> bool:
-        return (
-            actor.role == UserRole.SUPER_ADMIN
-            or actor.organization_id == self.organization_id
+        if actor.role == UserRole.SUPER_ADMIN:
+            return True
+        return membership_service.is_member(
+            self.db, actor.id, self.organization_id,
         )
 
     def _require_actor_scope(self, actor: User) -> None:
@@ -97,6 +101,19 @@ class IrreversibleActionService:
         return self.db.query(IrreversibleActionRequest).filter(
             IrreversibleActionRequest.organization_id == self.organization_id,
         )
+
+    @staticmethod
+    def _decision_evidence(decision) -> dict[str, Any]:
+        evidence = decision.to_audit()
+        evidence["evaluated_at"] = _utc_now().isoformat()
+        return evidence
+
+    @staticmethod
+    def _require_policy_allowed(decision) -> None:
+        if not decision.allowed:
+            raise ActionAuthorizationError(
+                f"organization policy refused action: {decision.reason}",
+            )
 
     def get(self, request_id: int) -> IrreversibleActionRequest | None:
         return self._query().filter(
@@ -117,10 +134,9 @@ class IrreversibleActionService:
         payload: dict[str, Any],
         idempotency_key: str,
         description: str | None = None,
+        channel: str = "internal",
     ) -> IrreversibleActionRequest:
         self._require_actor_scope(proposed_by)
-        if proposed_by.role == UserRole.VIEWER:
-            raise ActionAuthorizationError("viewer cannot propose write actions")
         if action_type not in SUPPORTED_ACTION_TYPES:
             raise ActionValidationError(f"unsupported action_type: {action_type}")
         if not idempotency_key or len(idempotency_key) > 160:
@@ -142,6 +158,20 @@ class IrreversibleActionService:
                 )
             return existing
 
+        decision = PolicyService(
+            self.db, self.organization_id,
+        ).evaluate_irreversible(
+            user=proposed_by,
+            action_type=action_type,
+            payload=canonical_payload,
+            channel=channel,
+        )
+        self._require_policy_allowed(decision)
+        if decision.requires_reason and not (description or "").strip():
+            raise ActionAuthorizationError(
+                "organization policy requires a proposal reason",
+            )
+
         row = IrreversibleActionRequest(
             organization_id=self.organization_id,
             action_type=action_type,
@@ -149,8 +179,10 @@ class IrreversibleActionService:
             payload=canonical_payload,
             payload_sha256=payload_sha256,
             idempotency_key=idempotency_key,
+            origin_channel=channel,
             status="proposed",
             proposed_by_user_id=proposed_by.id,
+            policy_proposed_decision=self._decision_evidence(decision),
         )
         self.db.add(row)
         self.db.commit()
@@ -170,7 +202,29 @@ class IrreversibleActionService:
             raise ActionStateError(f"action request {request_id} not found")
         if row.status != "proposed":
             raise ActionStateError("only a proposed action can be approved")
-        authority = self.db.query(OrganizationSigningAuthority).filter(
+        proposer = self.db.get(User, row.proposed_by_user_id)
+        if proposer is None:
+            raise ActionAuthorizationError("proposal author no longer exists")
+        decision = PolicyService(
+            self.db, self.organization_id,
+        ).evaluate_irreversible(
+            user=proposer,
+            action_type=row.action_type,
+            payload=row.payload,
+            channel=row.origin_channel,
+            exclude_request_id=row.id,
+        )
+        self._require_policy_allowed(decision)
+        if decision.requires_step_up:
+            raise ActionAuthorizationError(
+                "organization policy requires step-up authentication",
+            )
+        if decision.separation_of_duties and approved_by.id == row.proposed_by_user_id:
+            raise ActionAuthorizationError(
+                "organization policy forbids self approval",
+            )
+
+        authorities = self.db.query(OrganizationSigningAuthority).filter(
             OrganizationSigningAuthority.organization_id
             == self.organization_id,
             OrganizationSigningAuthority.user_id == approved_by.id,
@@ -178,7 +232,7 @@ class IrreversibleActionService:
         ).all()
         authority = next(
             (
-                candidate for candidate in authority
+                candidate for candidate in authorities
                 if "*" in (candidate.action_types or [])
                 or row.action_type in (candidate.action_types or [])
             ),
@@ -189,12 +243,37 @@ class IrreversibleActionService:
                 "active signing authority for this action is required",
             )
 
-        row.status = "approved"
-        row.approved_by_user_id = approved_by.id
-        row.approver_role = approved_by.role.value
-        row.approved_by_authority_id = authority.id
-        row.approver_authority_type = authority.authority_type
-        row.approved_at = _utc_now()
+        approval = self.db.query(IrreversibleActionApproval).filter(
+            IrreversibleActionApproval.request_id == row.id,
+            IrreversibleActionApproval.approved_by_user_id == approved_by.id,
+        ).first()
+        if approval is None:
+            self.db.add(IrreversibleActionApproval(
+                organization_id=self.organization_id,
+                request_id=row.id,
+                approved_by_user_id=approved_by.id,
+                authority_id=authority.id,
+                authority_type=authority.authority_type,
+                policy_decision=self._decision_evidence(decision),
+            ))
+            self.db.flush()
+
+        approval_count = self.db.query(IrreversibleActionApproval).filter(
+            IrreversibleActionApproval.organization_id == self.organization_id,
+            IrreversibleActionApproval.request_id == row.id,
+        ).count()
+        row.policy_approved_decision = self._decision_evidence(decision)
+        if approval_count >= decision.required_approvals:
+            row.status = "approved"
+            row.approved_by_user_id = approved_by.id
+            row.approver_role = (
+                membership_service.role_in(
+                    self.db, approved_by.id, self.organization_id,
+                ) or approved_by.role
+            ).value
+            row.approved_by_authority_id = authority.id
+            row.approver_authority_type = authority.authority_type
+            row.approved_at = _utc_now()
         self.db.commit()
         self.db.refresh(row)
         return row
@@ -252,6 +331,54 @@ class IrreversibleActionService:
         The conditional UPDATE is the execute-once lock. Concurrent workers
         cannot both observe and claim the same approved row.
         """
+        row = self.get(request_id)
+        if row is None:
+            raise ActionStateError(f"action request {request_id} not found")
+        if row.status != "approved":
+            raise ActionStateError(
+                f"action must be approved before execution; current status is {row.status}",
+            )
+        proposer = self.db.get(User, row.proposed_by_user_id)
+        if proposer is None:
+            raise ActionAuthorizationError("proposal author no longer exists")
+        decision = PolicyService(
+            self.db, self.organization_id,
+        ).evaluate_irreversible(
+            user=proposer,
+            action_type=row.action_type,
+            payload=row.payload,
+            channel=row.origin_channel,
+            exclude_request_id=row.id,
+        )
+        self._require_policy_allowed(decision)
+
+        approvals = self.db.query(IrreversibleActionApproval).filter(
+            IrreversibleActionApproval.organization_id == self.organization_id,
+            IrreversibleActionApproval.request_id == row.id,
+        ).all()
+        valid_approvers: set[int] = set()
+        for approval in approvals:
+            authority = self.db.get(OrganizationSigningAuthority, approval.authority_id)
+            approver = self.db.get(User, approval.approved_by_user_id)
+            if (
+                authority is not None
+                and authority.is_active
+                and authority.organization_id == self.organization_id
+                and approver is not None
+                and self._actor_in_scope(approver)
+                and ("*" in (authority.action_types or [])
+                     or row.action_type in (authority.action_types or []))
+            ):
+                valid_approvers.add(approval.approved_by_user_id)
+        if len(valid_approvers) < decision.required_approvals:
+            raise ActionAuthorizationError(
+                "active signing approvals no longer satisfy organization policy",
+            )
+
+        evidence = self._decision_evidence(decision)
+        evidence["valid_signing_approvals"] = len(valid_approvers)
+        row.policy_execution_decision = evidence
+        self.db.flush()
         claimed = self._query().filter(
             IrreversibleActionRequest.id == request_id,
             IrreversibleActionRequest.status == "approved",
@@ -265,8 +392,6 @@ class IrreversibleActionService:
         if claimed != 1:
             self.db.rollback()
             row = self.get(request_id)
-            if row is None:
-                raise ActionStateError(f"action request {request_id} not found")
             raise ActionStateError(
                 f"action must be approved before execution; current status is {row.status}",
             )
@@ -313,6 +438,19 @@ class IrreversibleActionService:
                 "action must be approved before execution; "
                 f"current status is {row.status}",
             )
+        proposer = self.db.get(User, row.proposed_by_user_id)
+        if proposer is None:
+            raise ActionAuthorizationError("proposal author no longer exists")
+        decision = PolicyService(
+            self.db, self.organization_id,
+        ).evaluate_irreversible(
+            user=proposer,
+            action_type=row.action_type,
+            payload=row.payload,
+            channel=row.origin_channel,
+            exclude_request_id=row.id,
+        )
+        self._require_policy_allowed(decision)
         return row
 
     def mark_executed(

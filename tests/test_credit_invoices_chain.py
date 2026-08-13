@@ -57,7 +57,7 @@ class _TypeAwareClient:
 def _fetch_invoices(monkeypatch, docs_by_type):
     from cfo.services.sumit_connector import SumitConnector
 
-    connector = SumitConnector(api_key="k", company_id="c")
+    connector = SumitConnector(api_key="k", company_id="c", organization_id=1)
     client = _TypeAwareClient(docs_by_type)
 
     async def _fake_get_client(self):

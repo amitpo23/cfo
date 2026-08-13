@@ -19,6 +19,7 @@ from ...integrations.sumit_models import (
     BooksBatchRequest,
 )
 from ...services.irreversible_action_service import (
+    ActionAuthorizationError,
     ActionConflictError,
     ActionStateError,
     ActionValidationError,
@@ -68,6 +69,8 @@ async def create_books_batch(
         )
     except (ActionConflictError, ActionStateError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActionAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ActionValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -86,6 +89,8 @@ async def create_books_batch(
         )
     except (ActionConflictError, ActionStateError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActionAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ActionValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

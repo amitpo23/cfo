@@ -14,8 +14,17 @@ from cfo.integrations.sumit_integration import SumitAPIError, SumitIntegration
 from cfo.integrations.sumit_models import ChargeRequest
 
 
+class _UnlimitedTestBudget:
+    def claim(self, _kind):
+        return None
+
+
 def _sumit():
-    return SumitIntegration(api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23", company_id="1")
+    return SumitIntegration(
+        api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23",
+        company_id="1",
+        request_limiter=_UnlimitedTestBudget(),
+    )
 
 
 def test_create_payment_link_returns_the_redirect_url():

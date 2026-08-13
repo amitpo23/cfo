@@ -73,6 +73,7 @@ import BudgetDashboard from './components/BudgetDashboard';
 import KPIDashboard from './components/KPIDashboard';
 import AIAnalyticsDashboard from './components/AIAnalyticsDashboard';
 import ChatAssistant from './components/ChatAssistant';
+import PolicyManagementDashboard from './components/PolicyManagementDashboard';
 
 // New Financial Operations Components
 import InvoicesDashboard from './components/InvoicesDashboard';
@@ -181,6 +182,7 @@ const navigationConfig = [
       { to: '/customers', icon: Users, label: 'Customers', description: 'Customer management' },
       { to: '/bank', icon: Building2, label: 'Bank Import', description: 'Bank statements' },
       { to: '/settings', icon: Settings, label: 'Settings', description: 'System settings' },
+      { to: '/policies', icon: ClipboardCheck, label: 'הרשאות כספיות', description: 'תקרות, ערוצים ומורשי חתימה', adminOnly: true },
     ]
   }
 ];
@@ -408,6 +410,7 @@ function App() {
                     all) -- retired in favor of the real dashboards below. */}
                 <Route path="/analytics" element={<Navigate to="/kpis" replace />} />
                 <Route path="/settings" element={<SettingsPage darkMode={darkMode} />} />
+                <Route path="/policies" element={<PolicyManagementDashboard currentUser={currentUser} />} />
 
                 {/* Financial Operations */}
                 <Route path="/invoices" element={<InvoicesDashboard />} />

@@ -525,7 +525,12 @@ async def get_sumit_integration(
             detail="SUMIT API key not configured for this organization",
         )
 
-    return SumitIntegration(api_key=api_key, company_id=company_id)
+    from ..services.sumit_request_budget import SumitRequestLimiter
+    return SumitIntegration(
+        api_key=api_key,
+        company_id=company_id,
+        request_limiter=SumitRequestLimiter(org_id),
+    )
 
 
 def sumit_for_org(db: Session, org_id: int):
@@ -546,7 +551,12 @@ def sumit_for_org(db: Session, org_id: int):
     company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
     if not api_key:
         return None
-    return SumitIntegration(api_key=api_key, company_id=company_id)
+    from ..services.sumit_request_budget import SumitRequestLimiter
+    return SumitIntegration(
+        api_key=api_key,
+        company_id=company_id,
+        request_limiter=SumitRequestLimiter(org_id),
+    )
 
 
 def require_admin(ctx: OrganizationAccessContext = Depends(get_access_context)):

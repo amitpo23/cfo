@@ -3,12 +3,24 @@ import sqlalchemy as sa
 
 from cfo.database import Base
 from cfo.services.schema_sync import (
+    _types_match,
     apply_additive,
     compute_missing,
     compute_schema_drift,
     empty_schema_drift,
     has_schema_drift,
 )
+
+
+def test_postgres_named_enum_matches_the_same_orm_enum_contract():
+    """PostgreSQL reflects a native ENUM with NamedType affinity while the
+    ORM enum exposes String affinity; they are the same declared contract."""
+    from sqlalchemy.dialects.postgresql import ENUM
+
+    expected = sa.Enum("ADMIN", "VIEWER", name="userrole")
+    reflected = ENUM("ADMIN", "VIEWER", name="userrole", create_type=False)
+
+    assert _types_match(expected, reflected)
 
 
 def _fresh_engine(tmp_path):

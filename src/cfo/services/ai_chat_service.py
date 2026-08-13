@@ -22,7 +22,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import ChatMessage
+from ..models import ChatMessage, User
 from . import moshko_memory
 from .ai_chat_tools import TOOLS, anthropic_tool_schemas, tool_target_system
 from .moshko_observability import (
@@ -35,6 +35,7 @@ from .ai_chat_personas import (
     build_system_prompt,
     resolve_persona,
 )
+from .policy_service import PolicyService
 
 # Backward-compatible alias — the persona layer (ai_chat_personas.py) now
 # owns the prompt strings; re-exported here under the original name because
@@ -87,7 +88,7 @@ _ACTION_UNKNOWN = "unknown"
 class AIChatService:
     def __init__(
         self, db: Session, organization_id: int, user_id: int,
-        *, is_super_admin: bool = False,
+        *, is_super_admin: bool = False, channel: str = "web",
     ):
         self.db = db
         self.organization_id = organization_id
@@ -97,6 +98,50 @@ class AIChatService:
         # never trusted from a prior turn. This is the single gate for both
         # office-tool schema visibility and office-tool execution below.
         self.is_super_admin = is_super_admin
+        self.channel = channel
+
+    def _tool_policy_decision(
+        self, tool, tool_input: dict[str, Any], *, exclude_message_id: int | None = None,
+    ):
+        if tool.office:
+            return None
+        if not tool.policy_action:
+            raise ChatConfirmationError(
+                "פעולת הכתיבה חסרה מיפוי הרשאה ולכן נחסמה בבטחה",
+            )
+        user = self.db.get(User, self.user_id)
+        if user is None:
+            raise ChatConfirmationError("לא ניתן לאמת את המשתמש המבקש")
+        return PolicyService(
+            self.db, self.organization_id,
+        ).evaluate_tool(
+            user=user,
+            policy_action=tool.policy_action,
+            tool_input=tool_input,
+            channel=self.channel,
+            exclude_message_id=exclude_message_id,
+        )
+
+    @staticmethod
+    def _assert_chat_policy(decision) -> None:
+        if decision is None:
+            return
+        if not decision.allowed:
+            raise ChatConfirmationError(
+                f"מדיניות הארגון אינה מתירה את הפעולה: {decision.reason}",
+            )
+        if decision.requires_step_up:
+            raise ChatConfirmationError(
+                "הפעולה דורשת אימות מוגבר שאינו זמין בתוך השיחה",
+            )
+        if decision.required_approvals > 1:
+            raise ChatConfirmationError(
+                "הפעולה דורשת יותר ממאשר אחד ויש להעבירה למרכז האישורים",
+            )
+        if decision.separation_of_duties:
+            raise ChatConfirmationError(
+                "מדיניות הפרדת התפקידים אינה מאפשרת אישור עצמי בשיחה",
+            )
 
     def _history(self, session_id: str) -> list[ChatMessage]:
         # Scoped to (org, user) — a chat session is a private conversation,
@@ -294,10 +339,29 @@ class AIChatService:
                 # Halt here — never execute a write tool from the model's
                 # own call. Persist what it proposed; only an explicit,
                 # separate confirm_action() can run it.
+                tool = TOOLS[write_call.name]
+                try:
+                    decision = self._tool_policy_decision(tool, dict(write_call.input))
+                    self._assert_chat_policy(decision)
+                except ChatConfirmationError as exc:
+                    final_text = str(exc)
+                    break
+                policy_context = (
+                    PolicyService(self.db, self.organization_id).tool_context(
+                        policy_action=tool.policy_action,
+                        tool_input=dict(write_call.input),
+                    ) if decision is not None else {}
+                )
                 pending_action = {
                     "tool": write_call.name,
                     "input": write_call.input,
-                    "description": TOOLS[write_call.name].description,
+                    "description": tool.description,
+                    "policy_action": tool.policy_action,
+                    "policy_amount": (
+                        str(policy_context.get("amount"))
+                        if policy_context.get("amount") is not None else None
+                    ),
+                    "policy_decision": decision.to_audit() if decision is not None else None,
                 }
                 final_text = assistant_text or (
                     f"אני מציע לבצע: {TOOLS[write_call.name].description}. לאשר?"
@@ -405,6 +469,12 @@ class AIChatService:
             # demoted/former-super-admin user (or any other caller) must not
             # be able to execute an office write via a stale pending_action.
             raise ChatConfirmationError(_OFFICE_REFUSAL_TEXT)
+        decision = self._tool_policy_decision(
+            tool,
+            dict(msg.pending_action.get("input") or {}),
+            exclude_message_id=msg.id,
+        )
+        self._assert_chat_policy(decision)
 
         # Compare-and-set claim committed BEFORE invoking the tool.  This is
         # the exactly-once boundary inside Rezef: only one worker can move a
@@ -449,6 +519,7 @@ class AIChatService:
             call_kwargs = dict(msg.pending_action["input"])
             if tool.needs_user:
                 call_kwargs["_user_id"] = self.user_id
+                call_kwargs["_channel"] = self.channel
             result = await self._execute_tool_observed(
                 tool=tool,
                 call_kwargs=call_kwargs,

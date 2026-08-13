@@ -30,6 +30,11 @@ PLACEHOLDERS = [
 ]
 
 
+class _UnlimitedTestBudget:
+    def claim(self, _kind):
+        return None
+
+
 @pytest.mark.parametrize("key", PLACEHOLDERS)
 @pytest.mark.asyncio
 async def test_a_placeholder_key_never_reaches_the_network(key):
@@ -70,7 +75,10 @@ async def test_a_realistic_key_is_not_refused(monkeypatch):
     המפתח פיקטיבי אך אינו נראה כמו placeholder, ולכן הבקשה ממשיכה —
     וכאן נעצרת בשכבת ה-HTTP המזויפת, לא ברשת."""
     client = SumitIntegration(
-        api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23", company_id="1")
+        api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23",
+        company_id="1",
+        request_limiter=_UnlimitedTestBudget(),
+    )
 
     sent = []
 

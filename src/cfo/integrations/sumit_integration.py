@@ -75,6 +75,10 @@ class PlaceholderCredentialsRefused(RuntimeError):
     """A request was attempted with an obviously fake API key. Never sent."""
 
 
+class SumitRequestBudgetRequired(RuntimeError):
+    """A real outbound request lacked the shared durable request limiter."""
+
+
 # מחרוזות שמעידות שהמפתח אינו אמיתי. הרשימה מכוונת להיות צרה: חסימה
 # גורפת מדי הייתה משביתה את הפרוד, ולכן היא מכילה רק דפוסים שאין להם
 # שימוש לגיטימי כמפתח.
@@ -157,7 +161,14 @@ class SumitIntegration(BaseIntegration):
 
     BASE_URL = "https://api.sumit.co.il"
 
-    def __init__(self, api_key: str, company_id: Optional[str] = None, **kwargs):
+    def __init__(
+        self,
+        api_key: str,
+        company_id: Optional[str] = None,
+        *,
+        request_limiter=None,
+        **kwargs,
+    ):
         """
         Initialize SUMIT integration
 
@@ -168,6 +179,7 @@ class SumitIntegration(BaseIntegration):
         """
         super().__init__(api_key, **kwargs)
         self.company_id = company_id
+        self.request_limiter = request_limiter
         self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers={
@@ -236,6 +248,13 @@ class SumitIntegration(BaseIntegration):
         # טסט שממקק את `_make_request` ממילא אינו נוגע ברשת, וחסימתו
         # הייתה חוסמת בדיקות לגיטימיות בלי להפחית סיכון.
         self._assert_credentials_are_real(endpoint)
+        if self.request_limiter is None:
+            raise SumitRequestBudgetRequired(
+                "SUMIT request refused: shared request budget is not configured",
+            )
+        # Synchronous DB claim is intentional: no network coroutine is created
+        # until the durable cross-instance slot is committed.
+        self.request_limiter.claim(endpoint)
         self._log_request(method, endpoint, data)
 
         try:

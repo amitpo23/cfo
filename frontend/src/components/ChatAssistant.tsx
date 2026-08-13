@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Send, ShieldAlert, Loader2, Bot, User as UserIcon, Building2, Plus, Activity, BookOpen } from 'lucide-react';
+import { Send, ShieldAlert, Loader2, Bot, User as UserIcon, Building2, Plus, Activity, BookOpen, ThumbsUp, ThumbsDown, HelpCircle, AlertTriangle } from 'lucide-react';
 import apiService from '../services/api';
 import type { CurrentUser } from './OrgSwitcher';
 
@@ -24,8 +24,11 @@ interface ChatMessageDto {
   pending_action: PendingAction | null;
   executed: boolean;
   action_status: 'pending' | 'executing' | 'executed' | 'cancelled' | 'unknown' | null;
+  feedback: { category: FeedbackCategory; comment: string | null; status: string } | null;
   created_at: string | null;
 }
+
+type FeedbackCategory = 'helpful' | 'inaccurate' | 'unknown' | 'unsafe';
 
 const SESSION_KEY = 'ai_chat_session_id';
 const PERSONA_KEY = 'ai_chat_persona';
@@ -93,6 +96,8 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
   const [input, setInput] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [persona, setPersona] = useState<PersonaKey>(getStoredPersona);
+  const [feedbackEditor, setFeedbackEditor] = useState<{ messageId: number; category: FeedbackCategory } | null>(null);
+  const [feedbackComment, setFeedbackComment] = useState('');
   const queryClient = useQueryClient();
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -143,6 +148,18 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
       apiService.post('/ai/chat/cancel', { message_id: messageId }),
     onSuccess: () => {
       setErrorMessage(null);
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
+    },
+    onError: (err) => setErrorMessage(extractErrorMessage(err)),
+  });
+
+  const feedbackMutation = useMutation({
+    mutationFn: ({ messageId, category, comment }: { messageId: number; category: FeedbackCategory; comment?: string }) =>
+      apiService.post(`/ai/chat/${messageId}/feedback`, { category, comment }),
+    onSuccess: () => {
+      setErrorMessage(null);
+      setFeedbackEditor(null);
+      setFeedbackComment('');
       queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
     },
     onError: (err) => setErrorMessage(extractErrorMessage(err)),
@@ -296,6 +313,41 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
                       >
                         {cancelMutation.isPending ? 'מבטל...' : 'ביטול'}
                       </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {m.role === 'assistant' && (
+                <div className={`mt-2 border-t pt-2 ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className={darkMode ? 'text-gray-400' : 'text-gray-500'}>
+                      {m.feedback ? `נשלח: ${m.feedback.category}` : 'התשובה עזרה?'}
+                    </span>
+                    <button type="button" title="מועיל" aria-label="סמן תשובה כמועילה" disabled={feedbackMutation.isPending}
+                      onClick={() => feedbackMutation.mutate({ messageId: m.id, category: 'helpful' })}
+                      className="rounded p-1 text-emerald-600 hover:bg-emerald-100 disabled:opacity-50"><ThumbsUp size={14} /></button>
+                    <button type="button" title="לא מדויק" aria-label="דווח על תשובה לא מדויקת" disabled={feedbackMutation.isPending}
+                      onClick={() => { setFeedbackEditor({ messageId: m.id, category: 'inaccurate' }); setFeedbackComment(m.feedback?.comment || ''); }}
+                      className="rounded p-1 text-amber-600 hover:bg-amber-100 disabled:opacity-50"><ThumbsDown size={14} /></button>
+                    <button type="button" title="מושקו לא ידע" aria-label="דווח שמושקו לא ידע" disabled={feedbackMutation.isPending}
+                      onClick={() => { setFeedbackEditor({ messageId: m.id, category: 'unknown' }); setFeedbackComment(m.feedback?.comment || ''); }}
+                      className="rounded p-1 text-blue-600 hover:bg-blue-100 disabled:opacity-50"><HelpCircle size={14} /></button>
+                    <button type="button" title="תשובה לא בטוחה" aria-label="דווח על תשובה לא בטוחה" disabled={feedbackMutation.isPending}
+                      onClick={() => { setFeedbackEditor({ messageId: m.id, category: 'unsafe' }); setFeedbackComment(m.feedback?.comment || ''); }}
+                      className="rounded p-1 text-red-600 hover:bg-red-100 disabled:opacity-50"><AlertTriangle size={14} /></button>
+                  </div>
+                  {feedbackEditor?.messageId === m.id && (
+                    <div className="mt-2 space-y-2">
+                      <textarea value={feedbackComment} onChange={(event) => setFeedbackComment(event.target.value)}
+                        maxLength={2000} rows={2} placeholder="מה היה חסר או לא מדויק?"
+                        className={`w-full rounded-lg border p-2 text-xs ${darkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-white'}`} />
+                      <div className="flex gap-2">
+                        <button type="button" disabled={feedbackMutation.isPending}
+                          onClick={() => feedbackMutation.mutate({ messageId: m.id, category: feedbackEditor.category, comment: feedbackComment })}
+                          className="rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50">שליחה לבדיקה</button>
+                        <button type="button" onClick={() => { setFeedbackEditor(null); setFeedbackComment(''); }}
+                          className="rounded border px-2.5 py-1 text-xs">ביטול</button>
+                      </div>
                     </div>
                   )}
                 </div>

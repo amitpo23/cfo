@@ -2,6 +2,34 @@
 import asyncio
 
 import httpx
+from fastapi import status
+
+
+def test_sumit_budget_exhaustion_maps_to_retryable_429():
+    from cfo.api import sumit_request_budget_exceeded_handler
+    from cfo.services.sumit_request_budget import SumitRequestBudgetExceeded
+
+    response = asyncio.run(sumit_request_budget_exceeded_handler(
+        None,
+        SumitRequestBudgetExceeded("SUMIT organization daily request budget exceeded"),
+    ))
+
+    assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert response.headers["retry-after"] == "60"
+    assert b"request_budget_exceeded" in response.body
+
+
+def test_sumit_budget_storage_failure_maps_to_503():
+    from cfo.api import sumit_request_budget_unavailable_handler
+    from cfo.services.sumit_request_budget import SumitRequestBudgetUnavailable
+
+    response = asyncio.run(sumit_request_budget_unavailable_handler(
+        None,
+        SumitRequestBudgetUnavailable("budget unavailable"),
+    ))
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert b"request_budget_unavailable" in response.body
 
 
 def test_httpx_error_returns_503_not_500(client, owner, monkeypatch):

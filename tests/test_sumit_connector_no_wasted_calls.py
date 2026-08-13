@@ -7,7 +7,7 @@ import asyncio
 def test_fetch_bank_transactions_never_calls_client(monkeypatch):
     from cfo.services.sumit_connector import SumitConnector
 
-    connector = SumitConnector(api_key="k", company_id="c")
+    connector = SumitConnector(api_key="k", company_id="c", organization_id=1)
 
     async def _boom(self):
         raise AssertionError("fetch_bank_transactions must not open a SUMIT client")
