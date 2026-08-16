@@ -37,6 +37,12 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
         # `suggest_expense_accounts` ו-`list_my_capabilities` הם read —
         # הם קוראים בלבד ואינם משנים דבר.
         "file_expense_to_account",
+        # נוסף במודע 16/08/2026: הצעת מנה לספרים. ההצעה עצמה אינה
+        # מבצעת דבר, אך היא הצעד הראשון ברישום **בלתי-הפיך** אצל הספק —
+        # ולכן write, לא read. `get_trial_balance` ו-`get_open_batches`
+        # שנוספו איתו הם read: הראשון מחשב מה-ledger של רצף, השני
+        # מחזיר honest-null על פער הספק.
+        "propose_books_batch",
     }
 
 

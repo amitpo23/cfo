@@ -255,6 +255,79 @@ async def _get_ledger_card(db, org_id: int, *, contact_id: int, **_kwargs) -> di
     return card if card is not None else {"error": "איש קשר לא נמצא"}
 
 
+async def _get_trial_balance(db, org_id: int, *, start: str | None = None,
+                             end: str | None = None, **_kwargs) -> dict:
+    """מאזן בוחן — מחושב מה-ledger של רצף, **לא נמשך מ-SUMIT**.
+
+    SUMIT אינה חושפת endpoint למאזן בוחן (ראו
+    `docs/bookkeeper_kb/09-sumit-operations-map.md`), ואין בכך חיסרון:
+    רצף מחזיקה הנהלת חשבונות כפולה משלה ומחשבת אותו מהנתונים שנמשכו
+    בסנכרון היומי. שאלת משתמש לעולם אינה מייצרת קריאת API — זה מה
+    שהוביל לחסימת ה-IP ב-13/08/2026.
+
+    `balanced` הוא השדה שקובע אם אפשר להסתמך על המספר. מאזן שאינו
+    מאוזן, או שנשען על מנות פתוחות, אינו סופי.
+    """
+    from .ledger_service import trial_balance
+
+    report = trial_balance(
+        db, org_id,
+        start=_parse_date_safe(start), end=_parse_date_safe(end),
+    )
+    payload = report.as_dict() if hasattr(report, "as_dict") else dict(report)
+    payload["source"] = "rezef_ledger"
+    payload["is_final"] = bool(payload.get("balanced"))
+    if not payload["is_final"]:
+        payload["not_final_reason"] = (
+            "המאזן אינו מאוזן או שקיימות תנועות שטרם נסגרו במנה. "
+            "אין לדווח לפי מספר זה בלי בדיקה."
+        )
+    return payload
+
+
+async def _get_open_batches(db, org_id: int, **_kwargs) -> dict:
+    """מנות פתוחות — **SUMIT אינה חושפת קריאת מנות בשום הרשאה.**
+
+    honest-null: מחזיר `unavailable` עם סיבה, ולא רשימה ריקה. רשימה
+    ריקה הייתה נקראת כ"אין מנות פתוחות" — קביעה שאין לה בסיס, והיא
+    בדיוק סוג הטעות שמובילה לדווח לפי מאזן לא-סופי.
+    """
+    return {
+        "status": "unavailable",
+        "reason_he": (
+            "SUMIT אינה חושפת קריאת מנות ב-API (מודול הספרים חושף "
+            "createbatch בלבד). מצב המנות נבדק במסך 'כל המנות הפתוחות' "
+            "בפורטל."
+        ),
+        "portal_path": "הנהלת חשבונות ← תנועות יומן ← כל המנות הפתוחות",
+        "what_rezef_knows": (
+            "רצף יודעת אילו פקודות היא שלחה ומתי, אך לא אם המנה נסגרה."
+        ),
+    }
+
+
+async def _propose_books_batch(db, org_id: int, *, description: str,
+                               **_kwargs) -> dict:
+    """הצעת מנה לספרים — רישום **בלתי-הפיך** אצל הספק.
+
+    אינו מבצע. יוצר הצעה שדורשת אישור מפורש, לפי חוזה
+    `IRREVERSIBLE_ACTION_CONTROL.md`. הביצוע עצמו עובר ב-adapter
+    שצורך payload מאושר ושמור, תופס ביצוע פעם אחת, ועוצר ב-
+    `executed_unverified` — כי אין readback.
+    """
+    return {
+        "status": "proposed",
+        "action_type": "books_batch",
+        "description": description,
+        "requires_owner_approval": True,
+        "irreversible": True,
+        "note_he": (
+            "יצירת מנה היא רישום לספרים. אחרי הביצוע לא ניתן לאמת "
+            "תכנותית שהמנה נקלטה — נדרש אימות בפורטל, וסגירתה ידנית."
+        ),
+    }
+
+
 async def _get_vat_position(db, org_id: int, **_kwargs) -> dict:
     from .financial_synthesis import compute_vat_position
     return compute_vat_position(db, org_id)
@@ -1294,6 +1367,54 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_search_contacts,
+    ),
+    "get_trial_balance": ChatTool(
+        name="get_trial_balance",
+        description=(
+            "מאזן בוחן — סך חובה מול זכות פר כרטיס, מחושב מהספרים של רצף. "
+            "מחזיר `is_final`: מאזן שאינו מאוזן או שיש מנות פתוחות אינו "
+            "סופי ואין לדווח לפיו."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "start": {"type": "string", "description": "תאריך התחלה YYYY-MM-DD"},
+                "end": {"type": "string", "description": "תאריך סיום YYYY-MM-DD"},
+            },
+        },
+        category="read",
+        fn=_get_trial_balance,
+    ),
+    "get_open_batches": ChatTool(
+        name="get_open_batches",
+        description=(
+            "מנות פתוחות בספרים. SUMIT אינה חושפת קריאת מנות ב-API — "
+            "הכלי מחזיר זאת במפורש ומפנה למסך בפורטל, במקום להעמיד פנים "
+            "שאין מנות פתוחות."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_open_batches,
+    ),
+    "propose_books_batch": ChatTool(
+        name="propose_books_batch",
+        description=(
+            "הצעת יצירת מנה בספרים (רישום בלתי-הפיך). אינו מבצע — יוצר "
+            "הצעה שדורשת אישור בעלים מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "תיאור המנה"},
+            },
+            "required": ["description"],
+        },
+        category="write",
+        fn=_propose_books_batch,
+        # רישום לספרים הוא writeback חשבונאי — אותה משפחת הרשאות של
+        # כל כתיבה חוזרת למערכת ההנה"ח, ולא פעולת חתימה נפרדת: ההצעה
+        # עצמה אינה מבצעת דבר. הביצוע עובר בחוזה הפעולות הבלתי-הפיכות.
+        policy_action="accounting.writeback.propose",
     ),
     "get_ledger_card": ChatTool(
         name="get_ledger_card",

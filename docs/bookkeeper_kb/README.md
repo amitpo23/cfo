@@ -15,6 +15,10 @@
 | [04-documents-and-evidence.md](04-documents-and-evidence.md) | מסמכים ואסמכתאות: חשבונית מס/קבלה, הקצאה, מד-אוץ | כשמסמך לא ברור; לפני פסילת/אישור ניכוי |
 | [05-external-references.md](05-external-references.md) | מצביעים: SUMIT KB, SOP-ים, gov.il | כשצריך את המקור המלא |
 | [06-daily-analysis-prompts.md](06-daily-analysis-prompts.md) | סט 10 שאלות הניתוח היומי (בנק, גבייה, חריגות, תזרים) | ריצת הניתוח היומית; שאילתות מוכנות לבוט |
+| [07-books-batches.md](07-books-batches.md) | מנות ותנועות יומן: הסדר, מה ה-API נותן, ולמה סגירה ידנית | קליטת/סגירת מנה, מנות פתוחות, פקודות יומן |
+| [08-duplicate-detection.md](08-duplicate-detection.md) | זיהוי כפילויות — ולמה מספר אסמכתא לבדו מייצר התראות שווא | **לפני כל קליטת מנה**, ובכל דיווח כפילות |
+| [09-sumit-operations-map.md](09-sumit-operations-map.md) | מפת הפעולות: 🟢 API · 🔵 מחושב ברצף · 🔴 דפדפן בלבד | **לפני שעונים "אני יכול לעשות X"** |
+| [10-month-end-close.md](10-month-end-close.md) | סגירת חודש — 11 שלבים ותנאי מעבר | "תסגור חודש", "מה הסטטוס", לפני דיווח |
 
 ## כללי המשמעת
 
