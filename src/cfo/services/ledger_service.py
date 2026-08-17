@@ -56,12 +56,28 @@ class Line:
         }
 
 
+# מקורות יבוא מהנה"ח חיצונית. נמדד בפרוד: `hashavshevet_mdb` הוא ה-source
+# היחיד בטבלה (15,060 שורות, org5). tuple ולא מחרוזת — כדי שיבוא נוסף
+# בעתיד יתווסף כאן ולא יפוזר בתנאים.
+IMPORT_SOURCES: tuple[str, ...] = ("hashavshevet_mdb",)
+
+# כרטיס ההשהיה לצד חסר ביבוא (הכרעת בעלים 17/08/2026). 19 תנועות
+# חד-צדדיות בסך ₪217,116.65 נרשמות כאן במקום להישמט — הפער גלוי
+# ובר-מעקב, והמאזן מתאזן.
+IMPORT_SUSPENSE_ACCOUNT = "9999"
+IMPORT_SUSPENSE_NAME_HE = "הפרשי יבוא לבירור"
+
 @dataclass
 class Entry:
     entry_date: Optional[date]
     memo: str
     source_ref: str
     lines: list[Line] = field(default_factory=list)
+    # פקודה שמקורה ביבוא מהנה"ח חיצונית (חשבשבת). מסומנת ולא מעורבבת:
+    # הכרעת הבעלים 17/08/2026 היא "לניתוח בלבד, מסומן בנפרד", כי התקופה
+    # עד 30/06/2026 כבר דווחה לרשויות ע"י ההנה"ח החיצונית. בלי הסימון
+    # אי-אפשר להפריד אותן בפלט דיווח, וההכרעה מתרוקנת מתוכן.
+    is_imported: bool = False
 
     @property
     def total_debit(self) -> float:
@@ -324,8 +340,19 @@ def add_payroll_entry(db, organization_id: int, *, entry_date: date, memo: str,
     return row
 
 
-def _entries_by_source(db, organization_id: int, source: str, default_memo: str) -> list[Entry]:
-    """פקודות יומן שמורות (ידניות/שכר) → Entry objects (מאוזנות בבנייה)."""
+def _entries_by_source(db, organization_id: int, source: str, default_memo: str,
+                       *, imported: bool = False) -> list[Entry]:
+    """פקודות יומן שמורות → Entry objects.
+
+    `imported=True` (מקורות יבוא) מפעיל שני דברים שאינם חלים על פקודות
+    ידניות/שכר, שמאוזנות בבנייה:
+
+    1. **סימון** `is_imported` — נדרש להפרדה בפלט דיווח.
+    2. **איזון בכרטיס השהיה.** ביבוא מפרוד יש 19 תנועות חד-צדדיות בסך
+       ₪217,116.65. מאזן שאינו מתאזן אינו מאזן, אבל השמטתן הייתה מעלימה
+       את הסכום בלי עקבה — וזה מה ש-honest-null אוסר. הצד החסר נרשם
+       לכרטיס השהיה מפורש: המאזן מתאזן, הפער גלוי ובר-מעקב.
+    """
     from ..models import JournalEntry
     out: list[Entry] = []
     rows = db.query(JournalEntry).filter(
@@ -336,13 +363,48 @@ def _entries_by_source(db, organization_id: int, source: str, default_memo: str)
         lines = [Line(account=str(l.get("account")), debit=_f(l.get("debit")),
                       credit=_f(l.get("credit")), description=l.get("description", ""))
                  for l in (r.lines or [])]
+        if imported:
+            lines = _balance_with_suspense(lines)
         out.append(Entry(entry_date=r.entry_date, memo=r.memo or default_memo,
-                          source_ref=f"{source}:{r.id}", lines=lines))
+                          source_ref=f"{source}:{r.external_id or r.id}",
+                          lines=lines, is_imported=imported))
     return out
+
+
+def _balance_with_suspense(lines: list[Line]) -> list[Line]:
+    """משלים צד חסר בכרטיס ההשהיה. תנועה מאוזנת חוזרת כמות שהיא —
+    אחרת הכרטיס היה מתמלא ברעש ומאבד את משמעותו כרשימת פריטים לבירור."""
+    debit = round(sum(l.debit for l in lines), 2)
+    credit = round(sum(l.credit for l in lines), 2)
+    gap = round(debit - credit, 2)
+    if abs(gap) < 0.01:
+        return lines
+    return lines + [Line(
+        account=IMPORT_SUSPENSE_ACCOUNT,
+        debit=0.0 if gap > 0 else abs(gap),
+        credit=gap if gap > 0 else 0.0,
+        description="צד נגדי חסר ביבוא — לבירור",
+    )]
 
 
 def _manual_entries(db, organization_id: int) -> list[Entry]:
     return _entries_by_source(db, organization_id, "manual", "פקודת יומן ידנית")
+
+
+def _imported_entries(db, organization_id: int) -> list[Entry]:
+    """פקודות שיובאו מהנה"ח חיצונית.
+
+    נמדד בפרוד (17/08/2026): `hashavshevet_mdb` הוא ה-source **היחיד**
+    בטבלת `journal_entries` — 15,060 שורות של org5, 25/11/2021→30/06/2026.
+    עד לתיקון הזה הן סוננו בשקט, כי `build_journal` קרא רק
+    `manual`/`payroll`, והמאזן של התיק היה חסר לגמרי.
+    """
+    out: list[Entry] = []
+    for source in IMPORT_SOURCES:
+        out.extend(_entries_by_source(
+            db, organization_id, source, "פקודה מיובאת", imported=True,
+        ))
+    return out
 
 
 def _payroll_entries(db, organization_id: int) -> list[Entry]:
@@ -411,6 +473,12 @@ def build_journal(db, organization_id: int, *, start: Optional[date] = None,
         if _in_period(e.entry_date, start, end):
             entries.append(e)
 
+    # פקודות מיובאות מהנה"ח חיצונית — מסומנות is_imported, ומאוזנות
+    # בכרטיס השהיה כשהיבוא חד-צדדי.
+    for e in _imported_entries(db, organization_id):
+        if _in_period(e.entry_date, start, end):
+            entries.append(e)
+
     entries.sort(key=lambda e: (e.entry_date or date.max))
     return entries
 
@@ -446,7 +514,16 @@ def trial_balance(db, organization_id: int, *, start: Optional[date] = None,
 
     total_debit = round(total_debit, 2)
     total_credit = round(total_credit, 2)
-    return {
+
+    # השער הרגולטורי. הכרעת הבעלים 17/08/2026: פקודות היבוא נכללות
+    # **לניתוח בלבד, מסומן בנפרד** — כי ההנה"ח החיצונית כבר דיווחה
+    # לרשויות על התקופה עד 30/06/2026. פלט שמכיל אותן בלי אזהרה מפורשת
+    # מזמין דיווח חוזר, וזו עבירה. לכן זה נאכף כאן ולא רק מתועד.
+    #
+    # האזהרה מופיעה **רק** כשיש פקודות מיובאות: אזהרה שמופיעה תמיד היא
+    # אזהרה שאיש אינו קורא.
+    imported = [e for e in entries if getattr(e, "is_imported", False)]
+    result = {
         "period": {"start": start.isoformat() if start else None,
                    "end": end.isoformat() if end else None},
         "accounts": accounts,
@@ -456,7 +533,24 @@ def trial_balance(db, organization_id: int, *, start: Optional[date] = None,
         "entry_count": len(entries),
         "derived": True,
         "disclaimer": DISCLAIMER,
+        "includes_imported": bool(imported),
+        "imported_entry_count": len(imported),
     }
+    if imported:
+        result["imported_warning_he"] = (
+            f"מאזן זה כולל {len(imported)} פקודות שיובאו מהנה\"ח חיצונית. "
+            "התקופה שהן מכסות כבר דווחה לרשויות על ידי ההנה\"ח החיצונית — "
+            "אין לדווח עליה שוב. השימוש המאושר הוא ניתוח בלבד."
+        )
+        suspense = next(
+            (a for a in accounts if a["account"] == IMPORT_SUSPENSE_ACCOUNT), None,
+        )
+        if suspense:
+            result["import_suspense_he"] = (
+                f"כרטיס {IMPORT_SUSPENSE_ACCOUNT} ({IMPORT_SUSPENSE_NAME_HE}) מחזיק "
+                "צדדים חסרים מהיבוא — פריטים לבירור, לא יתרה אמיתית."
+            )
+    return result
 
 
 def general_ledger(db, organization_id: int, account_code: str, *,
