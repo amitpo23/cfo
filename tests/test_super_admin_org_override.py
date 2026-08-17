@@ -65,25 +65,41 @@ def _active_org(client, headers):
     return client.get("/api/integration/status", headers=headers).json()["organization_id"]
 
 
-# --- non-super users: header is completely ignored (P0 isolation) ------------
+# --- non-super users: header for a foreign org FAILS (P0 isolation) ----------
+# **היפוך התנהגות 11/08/2026.** קודם הכותרת פשוט נבלעה והבקשה בוצעה
+# בארגון של המשתמש. הכוונה — לא להרחיב scope — נשמרת במלואה; מה שהשתנה
+# הוא שהבקשה נכשלת במקום להתבצע ביעד אחר. החלפת יעד בשקט היא בדיוק
+# התקלה שהוסרה מסופר-אדמין באותו סבב.
 def test_non_super_user_cannot_override_org(client, tenant):
     headers = {**tenant["headers"], "X-Active-Org-Id": "1"}
-    assert _active_org(client, headers) == tenant["user"]["organization_id"]
+    resp = client.get("/api/integration/status", headers=headers)
+
+    assert resp.status_code in (403, 409), resp.text
+    assert resp.json().get("organization_id") != 1, "scope הורחב לארגון 1"
 
 
 def test_non_super_override_does_not_leak_writes(client, owner, tenant):
-    """A non-super tenant with the header must not write into another org."""
+    """כתיבה עם כותרת לארגון זר נכשלת — ובוודאי אינה נוחתת שם."""
     headers = {**tenant["headers"], "X-Active-Org-Id": str(owner["user"]["organization_id"])}
     r = client.post("/api/tasks", json={"title": "tenant note"}, headers=headers)
-    assert r.status_code == 200, r.text
-    # The task must belong to the tenant's own org, NOT org 1.
+
+    assert r.status_code in (403, 409), r.text
     owner_titles = {t["title"] for t in client.get("/api/tasks", headers=owner["headers"]).json()}
     assert "tenant note" not in owner_titles
+    tenant_titles = {t["title"] for t in client.get("/api/tasks", headers=tenant["headers"]).json()}
+    assert "tenant note" not in tenant_titles, "הכתיבה בוצעה בארגון של המשתמש במקום להיכשל"
 
 
 # --- super user: override honored for reads ---------------------------------
-def test_super_without_header_uses_own_org(client, superadmin):
-    assert _active_org(client, superadmin["headers"]) == superadmin["own_org"]
+def test_super_without_header_must_choose(client, superadmin):
+    """**היפוך 11/08/2026 (ערב).** קודם סופר-אדמין עם ארגון בית נכנס
+    אליו בלי כותרת. זה יצר שתי התנהגויות לאותו תפקיד — תלוי בשדה
+    `organization_id` שהוא שריד היסטורי — והחזיר בדלת האחורית פעולה
+    רוחבית שנוחתת בתיק שאיש לא בחר בו."""
+    resp = client.get("/api/integration/status", headers=superadmin["headers"])
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["error"] == "active_organization_required"
 
 
 def test_super_with_header_targets_org(client, superadmin):
@@ -238,10 +254,12 @@ def test_super_admin_can_trigger_client_sync_without_connections(client, fresh_o
 def test_super_admin_can_edit_organization_name_and_tax_id(client, fresh_org, superadmin):
     client_org = fresh_org()
 
+    # סופר-אדמין חייב לבחור ארגון מפורשות — כולל כשהוא עורך אותו.
+    headers = {**superadmin["headers"], "X-Active-Org-Id": str(client_org["org_id"])}
     resp = client.patch(
         f"/api/admin/organizations/{client_org['org_id']}",
         json={"name": "שם חדש בע\"מ", "tax_id": "512345678"},
-        headers=superadmin["headers"],
+        headers=headers,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -249,17 +267,18 @@ def test_super_admin_can_edit_organization_name_and_tax_id(client, fresh_org, su
     assert body["tax_id"] == "512345678"
 
     # Persisted, not just echoed back.
-    fetched = client.get(f"/api/admin/organizations/{client_org['org_id']}", headers=superadmin["headers"])
+    fetched = client.get(f"/api/admin/organizations/{client_org['org_id']}", headers=headers)
     assert fetched.json()["name"] == "שם חדש בע\"מ"
 
 
 def test_super_admin_can_deactivate_organization(client, fresh_org, superadmin):
     client_org = fresh_org()
 
+    headers = {**superadmin["headers"], "X-Active-Org-Id": str(client_org["org_id"])}
     resp = client.patch(
         f"/api/admin/organizations/{client_org['org_id']}",
         json={"is_active": False},
-        headers=superadmin["headers"],
+        headers=headers,
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["is_active"] is False

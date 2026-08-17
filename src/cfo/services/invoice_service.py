@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from ..database import SessionLocal
 from ..config import settings
 from ..integrations.sumit_integration import SumitIntegration
+from .sumit_request_budget import SumitRequestLimiter
 from ..integrations.sumit_models import (
     DocumentRequest, DocumentResponse, DocumentItem,
     SendDocumentRequest, DocumentListRequest, ExpenseRequest
@@ -265,7 +266,7 @@ class InvoiceService:
         )
         
         try:
-            async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+            async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                 # יצירת המסמך
                 response = await sumit.create_document(document_request)
                 
@@ -381,7 +382,7 @@ class InvoiceService:
         )
         
         try:
-            async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+            async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                 response = await sumit.add_expense(expense_request)
                 invoice.sumit_expense_id = response.get('expense_id')
                 invoice.status = InvoiceStatus.SENT
@@ -475,7 +476,7 @@ class InvoiceService:
         
         if invoice.sumit_id:
             try:
-                async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+                async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                     await sumit.cancel_document(invoice.sumit_id)
             except Exception as e:
                 raise Exception(f"שגיאה בביטול חשבונית ב-SUMIT: {str(e)}")
@@ -536,7 +537,7 @@ class InvoiceService:
             to_date = date.today()
         
         try:
-            async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+            async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                 request = DocumentListRequest(
                     from_date=from_date,
                     to_date=to_date,
@@ -702,7 +703,7 @@ class InvoiceService:
             
             if days_overdue >= min_days_overdue and invoice.sumit_id:
                 try:
-                    async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+                    async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                         await sumit.send_document(SendDocumentRequest(
                             document_id=invoice.sumit_id,
                             subject=f"תזכורת תשלום - חשבונית {invoice.document_number}",

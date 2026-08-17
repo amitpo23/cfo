@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from ..database import SessionLocal
 from ..config import settings
 from ..integrations.sumit_integration import SumitIntegration
+from .sumit_request_budget import SumitRequestLimiter
 from ..integrations.sumit_models import (
     ChargeRequest, PaymentResponse, PaymentMethodCard,
     RecurringPaymentRequest, RecurringPaymentResponse,
@@ -231,7 +232,7 @@ class PaymentRequestService:
         
         # יצירת קישור תשלום ב-SUMIT
         try:
-            async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+            async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                 # יצירת טרנזקציה לתשלום
                 transaction = TransactionRequest(
                     amount=Decimal(str(request.amount)),
@@ -339,7 +340,7 @@ class PaymentRequestService:
     ) -> ChargeResult:
         """חיוב כרטיס אשראי"""
         try:
-            async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+            async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                 # Tokenize כרטיס לשימוש חד-פעמי
                 token_request = TokenizeCardRequest(
                     card_number=card_details['card_number'],
@@ -440,7 +441,7 @@ class PaymentRequestService:
         next_charge = self._calculate_next_charge_date(start_date, frequency)
         
         try:
-            async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+            async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                 # Tokenize כרטיס לשימוש חוזר
                 token_request = TokenizeCardRequest(
                     card_number=card_details['card_number'],
@@ -533,7 +534,7 @@ class PaymentRequestService:
             raise ValueError(f"הוראת קבע אינה פעילה")
         
         try:
-            async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+            async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                 if order.sumit_recurring_id:
                     payment = await sumit.charge_recurring(order.sumit_recurring_id)
                 else:
@@ -609,7 +610,7 @@ class PaymentRequestService:
         
         try:
             if order.sumit_recurring_id:
-                async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+                async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                     await sumit.cancel_recurring(order.sumit_recurring_id)
         except:
             pass
@@ -810,7 +811,7 @@ class PaymentRequestService:
     ):
         """שליחת SMS בקשת תשלום"""
         try:
-            async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+            async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                 from ..integrations.sumit_models import SMSRequest
                 sms = SMSRequest(
                     phone_number=request.customer_phone,

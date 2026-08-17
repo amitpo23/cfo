@@ -9,8 +9,10 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from cfo.database import SessionLocal
-from cfo.models import ChatMessage, Contact, ContactType, Invoice, InvoiceStatus
+from cfo.models import ChatMessage, Contact, ContactType, Invoice, InvoiceStatus, User
 from cfo.services import ai_chat_service, document_issuance_service
 from cfo.services.ai_chat_service import AIChatService, ChatConfirmationError
 
@@ -58,6 +60,14 @@ def _seed_overdue_invoice(db, org_id, total="500"):
     return inv
 
 
+def _org_user_id(db, org_id):
+    return db.query(User.id).filter(User.organization_id == org_id).scalar()
+
+
+def _chat_for_org(db, org_id, **kwargs):
+    return AIChatService(db, org_id, user_id=_org_user_id(db, org_id), **kwargs)
+
+
 def test_read_tool_executes_automatically_and_feeds_result_back(monkeypatch, fresh_org):
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
@@ -74,7 +84,7 @@ def test_read_tool_executes_automatically_and_feeds_result_back(monkeypatch, fre
             ),
         ])
 
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         result = asyncio.run(service.send_message("s1", "מה מצב הגבייה?"))
 
         assert result["pending_action"] is None
@@ -105,7 +115,7 @@ def test_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
             ),
         ])
 
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         result = asyncio.run(service.send_message("s1", "תפיק חשבונית ל-123 על 100 שקל"))
 
         assert result["pending_action"]["tool"] == "issue_document"
@@ -115,6 +125,198 @@ def test_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
         msg = db.query(ChatMessage).filter(ChatMessage.id == result["message_id"]).first()
         assert msg.pending_action is not None
         assert msg.executed is False
+        assert msg.action_status == "pending"
+    finally:
+        db.close()
+
+
+def test_confirm_action_rejects_an_action_already_claimed_for_execution(
+    monkeypatch, fresh_org,
+):
+    """A second worker must never replay a write after the first worker's
+    atomic claim, even while the external result is not known yet."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=_org_user_id(db, org_id),
+            session_id="atomic-claim",
+            role="assistant",
+            content="לאשר?",
+            pending_action={
+                "tool": "create_expense_category",
+                "input": {"name": "בדיקה"},
+                "description": "יצירת קטגוריה",
+            },
+            action_status="executing",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+
+        called = {"count": 0}
+
+        async def forbidden_execute(*_args, **_kwargs):
+            called["count"] += 1
+            return {"ok": True}
+
+        monkeypatch.setattr(AIChatService, "_execute_tool_observed", forbidden_execute)
+
+        with pytest.raises(ChatConfirmationError):
+            asyncio.run(_chat_for_org(db, org_id).confirm_action(msg.id))
+
+        assert called["count"] == 0
+    finally:
+        db.close()
+
+
+def test_atomic_claim_blocks_a_second_session_before_tool_execution(
+    monkeypatch, fresh_org,
+):
+    """The first confirmer commits its CAS claim before entering the tool.
+    A second independent DB session arriving from inside that execution must
+    observe `executing` and be rejected without invoking the tool twice."""
+    org_id = fresh_org()["org_id"]
+    db_a = SessionLocal()
+    db_b = SessionLocal()
+    try:
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=_org_user_id(db_a, org_id),
+            session_id="real-race",
+            role="assistant",
+            content="לאשר?",
+            pending_action={
+                "tool": "create_expense_category",
+                "input": {"name": "פעם אחת"},
+                "description": "יצירת קטגוריה",
+            },
+            action_status="pending",
+        )
+        db_a.add(msg)
+        db_a.commit()
+        db_a.refresh(msg)
+
+        calls = {"tool": 0, "second_rejected": False}
+        service_b = AIChatService(
+            db_b, org_id, user_id=_org_user_id(db_b, org_id),
+        )
+
+        async def execute_once(*_args, **_kwargs):
+            calls["tool"] += 1
+            try:
+                await service_b.confirm_action(msg.id)
+            except ChatConfirmationError:
+                calls["second_rejected"] = True
+            return {"ok": True}
+
+        monkeypatch.setattr(AIChatService, "_execute_tool_observed", execute_once)
+        result = asyncio.run(
+            AIChatService(
+                db_a, org_id, user_id=_org_user_id(db_a, org_id),
+            ).confirm_action(msg.id)
+        )
+
+        assert result["result"] == {"ok": True}
+        assert calls == {"tool": 1, "second_rejected": True}
+        db_b.expire_all()
+        stored = db_b.query(ChatMessage).filter(ChatMessage.id == msg.id).one()
+        assert stored.action_status == "executed"
+        assert stored.executed is True
+    finally:
+        db_b.close()
+        db_a.close()
+
+
+def test_cancel_action_persists_and_blocks_later_confirmation(monkeypatch, fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=_org_user_id(db, org_id),
+            session_id="cancelled-action",
+            role="assistant",
+            content="לאשר?",
+            pending_action={
+                "tool": "create_expense_category",
+                "input": {"name": "לא ליצור"},
+                "description": "יצירת קטגוריה",
+            },
+            action_status="pending",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+
+        service = _chat_for_org(db, org_id)
+        cancelled = service.cancel_action(msg.id)
+        assert cancelled["status"] == "cancelled"
+
+        db.refresh(msg)
+        assert msg.action_status == "cancelled"
+        assert msg.executed is False
+
+        called = {"count": 0}
+
+        async def forbidden_execute(*_args, **_kwargs):
+            called["count"] += 1
+            return {"ok": True}
+
+        monkeypatch.setattr(AIChatService, "_execute_tool_observed", forbidden_execute)
+        with pytest.raises(ChatConfirmationError):
+            asyncio.run(service.confirm_action(msg.id))
+        assert called["count"] == 0
+    finally:
+        db.close()
+
+
+def test_ambiguous_execution_failure_is_locked_unknown_and_not_replayed(
+    monkeypatch, fresh_org,
+):
+    """A transport/process failure can happen after the provider accepted
+    the write.  The safe state is UNKNOWN and requires verification, never
+    an automatic retry that could duplicate the external side effect."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=_org_user_id(db, org_id),
+            session_id="unknown-result",
+            role="assistant",
+            content="לאשר?",
+            pending_action={
+                "tool": "create_expense_category",
+                "input": {"name": "תוצאה לא ידועה"},
+                "description": "יצירת קטגוריה",
+            },
+            action_status="pending",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+
+        calls = {"count": 0}
+
+        async def ambiguous_failure(*_args, **_kwargs):
+            calls["count"] += 1
+            raise RuntimeError("provider accepted? bearer very-secret-token")
+
+        monkeypatch.setattr(AIChatService, "_execute_tool_observed", ambiguous_failure)
+        service = _chat_for_org(db, org_id)
+
+        with pytest.raises(ChatConfirmationError):
+            asyncio.run(service.confirm_action(msg.id))
+
+        db.refresh(msg)
+        assert msg.action_status == "unknown"
+        assert "very-secret-token" not in (msg.action_error or "")
+
+        with pytest.raises(ChatConfirmationError):
+            asyncio.run(service.confirm_action(msg.id))
+        assert calls["count"] == 1
     finally:
         db.close()
 
@@ -134,7 +336,7 @@ def test_create_payment_link_write_tool_is_never_auto_executed(monkeypatch, fres
             ),
         ])
 
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         result = asyncio.run(service.send_message("s1", "תיצור קישור תשלום לחשבונית"))
 
         assert result["pending_action"]["tool"] == "create_payment_link"
@@ -161,7 +363,7 @@ def test_confirm_action_executes_create_payment_link_exactly_once(monkeypatch, f
                 content=[_tool_use_block("t1", "create_payment_link", {"invoice_id": inv.id})],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         first = asyncio.run(service.send_message("s1", "צור קישור תשלום"))
         pending_id = first["message_id"]
 
@@ -213,7 +415,7 @@ def test_write_tool_still_not_executed_on_later_unconfirmed_turn(monkeypatch, fr
                 })],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         first = asyncio.run(service.send_message("s1", "תפיק חשבונית"))
         pending_id = first["message_id"]
 
@@ -272,7 +474,7 @@ def test_confirm_action_executes_exactly_once(monkeypatch, fresh_org):
                 })],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         first = asyncio.run(service.send_message("s1", "תפיק חשבונית"))
         pending_id = first["message_id"]
 
@@ -306,10 +508,10 @@ def test_confirm_action_rejects_cross_org(monkeypatch, fresh_org):
                 })],
             ),
         ])
-        service_a = AIChatService(db, org_a, user_id=1)
+        service_a = AIChatService(db, org_a, user_id=_org_user_id(db, org_a))
         first = asyncio.run(service_a.send_message("s1", "תפיק"))
 
-        service_b = AIChatService(db, org_b, user_id=2)
+        service_b = AIChatService(db, org_b, user_id=_org_user_id(db, org_b))
         try:
             asyncio.run(service_b.confirm_action(first["message_id"]))
             raised = None
@@ -326,14 +528,14 @@ def test_confirm_action_rejects_message_without_pending_action(fresh_org):
     db = SessionLocal()
     try:
         msg = ChatMessage(
-            organization_id=org_id, user_id=1, session_id="s1",
+            organization_id=org_id, user_id=_org_user_id(db, org_id), session_id="s1",
             role="assistant", content="שלום",
         )
         db.add(msg)
         db.commit()
         db.refresh(msg)
 
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         try:
             asyncio.run(service.confirm_action(msg.id))
             raised = None
@@ -361,7 +563,7 @@ def test_confirm_action_rejects_a_different_users_pending_action(monkeypatch, fr
                 })],
             ),
         ])
-        owner_service = AIChatService(db, org_id, user_id=1)
+        owner_service = _chat_for_org(db, org_id)
         pending = asyncio.run(owner_service.send_message("s1", "תפיק חשבונית"))
 
         attacker_service = AIChatService(db, org_id, user_id=999)
@@ -383,12 +585,12 @@ def test_chat_history_is_scoped_to_the_requesting_user(fresh_org):
     db = SessionLocal()
     try:
         db.add(ChatMessage(
-            organization_id=org_id, user_id=1, session_id="shared-guess",
+            organization_id=org_id, user_id=_org_user_id(db, org_id), session_id="shared-guess",
             role="user", content="מידע פרטי",
         ))
         db.commit()
 
-        owner_service = AIChatService(db, org_id, user_id=1)
+        owner_service = _chat_for_org(db, org_id)
         other_service = AIChatService(db, org_id, user_id=2)
 
         assert len(owner_service._history("shared-guess")) == 1
@@ -409,12 +611,12 @@ def test_history_is_capped_and_keeps_the_newest_messages_in_order(fresh_org):
         total = _MAX_HISTORY_MESSAGES + 15
         for i in range(total):
             db.add(ChatMessage(
-                organization_id=org_id, user_id=1, session_id="long-session",
+                organization_id=org_id, user_id=_org_user_id(db, org_id), session_id="long-session",
                 role="user", content=f"הודעה {i}",
             ))
         db.commit()
 
-        history = AIChatService(db, org_id, user_id=1)._history("long-session")
+        history = _chat_for_org(db, org_id)._history("long-session")
 
         assert len(history) == _MAX_HISTORY_MESSAGES
         # החדשות ביותר נשמרות, והסדר נשאר מהישן לחדש
@@ -643,6 +845,7 @@ def test_confirm_action_reports_honest_error_when_register_office_client_fails(m
 
         msg = db.query(ChatMessage).filter(ChatMessage.id == pending_id).first()
         assert msg.executed is False
+        assert msg.action_status == "pending"
         assert db.query(SumitCompany).filter(
             SumitCompany.company_id == "444555666",
         ).count() == 0
@@ -776,7 +979,7 @@ def test_create_expense_category_write_tool_is_never_auto_executed(monkeypatch, 
                 })],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         result = asyncio.run(service.send_message("s1", "פתח לי כרטיס הוצאה לנסיעות כנסים"))
 
         assert result["pending_action"]["tool"] == "create_expense_category"
@@ -802,7 +1005,7 @@ def test_confirm_action_executes_create_expense_category_successfully(monkeypatc
                 })],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         proposed = asyncio.run(service.send_message("s1", "פתח כרטיס הוצאה"))
         pending_id = proposed["message_id"]
 
@@ -838,7 +1041,7 @@ def test_set_expense_category_write_tool_is_never_auto_executed(monkeypatch, fre
                 })],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         result = asyncio.run(service.send_message("s1", "שנה את הקטגוריה של ההוצאה הזו לשכירות"))
 
         assert result["pending_action"]["tool"] == "set_expense_category"
@@ -863,7 +1066,7 @@ def test_confirm_action_executes_set_expense_category_successfully(monkeypatch, 
                 })],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         proposed = asyncio.run(service.send_message("s1", "שנה קטגוריה"))
         pending_id = proposed["message_id"]
 
@@ -892,7 +1095,7 @@ def test_classify_pending_expenses_write_tool_is_never_auto_executed(monkeypatch
                 content=[_tool_use_block("t1", "classify_pending_expenses", {})],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         result = asyncio.run(service.send_message("s1", "סווג את כל ההוצאות הממתינות"))
 
         assert result["pending_action"]["tool"] == "classify_pending_expenses"
@@ -919,7 +1122,7 @@ def test_confirm_action_executes_classify_pending_expenses_successfully(monkeypa
                 content=[_tool_use_block("t1", "classify_pending_expenses", {})],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         proposed = asyncio.run(service.send_message("s1", "סווג את כל ההוצאות הממתינות"))
         pending_id = proposed["message_id"]
 
@@ -950,7 +1153,7 @@ def test_file_expense_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
                 content=[_tool_use_block("t1", "file_expense", {"expense_id": exp["id"]})],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         result = asyncio.run(service.send_message("s1", f"תייק את הוצאה {exp['id']}"))
 
         assert result["pending_action"]["tool"] == "file_expense"
@@ -974,7 +1177,7 @@ def test_confirm_action_executes_file_expense_successfully(monkeypatch, fresh_or
                 content=[_tool_use_block("t1", "file_expense", {"expense_id": exp["id"]})],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = _chat_for_org(db, org_id)
         proposed = asyncio.run(service.send_message("s1", f"תייק את הוצאה {exp['id']}"))
         pending_id = proposed["message_id"]
 

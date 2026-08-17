@@ -16,10 +16,14 @@ from .routes import open_finance, office, calculators, payroll, ledger, daily_re
 from .dependencies import get_current_user
 from ..config import settings
 from ..database import init_db
-from ..integrations.sumit_integration import SumitAPIError
+from ..integrations.sumit_integration import SumitAPIError, SumitRequestBudgetRequired
 from ..services.data_sync_service import SumitNotConfiguredError, LegacySyncRetiredError
 from ..services.ai_chat_service import AIChatNotConfiguredError, AIChatUpstreamError
 from ..services.ai_analytics_service import AIAnalyticsNotConfiguredError
+from ..services.sumit_request_budget import (
+    SumitRequestBudgetExceeded,
+    SumitRequestBudgetUnavailable,
+)
 
 
 @asynccontextmanager
@@ -66,6 +70,55 @@ async def sumit_api_error_handler(_request, exc: SumitAPIError):
             "detail": str(exc),
             "source": "sumit",
             "code": "external_integration_error",
+        },
+    )
+
+
+@app.exception_handler(SumitRequestBudgetExceeded)
+async def sumit_request_budget_exceeded_handler(
+    _request,
+    exc: SumitRequestBudgetExceeded,
+):
+    """A durable ceiling is an intentional, retryable refusal—not a 500."""
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        headers={"Retry-After": "60"},
+        content={
+            "detail": str(exc),
+            "source": "sumit",
+            "code": "request_budget_exceeded",
+        },
+    )
+
+
+@app.exception_handler(SumitRequestBudgetUnavailable)
+async def sumit_request_budget_unavailable_handler(
+    _request,
+    exc: SumitRequestBudgetUnavailable,
+):
+    """Fail closed when the shared counter cannot be proven durable."""
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "detail": str(exc),
+            "source": "sumit",
+            "code": "request_budget_unavailable",
+        },
+    )
+
+
+@app.exception_handler(SumitRequestBudgetRequired)
+async def sumit_request_budget_required_handler(
+    _request,
+    exc: SumitRequestBudgetRequired,
+):
+    """A missed production wiring point must refuse the provider call."""
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "detail": str(exc),
+            "source": "sumit",
+            "code": "request_budget_unavailable",
         },
     )
 

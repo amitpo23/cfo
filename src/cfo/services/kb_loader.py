@@ -130,6 +130,58 @@ KB_CENTERS: tuple[KBCenter, ...] = (
                 "06-daily-analysis-prompts.md", "סט הניתוח היומי — 10 שאלות",
                 "פרומפטים מוכנים לצ'אטבוט/סוכן ולמפרט מחזור הבוקר האוטומטי, עם דגלים אדומים.",
             ),
+            # --- תהליכי עבודה מול הספרים (16–17/08/2026) --- #
+            # התקציר הוא מה שמושקו רואה בחיפוש, ולכן הוא נושא את מילות
+            # השאלה שבעל עסק ישאל בפועל ("מנה", "מאזן בוחן", "כפילות"),
+            # ולא רק תיאור אקדמי של הקובץ.
+            KBFile(
+                "07-books-batches.md", "מנות ותנועות יומן — קליטה וסגירת מנה",
+                "קליטת מנה, מנות פתוחות, פקודות יומן: הסדר המחייב, מה ה-API "
+                "נותן (createbatch בלבד), ולמה קריאת מנה וסגירתה ידניות. "
+                "מאזן בוחן עם מנות פתוחות אינו סופי.",
+            ),
+            KBFile(
+                "08-duplicate-detection.md", "זיהוי כפילויות",
+                "כפילות דורשת ≥3 שדות; מספר אסמכתא לבדו מייצר התראות שווא "
+                "(אגודה חקלאית 16749 מול 16713 — שתי חשבוניות נפרדות). "
+                "מחיקת תנועה שאינה כפילות היא מחיקת הוצאה מוכרת.",
+            ),
+            KBFile(
+                "09-sumit-operations-map.md", "מפת הפעולות מול SUMIT",
+                "מה נמשך מ-API, מה רצף מחשבת בעצמה (מאזן בוחן, רווח והפסד, "
+                "כרטסת, מאזן), ומה קיים רק בדפדפן. משמעת קריאות ה-API.",
+            ),
+            KBFile(
+                "10-month-end-close.md", "סגירת חודש — סדר השלבים",
+                "11 שלבים ותנאי מעבר: קליטה, סיווג, כפילויות, מסמכים חסרים, "
+                "התאמת בנק, מנה, מאזן בוחן, אימות משולש, סגירה ודיווח.",
+            ),
+            KBFile(
+                "11-updating-sumit.md", "איך נתונים נכנסים ל-SUMIT",
+                "createbatch כקריאה אחת למנה שלמה, מסלול אקסל לעדכון מפתחות "
+                "חשבון באפס קריאות, ושלוש מלכודות: תאריך העלאה מול תאריך "
+                "מסמך, סימון מסמכים כישנים, והוצאות שחוזרות מה-API בסכום 0.",
+            ),
+
+            KBFile(
+                "12-workflow-expense-classification.md",
+                "תהליך סיווג הוצאה",
+                "סדר הצעדים לסיווג ותיוק הוצאה, שער המסמך, ושתי מלכודות: "
+                "תאריך העלאה מול תאריך מסמך, והוצאות שחוזרות מה-API בסכום 0.",
+            ),
+            KBFile(
+                "13-workflow-bank-reconciliation.md",
+                "תהליך התאמת בנקים",
+                "התאמת תנועת בנק מול מסמך ותשלום. ל-SUMIT אין endpoint "
+                "להתאמות — רצף רואה את שני הצדדים ומתאימה אצלה, והתוצאה "
+                "נכתבת כפקודת יומן.",
+            ),
+            KBFile(
+                "14-parity-check.md",
+                "התאמת מאזן בוחן רצף מול SUMIT",
+                "מאזן של רצף שלא הוצלב מול SUMIT הוא חישוב ולא ספר. "
+                "ארבעה תנאים להצלבה תקפה, ולמה פער שלא הוסבר חוסם דיווח.",
+            ),
         ),
     ),
     KBCenter(
@@ -298,6 +350,28 @@ def _split_sections(
     return sections
 
 
+@lru_cache(maxsize=512)
+def _word_start_re(term: str) -> re.Pattern[str]:
+    """ביטוי שתופס את המונח בתחילת מילה בלבד.
+
+    ספירת תת-מחרוזת גולמית שברה את הדירוג: `"מנה"` נספרה בתוך `הזמנה`
+    ו-`תמונה`, ולכן מסמך על הזמנות דורג גבוה משאלה על מנות חשבונאיות
+    (נמדד 17/08/2026 — `"סגירת מנה"` החזיר את המודל המכונן במקום את
+    המסמך שאומר שאין API לסגירת מנה).
+
+    אות תחילית עברית אחת (ה/ו/ב/ל/מ/ש/כ) מותרת, כדי ש-`"המנה"` ו-
+    `"למנה"` כן ייספרו — הן אותו מונח.
+    """
+    return re.compile(
+        r"(?<![\w֐-׿])[הובלמשכ]?"
+        + re.escape(term)
+    )
+
+
+def _count_word_starts(haystack: str, term: str) -> int:
+    return len(_word_start_re(term).findall(haystack))
+
+
 def kb_search(query: str, *, max_chars: int = 4000) -> dict[str, Any]:
     """Case-insensitive keyword search across every KB file's ``## ``
     sections, ranked by keyword-occurrence count, returned up to
@@ -328,10 +402,21 @@ def kb_search(query: str, *, max_chars: int = 4000) -> dict[str, Any]:
             if not (center_dir / f.filename).exists():
                 continue
             text = _read_file(root, center.dir_name, f.filename)
+            # התאמה לכותרת/תקציר הרשומים מקבלת משקל גבוה. בלי זה הדירוג
+            # הוא ספירת מופעים גולמית, וקבצים ארוכים (מרכז העזרה של SUMIT,
+            # המודל המכונן) גוברים תמיד — כך ש"סגירת מנה" החזיר את המודל
+            # המכונן ולא את המסמך שאומר שאין API לסגירה. נמדד 17/08/2026.
+            label = f"{f.title_he} {f.summary_he}".lower()
+            label_hits = sum(1 for t in lowered_terms if t in label)
+
             for section in _split_sections(text, f.title_he, center.heading_re):
                 haystack = section["text"].lower()
-                score = sum(haystack.count(t) for t in lowered_terms)
-                if score > 0:
+                base = sum(_count_word_starts(haystack, t) for t in lowered_terms)
+                # נרמול לפי אורך הקטע: קטע ארוך צובר מופעים בלי להיות
+                # רלוונטי יותר.
+                density = base / max(len(haystack) / 1000.0, 1.0)
+                score = density + (label_hits * 25.0)
+                if base > 0 or label_hits:
                     scored.append({
                         "score": score,
                         "center": center.title_he,
@@ -347,10 +432,19 @@ def kb_search(query: str, *, max_chars: int = 4000) -> dict[str, Any]:
 
     results: list[dict[str, Any]] = []
     used = 0
+    # תקרת קטעים לקובץ: בלי זה מסמך ארוך אחד צורך את כל תקציב ה-
+    # max_chars בקטעים רצופים, ומסמכים רלוונטיים אחרים לא מקבלים מקום
+    # כלל. נמדד 17/08/2026 — "סגירת חודש" החזיר ארבעה קטעים מאותו
+    # מסמך, ו-10-month-end-close.md לא הופיע בתשובה בכלל.
+    _MAX_SECTIONS_PER_FILE = 2
+    per_file: dict[str, int] = {}
     for s in scored:
         remaining = max_chars - used
         if remaining <= 0:
             break
+        if per_file.get(s["file"], 0) >= _MAX_SECTIONS_PER_FILE:
+            continue
+        per_file[s["file"]] = per_file.get(s["file"], 0) + 1
         text = s["text"]
         cap = min(_SECTION_CHAR_CAP, remaining)
         if len(text) > cap:

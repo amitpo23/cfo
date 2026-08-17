@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, AlertCircle, Coins, Loader2, MessageCircle, RefreshCw, Wrench } from 'lucide-react';
+import { Activity, AlertCircle, Brain, CheckCircle2, Coins, Loader2, MessageCircle, RefreshCw, Wrench } from 'lucide-react';
 import api from '../services/api';
 import type { CurrentUser } from './OrgSwitcher';
 
@@ -66,6 +66,22 @@ interface UsageResponse {
   groups: UsageBucket[];
 }
 
+interface QualityFeedback {
+  id: number;
+  organization_id: number;
+  user_id: number;
+  session_id: string;
+  channel: string;
+  category: 'helpful' | 'inaccurate' | 'unknown' | 'unsafe';
+  comment: string | null;
+  question: string | null;
+  answer: string;
+  status: 'open' | 'reviewed' | 'resolved' | 'dismissed';
+  correction: string | null;
+  promoted_memory_id: number | null;
+  created_at: string | null;
+}
+
 const channelLabel: Record<string, string> = {
   web: 'ווב',
   telegram: 'טלגרם',
@@ -89,6 +105,7 @@ export default function MoshkoObservabilityDashboard({
   const [conversations, setConversations] = useState<Page<Conversation> | null>(null);
   const [toolCalls, setToolCalls] = useState<Page<ToolCall> | null>(null);
   const [usage, setUsage] = useState<UsageResponse | null>(null);
+  const [feedback, setFeedback] = useState<Page<QualityFeedback> | null>(null);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [loading, setLoading] = useState(true);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
@@ -100,6 +117,10 @@ export default function MoshkoObservabilityDashboard({
   const [success, setSuccess] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [feedbackStatus, setFeedbackStatus] = useState('open');
+  const [feedbackCategory, setFeedbackCategory] = useState('');
+  const [correctionDrafts, setCorrectionDrafts] = useState<Record<number, string>>({});
+  const [reviewingId, setReviewingId] = useState<number | null>(null);
 
   const params = useMemo(() => {
     const result: Record<string, string | number | boolean> = { limit: 50 };
@@ -119,20 +140,28 @@ export default function MoshkoObservabilityDashboard({
       const toolParams = { ...params };
       if (targetSystem) toolParams.target_system = targetSystem;
       if (success) toolParams.succeeded = success === 'success';
-      const [conversationData, toolData, usageData] = await Promise.all([
+      const feedbackParams: Record<string, string | number> = { limit: 100 };
+      if (organizationId) feedbackParams.organization_id = Number(organizationId);
+      if (userId) feedbackParams.user_id = Number(userId);
+      if (channel) feedbackParams.channel = channel;
+      if (feedbackStatus) feedbackParams.status = feedbackStatus;
+      if (feedbackCategory) feedbackParams.category = feedbackCategory;
+      const [conversationData, toolData, usageData, feedbackData] = await Promise.all([
         api.get<Page<Conversation>>('/admin/moshko/conversations', { params }),
         api.get<Page<ToolCall>>('/admin/moshko/tool-calls', { params: toolParams }),
         api.get<UsageResponse>('/admin/moshko/usage', { params: { ...params, group_by: 'day' } }),
+        api.get<Page<QualityFeedback>>('/admin/moshko/feedback', { params: feedbackParams }),
       ]);
       setConversations(conversationData);
       setToolCalls(toolData);
       setUsage(usageData);
+      setFeedback(feedbackData);
     } catch (requestError: any) {
       setError(requestError?.response?.data?.detail || 'טעינת נתוני מושקו נכשלה');
     } finally {
       setLoading(false);
     }
-  }, [currentUser?.role, params, success, targetSystem]);
+  }, [channel, currentUser?.role, feedbackCategory, feedbackStatus, organizationId, params, success, targetSystem, userId]);
 
   useEffect(() => {
     void load();
@@ -150,6 +179,28 @@ export default function MoshkoObservabilityDashboard({
       setError(requestError?.response?.data?.detail || 'טעינת התמלול נכשלה');
     } finally {
       setTranscriptLoading(false);
+    }
+  };
+
+  const reviewFeedback = async (row: QualityFeedback, promoteToMemory: boolean) => {
+    const correction = (correctionDrafts[row.id] ?? row.correction ?? '').trim();
+    if (promoteToMemory && !correction) {
+      setError('נדרש תיקון לפני הפיכתו לידע מאושר.');
+      return;
+    }
+    setReviewingId(row.id);
+    setError(null);
+    try {
+      await api.patch(`/admin/moshko/feedback/${row.id}`, {
+        correction: correction || undefined,
+        status: promoteToMemory ? 'resolved' : 'reviewed',
+        promote_to_memory: promoteToMemory,
+      });
+      await load();
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.detail || 'שמירת ביקורת מושקו נכשלה');
+    } finally {
+      setReviewingId(null);
     }
   };
 
@@ -196,6 +247,12 @@ export default function MoshkoObservabilityDashboard({
           <select value={success} onChange={(event) => setSuccess(event.target.value)} className="rounded-lg border px-3 py-2">
             <option value="">כל התוצאות</option><option value="success">הצלחה</option><option value="failure">כשל</option>
           </select>
+          <select value={feedbackStatus} onChange={(event) => setFeedbackStatus(event.target.value)} className="rounded-lg border px-3 py-2">
+            <option value="">כל סטטוסי האיכות</option><option value="open">פתוח לבדיקה</option><option value="reviewed">נבדק</option><option value="resolved">נפתר</option><option value="dismissed">נדחה</option>
+          </select>
+          <select value={feedbackCategory} onChange={(event) => setFeedbackCategory(event.target.value)} className="rounded-lg border px-3 py-2">
+            <option value="">כל סוגי המשוב</option><option value="inaccurate">לא מדויק</option><option value="unknown">לא ידע</option><option value="unsafe">לא בטוח</option><option value="helpful">מועיל</option>
+          </select>
         </section>
 
         {error && <div className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-4 text-red-800"><AlertCircle size={18} />{error}</div>}
@@ -203,10 +260,50 @@ export default function MoshkoObservabilityDashboard({
           <div className="flex items-center justify-center gap-3 rounded-xl border bg-white p-16 text-slate-500"><Loader2 className="animate-spin" /> טוען נתונים…</div>
         ) : (
           <>
-            <section className="grid gap-4 md:grid-cols-3">
+            <section className="grid gap-4 md:grid-cols-4">
               <div className="rounded-xl border bg-white p-5 shadow-sm"><MessageCircle className="mb-3 text-blue-600" /><div className="text-3xl font-bold">{conversations?.total ?? 0}</div><div className="text-sm text-slate-500">שיחות מסוננות</div></div>
               <div className="rounded-xl border bg-white p-5 shadow-sm"><Wrench className="mb-3 text-amber-600" /><div className="text-3xl font-bold">{toolCalls?.total ?? 0}</div><div className="text-sm text-slate-500">קריאות כלים</div></div>
               <div className="rounded-xl border bg-white p-5 shadow-sm"><Coins className="mb-3 text-emerald-600" /><div className="text-3xl font-bold">{formatCost(usage?.summary.cost_usd ?? null)}</div><div className="text-sm text-slate-500">עלות מתומחרת; לא ידוע נשאר NULL</div></div>
+              <div className="rounded-xl border bg-white p-5 shadow-sm"><Brain className="mb-3 text-violet-600" /><div className="text-3xl font-bold">{feedback?.total ?? 0}</div><div className="text-sm text-slate-500">פריטי איכות בתור</div></div>
+            </section>
+
+            <section className="overflow-hidden rounded-xl border bg-white shadow-sm">
+              <div className="border-b p-4">
+                <h2 className="text-lg font-semibold">תור איכות ואימון מושקו</h2>
+                <p className="text-sm text-slate-500">כל תיקון נשמר רק בארגון שממנו הגיעה השיחה; קידום לידע דורש פעולה מפורשת.</p>
+              </div>
+              <div className="max-h-[700px] divide-y overflow-auto">
+                {(feedback?.items || []).map((row) => (
+                  <article key={row.id} className="space-y-3 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                      <span className="font-semibold text-slate-800">{row.category} · ארגון {row.organization_id} · משתמש {row.user_id} · {channelLabel[row.channel] || row.channel}</span>
+                      <span>{formatDate(row.created_at)} · {row.status}</span>
+                    </div>
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-lg bg-blue-50 p-3 text-sm"><div className="mb-1 text-xs font-semibold text-blue-700">השאלה</div>{row.question || 'לא נמצאה שאלה קודמת'}</div>
+                      <div className="rounded-lg bg-slate-100 p-3 text-sm"><div className="mb-1 text-xs font-semibold text-slate-600">תשובת מושקו</div>{row.answer}</div>
+                    </div>
+                    {row.comment && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"><strong>הערת המשתמש:</strong> {row.comment}</div>}
+                    <textarea
+                      value={correctionDrafts[row.id] ?? row.correction ?? ''}
+                      onChange={(event) => setCorrectionDrafts((current) => ({ ...current, [row.id]: event.target.value }))}
+                      rows={2}
+                      maxLength={8000}
+                      placeholder="כתוב תשובה מתקנת מדויקת לארגון הזה"
+                      className="w-full rounded-lg border p-3 text-sm"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" disabled={reviewingId === row.id} onClick={() => void reviewFeedback(row, false)} className="rounded-lg border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50">
+                        סמן כנבדק
+                      </button>
+                      <button type="button" disabled={reviewingId === row.id} onClick={() => void reviewFeedback(row, true)} className="flex items-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+                        {reviewingId === row.id ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} אשר והוסף לידע הארגוני
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {!feedback?.items.length && <p className="p-6 text-sm text-slate-500">אין פריטי משוב במסנן שנבחר.</p>}
+              </div>
             </section>
 
             <section className="rounded-xl border bg-white p-5 shadow-sm">

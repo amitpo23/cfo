@@ -175,9 +175,11 @@ def test_super_admin_can_filter_all_memory_without_personal_data_leak(
     other_id, _ = _add_user(org["org_id"], role=UserRole.USER, suffix="super-visible")
     ids = _seed_memories(org["org_id"], owner.id, other_id)
 
+    # סופר-אדמין חייב לבחור ארגון מפורשות מ-11/08/2026.
     response = client.get(
         f"/api/admin/moshko/memory?organization_id={org['org_id']}&user_id={other_id}",
-        headers=stage3_super_admin["headers"],
+        headers={**stage3_super_admin["headers"],
+                 "X-Active-Org-Id": str(org["org_id"])},
     )
 
     assert response.status_code == 200, response.text

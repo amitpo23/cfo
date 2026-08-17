@@ -78,3 +78,10 @@ Thumbs.db
 supabase/.temp/
 *.bak
 cfo.db.*.bak
+
+# צילומי פרוד וסודות — נתוני לקוחות אמיתיים. לעולם לא ב-git.
+prod-snapshot.sql
+*-snapshot.sql
+.env.prod
+.env.*.local
+docker-compose.override.yml

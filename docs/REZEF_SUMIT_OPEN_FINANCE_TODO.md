@@ -131,15 +131,15 @@
 
 - [ ] **RSF-150** Verify account-specific SUMIT API permissions against official documentation.
 - [x] **RSF-151** Determine whether a real reconciliation/journal-batch/transaction-import API exists. — *2026-07-10: **YES — journal-batch API exists**: `POST /books/transactions/createbatch/` in the live swagger (`api.sumit.co.il/swagger/v1/swagger.json`, 84 paths). Request: `{Credentials{CompanyID, APIKey}, DatabaseID, BatchDescription, Transactions[{Reference1, Reference2, ReferenceDate, ValueDate, DebitAccountCode, CreditAccountCode, AmountILS, Details}]}`. It is the ONLY /books/ endpoint — double-entry journal import, not a bank-reconciliation API per se. Open questions: requires the internal-accounting (Books) module active on the SUMIT company + a chart-of-accounts code mapping + DatabaseID; bookkeeping currently lives at the accountant's SUMIT company. Help-center has no article for it (undocumented publicly, but in the official spec). No bank-row import or reconciliation-record API exists; SUMIT's own bank module (Growth plan+) uses SUMIT's bank feed with manual "generate document from row" workflow.*
-- [ ] **RSF-152** If an API exists, document request, idempotency and confirmation identifiers before implementation.
+- [x] **RSF-152** If an API exists, document request, idempotency and confirmation identifiers before implementation. — *09/08/2026: request contract is versioned in `SUMIT_API_REFERENCE.md`; Rezef approval id + immutable payload hash provide idempotency/execute-once, and `Data.BatchURL` is the only provider confirmation identifier.*
 - [ ] **RSF-153** If no API exists, document the SUMIT UI file-import format and validation rules.
 - [ ] **RSF-154** Rename/represent customer remark outcome as `remark_posted`, not reconciliation confirmation.
 - [ ] **RSF-155** Keep unsupported bill/expense write-back honest.
-- [ ] **RSF-156** Produce a dry-run payload/file for one approved sample only.
-- [ ] **RSF-157** Obtain explicit action-time approval before SUMIT mutation/import.
+- [x] **RSF-156** Produce a dry-run payload/file for one approved sample only. — *Covered offline with an exact Swagger-shaped sample; no live call was made.*
+- [x] **RSF-157** Obtain explicit action-time approval before SUMIT mutation/import. — *`POST /api/accounting/books/batches` refuses before provider resolution unless the exact persisted `sumit_writeback` payload is approved.*
 - [ ] **RSF-158** Execute one controlled approved case.
 - [ ] **RSF-159** Verify SUMIT batch/record identifier, count and totals.
-- [ ] **RSF-160** Persist confirmation evidence in Rezef.
+- [x] **RSF-160** Persist confirmation evidence in Rezef. — *`BatchURL` is stored as provider reference and execution evidence, explicitly `executed_unverified`; portal readback remains RSF-159.*
 - [ ] **RSF-161** Verify correction/reversal procedure.
 
 ## P2 — Quality gates

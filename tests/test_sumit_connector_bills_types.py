@@ -45,7 +45,7 @@ class _TypeAwareClient:
 def test_fetch_bills_covers_both_expense_types_and_skips_drafts(monkeypatch):
     from cfo.services.sumit_connector import SumitConnector
 
-    connector = SumitConnector(api_key="k", company_id="c")
+    connector = SumitConnector(api_key="k", company_id="c", organization_id=1)
     client = _TypeAwareClient()
 
     async def _fake_get_client(self):
@@ -75,7 +75,7 @@ def test_fetch_invoices_never_pulls_receipts_or_expenses(monkeypatch):
     """
     from cfo.services.sumit_connector import SumitConnector
 
-    connector = SumitConnector(api_key="k", company_id="c")
+    connector = SumitConnector(api_key="k", company_id="c", organization_id=1)
     client = _TypeAwareClient()  # מחזיר [] לסוגים לא מוכרים
 
     async def _fake_get_client(self):
@@ -101,7 +101,7 @@ def test_fetch_invoices_covers_invoice_and_invoice_receipt(monkeypatch):
     """
     from cfo.services.sumit_connector import SumitConnector
 
-    connector = SumitConnector(api_key="k", company_id="c")
+    connector = SumitConnector(api_key="k", company_id="c", organization_id=1)
     client = _TypeAwareClient()
     client.docs_by_type = {
         "0": [_doc("inv0", 234, status="open")],

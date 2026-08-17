@@ -2,6 +2,34 @@
 import asyncio
 
 import httpx
+from fastapi import status
+
+
+def test_sumit_budget_exhaustion_maps_to_retryable_429():
+    from cfo.api import sumit_request_budget_exceeded_handler
+    from cfo.services.sumit_request_budget import SumitRequestBudgetExceeded
+
+    response = asyncio.run(sumit_request_budget_exceeded_handler(
+        None,
+        SumitRequestBudgetExceeded("SUMIT organization daily request budget exceeded"),
+    ))
+
+    assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert response.headers["retry-after"] == "60"
+    assert b"request_budget_exceeded" in response.body
+
+
+def test_sumit_budget_storage_failure_maps_to_503():
+    from cfo.api import sumit_request_budget_unavailable_handler
+    from cfo.services.sumit_request_budget import SumitRequestBudgetUnavailable
+
+    response = asyncio.run(sumit_request_budget_unavailable_handler(
+        None,
+        SumitRequestBudgetUnavailable("budget unavailable"),
+    ))
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert b"request_budget_unavailable" in response.body
 
 
 def test_httpx_error_returns_503_not_500(client, owner, monkeypatch):
@@ -123,7 +151,7 @@ def test_post_binary_upstream_4xx_raises_sumit_api_error():
     from cfo.integrations.sumit_integration import SumitIntegration, SumitAPIError
 
     async def _run():
-        sumit = SumitIntegration(api_key="test-key", company_id="1")
+        sumit = SumitIntegration(api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23", company_id="1")
         try:
             async def _fake_post(url, json=None, **kwargs):
                 request = httpx.Request("POST", "https://api.sumit.co.il" + url)

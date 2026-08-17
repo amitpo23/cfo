@@ -1,4 +1,5 @@
 import os
+import socket
 import sys
 import tempfile
 
@@ -6,8 +7,92 @@ import tempfile
 _db_path = os.path.join(tempfile.mkdtemp(prefix="cfo_test_"), "test.db")
 os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
 os.environ.pop("REGISTRATION_SECRET", None)
+# מפתח מזויף. תפקידו היחיד: לגרום ל-"האם SUMIT מוגדר?" להחזיר True
+# עבור ארגון 1, כדי שטסטי הבידוד יוכלו להוכיח ששאר הארגונים **אינם**
+# נופלים על קרדנשלים מהסביבה. הוא לא נועד להישלח לשום מקום —
+# ראו חומת הרשת מיד למטה, שהיא מה שהופך את הכוונה הזו לאכיפה.
 os.environ["SUMIT_API_KEY"] = "test-env-sumit-key"
 os.environ["CRON_SECRET"] = "test-cron-secret"
+
+# --------------------------------------------------------------------- #
+# חומת רשת — אירוע 13/08/2026
+# --------------------------------------------------------------------- #
+# מדידה עם sentinel גילתה **116 ניסיונות חיבור ל-`api.sumit.co.il` בכל
+# ריצת סוויטה מלאה**, עם המפתח המזויף שלמעלה. בריצות חוזרות באותו יום —
+# מעל אלף ניסיונות אימות כושלים מאותה כתובת IP, כלומר בדיוק הדפוס
+# ש-SUMIT חוסמת עליו ("Repeated incorrect credentials attempts detected").
+# החסימה חלה על ה-IP, ולכן היא פוגעת גם בעבודה האמיתית של הבעלים.
+#
+# למה זה היה בלתי-נראה: הטסטים עוברים בין אם הקריאה הצליחה ובין אם
+# נכשלה — הם בודקים את טיפול השגיאה. סוויטה ירוקה מעולם לא העידה שאין
+# תעבורה יוצאת.
+#
+# החסימה ב-DNS ולא ב-`connect` במכוון: היא תופסת גם ספריות שמנהלות
+# connection pool משלהן. הודעת השגיאה נושאת את שם הטסט האשם, כדי
+# שהוספה עתידית של קריאה יוצאת תאותר מיד ולא תחייב חיפוש ב-1,967 טסטים.
+
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "testserver", ""}
+_real_getaddrinfo = socket.getaddrinfo
+_real_create_connection = socket.create_connection
+_real_socket = socket.socket
+_current_test = {"name": "<import/collection>"}
+
+
+def _host_str(host) -> str:
+    return host.decode() if isinstance(host, (bytes, bytearray)) else str(host)
+
+
+def _blocked(host) -> RuntimeError:
+    return RuntimeError(
+        f"provider network is blocked in tests: {host} "
+        f"(attempted by {_current_test['name']}). "
+        "Use a fake connector/client instead of a real request — a live call "
+        "with the placeholder key gets the owner's IP blocked by the provider."
+    )
+
+
+def _guarded_getaddrinfo(host, port, *args, **kwargs):
+    name = _host_str(host)
+    if name not in _LOCAL_HOSTS:
+        raise _blocked(name)
+    return _real_getaddrinfo(host, port, *args, **kwargs)
+
+
+def _guarded_create_connection(address, *args, **kwargs):
+    name = _host_str(address[0]) if address else ""
+    if name not in _LOCAL_HOSTS:
+        raise _blocked(name)
+    return _real_create_connection(address, *args, **kwargs)
+
+
+class _GuardedSocket(_real_socket):
+    """Close the raw-IP escape hatch left by DNS/create_connection guards.
+
+    AF_UNIX sockets use a string filesystem address and remain available.
+    Internet sockets must target an explicitly local host, even when a client
+    library already resolved the hostname and calls ``connect`` directly.
+    """
+
+    @staticmethod
+    def _guard_address(address):
+        if not isinstance(address, tuple) or not address:
+            return
+        name = _host_str(address[0])
+        if name not in _LOCAL_HOSTS:
+            raise _blocked(name)
+
+    def connect(self, address):
+        self._guard_address(address)
+        return super().connect(address)
+
+    def connect_ex(self, address):
+        self._guard_address(address)
+        return super().connect_ex(address)
+
+
+socket.getaddrinfo = _guarded_getaddrinfo
+socket.create_connection = _guarded_create_connection
+socket.socket = _GuardedSocket
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -15,6 +100,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cfo.api import app
+
+
+def pytest_runtest_setup(item):
+    """מחזיק את שם הטסט הנוכחי כדי שחומת הרשת תוכל להצביע על האשם."""
+    _current_test["name"] = item.name
 
 
 @pytest.fixture(scope="session")

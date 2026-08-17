@@ -2,7 +2,7 @@
  * Daily-cumulative intra-month reports — P&L מצטבר יומי, גיול חובות/ספקים, ופירוט ספקים.
  * Derived from synced SUMIT documents.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { TrendingUp, Loader2, Clock, Building2, Download } from 'lucide-react';
 import api from '../services/api';
@@ -37,7 +37,7 @@ export default function DailyReportsDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       const [p, a, b, s, v] = await Promise.all([
@@ -51,7 +51,7 @@ export default function DailyReportsDashboard() {
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'שגיאה בטעינת הדוחות');
     } finally { setLoading(false); }
-  };
+  }, [month, year]);
 
   const downloadPcn874 = async () => {
     try {
@@ -67,7 +67,7 @@ export default function DailyReportsDashboard() {
     }
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [year, month]);
+  useEffect(() => { void load(); }, [load]);
 
   // Deep-link from the overview's "בריף בוקר" chip (#morning-brief) — the
   // router doesn't auto-scroll to hashes on route change, so do it manually
@@ -77,7 +77,6 @@ export default function DailyReportsDashboard() {
       const el = document.getElementById('morning-brief');
       el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.hash]);
 
   const maxProfit = pl ? Math.max(1, ...pl.days.map((d) => Math.abs(d.profit_cum))) : 1;

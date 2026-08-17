@@ -59,9 +59,10 @@ class SumitConnector(AccountingConnector):
     Wraps the existing SumitIntegration and normalizes results.
     """
 
-    def __init__(self, api_key: str, company_id: str):
+    def __init__(self, api_key: str, company_id: str, organization_id: int):
         self.api_key = api_key
         self.company_id = company_id
+        self.organization_id = organization_id
 
     async def _get_client(self):
         # A fresh instance per call: every fetch method wraps the client in
@@ -69,9 +70,11 @@ class SumitConnector(AccountingConnector):
         # cached instance would be closed by the first fetch and break every
         # subsequent one in the same sync run.
         from ..integrations.sumit_integration import SumitIntegration
+        from .sumit_request_budget import SumitRequestLimiter
         return SumitIntegration(
             api_key=self.api_key,
             company_id=self.company_id,
+            request_limiter=SumitRequestLimiter(self.organization_id),
         )
 
     async def test_connection(self) -> bool:

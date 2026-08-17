@@ -154,7 +154,14 @@ class Settings(BaseSettings):
     # ocr_daily_document_limit's role for the background pipeline).
     chat_receipt_daily_limit: int = 20
     # AI chat assistant (Wave 2 Step 9) — same anthropic_api_key as OCR above.
-    ai_chat_model: str = "claude-sonnet-5"
+    # Haiku 4.5 — המודל הזול ביותר. הכרעת בעלים 17/08/2026, כשיתרת
+    # החשבון עמדה על $1.92. זה אינו רק חיסכון: חשבון שנגמר באמצע יום
+    # עבודה משבית את מושקו לגמרי, בלי אזהרה. ברירת מחדל יקרה היא סיכון
+    # זמינות, לא רק סיכון תקציב.
+    #
+    # נשאר משתנה סביבה (`AI_CHAT_MODEL`) — משימה שדורשת מודל חזק יותר
+    # יכולה להעלות אותו נקודתית.
+    ai_chat_model: str = "claude-haiku-4-5-20251001"
     # JSON object keyed by exact model id. Rates are USD per one million
     # tokens: input_per_million_usd, output_per_million_usd and, when cache
     # tokens occur, cache_read_per_million_usd/cache_creation_per_million_usd.
@@ -200,6 +207,12 @@ class Settings(BaseSettings):
     # sync per org per this many hours — the cron schedule alone is not a
     # guarantee.
     sumit_sync_min_interval_hours: int = 20
+    # Hard request-boundary ceilings shared through Postgres. SUMIT documents
+    # a temporary block at roughly 100 requests/minute, so Rezef stays below
+    # that with a non-configurably-higher maximum of 80. The daily value is an
+    # internal paid-action safety budget per organization, not a provider quota.
+    sumit_global_requests_per_minute: int = 80
+    sumit_org_daily_request_limit: int = 300
     # /documents/getdetails is one paid SUMIT action per document. Supplier
     # enrichment is therefore capped independently from the once-daily job
     # cadence. This is an internal cost budget, not a claimed provider quota;
@@ -243,6 +256,12 @@ class Settings(BaseSettings):
             self.of_sync_min_interval_hours = 20
         if self.sumit_sync_min_interval_hours < 20:
             self.sumit_sync_min_interval_hours = 20
+        self.sumit_global_requests_per_minute = min(
+            80, max(0, self.sumit_global_requests_per_minute),
+        )
+        self.sumit_org_daily_request_limit = min(
+            300, max(0, self.sumit_org_daily_request_limit),
+        )
         self.sumit_enrichment_daily_action_limit = min(
             25,
             max(0, self.sumit_enrichment_daily_action_limit),

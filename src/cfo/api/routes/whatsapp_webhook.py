@@ -335,6 +335,7 @@ async def _handle_message(db: Session, message: dict) -> None:
         # through. A super_admin who wants office tools uses the
         # authenticated web app.
         is_super_admin=False,
+        channel="whatsapp",
     )
     result = await service.send_message(
         session_id=f"wa-{external_id}", text=text, persona=identity.default_persona,
@@ -434,7 +435,8 @@ async def _handle_interactive(db: Session, message: dict) -> None:
         message_id = _parse_message_id(button_id)
         if message_id is not None:
             service = AIChatService(
-                db, identity.organization_id, identity.user_id, is_super_admin=False,
+                db, identity.organization_id, identity.user_id,
+                is_super_admin=False, channel="whatsapp",
             )
             try:
                 await service.confirm_action(message_id)
@@ -442,7 +444,14 @@ async def _handle_interactive(db: Session, message: dict) -> None:
             except ChatConfirmationError as exc:
                 await gateway.send_text(external_id, str(exc))
     elif button_id.startswith("cancel:"):
-        # No cancellation mechanism exists on ChatMessage/pending_action
-        # (same as telegram_webhook) — acknowledge without executing
-        # anything, rather than inventing new DB state.
-        await gateway.send_text(external_id, "בוטל.")
+        message_id = _parse_message_id(button_id)
+        if message_id is not None:
+            service = AIChatService(
+                db, identity.organization_id, identity.user_id,
+                is_super_admin=False, channel="whatsapp",
+            )
+            try:
+                service.cancel_action(message_id)
+                await gateway.send_text(external_id, "בוטל.")
+            except ChatConfirmationError as exc:
+                await gateway.send_text(external_id, str(exc))

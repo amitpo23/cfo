@@ -2,10 +2,12 @@
 Accounting API routes
 Handles customers, documents, invoices, and general accounting operations
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from typing import List, Optional
 from datetime import date
+from sqlalchemy.orm import Session
 
+from ...database import get_db_session
 from ...integrations.sumit_integration import SumitIntegration
 from ...integrations.sumit_models import (
     CustomerRequest, CustomerResponse, CustomerRemarkRequest,
@@ -13,11 +15,117 @@ from ...integrations.sumit_models import (
     DocumentListRequest, ExpenseRequest, DebtReportRequest,
     IncomeItemRequest, IncomeItemResponse,
     BankAccountVerification, ExchangeRateRequest, ExchangeRateResponse,
-    SettingsUpdate, DocumentNumberRequest
+    SettingsUpdate, DocumentNumberRequest,
+    BooksBatchRequest,
 )
-from ..dependencies import get_current_user, get_sumit_integration
+from ...services.irreversible_action_service import (
+    ActionAuthorizationError,
+    ActionConflictError,
+    ActionStateError,
+    ActionValidationError,
+    IrreversibleActionService,
+)
+from ..dependencies import (
+    get_current_org_id,
+    get_current_user,
+    get_sumit_integration,
+    require_admin,
+    sumit_for_org,
+)
 
 router = APIRouter()
+
+
+@router.post("/books/batches")
+async def create_books_batch(
+    request: BooksBatchRequest,
+    approval_id: Optional[int] = Header(
+        None,
+        alias="X-Rezef-Approval-Id",
+    ),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+    _admin=Depends(require_admin),
+):
+    """Create one approved, open SUMIT books batch exactly once.
+
+    SUMIT's published API has no readback/close operation for this resource.
+    The durable action therefore stops at ``executed`` and reports that portal
+    verification is still required.
+    """
+    if approval_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="An approved X-Rezef-Approval-Id is required",
+        )
+
+    submitted_payload = request.model_dump(mode="json", exclude_none=True)
+    action_service = IrreversibleActionService(db, org_id)
+    try:
+        action_service.validate_approved_intent(
+            approval_id,
+            action_type="sumit_writeback",
+            submitted_payload=submitted_payload,
+        )
+    except (ActionConflictError, ActionStateError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActionAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ActionValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    sumit = sumit_for_org(db, org_id)
+    if sumit is None:
+        raise HTTPException(
+            status_code=400,
+            detail="SUMIT API key not configured for this organization",
+        )
+
+    try:
+        action = action_service.claim_approved_for_execution(
+            approval_id,
+            action_type="sumit_writeback",
+            submitted_payload=submitted_payload,
+        )
+    except (ActionConflictError, ActionStateError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActionAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ActionValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    persisted_request = BooksBatchRequest.model_validate(action.payload)
+    try:
+        async with sumit:
+            result = await sumit.create_books_batch(persisted_request)
+    except Exception as exc:
+        action_service.mark_failed(
+            approval_id,
+            error=f"SUMIT books batch failed: {type(exc).__name__}",
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="SUMIT did not confirm books batch creation",
+        ) from exc
+
+    action_service.mark_executed(
+        approval_id,
+        provider_reference=result.batch_url,
+        execution_result={
+            "BatchURL": result.batch_url,
+            "batch_closed": False,
+            "verification": "SUMIT portal required",
+        },
+    )
+    return {
+        "approval_request_id": approval_id,
+        "approval_status": "executed_unverified",
+        "batch_url": result.batch_url,
+        "batch_closed": False,
+        "verification_required": (
+            "Verify open/closed status in the SUMIT batches portal"
+        ),
+    }
 
 
 # ==================== Customers ====================

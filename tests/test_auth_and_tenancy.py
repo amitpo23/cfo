@@ -259,15 +259,30 @@ def test_cannot_read_another_orgs_sync_run(client, owner, fresh_org):
 def test_null_org_id_is_rejected():
     import asyncio
     from fastapi import HTTPException
-    from cfo.api.dependencies import get_current_org_id
-    from cfo.models import User
+    from cfo.api.dependencies import resolve_access_context
+    from cfo.database import SessionLocal
+    from cfo.models import Organization, User, UserRole
 
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(get_current_org_id(User(organization_id=None)))
-    assert exc.value.status_code == 403
+    # ההכרעה עברה כולה ל-`resolve_access_context`; `get_current_org_id`
+    # היא עטיפה דקה מעליה. המשתמשים כאן אינם שמורים (id=None) ולכן אין
+    # להם חברויות, והמסלול שנבדק הוא בדיוק זה שנבדק קודם: העמודה הישנה.
+    db = SessionLocal()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(resolve_access_context(
+                User(organization_id=None, role=UserRole.USER), None, db))
+        assert exc.value.status_code == 403
 
-    # a real org passes through unchanged
-    assert asyncio.run(get_current_org_id(User(organization_id=5))) == 5
+        # גם עמודת ארגון שמצביעה לארגון אמיתי אינה סמכות. רק חברות.
+        org = Organization(name="null-org-id-test", is_active=True)
+        db.add(org)
+        db.commit()
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(resolve_access_context(
+                User(organization_id=org.id, role=UserRole.USER), None, db))
+        assert exc.value.status_code == 403
+    finally:
+        db.close()
 
 
 # --- SUMIT direct routes must use per-org vault, not env for other tenants (P0)

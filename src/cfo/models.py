@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, EmailStr
 from sqlalchemy import (
     Column, Integer, String, Numeric, DateTime, Date,
     ForeignKey, Enum as SQLEnum, Boolean, Text, JSON,
-    Index, Float, UniqueConstraint
+    Index, Float, UniqueConstraint, CheckConstraint, func, true, false
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -139,17 +139,16 @@ class Organization(Base):
     # Email is on by default (it's free); SMS costs money per message, so it
     # stays opt-in and — per morning_brief_service — is only ever sent when
     # the brief is red, one line, regardless of this flag being on.
-    # Nullable (like `is_active` above, unlike `collection_reminders_enabled`):
-    # a Python-side-only default= never reaches a raw SQL INSERT/ALTER TABLE
-    # backfill, so a NOT NULL column here would reject any row that doesn't
-    # set it explicitly (see tests/test_schema_sync.py's drift-simulation
-    # tests, which insert organizations rows with a minimal raw column list).
-    # morning_brief_service treats NULL the same as the column's intended
-    # default (see _deliver_email/_deliver_sms) rather than misreading it as
-    # an explicit opt-out.
-    morning_brief_email_enabled = Column(Boolean, default=True, nullable=True)
+    # Server defaults keep raw SQL/additive paths aligned with the original
+    # Alembic migration's NOT NULL contract; service code still treats legacy
+    # NULL rows conservatively during a staged repair.
+    morning_brief_email_enabled = Column(
+        Boolean, default=True, nullable=False, server_default=true(),
+    )
     morning_brief_recipients = Column(String(500), nullable=True)
-    morning_brief_sms_enabled = Column(Boolean, default=False, nullable=True)
+    morning_brief_sms_enabled = Column(
+        Boolean, default=False, nullable=False, server_default=false(),
+    )
 
     # --- חבילה H (התאמת בעלות אוטומטית) --- #
     # חותמת שהבעלים (מנהל המערכת היחיד — אין "אדמין ארגון") הכריע ידנית מי
@@ -210,6 +209,66 @@ class AuditLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class OrganizationMembership(Base):
+    """חברות של אדם בארגון, עם תפקיד — אחד לכל צירוף.
+
+    `User.organization_id` הוא FK יחיד, ולכן אדם יכול היה להשתייך לארגון
+    אחד בלבד. זה שגוי במציאות שהמערכת משרתת: בעל עסק יכול להיות ADMIN
+    בחברה שלו ו-VIEWER בחברה של שותף, ומנהלת חשבונות עובדת על עשרות תיקים.
+
+    הטבלה יושבת ב**מסד הבקרה** (ראו `docs/adr/0001`): היא זו שמכריעה
+    לאיזה מסד ארגוני מותר לפנות, ולכן אינה יכולה לשבת בתוכו.
+
+    `users.organization_id` **לא נמחק** — הוא מקור ה-backfill ונשאר
+    fallback לקריאה עד שכל הקוראים יעברו.
+
+    חברות נוצרת בהזמנה או ב-bootstrap מפורש בלבד. אין נתיב שיוצר אותה
+    מהתאמת מייל, דומיין או נתון מ-SUMIT: Google מאמת אדם, לא בעלות על
+    עסק. `tests/test_organization_membership.py` שומר על כך מבנית.
+    """
+    __tablename__ = "organization_memberships"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False,
+    )
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.USER)
+    # invited = הוזמן וטרם התקבל · active = פעיל · suspended = מושהה זמנית
+    # · revoked = בוטל. רק `active` מקנה גישה.
+    status = Column(String(20), nullable=False, default="invited")
+    invited_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    # גישה זמנית (למשל רו"ח חיצוני לתקופת ביקורת). נבדק בזמן השאילתה ולא
+    # במשימת ניקוי — כדי שפקיעה תיכנס לתוקף מיד ולא בהרצה הבאה של cron.
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "organization_id", name="uq_membership_user_org",
+        ),
+        # `SUPER_ADMIN` הוא תפקיד פלטפורמה, לא תפקיד בתוך ארגון. חברות
+        # כזו הייתה מאפשרת למנהל ארגון להעניק סמכות-על בתיק שלו ולעקוף
+        # את ההפרדה בין מפעיל מערכת לבעל עסק. האילוץ יושב במסד ולא רק
+        # בשירות, כדי שגם כתיבה ישירה תיחסם.
+        CheckConstraint(
+            "role != 'SUPER_ADMIN'", name="ck_membership_role_not_super_admin",
+        ),
+        Index("ix_membership_user_status", "user_id", "status"),
+        Index("ix_membership_org_status", "organization_id", "status"),
+    )
+
+
 class OrganizationSigningAuthority(Base):
     """Business-owner/signatory authority, separate from application RBAC.
 
@@ -251,6 +310,78 @@ class OrganizationSigningAuthority(Base):
     )
 
 
+class PolicyGrant(Base):
+    """Organization-scoped policy overlay for one role or one user.
+
+    Application RBAC remains the broad baseline.  These rows add explicit
+    denies and the financial boundaries that a role alone cannot express.
+    A grant can target exactly one user or one organization role, never both.
+    """
+    __tablename__ = "policy_grants"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False,
+    )
+    action = Column(String(80), nullable=False)
+    effect = Column(String(10), nullable=False, default="allow")
+    role = Column(SQLEnum(UserRole), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    max_amount = Column(Numeric(18, 2), nullable=True)
+    daily_limit_amount = Column(Numeric(18, 2), nullable=True)
+    monthly_limit_amount = Column(Numeric(18, 2), nullable=True)
+    currency = Column(String(3), nullable=False, default="ILS")
+    allowed_bank_accounts = Column(JSON, nullable=True)
+    allowed_counterparties = Column(JSON, nullable=True)
+    allowed_document_types = Column(JSON, nullable=True)
+    allowed_channels = Column(JSON, nullable=True)
+
+    valid_from = Column(DateTime(timezone=True), nullable=True)
+    valid_until = Column(DateTime(timezone=True), nullable=True)
+    requires_step_up = Column(Boolean, nullable=False, default=False)
+    required_approvals = Column(Integer, nullable=False, default=1)
+    separation_of_duties = Column(Boolean, nullable=False, default=False)
+    requires_reason = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    revoked_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "effect IN ('allow', 'deny')", name="ck_policy_grant_effect",
+        ),
+        CheckConstraint(
+            "((role IS NOT NULL AND user_id IS NULL) OR "
+            "(role IS NULL AND user_id IS NOT NULL))",
+            name="ck_policy_grant_single_subject",
+        ),
+        CheckConstraint(
+            "required_approvals >= 1", name="ck_policy_required_approvals",
+        ),
+        CheckConstraint(
+            "max_amount IS NULL OR max_amount > 0",
+            name="ck_policy_max_amount_positive",
+        ),
+        CheckConstraint(
+            "daily_limit_amount IS NULL OR daily_limit_amount > 0",
+            name="ck_policy_daily_limit_positive",
+        ),
+        CheckConstraint(
+            "monthly_limit_amount IS NULL OR monthly_limit_amount > 0",
+            name="ck_policy_monthly_limit_positive",
+        ),
+        Index("ix_policy_grant_org_action_active", "organization_id", "action", "is_active"),
+        Index("ix_policy_grant_org_user", "organization_id", "user_id"),
+    )
+
+
 class IrreversibleActionRequest(Base):
     """Durable proposal/approval/execution evidence for an external action.
 
@@ -269,6 +400,9 @@ class IrreversibleActionRequest(Base):
     payload = Column(JSON, nullable=False)
     payload_sha256 = Column(String(64), nullable=False)
     idempotency_key = Column(String(160), nullable=False)
+    origin_channel = Column(
+        String(30), nullable=False, default="internal", server_default="internal",
+    )
 
     status = Column(String(24), nullable=False, default="proposed")
     proposed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
@@ -285,6 +419,12 @@ class IrreversibleActionRequest(Base):
     execution_result = Column(JSON, nullable=True)
     verification_evidence = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
+
+    # Sanitized policy decisions are retained as evidence.  They contain the
+    # outcome/reason and requirements, not account allow-lists or secrets.
+    policy_proposed_decision = Column(JSON, nullable=True)
+    policy_approved_decision = Column(JSON, nullable=True)
+    policy_execution_decision = Column(JSON, nullable=True)
 
     proposed_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
@@ -310,6 +450,37 @@ class IrreversibleActionRequest(Base):
     )
 
 
+class IrreversibleActionApproval(Base):
+    """One distinct signatory approval for an immutable action request."""
+    __tablename__ = "irreversible_action_approvals"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False,
+    )
+    request_id = Column(
+        Integer, ForeignKey("irreversible_action_requests.id"), nullable=False,
+    )
+    approved_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    authority_id = Column(
+        Integer, ForeignKey("organization_signing_authorities.id"), nullable=False,
+    )
+    authority_type = Column(String(30), nullable=False)
+    policy_decision = Column(JSON, nullable=False)
+    approved_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "request_id", "approved_by_user_id",
+            name="uq_action_approval_request_user",
+        ),
+        Index("ix_action_approval_org_request", "organization_id", "request_id"),
+    )
+
+
 # Database Models
 class Account(Base):
     """חשבון"""
@@ -326,6 +497,12 @@ class Account(Base):
     # Provenance — distinguishes SUMIT synthesized accounts from real Open Finance
     # bank accounts so the two sources coexist without external_id collisions.
     source = Column(String(50), default="manual")
+    # Open Finance consent connection that owns this account.  This is kept
+    # separate from IntegrationConnection.id: the latter is Rezef's encrypted
+    # org-level connector configuration, while this value is the provider's
+    # opaque per-bank consent id.  NULL for manual/SUMIT accounts and for old
+    # observations that predate the mapping (honest-null; never guessed).
+    open_finance_connection_id = Column(String(255), nullable=True)
     # Source chart-of-accounts provenance.  These columns intentionally live on
     # Account (the existing connector chart data plane), not ExpenseCategory and
     # not a parallel ledger-account table.
@@ -378,6 +555,10 @@ class Account(Base):
 
     __table_args__ = (
         Index("ix_account_org_ext_source", "organization_id", "external_id", "source", unique=True),
+        Index(
+            "ix_account_org_of_connection",
+            "organization_id", "open_finance_connection_id",
+        ),
         UniqueConstraint(
             "organization_id",
             "source_account_code",
@@ -634,6 +815,39 @@ class SyncRun(Base):
 
     __table_args__ = (
         Index("ix_syncrun_org_status", "organization_id", "status"),
+    )
+
+
+class ProviderRequestBudget(Base):
+    """Atomic cross-instance provider request counter for one UTC window."""
+    __tablename__ = "provider_request_budgets"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(30), nullable=False)
+    # "global" protects provider/IP burst limits; "org:<id>" protects the
+    # customer's paid daily allowance.  A string avoids NULL uniqueness traps.
+    scope_key = Column(String(80), nullable=False)
+    organization_id = Column(Integer, nullable=True)
+    window_kind = Column(String(20), nullable=False)
+    window_start = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Integer, nullable=False, default=0)
+    limit_value = Column(Integer, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "scope_key", "window_kind", "window_start",
+            name="uq_provider_budget_window",
+        ),
+        CheckConstraint("used >= 0", name="ck_provider_budget_used_nonnegative"),
+        CheckConstraint("limit_value >= 0", name="ck_provider_budget_limit_nonnegative"),
+        Index(
+            "ix_provider_budget_provider_window",
+            "provider", "window_kind", "window_start",
+        ),
     )
 
 
@@ -1015,10 +1229,18 @@ class ChatMessage(Base):
     content = Column(Text, nullable=False)
     pending_action = Column(JSON, nullable=True)  # {"tool": str, "input": dict, "description": str}
     executed = Column(Boolean, default=False)
+    # Durable confirmation state.  NULL remains a supported legacy value:
+    # pending_action + executed=False + action_status=NULL is interpreted as
+    # "pending" so an additive migration never strands existing proposals.
+    action_status = Column(String(20), nullable=True)  # pending | executing | executed | cancelled | unknown
+    action_claimed_at = Column(DateTime(timezone=True), nullable=True)
+    action_completed_at = Column(DateTime(timezone=True), nullable=True)
+    action_error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index("ix_aichat_org_session", "organization_id", "session_id"),
+        Index("ix_aichat_org_action_status", "organization_id", "action_status"),
     )
 
 
@@ -1068,6 +1290,48 @@ class MoshkoToolCall(Base):
         Index("ix_moshko_tool_calls_org_created", "organization_id", "created_at"),
         Index("ix_moshko_tool_calls_session", "session_id"),
         Index("ix_moshko_tool_calls_target_success", "target_system", "succeeded"),
+    )
+
+
+class MoshkoFeedback(Base):
+    """User-reported quality evidence and its human-reviewed correction.
+
+    Question/answer snapshots are immutable evidence.  A correction is never
+    global training data: promotion creates an approved, organization-scoped
+    ``MoshkoMemory`` row and keeps the link for idempotency and audit.
+    """
+    __tablename__ = "moshko_feedback"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    message_id = Column(Integer, ForeignKey("ai_chat_messages.id"), nullable=False)
+    session_id = Column(String(64), nullable=False)
+    channel = Column(String(20), nullable=False, default="web")
+    category = Column(String(20), nullable=False)  # helpful | inaccurate | unknown | unsafe
+    comment = Column(Text, nullable=True)
+    question = Column(Text, nullable=True)
+    answer = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="open")
+    correction = Column(Text, nullable=True)
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    promoted_memory_id = Column(Integer, ForeignKey("moshko_memory.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "message_id", name="uq_moshko_feedback_user_message"),
+        CheckConstraint(
+            "category IN ('helpful','inaccurate','unknown','unsafe')",
+            name="ck_moshko_feedback_category",
+        ),
+        CheckConstraint(
+            "status IN ('open','reviewed','resolved','dismissed')",
+            name="ck_moshko_feedback_status",
+        ),
+        Index("ix_moshko_feedback_org_status_created", "organization_id", "status", "created_at"),
+        Index("ix_moshko_feedback_category_created", "category", "created_at"),
     )
 
 
@@ -1607,7 +1871,9 @@ class ChannelIdentity(Base):
     default_persona = Column(String(20), default="cfo")
     verified_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(
+        DateTime, default=datetime.utcnow, nullable=False, server_default=func.now(),
+    )
 
     # --- package B (2026-07-27 moshko-full-bot plan) — proactive push opt-in --- #
     # Nullable, default True, same pattern as Organization.morning_brief_email_enabled
@@ -1641,7 +1907,9 @@ class ChannelLinkCode(Base):
     code_hash = Column(String(64), nullable=False, index=True)
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(
+        DateTime, default=datetime.utcnow, nullable=False, server_default=func.now(),
+    )
 
 
 class MoshkoMemory(Base):
@@ -1682,7 +1950,9 @@ class ChannelProcessedUpdate(Base):
     id = Column(Integer, primary_key=True)
     provider = Column(String(20), nullable=False)
     update_id = Column(String(64), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(
+        DateTime, default=datetime.utcnow, nullable=False, server_default=func.now(),
+    )
 
     __table_args__ = (
         UniqueConstraint("provider", "update_id", name="uq_channel_processed_update"),

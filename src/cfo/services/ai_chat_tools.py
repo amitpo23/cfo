@@ -36,6 +36,10 @@ class ChatTool:
     # tools with this flag set, so the other ~39 existing tools' call
     # signature is completely unaffected (Moshko plan 2026-07-27, package D1).
     needs_user: bool = False
+    # Stable policy-catalog action checked both when the write is proposed
+    # and immediately before the atomic execution claim. Office-only tools
+    # use the separate platform gate and deliberately leave this unset.
+    policy_action: str | None = None
 
 
 async def _find_capability(db, org_id: int, task: str = "", reads_only: bool = False, **_kwargs) -> dict:
@@ -128,9 +132,14 @@ async def _office_account_status(db, org_id: int, **_kwargs) -> dict:
 
     from .office_capabilities import office_credentials
     from ..integrations.sumit_integration import SumitIntegration
+    from .sumit_request_budget import SumitRequestLimiter
 
     creds = office_credentials()
-    client = SumitIntegration(api_key=creds["api_key"], company_id=creds["company_id"])
+    client = SumitIntegration(
+        api_key=creds["api_key"],
+        company_id=creds["company_id"],
+        request_limiter=SumitRequestLimiter(org_id),
+    )
     async with client:
         quotas = await client.list_quotas()
 
@@ -244,6 +253,89 @@ async def _get_ledger_card(db, org_id: int, *, contact_id: int, **_kwargs) -> di
     from .ledger_service import contact_card
     card = contact_card(db, org_id, contact_id)
     return card if card is not None else {"error": "איש קשר לא נמצא"}
+
+
+async def _get_trial_balance(db, org_id: int, *, start: str | None = None,
+                             end: str | None = None, **_kwargs) -> dict:
+    """מאזן בוחן — מחושב מה-ledger של רצף, **לא נמשך מ-SUMIT**.
+
+    SUMIT אינה חושפת endpoint למאזן בוחן (ראו
+    `docs/bookkeeper_kb/09-sumit-operations-map.md`), ואין בכך חיסרון:
+    רצף מחזיקה הנהלת חשבונות כפולה משלה ומחשבת אותו מהנתונים שנמשכו
+    בסנכרון היומי. שאלת משתמש לעולם אינה מייצרת קריאת API — זה מה
+    שהוביל לחסימת ה-IP ב-13/08/2026.
+
+    `balanced` הוא השדה שקובע אם אפשר להסתמך על המספר. מאזן שאינו
+    מאוזן, או שנשען על מנות פתוחות, אינו סופי.
+    """
+    from .ledger_service import trial_balance
+
+    report = trial_balance(
+        db, org_id,
+        start=_parse_date_safe(start), end=_parse_date_safe(end),
+    )
+    payload = report.as_dict() if hasattr(report, "as_dict") else dict(report)
+    payload["source"] = "rezef_ledger"
+    payload["balanced"] = bool(payload.get("balanced"))
+
+    # SUMIT אינה חושפת קריאת מאזן בוחן בשום הרשאה, ולכן רצף **אינה
+    # יכולה** לאמת תכנותית שהמספר תואם לספר הרשמי. הגרסה הראשונה קבעה
+    # `is_final` על סמך חובה=זכות בלבד — וזה מדד את הדבר הלא-נכון:
+    # מאזן יכול להיות מאוזן אצלנו ובכל זאת לא לתאום, למשל כשפקודה
+    # נשלחה ב-createbatch, חזרה `executed_unverified`, ולא נקלטה.
+    payload["sumit_parity"] = "not_checked"
+    payload["is_final"] = bool(payload["balanced"]) and payload["sumit_parity"] == "verified"
+    payload["not_final_reason"] = (
+        "המספר מחושב מהספרים של רצף ו**לא הוצלב מול SUMIT**. SUMIT היא "
+        "התוכנה המאושרת שמפיקה את הדיווח, ואין ב-API שלה קריאת מאזן — "
+        "ההצלבה נעשית מול מאזן שמורידים מהפורטל. שים לב גם למנות פתוחות: "
+        "מאזן שהופק כשהן פתוחות כולל אותן ואינו סופי. "
+        "אין לדווח לפי מספר זה לפני הצלבה."
+    )
+    return payload
+
+
+async def _get_open_batches(db, org_id: int, **_kwargs) -> dict:
+    """מנות פתוחות — **SUMIT אינה חושפת קריאת מנות בשום הרשאה.**
+
+    honest-null: מחזיר `unavailable` עם סיבה, ולא רשימה ריקה. רשימה
+    ריקה הייתה נקראת כ"אין מנות פתוחות" — קביעה שאין לה בסיס, והיא
+    בדיוק סוג הטעות שמובילה לדווח לפי מאזן לא-סופי.
+    """
+    return {
+        "status": "unavailable",
+        "reason_he": (
+            "SUMIT אינה חושפת קריאת מנות ב-API (מודול הספרים חושף "
+            "createbatch בלבד). מצב המנות נבדק במסך 'כל המנות הפתוחות' "
+            "בפורטל."
+        ),
+        "portal_path": "הנהלת חשבונות ← תנועות יומן ← כל המנות הפתוחות",
+        "what_rezef_knows": (
+            "רצף יודעת אילו פקודות היא שלחה ומתי, אך לא אם המנה נסגרה."
+        ),
+    }
+
+
+async def _propose_books_batch(db, org_id: int, *, description: str,
+                               **_kwargs) -> dict:
+    """הצעת מנה לספרים — רישום **בלתי-הפיך** אצל הספק.
+
+    אינו מבצע. יוצר הצעה שדורשת אישור מפורש, לפי חוזה
+    `IRREVERSIBLE_ACTION_CONTROL.md`. הביצוע עצמו עובר ב-adapter
+    שצורך payload מאושר ושמור, תופס ביצוע פעם אחת, ועוצר ב-
+    `executed_unverified` — כי אין readback.
+    """
+    return {
+        "status": "proposed",
+        "action_type": "books_batch",
+        "description": description,
+        "requires_owner_approval": True,
+        "irreversible": True,
+        "note_he": (
+            "יצירת מנה היא רישום לספרים. אחרי הביצוע לא ניתן לאמת "
+            "תכנותית שהמנה נקלטה — נדרש אימות בפורטל, וסגירתה ידנית."
+        ),
+    }
 
 
 async def _get_vat_position(db, org_id: int, **_kwargs) -> dict:
@@ -797,7 +889,8 @@ async def _propose_vat_filing_approval(
         }
 
     user = db.query(User).filter(User.id == _user_id).first() if _user_id else None
-    if user is None or user.organization_id != org_id:
+    from . import membership_service
+    if user is None or not membership_service.is_member(db, user.id, org_id):
         return {
             "status": "failed",
             "message": "לא ניתן לאמת את זהות המשתמש המבקש — הפעולה בוטלה.",
@@ -846,6 +939,7 @@ async def _propose_vat_filing_approval(
                 f"אישור בעלים למספרי דיווח מע\"מ לתקופה {period_label} "
                 f"(basis={basis}) — לא כולל שידור בפועל, שנעשה ידנית ב-SUMIT."
             ),
+            channel=str(_kwargs.get("_channel") or "web"),
         )
     except ValueError as exc:
         return {"status": "failed", "message": str(exc)}
@@ -1156,6 +1250,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["expense_id", "account_id"],
         },
         category="write",
+        policy_action="expenses.file",
         fn=_file_expense_to_account,
     ),
     "list_my_capabilities": ChatTool(
@@ -1245,6 +1340,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["document_type", "customer_id", "customer_name", "items"],
         },
         category="write",
+        policy_action="invoices.issue",
         fn=_issue_document,
     ),
     "log_collection_attempt": ChatTool(
@@ -1265,6 +1361,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["case_id", "channel", "outcome"],
         },
         category="write",
+        policy_action="collections.contact",
         fn=_log_collection_attempt,
     ),
     "search_contacts": ChatTool(
@@ -1280,6 +1377,54 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_search_contacts,
+    ),
+    "get_trial_balance": ChatTool(
+        name="get_trial_balance",
+        description=(
+            "מאזן בוחן — סך חובה מול זכות פר כרטיס, מחושב מהספרים של רצף. "
+            "מחזיר `is_final`: מאזן שאינו מאוזן או שיש מנות פתוחות אינו "
+            "סופי ואין לדווח לפיו."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "start": {"type": "string", "description": "תאריך התחלה YYYY-MM-DD"},
+                "end": {"type": "string", "description": "תאריך סיום YYYY-MM-DD"},
+            },
+        },
+        category="read",
+        fn=_get_trial_balance,
+    ),
+    "get_open_batches": ChatTool(
+        name="get_open_batches",
+        description=(
+            "מנות פתוחות בספרים. SUMIT אינה חושפת קריאת מנות ב-API — "
+            "הכלי מחזיר זאת במפורש ומפנה למסך בפורטל, במקום להעמיד פנים "
+            "שאין מנות פתוחות."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_open_batches,
+    ),
+    "propose_books_batch": ChatTool(
+        name="propose_books_batch",
+        description=(
+            "הצעת יצירת מנה בספרים (רישום בלתי-הפיך). אינו מבצע — יוצר "
+            "הצעה שדורשת אישור בעלים מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "תיאור המנה"},
+            },
+            "required": ["description"],
+        },
+        category="write",
+        fn=_propose_books_batch,
+        # רישום לספרים הוא writeback חשבונאי — אותה משפחת הרשאות של
+        # כל כתיבה חוזרת למערכת ההנה"ח, ולא פעולת חתימה נפרדת: ההצעה
+        # עצמה אינה מבצעת דבר. הביצוע עובר בחוזה הפעולות הבלתי-הפיכות.
+        policy_action="accounting.writeback.propose",
     ),
     "get_ledger_card": ChatTool(
         name="get_ledger_card",
@@ -1341,6 +1486,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["invoice_id"],
         },
         category="write",
+        policy_action="payment_link.create",
         fn=_create_payment_link,
     ),
     "create_bank_payment_request": ChatTool(
@@ -1370,6 +1516,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["amount", "description", "creditor_name", "creditor_account_number"],
         },
         category="write",
+        policy_action="bank_payment.propose",
         fn=_create_bank_payment_request,
     ),
     "connect_bank_account": ChatTool(
@@ -1392,6 +1539,7 @@ TOOLS: dict[str, ChatTool] = {
             },
         },
         category="write",
+        policy_action="bank_connection.create",
         fn=_connect_bank_account,
     ),
     "list_expenses": ChatTool(
@@ -1440,6 +1588,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["key", "name_he"],
         },
         category="write",
+        policy_action="expenses.manage_categories",
         fn=_create_expense_category,
     ),
     "set_expense_category": ChatTool(
@@ -1457,6 +1606,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["expense_id", "category"],
         },
         category="write",
+        policy_action="expenses.review",
         fn=_set_expense_category,
     ),
     "get_learned_rules": ChatTool(
@@ -1480,6 +1630,7 @@ TOOLS: dict[str, ChatTool] = {
         ),
         input_schema={"type": "object", "properties": {}},
         category="write",
+        policy_action="expenses.classify",
         fn=_classify_pending_expenses,
     ),
     "file_expense": ChatTool(
@@ -1498,6 +1649,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["expense_id"],
         },
         category="write",
+        policy_action="expenses.file",
         fn=_file_expense,
     ),
     "get_expense_intake_status": ChatTool(
@@ -1764,6 +1916,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["report_type", "recipient_email"],
         },
         category="write",
+        policy_action="reports.email",
         fn=_email_report,
     ),
     "propose_vat_filing_approval": ChatTool(
@@ -1787,6 +1940,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["year", "month"],
         },
         category="write",
+        policy_action="filing.prepare",
         fn=_propose_vat_filing_approval,
         needs_user=True,
     ),
@@ -1918,6 +2072,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["action"],
         },
         category="write",
+        policy_action="moshko.memory.write",
         fn=_memory,
         needs_user=True,
     ),
@@ -1945,6 +2100,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["title"],
         },
         category="write",
+        policy_action="tasks.write",
         fn=_create_task,
     ),
     "list_tasks": ChatTool(
@@ -1982,6 +2138,7 @@ TOOLS: dict[str, ChatTool] = {
             "required": ["task_id"],
         },
         category="write",
+        policy_action="tasks.write",
         fn=_update_task,
     ),
     "search_history": ChatTool(

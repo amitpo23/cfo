@@ -131,6 +131,23 @@ def test_upsert_account_create_persists_credit_limit(db, fresh_org):
     assert row.credit_limit == Decimal("20000")
 
 
+def test_upsert_account_persists_open_finance_connection_id(db, fresh_org):
+    org = fresh_org()
+    engine = _engine(db, org["org_id"])
+    item = NormalizedAccount(
+        external_id="open_finance:conn-map", name="Mapped bank",
+        account_type="bank", open_finance_connection_id="conn-source-evidence",
+    )
+    engine._upsert_account(item)
+    db.commit()
+
+    row = db.query(Account).filter(
+        Account.organization_id == org["org_id"],
+        Account.external_id == "open_finance:conn-map",
+    ).one()
+    assert row.open_finance_connection_id == "conn-source-evidence"
+
+
 def test_upsert_account_update_overwrites_with_new_value(db, fresh_org):
     org = fresh_org()
     engine = _engine(db, org["org_id"])

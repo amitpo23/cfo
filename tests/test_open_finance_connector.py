@@ -51,12 +51,14 @@ def test_normalize_account_real_shape():
         "currency": "ILS",
         "balances": [{"amount": 1234.56, "currency": "ILS", "balanceType": "current"}],
         "accountType": "CACC",
+        "connectionId": "conn-hapoalim",
     }
     a = conn._normalize_account(raw)
     assert a.external_id == "open_finance:acc-1"
     assert a.name == 'עו"ש'
     assert a.balance == Decimal("1234.56")
     assert a.currency == "ILS"
+    assert a.open_finance_connection_id == "conn-hapoalim"
 
 
 def test_items_and_next_handles_array_and_object():

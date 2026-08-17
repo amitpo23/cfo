@@ -27,7 +27,26 @@ def _create_admin(client, owner, email: str):
         },
     )
     assert response.status_code == 201, response.text
-    return response.json()
+    created = response.json()
+
+    # מאז 11/08/2026 `POST /admin/users` יוצר חברות `invited`, לא `active`.
+    # משתמש שטרם קיבל אינו יכול לפעול — ולכן ה-helper משלים את הקבלה,
+    # כפי שהמשתמש האמיתי היה עושה.
+    from cfo.database import SessionLocal
+    from cfo.services import membership_service
+
+    db = SessionLocal()
+    try:
+        membership_service.accept(
+            db,
+            organization_id=owner["user"]["organization_id"],
+            user_id=created["id"],
+            acting_user_id=created["id"],
+        )
+        db.commit()
+    finally:
+        db.close()
+    return created
 
 
 def _propose(client, headers, *, action_type: str, key: str):
@@ -156,19 +175,20 @@ def test_super_admin_cannot_substitute_for_business_owner(client, owner):
     finally:
         db.close()
 
-    proposal = _propose(
-        client,
-        headers,
-        action_type="refund",
-        key="signer-test:super-admin-refund",
-    )
+    # A platform operator may observe across organizations but cannot
+    # originate a customer's financial intent.
     response = client.post(
-        f"/api/approvals/{proposal['id']}/approve",
+        "/api/approvals",
         headers=headers,
+        json={
+            "action_type": "refund",
+            "payload": {"test_key": "signer-test:super-admin-refund"},
+            "idempotency_key": "signer-test:super-admin-refund",
+        },
     )
 
     assert response.status_code == 403, response.text
-    assert "signing authority" in response.json()["detail"].lower()
+    assert "organization policy" in response.json()["detail"].lower()
 
 
 def test_last_owner_authority_cannot_be_revoked(client, owner):
@@ -209,6 +229,17 @@ def test_existing_org_requires_explicit_one_time_owner_bootstrap(client):
             is_active=True,
         )
         db.add(admin)
+        db.flush()
+        from cfo.services import membership_service
+
+        membership_service.grant(
+            db,
+            organization_id=organization.id,
+            user_id=admin.id,
+            role=UserRole.ADMIN,
+            granted_by_user_id=admin.id,
+            status=membership_service.ACTIVE,
+        )
         db.commit()
         db.refresh(admin)
         headers = _token_headers(admin.id)
@@ -237,3 +268,43 @@ def test_existing_org_requires_explicit_one_time_owner_bootstrap(client):
         json={"confirmation": "I_AM_AUTHORIZED_OWNER"},
     )
     assert replay.status_code == 409, replay.text
+
+
+def test_admin_membership_can_manage_signing_authority_outside_home_org(client, fresh_org):
+    """Signing authority follows the selected organization membership, not
+    the legacy single ``User.organization_id`` home column."""
+    actor = fresh_org()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.organization_id == actor["org_id"]).first()
+        target_org = Organization(
+            name="Membership-owned signing org",
+            integration_type=IntegrationType.MANUAL,
+            is_active=True,
+        )
+        db.add(target_org)
+        db.flush()
+        from cfo.services import membership_service
+        membership_service.grant(
+            db,
+            organization_id=target_org.id,
+            user_id=user.id,
+            role=UserRole.ADMIN,
+            granted_by_user_id=user.id,
+            status=membership_service.ACTIVE,
+        )
+        db.commit()
+        target_org_id = target_org.id
+        user_id = user.id
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/approvals/signing-authorities/bootstrap",
+        headers={**actor["headers"], "X-Active-Org-Id": str(target_org_id)},
+        json={"confirmation": "I_AM_AUTHORIZED_OWNER"},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["organization_id"] == target_org_id
+    assert response.json()["user_id"] == user_id

@@ -9,7 +9,11 @@ from pathlib import Path
 
 import sqlalchemy as sa
 
-from cfo.services.schema_sync import compute_missing
+from cfo.services.schema_sync import (
+    compute_missing,
+    compute_schema_drift,
+    has_schema_drift,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,12 +46,15 @@ def test_alembic_upgrade_head_builds_a_complete_fresh_database(tmp_path):
 
     engine = sa.create_engine(database_url)
     assert compute_missing(engine) == {"tables": [], "columns": {}}
+    full_drift = compute_schema_drift(engine)
+    assert has_schema_drift(full_drift) is False
+    assert set(full_drift["dialect_exemptions"]) == {"expenses", "moshko_memory"}
 
     with engine.connect() as connection:
         revision = connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
         ).scalar_one()
-    assert revision == "b0c1d2e3f4a5"
+    assert revision == "05c6d7e8f9a0"
     account_indexes = {
         index["name"]: index
         for index in sa.inspect(engine).get_indexes("accounts")

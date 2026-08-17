@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } f
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import api from './services/api';
 import OrgSwitcher, { CurrentUser } from './components/OrgSwitcher';
+import ActiveOrgRequired from './components/ActiveOrgRequired';
 import {
   LayoutDashboard,
   Users,
@@ -72,6 +73,7 @@ import BudgetDashboard from './components/BudgetDashboard';
 import KPIDashboard from './components/KPIDashboard';
 import AIAnalyticsDashboard from './components/AIAnalyticsDashboard';
 import ChatAssistant from './components/ChatAssistant';
+import PolicyManagementDashboard from './components/PolicyManagementDashboard';
 
 // New Financial Operations Components
 import InvoicesDashboard from './components/InvoicesDashboard';
@@ -117,7 +119,7 @@ const navigationConfig = [
     section: 'CFO',
     items: [
       { to: '/', icon: LayoutDashboard, label: 'Command Center', description: 'CFO overview' },
-      { to: '/ai-chat', icon: MessageCircle, label: 'עוזר AI', description: 'שיחה עם עוזר ה-CFO — פעולות כתיבה דורשות אישור' },
+      { to: '/ai-chat', icon: MessageCircle, label: 'מושקו', description: 'שיחה עם סוכן ה-CFO — פעולות כתיבה דורשות אישור' },
       { to: '/executive', icon: Gauge, label: 'דשבורד מנהלים', description: '8 פאנלים של מצב העסק' },
       { to: '/cashflow', icon: Wallet, label: 'Cash Flow', description: 'Projections & scenarios' },
       { to: '/cashflow-detail', icon: TrendingUp, label: 'תזרים — מפורט', description: 'חודשי/יומי, burn-rate ויחסי נזילות' },
@@ -180,6 +182,7 @@ const navigationConfig = [
       { to: '/customers', icon: Users, label: 'Customers', description: 'Customer management' },
       { to: '/bank', icon: Building2, label: 'Bank Import', description: 'Bank statements' },
       { to: '/settings', icon: Settings, label: 'Settings', description: 'System settings' },
+      { to: '/policies', icon: ClipboardCheck, label: 'הרשאות כספיות', description: 'תקרות, ערוצים ומורשי חתימה', adminOnly: true },
     ]
   }
 ];
@@ -302,6 +305,8 @@ function App() {
               <div className="flex items-center gap-4">
                 {/* Super-admin: act-as-client organization switcher */}
                 {currentUser && <OrgSwitcher currentUser={currentUser} darkMode={darkMode} />}
+                {/* חוסם כשהשרת מחזיר 409 active_organization_required */}
+                <ActiveOrgRequired darkMode={darkMode} />
 
                 {/* Dark Mode Toggle */}
                 <button
@@ -365,6 +370,7 @@ function App() {
                 {/* CFO Command Center */}
                 <Route path="/" element={<CFOOverview darkMode={darkMode} />} />
                 <Route path="/ai-chat" element={<ChatAssistant darkMode={darkMode} currentUser={currentUser} />} />
+                <Route path="/agent/:sessionId" element={<ChatAssistant darkMode={darkMode} currentUser={currentUser} />} />
                 <Route path="/cashflow" element={<CFOCashFlowProjection darkMode={darkMode} />} />
                 <Route path="/cashflow-detail" element={<CashFlowDashboard />} />
                 <Route path="/ar" element={<CFOARDashboard darkMode={darkMode} />} />
@@ -404,6 +410,7 @@ function App() {
                     all) -- retired in favor of the real dashboards below. */}
                 <Route path="/analytics" element={<Navigate to="/kpis" replace />} />
                 <Route path="/settings" element={<SettingsPage darkMode={darkMode} />} />
+                <Route path="/policies" element={<PolicyManagementDashboard currentUser={currentUser} />} />
 
                 {/* Financial Operations */}
                 <Route path="/invoices" element={<InvoicesDashboard />} />
@@ -436,7 +443,9 @@ interface NavItemProps {
 
 const NavItem: React.FC<NavItemProps> = ({ to, icon, label, description, collapsed, darkMode }) => {
   const location = useLocation();
-  const isActive = location.pathname === to;
+  const isActive = location.pathname === to || (
+    to === '/ai-chat' && location.pathname.startsWith('/agent/')
+  );
 
   return (
     <Link

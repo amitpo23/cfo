@@ -574,17 +574,23 @@ def test_button_reply_cancel_does_not_execute_anything(
     iso = fresh_org()
     _link(iso["org_id"], "972500001301")
 
-    called = {"n": 0}
+    called = {"confirm": 0, "cancel": 0, "message_id": None}
 
     async def fake_confirm_action(self, message_id):
-        called["n"] += 1
+        called["confirm"] += 1
         return {"result": {}, "message_id": message_id}
 
+    def fake_cancel_action(self, message_id):
+        called["cancel"] += 1
+        called["message_id"] = message_id
+        return {"message_id": message_id, "status": "cancelled"}
+
     monkeypatch.setattr(AIChatService, "confirm_action", fake_confirm_action)
+    monkeypatch.setattr(AIChatService, "cancel_action", fake_cancel_action, raising=False)
 
     r = _post(client, _button_reply_message("wamid.cancel-1", "972500001301", "cancel:88"))
     assert r.status_code == 200
-    assert called["n"] == 0
+    assert called == {"confirm": 0, "cancel": 1, "message_id": 88}
     assert any("בוטל" in text for _, text in fake_gateway["send_text"])
 
 

@@ -27,6 +27,7 @@ from .sumit_models import (
     DocumentRequest, DocumentResponse, SendDocumentRequest,
     DocumentListRequest, ExpenseRequest, DebtReportRequest,
     DocumentPayment, ScheduledDocumentResult,
+    BooksBatchRequest, BooksBatchResponse,
     # Payment models
     ChargeRequest, PaymentResponse, PaymentMethodResponse, PaymentLinkResponse,
     # Transaction models
@@ -68,6 +69,30 @@ class SumitAPIError(Exception):
 class PaidSumitActionDisabled(RuntimeError):
     """A billed per-document SUMIT action was attempted while the cost budget
     is zero. The request was never sent."""
+
+
+class PlaceholderCredentialsRefused(RuntimeError):
+    """A request was attempted with an obviously fake API key. Never sent."""
+
+
+class SumitRequestBudgetRequired(RuntimeError):
+    """A real outbound request lacked the shared durable request limiter."""
+
+
+# מחרוזות שמעידות שהמפתח אינו אמיתי. הרשימה מכוונת להיות צרה: חסימה
+# גורפת מדי הייתה משביתה את הפרוד, ולכן היא מכילה רק דפוסים שאין להם
+# שימוש לגיטימי כמפתח.
+_PLACEHOLDER_MARKERS = (
+    "test-", "test_", "dummy", "placeholder", "changeme", "change-me",
+    "your-api-key", "your_api_key", "xxxx", "fake", "example",
+)
+
+
+def _looks_like_placeholder(api_key: Optional[str]) -> bool:
+    if not api_key or not api_key.strip():
+        return True
+    lowered = api_key.strip().lower()
+    return any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
 
 
 # Mapping from this codebase's document type names to SUMIT's
@@ -136,7 +161,14 @@ class SumitIntegration(BaseIntegration):
 
     BASE_URL = "https://api.sumit.co.il"
 
-    def __init__(self, api_key: str, company_id: Optional[str] = None, **kwargs):
+    def __init__(
+        self,
+        api_key: str,
+        company_id: Optional[str] = None,
+        *,
+        request_limiter=None,
+        **kwargs,
+    ):
         """
         Initialize SUMIT integration
 
@@ -147,6 +179,7 @@ class SumitIntegration(BaseIntegration):
         """
         super().__init__(api_key, **kwargs)
         self.company_id = company_id
+        self.request_limiter = request_limiter
         self.client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers={
@@ -211,6 +244,17 @@ class SumitIntegration(BaseIntegration):
             Dict containing the full response envelope
             ({"Status": ..., "UserErrorMessage": ..., "Data": ...})
         """
+        # השער יושב כאן — בנקודה שבה הרשת באמת קורית — ולא ב-`_post`.
+        # טסט שממקק את `_make_request` ממילא אינו נוגע ברשת, וחסימתו
+        # הייתה חוסמת בדיקות לגיטימיות בלי להפחית סיכון.
+        self._assert_credentials_are_real(endpoint)
+        if self.request_limiter is None:
+            raise SumitRequestBudgetRequired(
+                "SUMIT request refused: shared request budget is not configured",
+            )
+        # Synchronous DB claim is intentional: no network coroutine is created
+        # until the durable cross-instance slot is committed.
+        self.request_limiter.claim(endpoint)
         self._log_request(method, endpoint, data)
 
         try:
@@ -238,6 +282,30 @@ class SumitIntegration(BaseIntegration):
         except Exception as e:
             self._log_error(e, f"Request failed on {endpoint}")
             raise
+
+    def _assert_credentials_are_real(self, endpoint: str) -> None:
+        """מסרב לצאת לרשת עם מפתח שנראה כמו placeholder.
+
+        **אירוע 13/08/2026.** `tests/conftest.py` מגדיר
+        `SUMIT_API_KEY="test-env-sumit-key"` כדי ש-"האם SUMIT מוגדר?"
+        יחזיר True. שום דבר לא מנע מהקוד להשתמש בו מול השרת האמיתי:
+        מדידה גילתה 116 ניסיונות חיבור ל-`api.sumit.co.il` בכל ריצת
+        סוויטה, ומעל אלף ביום — כלומר אלף ניסיונות אימות כושלים מאותה
+        כתובת IP. SUMIT חוסמת על הדפוס הזה, והחסימה פוגעת בבעלים.
+
+        חומת הרשת ב-conftest מגנה על הסוויטה; השער הזה מגן על כל השאר —
+        סקריפט ידני, קונסולה, notebook, סביבת dev מוגדרת חלקית.
+
+        זהו סיכון **שונה** מ-`_assert_paid_actions_enabled`: שם חיוב,
+        כאן חסימה. שניהם נדרשים.
+        """
+        if _looks_like_placeholder(self.api_key):
+            raise PlaceholderCredentialsRefused(
+                f"refusing to call SUMIT ({endpoint}) with a placeholder API "
+                "key. Repeated failed authentication gets the account and IP "
+                "blocked by the provider — which blocks the owner's real work "
+                "too. Configure a real key, or use a fake connector in tests."
+            )
 
     @staticmethod
     def _assert_paid_actions_enabled(action: str) -> None:
@@ -305,6 +373,7 @@ class SumitIntegration(BaseIntegration):
         POST to a SUMIT endpoint that returns raw binary content
         (e.g. /accounting/documents/getpdf/) and return the bytes.
         """
+        self._assert_credentials_are_real(endpoint)
         data = self._with_credentials(payload or {})
         response = await self.client.post(endpoint, json=data)
         try:
@@ -858,6 +927,57 @@ class SumitIntegration(BaseIntegration):
             date=issue,
             currency=document.currency or "ILS",
         )
+
+    async def create_books_batch(
+        self,
+        request: BooksBatchRequest,
+    ) -> BooksBatchResponse:
+        """Create an open journal batch using SUMIT's versioned Books API.
+
+        The published contract returns only ``BatchURL``. It does not expose
+        batch readback or close, so this acknowledgement must not be treated as
+        evidence that the batch is closed or independently verified.
+        """
+        transactions: List[Dict[str, Any]] = []
+        for transaction in request.transactions:
+            item: Dict[str, Any] = {
+                "DebitAccountCode": transaction.debit_account_code,
+                "CreditAccountCode": transaction.credit_account_code,
+                "AmountILS": float(transaction.amount_ils),
+            }
+            optional_fields = {
+                "Reference1": transaction.reference1,
+                "Reference2": transaction.reference2,
+                "ReferenceDate": (
+                    transaction.reference_date.isoformat()
+                    if transaction.reference_date else None
+                ),
+                "ValueDate": (
+                    transaction.value_date.isoformat()
+                    if transaction.value_date else None
+                ),
+                "Details": transaction.details,
+            }
+            item.update({
+                key: value for key, value in optional_fields.items()
+                if value is not None
+            })
+            transactions.append(item)
+
+        payload: Dict[str, Any] = {
+            "DatabaseID": request.database_id,
+            "Transactions": transactions,
+        }
+        if request.batch_description is not None:
+            payload["BatchDescription"] = request.batch_description
+
+        data = await self._post("/books/transactions/createbatch/", payload)
+        batch_url = data.get("BatchURL") if isinstance(data, dict) else None
+        if not isinstance(batch_url, str) or not batch_url.strip():
+            raise SumitAPIError(
+                "SUMIT books batch response omitted BatchURL",
+            )
+        return BooksBatchResponse(batch_url=batch_url)
 
     async def add_expense(self, expense: ExpenseRequest) -> Dict[str, Any]:
         """

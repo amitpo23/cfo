@@ -11,13 +11,19 @@ import asyncio
 from types import SimpleNamespace
 
 from cfo.database import SessionLocal
-from cfo.models import ChatMessage
+from cfo.models import ChatMessage, User
 from cfo.services import moshko_memory
 from cfo.services.ai_chat_personas import PERSONAS, build_system_prompt
 from cfo.services.ai_chat_service import AIChatService
 from cfo.services.ai_chat_tools import TOOLS
 
 from tests.test_ai_chat_service import _patch_client, _text_block, _tool_use_block
+
+
+def _org_and_user(fresh_org, db):
+    org_id = fresh_org()["org_id"]
+    user = db.query(User).filter(User.organization_id == org_id).one()
+    return org_id, user
 
 
 # ---------------------------------------------------------------------- #
@@ -466,9 +472,9 @@ def test_search_history_tool_is_read_category_and_needs_user():
 
 
 def test_memory_tool_add_is_never_auto_executed(monkeypatch, fresh_org):
-    org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
+        org_id, user = _org_and_user(fresh_org, db)
         _patch_client(monkeypatch, responses=[
             SimpleNamespace(
                 stop_reason="tool_use",
@@ -480,7 +486,7 @@ def test_memory_tool_add_is_never_auto_executed(monkeypatch, fresh_org):
                 ],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = AIChatService(db, org_id, user_id=user.id)
         result = asyncio.run(service.send_message("s1", "תזכור שהבנק הראשי הוא בנק הפועלים"))
 
         assert result["pending_action"]["tool"] == "memory"
@@ -494,9 +500,9 @@ def test_memory_tool_add_is_never_auto_executed(monkeypatch, fresh_org):
 
 
 def test_confirm_action_executes_memory_add_successfully(monkeypatch, fresh_org):
-    org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
+        org_id, user = _org_and_user(fresh_org, db)
         _patch_client(monkeypatch, responses=[
             SimpleNamespace(
                 stop_reason="tool_use",
@@ -505,7 +511,7 @@ def test_confirm_action_executes_memory_add_successfully(monkeypatch, fresh_org)
                 })],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = AIChatService(db, org_id, user_id=user.id)
         proposed = asyncio.run(service.send_message("s1", "תזכור את זה"))
         pending_id = proposed["message_id"]
 
@@ -605,9 +611,9 @@ def test_confirm_action_executes_memory_add_scoped_to_the_confirming_user(monkey
     """scope='user' writes must be attributed to the CONFIRMING user's real
     identity (never model-supplied) — same needs_user pattern proven for
     propose_vat_filing_approval."""
-    org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
+        org_id, user = _org_and_user(fresh_org, db)
         _patch_client(monkeypatch, responses=[
             SimpleNamespace(
                 stop_reason="tool_use",
@@ -616,18 +622,18 @@ def test_confirm_action_executes_memory_add_scoped_to_the_confirming_user(monkey
                 })],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=7)
+        service = AIChatService(db, org_id, user_id=user.id)
         proposed = asyncio.run(service.send_message("s1", "תזכור שאני מעדיף תשובות ארוכות"))
         confirmed = asyncio.run(service.confirm_action(proposed["message_id"]))
         assert confirmed["result"]["status"] == "ok"
 
         assert any(
             m["content"] == "מעדיף תשובות ארוכות"
-            for m in moshko_memory.list_memories(db, org_id, user_id=7)
+            for m in moshko_memory.list_memories(db, org_id, user_id=user.id)
         )
         assert not any(
             m["content"] == "מעדיף תשובות ארוכות"
-            for m in moshko_memory.list_memories(db, org_id, user_id=8)
+            for m in moshko_memory.list_memories(db, org_id, user_id=user.id + 100000)
         )
     finally:
         db.close()

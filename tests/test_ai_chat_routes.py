@@ -35,7 +35,15 @@ def chat_superadmin(client):
     assert resp.status_code == 201, resp.text
     data = resp.json()
     _promote_to_super("chat-super@example.com")
-    return {"headers": {"Authorization": f"Bearer {data['access_token']}"}}
+    # מ-11/08/2026 כל סופר-אדמין חייב לבחור ארגון מפורשות — גם כשיש לו
+    # ארגון בית. הכותרת מצורפת כאן כדי שהטסטים בקובץ יבדקו את מה שהם
+    # מתארים (כלי משרד) ולא ייעצרו על בחירת ארגון.
+    return {
+        "headers": {
+            "Authorization": f"Bearer {data['access_token']}",
+            "X-Active-Org-Id": str(data["user"]["organization_id"]),
+        }
+    }
 
 
 class FakeMessages:
@@ -54,7 +62,22 @@ class FakeAnthropicClient:
 def test_routes_require_auth(client):
     assert client.post("/api/ai/chat", json={"session_id": "s", "message": "hi"}).status_code == 403
     assert client.post("/api/ai/chat/confirm", json={"message_id": 1}).status_code == 403
+    assert client.post("/api/ai/chat/cancel", json={"message_id": 1}).status_code == 403
     assert client.get("/api/ai/chat/s").status_code == 403
+
+
+@pytest.mark.parametrize("session_id", ["bad/session", "x" * 65, "רווח לא חוקי"])
+def test_chat_session_id_is_validated_before_storage(client, fresh_org, session_id):
+    iso = fresh_org()
+
+    sent = client.post(
+        "/api/ai/chat",
+        headers=iso["headers"],
+        json={"session_id": session_id, "message": "היי"},
+    )
+
+    assert sent.status_code == 400
+    assert "session_id" in sent.json()["detail"]
 
 
 def test_send_message_route_and_history(monkeypatch, client, fresh_org):
@@ -85,6 +108,28 @@ def test_confirm_route_rejects_unknown_message(client, fresh_org):
     iso = fresh_org()
     r = client.post("/api/ai/chat/confirm", headers=iso["headers"], json={"message_id": 999999})
     assert r.status_code == 400
+
+
+def test_cancel_route_invokes_scoped_service(monkeypatch, client, fresh_org):
+    iso = fresh_org()
+    called = {}
+
+    def fake_cancel(self, message_id):
+        called["org_id"] = self.organization_id
+        called["user_id"] = self.user_id
+        called["message_id"] = message_id
+        return {"message_id": message_id, "status": "cancelled"}
+
+    monkeypatch.setattr(AIChatService, "cancel_action", fake_cancel, raising=False)
+    r = client.post(
+        "/api/ai/chat/cancel",
+        headers=iso["headers"],
+        json={"message_id": 123},
+    )
+
+    assert r.status_code == 200, r.text
+    assert called["message_id"] == 123
+    assert called["org_id"] == iso["org_id"]
 
 
 def test_chat_history_is_org_isolated(monkeypatch, client, fresh_org):

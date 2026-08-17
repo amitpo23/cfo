@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from .config import settings
 from .database import init_db, SessionLocal
 from .integrations.sumit_integration import SumitIntegration
+from .services.sumit_request_budget import SumitRequestLimiter
 
 console = Console()
 
@@ -42,7 +43,8 @@ def test_sumit():
     async def test():
         async with SumitIntegration(
             api_key=settings.sumit_api_key,
-            company_id=settings.sumit_company_id
+            company_id=settings.sumit_company_id,
+            request_limiter=SumitRequestLimiter(1),
         ) as sumit:
             is_connected = await sumit.test_connection()
             if is_connected:

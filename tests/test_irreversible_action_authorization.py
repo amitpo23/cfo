@@ -4,9 +4,22 @@ import pytest
 from cfo.auth import create_access_token, get_password_hash
 from cfo.database import SessionLocal
 from cfo.models import User, UserRole
+from cfo.services import membership_service
 
 
 IRREVERSIBLE_ACTIONS = [
+    (
+        "post",
+        "/api/accounting/books/batches",
+        {
+            "database_id": 777,
+            "transactions": [{
+                "debit_account_code": "6000",
+                "credit_account_code": "10001",
+                "amount_ils": "118.00",
+            }],
+        },
+    ),
     ("post", "/api/payments/charge", {"amount": 10}),
     ("post", "/api/payments/recurring/r1/cancel", None),
     ("post", "/api/payments/upay/setup", {"email": "a@b.com", "password": "x"}),
@@ -39,6 +52,7 @@ def _network_must_not_be_reached(monkeypatch):
     monkeypatch.setattr(SumitIntegration, "charge_customer", forbidden_sumit_call)
     monkeypatch.setattr(SumitIntegration, "cancel_recurring", forbidden_sumit_call)
     monkeypatch.setattr(SumitIntegration, "setup_upay_credentials", forbidden_sumit_call)
+    monkeypatch.setattr(SumitIntegration, "create_books_batch", forbidden_sumit_call)
     monkeypatch.setattr(
         open_finance, "get_open_finance_client", forbidden_open_finance_client,
     )
@@ -56,6 +70,15 @@ def _create_role_headers(owner, *, role, email):
             is_active=True,
         )
         db.add(row)
+        db.flush()
+        membership_service.grant(
+            db,
+            organization_id=owner["user"]["organization_id"],
+            user_id=row.id,
+            role=role,
+            granted_by_user_id=owner["user"]["id"],
+            status=membership_service.ACTIVE,
+        )
         db.commit()
         db.refresh(row)
         token = create_access_token({"sub": row.id})

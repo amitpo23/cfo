@@ -6,7 +6,8 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Send, ShieldAlert, Loader2, Bot, User as UserIcon, Building2 } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Send, ShieldAlert, Loader2, Bot, User as UserIcon, Building2, Plus, Activity, BookOpen, ThumbsUp, ThumbsDown, HelpCircle, AlertTriangle } from 'lucide-react';
 import apiService from '../services/api';
 import type { CurrentUser } from './OrgSwitcher';
 
@@ -22,8 +23,12 @@ interface ChatMessageDto {
   content: string;
   pending_action: PendingAction | null;
   executed: boolean;
+  action_status: 'pending' | 'executing' | 'executed' | 'cancelled' | 'unknown' | null;
+  feedback: { category: FeedbackCategory; comment: string | null; status: string } | null;
   created_at: string | null;
 }
+
+type FeedbackCategory = 'helpful' | 'inaccurate' | 'unknown' | 'unsafe';
 
 const SESSION_KEY = 'ai_chat_session_id';
 const PERSONA_KEY = 'ai_chat_persona';
@@ -60,6 +65,18 @@ function getSessionId(): string {
   return id;
 }
 
+function newSessionId(): string {
+  return `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function resolveSessionId(routeSessionId?: string): string {
+  if (routeSessionId && /^[A-Za-z0-9_-]{1,64}$/.test(routeSessionId)) {
+    localStorage.setItem(SESSION_KEY, routeSessionId);
+    return routeSessionId;
+  }
+  return getSessionId();
+}
+
 function getStoredPersona(): PersonaKey {
   const stored = localStorage.getItem(PERSONA_KEY);
   if (stored === 'bookkeeper' || stored === 'cfo' || stored === 'accountant') return stored;
@@ -73,12 +90,23 @@ function extractErrorMessage(err: unknown): string {
 
 const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | null }> = ({ darkMode, currentUser }) => {
   const isOfficeManager = currentUser?.role === 'super_admin';
-  const [sessionId] = useState(getSessionId);
+  const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
+  const navigate = useNavigate();
+  const [sessionId, setSessionId] = useState(() => resolveSessionId(routeSessionId));
   const [input, setInput] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [persona, setPersona] = useState<PersonaKey>(getStoredPersona);
+  const [feedbackEditor, setFeedbackEditor] = useState<{ messageId: number; category: FeedbackCategory } | null>(null);
+  const [feedbackComment, setFeedbackComment] = useState('');
   const queryClient = useQueryClient();
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (routeSessionId && /^[A-Za-z0-9_-]{1,64}$/.test(routeSessionId)) {
+      localStorage.setItem(SESSION_KEY, routeSessionId);
+      setSessionId(routeSessionId);
+    }
+  }, [routeSessionId]);
 
   const handlePersonaChange = (key: PersonaKey) => {
     setPersona(key);
@@ -115,11 +143,40 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
     onError: (err) => setErrorMessage(extractErrorMessage(err)),
   });
 
+  const cancelMutation = useMutation({
+    mutationFn: (messageId: number) =>
+      apiService.post('/ai/chat/cancel', { message_id: messageId }),
+    onSuccess: () => {
+      setErrorMessage(null);
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
+    },
+    onError: (err) => setErrorMessage(extractErrorMessage(err)),
+  });
+
+  const feedbackMutation = useMutation({
+    mutationFn: ({ messageId, category, comment }: { messageId: number; category: FeedbackCategory; comment?: string }) =>
+      apiService.post(`/ai/chat/${messageId}/feedback`, { category, comment }),
+    onSuccess: () => {
+      setErrorMessage(null);
+      setFeedbackEditor(null);
+      setFeedbackComment('');
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
+    },
+    onError: (err) => setErrorMessage(extractErrorMessage(err)),
+  });
+
   const handleSend = () => {
     const text = input.trim();
     if (!text || sendMutation.isPending) return;
     setInput('');
     sendMutation.mutate(text);
+  };
+
+  const handleNewConversation = () => {
+    const id = newSessionId();
+    localStorage.setItem(SESSION_KEY, id);
+    setSessionId(id);
+    navigate(`/agent/${id}`);
   };
 
   const cardClass = `rounded-2xl border ${
@@ -128,8 +185,8 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
 
   return (
     <div className={`p-6 h-full flex flex-col ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-      <div className="flex items-center gap-3 mb-1">
-        <h1 className="text-3xl font-bold">עוזר CFO — AI</h1>
+      <div className="flex flex-wrap items-center gap-3 mb-1">
+        <h1 className="text-3xl font-bold">מושקו — סוכן ה־CFO</h1>
         {isOfficeManager && (
           <span className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full ${
             darkMode ? 'bg-purple-900/40 text-purple-200' : 'bg-purple-100 text-purple-700'
@@ -138,12 +195,35 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
             מצב מנהל משרד
           </span>
         )}
+        <button
+          type="button"
+          onClick={handleNewConversation}
+          className={`mr-auto flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
+            darkMode ? 'border-gray-700 hover:bg-gray-800' : 'border-gray-200 bg-white hover:bg-gray-50'
+          }`}
+        >
+          <Plus size={16} /> שיחה חדשה
+        </button>
       </div>
       <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
         שאל על מצב פיננסי, גיול חובות, תיקי גבייה ועוד. פעולות כתיבה (הפקת מסמך, רישום ניסיון גבייה)
         מוצגות לאישור מפורש לפני ביצוע.
         {isOfficeManager && ' במצב מנהל משרד יש לך גם כלים לצפייה בכל תיקי הלקוחות ורולאפ פיננסי חוצה-לקוחות.'}
       </p>
+
+      <div className={`mb-3 flex flex-wrap items-center gap-3 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+        <span dir="ltr">Session: {sessionId}</span>
+        {isOfficeManager && (
+          <>
+            <Link to="/admin-moshko" className="flex items-center gap-1 text-violet-600 hover:underline">
+              <Activity size={13} /> ניטור כל השיחות
+            </Link>
+            <Link to="/admin-moshko-knowledge" className="flex items-center gap-1 text-violet-600 hover:underline">
+              <BookOpen size={13} /> ניהול הידע של מושקו
+            </Link>
+          </>
+        )}
+      </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-1">
         {PERSONAS.map((p) => (
@@ -207,17 +287,68 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
                   <pre className="mb-2 overflow-x-auto rounded bg-black/5 p-2 text-[11px] dir-ltr text-left">
                     {JSON.stringify(m.pending_action.input, null, 2)}
                   </pre>
-                  {m.executed ? (
+                  {m.executed || m.action_status === 'executed' ? (
                     <span className="text-green-600 font-medium">✓ בוצע</span>
+                  ) : m.action_status === 'cancelled' ? (
+                    <span className="text-gray-500 font-medium">בוטל</span>
+                  ) : m.action_status === 'executing' ? (
+                    <span className="text-blue-600 font-medium">בביצוע — לא יופעל שוב</span>
+                  ) : m.action_status === 'unknown' ? (
+                    <span className="text-red-600 font-medium">תוצאה לא ידועה — נדרש אימות ידני</span>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => confirmMutation.mutate(m.id)}
-                      disabled={confirmMutation.isPending}
-                      className="px-3 py-1.5 rounded-lg bg-yellow-500 text-white text-xs font-semibold hover:bg-yellow-600 disabled:opacity-50"
-                    >
-                      {confirmMutation.isPending ? 'מבצע...' : 'אשר וביצוע'}
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => confirmMutation.mutate(m.id)}
+                        disabled={confirmMutation.isPending || cancelMutation.isPending}
+                        className="px-3 py-1.5 rounded-lg bg-yellow-500 text-white text-xs font-semibold hover:bg-yellow-600 disabled:opacity-50"
+                      >
+                        {confirmMutation.isPending ? 'מבצע...' : 'אשר וביצוע'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => cancelMutation.mutate(m.id)}
+                        disabled={confirmMutation.isPending || cancelMutation.isPending}
+                        className="px-3 py-1.5 rounded-lg border border-gray-400 text-xs font-semibold hover:bg-black/5 disabled:opacity-50"
+                      >
+                        {cancelMutation.isPending ? 'מבטל...' : 'ביטול'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {m.role === 'assistant' && (
+                <div className={`mt-2 border-t pt-2 ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className={darkMode ? 'text-gray-400' : 'text-gray-500'}>
+                      {m.feedback ? `נשלח: ${m.feedback.category}` : 'התשובה עזרה?'}
+                    </span>
+                    <button type="button" title="מועיל" aria-label="סמן תשובה כמועילה" disabled={feedbackMutation.isPending}
+                      onClick={() => feedbackMutation.mutate({ messageId: m.id, category: 'helpful' })}
+                      className="rounded p-1 text-emerald-600 hover:bg-emerald-100 disabled:opacity-50"><ThumbsUp size={14} /></button>
+                    <button type="button" title="לא מדויק" aria-label="דווח על תשובה לא מדויקת" disabled={feedbackMutation.isPending}
+                      onClick={() => { setFeedbackEditor({ messageId: m.id, category: 'inaccurate' }); setFeedbackComment(m.feedback?.comment || ''); }}
+                      className="rounded p-1 text-amber-600 hover:bg-amber-100 disabled:opacity-50"><ThumbsDown size={14} /></button>
+                    <button type="button" title="מושקו לא ידע" aria-label="דווח שמושקו לא ידע" disabled={feedbackMutation.isPending}
+                      onClick={() => { setFeedbackEditor({ messageId: m.id, category: 'unknown' }); setFeedbackComment(m.feedback?.comment || ''); }}
+                      className="rounded p-1 text-blue-600 hover:bg-blue-100 disabled:opacity-50"><HelpCircle size={14} /></button>
+                    <button type="button" title="תשובה לא בטוחה" aria-label="דווח על תשובה לא בטוחה" disabled={feedbackMutation.isPending}
+                      onClick={() => { setFeedbackEditor({ messageId: m.id, category: 'unsafe' }); setFeedbackComment(m.feedback?.comment || ''); }}
+                      className="rounded p-1 text-red-600 hover:bg-red-100 disabled:opacity-50"><AlertTriangle size={14} /></button>
+                  </div>
+                  {feedbackEditor?.messageId === m.id && (
+                    <div className="mt-2 space-y-2">
+                      <textarea value={feedbackComment} onChange={(event) => setFeedbackComment(event.target.value)}
+                        maxLength={2000} rows={2} placeholder="מה היה חסר או לא מדויק?"
+                        className={`w-full rounded-lg border p-2 text-xs ${darkMode ? 'border-gray-600 bg-gray-800' : 'border-gray-300 bg-white'}`} />
+                      <div className="flex gap-2">
+                        <button type="button" disabled={feedbackMutation.isPending}
+                          onClick={() => feedbackMutation.mutate({ messageId: m.id, category: feedbackEditor.category, comment: feedbackComment })}
+                          className="rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50">שליחה לבדיקה</button>
+                        <button type="button" onClick={() => { setFeedbackEditor(null); setFeedbackComment(''); }}
+                          className="rounded border px-2.5 py-1 text-xs">ביטול</button>
+                      </div>
+                    </div>
                   )}
                 </div>
               )}

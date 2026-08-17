@@ -38,6 +38,7 @@
 - [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — מצב מוכנות לפרוד
 - [`DOCKER_LOCAL.md`](DOCKER_LOCAL.md) — הרמה מקומית
 - [`REPO_ORDER_AND_CONTROL_PLANE.md`](REPO_ORDER_AND_CONTROL_PLANE.md) — סדר הריפו ושכבות ההנחיה לסוכנים
+- [`REZEF_CLI_ROADMAP.md`](REZEF_CLI_ROADMAP.md) — מצב ה־CLI הישן וחוזה CLI/MCP עתידי (בחניון עד סגירת שער 0)
 - [`.agents/skills/rezef-operator/`](../.agents/skills/rezef-operator/) — נתב Codex למקורות האמת (אינו משכפל ידע)
 - [`guides/`](guides/) — מדריכי אינטגרציה ורב-דיירות, כיסוי מודולי SUMIT
 

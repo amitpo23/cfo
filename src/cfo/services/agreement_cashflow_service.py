@@ -14,6 +14,7 @@ import numpy as np
 from ..database import SessionLocal
 from ..config import settings
 from ..integrations.sumit_integration import SumitIntegration
+from .sumit_request_budget import SumitRequestLimiter
 
 
 class AgreementType(str, Enum):
@@ -534,7 +535,7 @@ class AgreementCashFlowService:
         entries = []
         
         try:
-            async with SumitIntegration(api_key=settings.sumit_api_key) as sumit:
+            async with SumitIntegration(api_key=settings.sumit_api_key, request_limiter=SumitRequestLimiter(self.organization_id)) as sumit:
                 # קבלת חשבוניות פתוחות
                 documents = await sumit.list_documents(
                     type_filter="invoice",

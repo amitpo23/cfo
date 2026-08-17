@@ -2,7 +2,7 @@
  * The unifying engine — command center. One view over status + the full pipeline,
  * with a state tag on every section (real / derived / unvalidated).
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Cpu, Loader2, CheckCircle2, AlertTriangle, Plug } from 'lucide-react';
 import api from '../services/api';
 
@@ -43,16 +43,16 @@ export default function EngineDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const run = async () => {
+  const run = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       setData(await api.get<PipelineResult>('/api/engine/run'));
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'שגיאה בהרצת המנוע');
     } finally { setLoading(false); }
-  };
+  }, []);
 
-  useEffect(() => { run(); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { void run(); }, [run]);
 
   const st = data?.status;
 

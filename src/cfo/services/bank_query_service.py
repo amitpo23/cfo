@@ -24,7 +24,7 @@ from collections import defaultdict
 from datetime import date as date_type
 from typing import Any
 
-from sqlalchemy import Integer, func
+from sqlalchemy import Integer, func, or_
 from sqlalchemy.orm import Session
 
 from ..models import Account, BankTransaction
@@ -105,6 +105,8 @@ def _status(txn: BankTransaction) -> str | None:
 def _row_dict(txn: BankTransaction) -> dict[str, Any]:
     return {
         "id": txn.id,
+        "external_id": txn.external_id,
+        "account_id": txn.account_id,
         "date": txn.transaction_date.isoformat() if txn.transaction_date else None,
         "amount": float(txn.amount or 0),
         "currency": txn.currency,
@@ -114,7 +116,27 @@ def _row_dict(txn: BankTransaction) -> dict[str, Any]:
         "category_sub": _category_sub(txn),
         "is_reconciled": bool(txn.is_reconciled),
         "is_provisional": bool(txn.is_provisional),
+        "connection_id": _raw_get(txn, "connectionId"),
+        "provider_id": _raw_get(txn, "providerId"),
     }
+
+
+def get_bank_transaction(db: Session, org_id: int, external_id: str) -> dict[str, Any] | None:
+    """Return one Open Finance transaction by local or provider id, org-scoped."""
+    candidates = [external_id]
+    if not external_id.startswith("open_finance:"):
+        candidates.append(f"open_finance:{external_id}")
+    identifiers = [BankTransaction.external_id.in_(candidates)]
+    try:
+        identifiers.append(BankTransaction.id == int(external_id))
+    except ValueError:
+        pass
+    row = db.query(BankTransaction).filter(
+        BankTransaction.organization_id == org_id,
+        BankTransaction.source == "open_finance",
+        or_(*identifiers),
+    ).first()
+    return _row_dict(row) if row else None
 
 
 def query_bank_transactions(
@@ -130,6 +152,9 @@ def query_bank_transactions(
     limit: int = 50,
     source: str | None = None,
     account_id: int | None = None,
+    connection_id: str | None = None,
+    provider_id: str | None = None,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """Filterable list of bank/card transactions for one organization.
 
@@ -168,15 +193,31 @@ def query_bank_transactions(
     all_rows = q.order_by(BankTransaction.transaction_date.desc()).all()
     if txn_type:
         all_rows = [t for t in all_rows if _txn_type(t) == txn_type]
+    if connection_id:
+        all_rows = [
+            t for t in all_rows
+            if _raw_get(t, "connectionId") == connection_id
+            or (
+                t.account is not None
+                and t.account.open_finance_connection_id == connection_id
+            )
+        ]
+    if provider_id:
+        all_rows = [
+            t for t in all_rows if _raw_get(t, "providerId") == provider_id
+        ]
 
     count = len(all_rows)
     total_amount = round(float(sum(float(t.amount or 0) for t in all_rows)), 2)
-    rows = [_row_dict(t) for t in all_rows[:limit]]
+    page_rows = all_rows[offset:offset + limit]
+    rows = [_row_dict(t) for t in page_rows]
+    next_cursor = str(offset + limit) if offset + limit < count else None
 
     return {
         "count": count,
         "total_amount": total_amount,
         "transactions": rows,
+        "next_cursor": next_cursor,
     }
 
 

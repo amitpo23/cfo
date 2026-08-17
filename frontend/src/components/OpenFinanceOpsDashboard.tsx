@@ -4,7 +4,7 @@
  * creates new ones via the dedicated routes. (Requires Open Finance credentials;
  * without them the list shows a clear "not configured" message.)
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { CreditCard, Banknote, Users, Store, Loader2, Plus, RefreshCw } from 'lucide-react';
 import api from '../services/api';
 
@@ -29,17 +29,17 @@ export default function OpenFinanceOpsDashboard() {
 
   const current = TABS.find((t) => t.key === tab)!;
 
-  const loadStatus = async () => {
+  const loadStatus = useCallback(async () => {
     const status = await api.get<{ configured?: Record<string, boolean> }>('/integration/status');
     const isConfigured = status.configured?.open_finance === true;
     setConfigured(isConfigured);
     return isConfigured;
-  };
+  }, []);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true); setError(null); setRows([]);
     try {
-      const isConfigured = configured ?? await loadStatus();
+      const isConfigured = await loadStatus();
       if (!isConfigured) {
         setError('חיבור Open Finance לא מוגדר לארגון הזה עדיין.');
         return;
@@ -50,9 +50,13 @@ export default function OpenFinanceOpsDashboard() {
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'לא ניתן לטעון — ייתכן ש-Open Finance לא מוגדר.');
     } finally { setLoading(false); }
-  };
+  }, [current, loadStatus]);
 
-  useEffect(() => { setForm({}); setNotice(null); load(); /* eslint-disable-next-line */ }, [tab]);
+  useEffect(() => {
+    setForm({});
+    setNotice(null);
+    void load();
+  }, [load, tab]);
 
   const create = async () => {
     setBusy(true); setError(null); setNotice(null);

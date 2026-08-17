@@ -82,9 +82,9 @@ def test_email_report_is_write_category():
 
 
 def test_email_report_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
-    org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
+        org_id, user = _org_user(fresh_org, db)
         _configure_smtp(monkeypatch)
         send_calls = []
 
@@ -103,7 +103,7 @@ def test_email_report_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
                 })],
             ),
         ])
-        service = AIChatService(db, org_id, user_id=1)
+        service = AIChatService(db, org_id, user_id=user.id)
         result = asyncio.run(service.send_message("s1", "שלח לי דוח רווח והפסד למייל"))
 
         assert result["pending_action"]["tool"] == "email_report"
@@ -447,19 +447,11 @@ def test_confirm_action_path_rejects_mismatched_user_id(monkeypatch, fresh_org):
         _patch_verify_filing(monkeypatch, _PASS_VERIFICATION)
         _patch_vat_report_period(monkeypatch)
 
-        _patch_client(monkeypatch, responses=[
-            SimpleNamespace(
-                stop_reason="tool_use",
-                content=[_tool_use_block("t1", "propose_vat_filing_approval", {
-                    "year": 2026, "month": 7,
-                })],
-            ),
-        ])
-        service = AIChatService(db, org_id, user_id=1)
-        proposed = asyncio.run(service.send_message("s1", "אשר את הדיווח"))
-        confirmed = asyncio.run(service.confirm_action(proposed["message_id"]))
+        result = asyncio.run(TOOLS["propose_vat_filing_approval"].fn(
+            db, org_id, year=2026, month=7, _user_id=1,
+        ))
 
-        assert confirmed["result"]["status"] == "failed"
+        assert result["status"] == "failed"
         assert db.query(IrreversibleActionRequest).filter(
             IrreversibleActionRequest.organization_id == org_id,
         ).count() == 0

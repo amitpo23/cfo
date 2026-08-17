@@ -378,3 +378,158 @@ def test_admin_tool_calls_and_usage_are_filterable_and_paginated(
     assert body["summary"]["cost_usd"] == pytest.approx(0.01)
     assert body["groups"][0]["model"] == "test-model"
 
+
+def _seed_feedback_message(org_id: int, user_id: int, session_id: str) -> int:
+    db = SessionLocal()
+    try:
+        db.add(ChatMessage(
+            organization_id=org_id,
+            user_id=user_id,
+            session_id=session_id,
+            role="user",
+            content="מה היתרה בבנק?",
+        ))
+        answer = ChatMessage(
+            organization_id=org_id,
+            user_id=user_id,
+            session_id=session_id,
+            role="assistant",
+            content="אין לי מידע מספיק.",
+        )
+        db.add(answer)
+        db.commit()
+        db.refresh(answer)
+        return answer.id
+    finally:
+        db.close()
+
+
+def test_user_can_flag_only_their_own_org_scoped_assistant_answer(client, fresh_org):
+    org_a = fresh_org()
+    org_b = fresh_org()
+    db = SessionLocal()
+    try:
+        user_a = db.query(User).filter(User.organization_id == org_a["org_id"]).first().id
+        user_b = db.query(User).filter(User.organization_id == org_b["org_id"]).first().id
+    finally:
+        db.close()
+    message_a = _seed_feedback_message(org_a["org_id"], user_a, "feedback-a")
+    message_b = _seed_feedback_message(org_b["org_id"], user_b, "feedback-b")
+
+    created = client.post(
+        f"/api/ai/chat/{message_a}/feedback",
+        headers=org_a["headers"],
+        json={"category": "unknown", "comment": "המידע כן קיים בחיבור הבנק"},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["organization_id"] == org_a["org_id"]
+    assert created.json()["status"] == "open"
+
+    cross_org = client.post(
+        f"/api/ai/chat/{message_b}/feedback",
+        headers=org_a["headers"],
+        json={"category": "inaccurate"},
+    )
+    assert cross_org.status_code == 404
+
+
+def test_feedback_rejects_user_messages_and_unknown_categories(client, fresh_org):
+    org = fresh_org()
+    db = SessionLocal()
+    try:
+        user_id = db.query(User).filter(User.organization_id == org["org_id"]).first().id
+        question = ChatMessage(
+            organization_id=org["org_id"], user_id=user_id,
+            session_id="feedback-invalid", role="user", content="שאלה",
+        )
+        db.add(question)
+        db.commit()
+        db.refresh(question)
+        question_id = question.id
+    finally:
+        db.close()
+
+    assert client.post(
+        f"/api/ai/chat/{question_id}/feedback",
+        headers=org["headers"], json={"category": "unknown"},
+    ).status_code == 400
+    assert client.post(
+        f"/api/ai/chat/{question_id}/feedback",
+        headers=org["headers"], json={"category": "invented"},
+    ).status_code == 400
+
+
+def test_super_admin_quality_queue_is_filterable_and_regular_admin_is_blocked(
+    client, moshko_super_admin, fresh_org,
+):
+    org = fresh_org()
+    db = SessionLocal()
+    try:
+        user_id = db.query(User).filter(User.organization_id == org["org_id"]).first().id
+    finally:
+        db.close()
+    message_id = _seed_feedback_message(org["org_id"], user_id, "feedback-queue")
+    assert client.post(
+        f"/api/ai/chat/{message_id}/feedback", headers=org["headers"],
+        json={"category": "inaccurate", "comment": "הסכום שגוי"},
+    ).status_code == 201
+
+    assert client.get(
+        "/api/admin/moshko/feedback", headers=org["headers"],
+    ).status_code == 403
+    response = client.get(
+        f"/api/admin/moshko/feedback?organization_id={org['org_id']}&status=open",
+        headers=moshko_super_admin["headers"],
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 1
+    item = response.json()["items"][0]
+    assert item["question"] == "מה היתרה בבנק?"
+    assert item["answer"] == "אין לי מידע מספיק."
+
+
+def test_super_admin_correction_promotes_only_org_scoped_approved_memory_and_audits(
+    client, moshko_super_admin, fresh_org,
+):
+    from cfo.models import AuditLog, MoshkoFeedback, MoshkoMemory
+
+    org = fresh_org()
+    other = fresh_org()
+    db = SessionLocal()
+    try:
+        user_id = db.query(User).filter(User.organization_id == org["org_id"]).first().id
+    finally:
+        db.close()
+    message_id = _seed_feedback_message(org["org_id"], user_id, "feedback-promote")
+    feedback = client.post(
+        f"/api/ai/chat/{message_id}/feedback", headers=org["headers"],
+        json={"category": "unknown"},
+    ).json()
+
+    corrected = client.patch(
+        f"/api/admin/moshko/feedback/{feedback['id']}",
+        headers=moshko_super_admin["headers"],
+        json={
+            "correction": "יתרת הבנק נקראת רק מחשבונות Open Finance של הארגון הפעיל.",
+            "status": "resolved",
+            "promote_to_memory": True,
+        },
+    )
+    assert corrected.status_code == 200, corrected.text
+
+    db = SessionLocal()
+    try:
+        row = db.query(MoshkoFeedback).filter(MoshkoFeedback.id == feedback["id"]).one()
+        memory = db.query(MoshkoMemory).filter(MoshkoMemory.id == row.promoted_memory_id).one()
+        assert memory.organization_id == org["org_id"]
+        assert memory.organization_id != other["org_id"]
+        assert memory.user_id is None
+        assert memory.category == "correction"
+        assert memory.approved_at is not None
+        assert db.query(AuditLog).filter(
+            AuditLog.action == "MOSHKO_FEEDBACK_REVIEW",
+            AuditLog.organization_id == org["org_id"],
+            AuditLog.entity_id == row.id,
+        ).count() == 1
+    finally:
+        db.close()

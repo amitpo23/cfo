@@ -22,8 +22,8 @@ from ...database import get_db_session
 from ..dependencies import get_current_org_id, require_admin
 from ...config import settings
 from ...models import (
-    Account, BankConnection, BankTransaction, CfoInsight, IntegrationConnection,
-    OpenFinancePayment,
+    Account, AuditLog, BankConnection, BankTransaction, CfoInsight,
+    IntegrationConnection, OpenFinancePayment,
 )
 from ...services.open_finance_client import OpenFinanceClient, OpenFinanceError
 from ...services.credentials_vault import decrypt_credentials
@@ -32,6 +32,7 @@ from ...services import bank_query_service
 from ...services import of_snapshot_service
 from ...services.of_snapshot_service import OfSnapshotRefreshCooldown
 from ...services.irreversible_action_service import (
+    ActionAuthorizationError,
     ActionConflictError,
     ActionStateError,
     ActionValidationError,
@@ -56,6 +57,8 @@ BANK_INSIGHT_TYPES = {
     # POST /insights/generate (see credit_line_service.py, bank_anomalies.py).
     "credit_line_breach", "bank_anomaly",
 }
+
+REFRESH_ALL_CONFIRMATION = "I_CONFIRM_OPEN_FINANCE_REFRESH_20_CREDITS"
 
 
 # ---------------------------------------------------------------------- #
@@ -229,6 +232,65 @@ class CreateConnectionRequest(BaseModel):
     psu_id: Optional[str] = None
 
 
+class RefreshAllConnectionsRequest(BaseModel):
+    confirmation: str
+    reason: Optional[str] = None
+
+
+def _connection_freshness(as_of: Optional[datetime]) -> str:
+    if as_of is None:
+        return "unknown"
+    value = as_of.replace(tzinfo=None) if as_of.tzinfo else as_of
+    return "fresh" if datetime.utcnow() - value <= timedelta(hours=48) else "stale"
+
+
+@router.get("/status")
+async def open_finance_status(
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """DB-only, one row per consent connection; never merges bank totals."""
+    connections = db.query(BankConnection).filter(
+        BankConnection.organization_id == org_id,
+    ).order_by(BankConnection.created_at).all()
+    output = []
+    for connection in connections:
+        accounts = db.query(Account).filter(
+            Account.organization_id == org_id,
+            Account.source == "open_finance",
+            Account.open_finance_connection_id == connection.connection_id,
+        ).all()
+        account_ids = [account.id for account in accounts]
+        transaction_count = 0
+        if account_ids:
+            transaction_count = db.query(BankTransaction).filter(
+                BankTransaction.organization_id == org_id,
+                BankTransaction.source == "open_finance",
+                BankTransaction.account_id.in_(account_ids),
+            ).count()
+        observed = [a.balance_as_of for a in accounts if a.balance_as_of]
+        as_of = max(observed) if observed else connection.last_refresh_at
+        output.append({
+            **_bank_connection_dict(connection),
+            "accounts_count": len(accounts),
+            "transactions_count": transaction_count,
+            "as_of": as_of.isoformat() if as_of else None,
+            "freshness": _connection_freshness(as_of),
+        })
+    unmapped_accounts = db.query(Account).filter(
+        Account.organization_id == org_id,
+        Account.source == "open_finance",
+        Account.open_finance_connection_id.is_(None),
+    ).count()
+    return {
+        "organization_id": org_id,
+        "connections": output,
+        "count": len(output),
+        "unmapped_accounts_count": unmapped_accounts,
+        "mapping_complete": unmapped_accounts == 0,
+    }
+
+
 @router.post("/connections")
 async def create_connection(
     body: CreateConnectionRequest,
@@ -348,6 +410,79 @@ async def list_connections(
     return {"items": [_bank_connection_dict(r) for r in rows], "count": len(rows)}
 
 
+@router.post("/connections/refresh-all")
+async def refresh_all_connections(
+    body: RefreshAllConnectionsRequest,
+    org_id: int = Depends(get_current_org_id),
+    admin=Depends(require_admin),
+    db: Session = Depends(get_db_session),
+):
+    """Costed provider refresh: exact confirmation + durable 20h claim.
+
+    This endpoint does not run from page load, chat, or the CLI.  It exists as
+    an explicit operator action and claims its cooldown before provider access,
+    so a failure cannot be hammered repeatedly.
+    """
+    if body.confirmation != REFRESH_ALL_CONFIRMATION:
+        raise HTTPException(
+            400,
+            {
+                "error": "exact_confirmation_required",
+                "confirmation": REFRESH_ALL_CONFIRMATION,
+                "cost_credits": 20,
+            },
+        )
+
+    # Reuse the same cross-instance advisory-lock + durable checkpoint gate as
+    # provider-backed cron operations.  Importing lazily avoids a route cycle.
+    from .cron import _claim_periodic_provider_budget
+
+    skipped = _claim_periodic_provider_budget(
+        db,
+        org_id=org_id,
+        source="open_finance",
+        entity_type="manual_refresh_all",
+        interval_hours=settings.of_sync_min_interval_hours,
+    )
+    if skipped:
+        raise HTTPException(429, {
+            "error": skipped.get("skipped", "refresh_budget_unavailable"),
+            "detail": "Open Finance refresh-all is limited to one claimed attempt per 20 hours.",
+        })
+
+    client = None
+    try:
+        client = get_open_finance_client(db, org_id)
+        result = await _call(client.refresh_all_connections())
+        db.add(AuditLog(
+            user_id=admin.id,
+            organization_id=org_id,
+            action="OPEN_FINANCE_REFRESH_ALL",
+            entity_type="BankConnection",
+            details={
+                "cost_credits": 20,
+                "reason": body.reason,
+                "result": "provider_accepted",
+            },
+        ))
+        db.commit()
+        return {"accepted": True, "cost_credits": 20, "provider_response": result}
+    except Exception:
+        db.rollback()
+        db.add(AuditLog(
+            user_id=admin.id,
+            organization_id=org_id,
+            action="OPEN_FINANCE_REFRESH_ALL_FAILED",
+            entity_type="BankConnection",
+            details={"cost_credits": 20, "reason": body.reason},
+        ))
+        db.commit()
+        raise
+    finally:
+        if client is not None:
+            await client.close()
+
+
 @router.get("/connections/{connection_id}")
 async def get_connection(connection_id: str, org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session)):
     """Onboarding-status polling stays live (consent journeys change fast),
@@ -429,15 +564,14 @@ async def list_accounts(
     """RSF-030: served entirely from OUR DB — Open Finance accounts land here
     daily via the sync engine (`Account.source == "open_finance"`,
     `external_id` prefixed `open_finance:`). No Open Finance client is built
-    for this route at all. `connection_id` isn't stored on `Account` today so
-    it can't be honoured as a filter; it's accepted but ignored rather than
-    silently misfiltering."""
-    rows = (
-        db.query(Account)
-        .filter(Account.organization_id == org_id, Account.source == "open_finance")
-        .order_by(Account.id)
-        .all()
+    for this route at all.  `connection_id` is provider evidence persisted by
+    the normal account sync; legacy NULL rows are never guessed into a bank."""
+    query = db.query(Account).filter(
+        Account.organization_id == org_id, Account.source == "open_finance",
     )
+    if connection_id:
+        query = query.filter(Account.open_finance_connection_id == connection_id)
+    rows = query.order_by(Account.id).all()
     return {"items": [_account_dict(r) for r in rows], "count": len(rows)}
 
 
@@ -465,13 +599,17 @@ async def list_transactions(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     next_page: Optional[str] = None,
+    cursor: Optional[str] = None,
+    connection_id: Optional[str] = None,
+    provider_id: Optional[str] = None,
+    type: Optional[str] = Query(None, pattern="^(BANK|CARD)$"),
+    limit: int = Query(50, ge=1, le=500),
     org_id: int = Depends(get_current_org_id), db: Session = Depends(get_db_session),
 ):
     """RSF-030: served from OUR DB (`BankTransaction.source == "open_finance"`)
     via `bank_query_service`. No Open Finance client is built for this route.
-    `next_page` has no meaning against a local table (there is no provider
-    pagination cursor to resume) and is accepted-but-ignored rather than
-    faked."""
+    Pagination is a local offset cursor, deliberately distinct from the
+    provider cursor: normal reads never call Open Finance."""
     local_account_id = None
     if account_id:
         acc = (
@@ -484,13 +622,49 @@ async def list_transactions(
             .first()
         )
         local_account_id = acc.id if acc else -1  # no match -> filter to nothing, don't ignore the param
+    requested_cursor = cursor or next_page
+    try:
+        offset = int(requested_cursor or "0")
+        if offset < 0:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(400, "Invalid local cursor")
     result = bank_query_service.query_bank_transactions(
         db, org_id,
         date_from=date_from, date_to=date_to,
         source="open_finance", account_id=local_account_id,
-        limit=500,
+        connection_id=connection_id, provider_id=provider_id,
+        txn_type=type, limit=limit, offset=offset,
     )
-    return {"items": result["transactions"], "count": result["count"], "total_amount": result["total_amount"]}
+    return {
+        "items": result["transactions"], "count": result["count"],
+        "total_amount": result["total_amount"], "next_cursor": result["next_cursor"],
+    }
+
+
+@router.get("/transactions/{transaction_id}")
+async def get_transaction(
+    transaction_id: str,
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    row = bank_query_service.get_bank_transaction(db, org_id, transaction_id)
+    if row is None:
+        raise HTTPException(404, "Transaction not found")
+    return row
+
+
+@router.get("/categories")
+async def transaction_categories(
+    refresh: bool = Query(False),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    return await _cached_get(
+        db, org_id, "transaction_categories",
+        lambda c: c.list_transaction_categories(), refresh=refresh,
+        max_age_hours=24 * 30,
+    )
 
 
 @router.get("/monthly-report")
@@ -734,6 +908,8 @@ async def create_payment(
         ActionValidationError,
     ) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ActionAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     client = get_open_finance_client(db, org_id)
     try:
@@ -804,6 +980,8 @@ async def create_payment(
                     error=str(exc.detail),
                 )
             raise
+        except ActionAuthorizationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
     finally:
         await client.close()
 
@@ -1403,6 +1581,7 @@ def _account_dict(r: Account) -> dict:
     return {
         "id": r.id,
         "external_id": r.external_id,
+        "connection_id": r.open_finance_connection_id,
         "name": r.name,
         "account_type": getattr(r.account_type, "value", r.account_type),
         "raw_account_type": r.raw_account_type,

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import {
   AlertTriangle,
@@ -416,13 +416,13 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
   const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
 
-  const goToLogin = () => {
+  const goToLogin = useCallback(() => {
     setMode('login');
     setTimeout(
       () => document.getElementById('signup')?.scrollIntoView({ behavior: 'smooth' }),
       50,
     );
-  };
+  }, []);
 
   // Open directly in login mode when arriving at /login (or any *login* path/hash).
   useEffect(() => {
@@ -433,19 +433,18 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
     ) {
       goToLogin();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [goToLogin]);
 
   const selectedPlanName = useMemo(
     () => plans.find((plan) => plan.id === selectedPlan)?.name || plans[1].name,
     [selectedPlan],
   );
 
-  const completeLogin = (data: TokenResponse) => {
+  const completeLogin = useCallback((data: TokenResponse) => {
     localStorage.setItem('auth_token', data.access_token);
     localStorage.setItem('rezef_selected_plan', selectedPlan);
     onSuccess();
-  };
+  }, [onSuccess, selectedPlan]);
 
   const checkoutSessionId = checkout?.checkout_session_id;
   const paymentStatus = checkout?.payment_status;
@@ -527,7 +526,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
     }
   };
 
-  const handleGoogleCredential = async (credential?: string) => {
+  const handleGoogleCredential = useCallback(async (credential?: string) => {
     if (!credential) return;
     setError(null);
     setLoading(true);
@@ -549,7 +548,16 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [
+    annualReportRequested,
+    annualRevenue,
+    checkoutSessionId,
+    completeLogin,
+    paymentStatus,
+    paymentTemplate,
+    registrationCode,
+    selectedPlan,
+  ]);
 
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID || !googleButtonRef.current) return;
@@ -580,7 +588,7 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
     script.defer = true;
     script.onload = render;
     document.head.appendChild(script);
-  }, [mode, registrationCode, selectedPlan, checkoutSessionId, paymentStatus]);
+  }, [handleGoogleCredential, mode]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
