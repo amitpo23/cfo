@@ -113,7 +113,20 @@ async def test_error_names_the_setting_that_reopens_it(client, budget_off, monke
 
 @pytest.mark.asyncio
 async def test_budget_above_zero_still_allows_the_call(client, budget_on, monkeypatch):
-    """השער הוא מתג כיבוי, לא חסימה קבועה — עם תקציב הקריאה עוברת."""
+    """השער הוא מתג כיבוי, לא חסימה קבועה — עם תקציב הקריאה עוברת.
+
+    מ-17/08/2026 קיים שער שני ובלתי-תלוי: מכסת הספק בפועל
+    (`ActionsBilling/Operations`, נקראת מ-listquotas). הטסט הזה בודק את
+    **מתג הכיבוי**, ולכן הוא מזריק מדידת מכסה תקפה — ולא מבטל את השער
+    השני. שני השערים חייבים להיפתח כדי שפעולה בתשלום תצא.
+    """
+    from datetime import datetime, timezone
+    from cfo.services.sumit_quota import QuotaSnapshot
+
+    client.quota_snapshot = QuotaSnapshot(
+        organization_id=1, used=0, limit=50,
+        measured_at=datetime.now(timezone.utc),
+    )
     sent = []
 
     async def _post(path, payload=None, **kwargs):

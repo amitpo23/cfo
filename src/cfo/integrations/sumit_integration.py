@@ -75,6 +75,15 @@ class PlaceholderCredentialsRefused(RuntimeError):
     """A request was attempted with an obviously fake API key. Never sent."""
 
 
+class SumitRateCeilingRefused(RuntimeError):
+    """The per-org/global request ceiling refused this call. Never sent.
+
+    Distinct from the caller-level budget gates in cron/services: this one
+    lives at the single network chokepoint, so no caller — new service,
+    manual script, console — can bypass it.
+    """
+
+
 class SumitRequestBudgetRequired(RuntimeError):
     """A real outbound request lacked the shared durable request limiter."""
 
@@ -307,6 +316,23 @@ class SumitIntegration(BaseIntegration):
                 "too. Configure a real key, or use a fake connector in tests."
             )
 
+    def _assert_within_provider_quota(self, action: str) -> None:
+        """**האיסור המוחלט** — נמדד מול המכסה בפועל, לא מול מספר מוסכם.
+
+        קריאה חינמית ל-`listquotas` על תיק עמית פורת (17/08/2026) החזירה
+        `ActionsBilling/Operations: Usage 0, Quota 50`. התקרה שהייתה
+        בקוד היא 25 **ליום לארגון** — כלומר גדולה מהמכסה עצמה אם ה-50
+        חודשיים. זה מסביר את ₪62.23/יום שחויבו ב-17/07.
+
+        `quota_snapshot` מוזרק על ידי הקורא מהמדידה היומית. `None` —
+        כלומר אין מדידה — **חוסם**: מכסה לא-ידועה אינה מכסה פנויה.
+        """
+        from ..services.sumit_quota import assert_paid_action_within_quota
+
+        assert_paid_action_within_quota(
+            getattr(self, "quota_snapshot", None), endpoint=action,
+        )
+
     @staticmethod
     def _assert_paid_actions_enabled(action: str) -> None:
         """Kill-switch for billed per-document SUMIT actions.
@@ -374,6 +400,18 @@ class SumitIntegration(BaseIntegration):
         (e.g. /accounting/documents/getpdf/) and return the bytes.
         """
         self._assert_credentials_are_real(endpoint)
+        # `_post_binary` פותח חיבור בעצמו ואינו עובר ב-`_make_request`,
+        # ולכן הוא **חייב שער משלו**. עד 17/08/2026 הוא לא תפס מכסה כלל
+        # — והמסלול היחיד שעובר כאן הוא `/accounting/documents/getpdf/`,
+        # שהיא פעולה **בתשלום פר-מסמך**. כלומר המסלול היקר ביותר היה
+        # היחיד בלי תקרה.
+        if self.request_limiter is None:
+            raise SumitRequestBudgetRequired(
+                "SUMIT request refused: shared request budget is not configured",
+            )
+        # תפיסה סינכרונית לפני יצירת ה-coroutine, זהה ל-`_make_request`:
+        # אין בקשה עד שהמשבצת העמידה נרשמה.
+        self.request_limiter.claim(endpoint)
         data = self._with_credentials(payload or {})
         response = await self.client.post(endpoint, json=data)
         try:
@@ -783,6 +821,7 @@ class SumitIntegration(BaseIntegration):
             PDF content as bytes
         """
         self._assert_paid_actions_enabled("getpdf")
+        self._assert_within_provider_quota("getpdf")
         return await self._post_binary(
             "/accounting/documents/getpdf/",
             {
@@ -802,6 +841,7 @@ class SumitIntegration(BaseIntegration):
             DocumentResponse with document details
         """
         self._assert_paid_actions_enabled("getdetails")
+        self._assert_within_provider_quota("getdetails")
         data = await self._post(
             "/accounting/documents/getdetails/",
             {"DocumentID": self._to_int(document_id)}
@@ -1027,6 +1067,7 @@ class SumitIntegration(BaseIntegration):
         document — everything PCN874 needs, only reachable via getdetails.
         """
         self._assert_paid_actions_enabled("getdetails")
+        self._assert_within_provider_quota("getdetails")
         data = await self._post(
             "/accounting/documents/getdetails/",
             {"DocumentID": self._to_int(document_id)}
