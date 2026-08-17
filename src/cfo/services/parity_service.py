@@ -45,6 +45,66 @@ SUMIT_CROSSCHECK_TOLERANCE = 1.0
 
 INSIGHT_TYPE = "parity_mismatch"
 
+# ==================================================================== #
+# רישום הבדיקות — מקור אמת יחיד לריצה היומית **ולצ'ק-ליסט של מושקו**
+# ==================================================================== #
+# `run_daily_parity` מריצה מכאן, ו-`render_parity_checklist_he` מייצרת
+# מכאן את docs/bookkeeper_kb/14-parity-check.md. שני כיוונים נאכפים ב-
+# tests/test_parity_checklist_generated.py, כדי שלא יחזור הכשל של
+# kb_loader: מסמכים שנכתבו, לא נרשמו, והטסטים המשיכו לעבור בזמן שמושקו
+# לא ראה אותם.
+#
+# `compares` הוא השדה שעונה על השאלה "איזו צלע של המשולש נבדקה" — הוא מה
+# שחשף ששתי צלעות מדלגות בשקט בזמן שההכרעה ירוקה.
+PARITY_CHECKS: tuple[dict[str, str], ...] = (
+    {
+        "key": "freshness",
+        "title_he": "טריות הסנכרון",
+        "compares": "חותמות סנכרון SUMIT ו-Open Finance מול השעון",
+        "blocks_he": (
+            f"מקור שלא סונכרן מעל {STALE_SYNC_HOURS} שעות. אז כל הבדיקות "
+            "הבאות מסומנות לא-סמכותיות — הן מדווחות אך אינן מכריעות."
+        ),
+    },
+    {
+        "key": "of_balance_walk",
+        "title_he": "הילוך יתרות הבנק",
+        "compares": "יתרת החשבון בפועל (Open Finance) מול snapshot אחרון + תנועות מאז",
+        "blocks_he": "אין חשבונות Open Finance מחוברים, או אין snapshot קודם → skipped.",
+    },
+    {
+        "key": "internal_double_computation",
+        "title_he": "רו״ה בשתי דרכי חישוב",
+        "compares": "רצף מול רצף — מצטבר-יומי מול חישוב ישיר על אותה אוכלוסייה",
+        "blocks_he": (
+            "ארבעה אפסים בשני הצדדים → unknown, לא ok. אין נתונים אינו "
+            "התאמה."
+        ),
+    },
+    {
+        "key": "sumit_crosscheck",
+        "title_he": "הצלבה מול ספרי SUMIT",
+        "compares": "מע״מ תשומות/עסקאות ברצף מול ערכי SUMIT שהוקלדו (FilingCrosscheck)",
+        "blocks_he": (
+            "אין רשומת FilingCrosscheck לתקופה → skipped. זו הצלע שדורשת "
+            "הקלדה ידנית מהפורטל, ולכן היא הצלע שנוטה להיעדר."
+        ),
+    },
+)
+
+
+def render_parity_checklist_he() -> str:
+    """מייצר את גוף הצ'ק-ליסט. נכתב לדיסק ע"י scripts/render_bookkeeper_kb.py."""
+    lines = [
+        "| # | בדיקה | מה מושווה מול מה | מה חוסם / מה מדלג |",
+        "|---|-------|------------------|--------------------|",
+    ]
+    for idx, c in enumerate(PARITY_CHECKS, start=1):
+        lines.append(
+            f"| {idx} | **{c['title_he']}** | {c['compares']} | {c['blocks_he']} |"
+        )
+    return "\n".join(lines)
+
 
 def sync_freshness(
     db,
@@ -341,9 +401,27 @@ def _check_internal_double_computation(db, org_id: int, as_of: date) -> dict[str
     diff_exp = abs(cp_expense - direct["expense"])
     tolerance = INTERNAL_DOUBLE_COMPUTATION_TOLERANCE
     ok = diff_rev <= tolerance and diff_exp <= tolerance
-    status = "ok" if ok else "mismatch"
 
-    if ok:
+    # honest-null: ארבעה אפסים אינם הוכחת עקביות אלא היעדר נתון. בלי השער
+    # הזה הבדיקה מחזירה "ok" על ארגון ריק — ומדווחת הצלחה על כך שלא בדקה
+    # דבר. זה קרה בפועל: org1/org2 מסתנכרנים כל יום (ולכן הטריות ירוקה)
+    # אך אין להם פקודות יומן, ולכן הריצה של 03:45 הכריזה "ok" בזמן ששתי
+    # הצלעות האחרות "skipped". אותה תבנית fail-open כמו spent_today=None.
+    no_data = (
+        cp_revenue == 0.0 and cp_expense == 0.0
+        and direct["revenue"] == 0.0 and direct["expense"] == 0.0
+    )
+    if no_data:
+        status = "unknown"
+    else:
+        status = "ok" if ok else "mismatch"
+
+    if no_data:
+        details_he = (
+            "אין נתונים להשוואה בחודש זה — שתי דרכי החישוב החזירו אפס בהכנסות "
+            "ובהוצאות. זו אינה התאמה אלא היעדר בסיס לבדיקה."
+        )
+    elif ok:
         details_he = "שתי דרכי החישוב (מצטבר-יומי מול ישיר) תואמות על הכנסות והוצאות החודש."
     else:
         parts = []
@@ -420,16 +498,42 @@ def run_daily_parity(db, organization_id: int, as_of: date) -> dict[str, Any]:
     freshness_check, authoritative = _check_freshness(db, organization_id)
     checks: list[dict[str, Any]] = [freshness_check]
 
-    for fn in (_check_of_balance_walk, _check_internal_double_computation, _check_sumit_crosscheck):
-        c = fn(db, organization_id, as_of)
+    # נגזר מ-PARITY_CHECKS ולא מ-tuple מקודד-קשיח: כך בדיקה חמישית שתתווסף
+    # לרישום תרוץ בפועל, ובדיקה שתרוץ בלי להיות ברישום תיתפס בטסט.
+    # `freshness` כבר רץ למעלה (הוא מכתיב authoritative לשאר).
+    for spec in PARITY_CHECKS:
+        if spec["key"] == "freshness":
+            continue
+        c = globals()[f"_check_{spec['key']}"](db, organization_id, as_of)
         c["authoritative"] = authoritative
+        c["title_he"] = spec["title_he"]
+        c["compares"] = spec["compares"]
         checks.append(c)
 
     mismatched = any(c["status"] == "mismatch" and c.get("authoritative", True) for c in checks)
+
+    # honest-null בהכרעה הכוללת: "ok" מחייב שלפחות בדיקה מהותית אחת
+    # **באמת השוותה** משהו. הטריות אינה כזו — היא מוכיחה שסנכרון רץ, לא
+    # שהמספרים תואמים.
+    #
+    # בלי השער הזה התקבל בפועל:
+    #   freshness=ok · of_balance_walk=skipped ·
+    #   internal_double_computation=ok(0 מול 0) · sumit_crosscheck=skipped
+    #   → status="ok"
+    # שתי צלעות דילגו, השלישית השוותה אפס לאפס, וההכרעה ירוקה. דוח כזה
+    # גרוע מהיעדר דוח: הוא סוגר התראות (check_and_alert עושה resolve על
+    # "ok") על בסיס שתיקה, ומאמן את הקורא להתעלם.
+    substantive = [c for c in checks if c["name"] != "freshness"]
+    proved_something = any(
+        c["status"] == "ok" and c.get("authoritative", True) for c in substantive
+    )
+
     if mismatched:
         status = "mismatch"
     elif freshness_check["status"] == "stale":
         status = "stale"
+    elif not proved_something:
+        status = "unknown"
     else:
         status = "ok"
 
