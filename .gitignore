@@ -82,6 +82,9 @@ cfo.db.*.bak
 # צילומי פרוד וסודות — נתוני לקוחות אמיתיים. לעולם לא ב-git.
 prod-snapshot.sql
 *-snapshot.sql
+# scripts/run_prod_migration.sh יוצר בדיוק את השם הזה לפני כל מיגרציה.
+# בלי הדפוס הזה, `git add -A` סוחף 16MB נתוני לקוח לריפו — וזה כמעט קרה.
+neondb-pre-migrate-*.sql
 .env.prod
 .env.*.local
 docker-compose.override.yml
