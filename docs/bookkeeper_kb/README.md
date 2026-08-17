@@ -20,6 +20,9 @@
 | [09-sumit-operations-map.md](09-sumit-operations-map.md) | מפת הפעולות: 🟢 API · 🔵 מחושב ברצף · 🔴 דפדפן בלבד | **לפני שעונים "אני יכול לעשות X"** |
 | [10-month-end-close.md](10-month-end-close.md) | סגירת חודש — 11 שלבים ותנאי מעבר | "תסגור חודש", "מה הסטטוס", לפני דיווח |
 | [11-updating-sumit.md](11-updating-sumit.md) | **איך נתונים נכנסים ל-SUMIT** — מסלולים, עלות מכסה, ומלכודות | "איך זה מגיע לסאמיט", לפני כל כתיבה לספרים ולפני דיווח |
+| [12-workflow-expense-classification.md](12-workflow-expense-classification.md) | **תהליך** — סיווג ותיוק הוצאה | "תסווג הוצאות", לפני קליטת מנה |
+| [13-workflow-bank-reconciliation.md](13-workflow-bank-reconciliation.md) | **תהליך** — התאמת בנקים | "תתאים את הבנק", לפני סגירת חודש |
+| [14-parity-check.md](14-parity-check.md) | **התאמת מאזן רצף ↔ SUMIT** — למה מספר אינו מוכן לדיווח בלעדיה | **לפני כל מסירת מאזן בוחן ולפני כל דיווח** |
 
 ## כללי המשמעת
 

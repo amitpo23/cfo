@@ -276,12 +276,22 @@ async def _get_trial_balance(db, org_id: int, *, start: str | None = None,
     )
     payload = report.as_dict() if hasattr(report, "as_dict") else dict(report)
     payload["source"] = "rezef_ledger"
-    payload["is_final"] = bool(payload.get("balanced"))
-    if not payload["is_final"]:
-        payload["not_final_reason"] = (
-            "המאזן אינו מאוזן או שקיימות תנועות שטרם נסגרו במנה. "
-            "אין לדווח לפי מספר זה בלי בדיקה."
-        )
+    payload["balanced"] = bool(payload.get("balanced"))
+
+    # SUMIT אינה חושפת קריאת מאזן בוחן בשום הרשאה, ולכן רצף **אינה
+    # יכולה** לאמת תכנותית שהמספר תואם לספר הרשמי. הגרסה הראשונה קבעה
+    # `is_final` על סמך חובה=זכות בלבד — וזה מדד את הדבר הלא-נכון:
+    # מאזן יכול להיות מאוזן אצלנו ובכל זאת לא לתאום, למשל כשפקודה
+    # נשלחה ב-createbatch, חזרה `executed_unverified`, ולא נקלטה.
+    payload["sumit_parity"] = "not_checked"
+    payload["is_final"] = bool(payload["balanced"]) and payload["sumit_parity"] == "verified"
+    payload["not_final_reason"] = (
+        "המספר מחושב מהספרים של רצף ו**לא הוצלב מול SUMIT**. SUMIT היא "
+        "התוכנה המאושרת שמפיקה את הדיווח, ואין ב-API שלה קריאת מאזן — "
+        "ההצלבה נעשית מול מאזן שמורידים מהפורטל. שים לב גם למנות פתוחות: "
+        "מאזן שהופק כשהן פתוחות כולל אותן ואינו סופי. "
+        "אין לדווח לפי מספר זה לפני הצלבה."
+    )
     return payload
 
 
