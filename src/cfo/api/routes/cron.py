@@ -171,6 +171,43 @@ async def _run_sync_targets(db: Session, targets: set) -> list:
     return results
 
 
+def _resolve_sumit_key(db: Session, org_id: int) -> Optional[str]:
+    """המפתח שהארגון באמת ישתמש בו — אותו מסלול בדיוק כמו
+    `data_sync_service._get_sumit_client`, כולל הכלל שאישורי-סביבה שייכים
+    לארגון 1 בלבד. פתרון שונה כאן היה מייצר חלון על מפתח אחד בזמן
+    שהריצה משתמשת באחר, כלומר מגבלה שאינה חוסמת דבר."""
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    creds = org.api_credentials if org and org.api_credentials else {}
+    env_allowed = org_id == 1
+    return creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
+
+
+def _per_key_daily_gate(db: Session, org_id: int) -> Optional[dict]:
+    """שער ריצת-הסנכרון היומית **לכל מפתח** (הנחיית הבעלים, 17/08/2026).
+
+    `_daily_budget_gate` חוסם לפי (ארגון, מקור). אבל `SUMIT_OFFICE_API_KEY`
+    הוא הגדרה גלובלית אחת המשרתת את כל הארגונים — ולכן N ארגונים יכולים
+    כל אחד לעבור את השער הקיים ולשרוף את **אותו** מפתח. המכסה בתשלום היא
+    50, ולכן זה בדיוק המסלול שגרם לחיוב.
+
+    השער כאן נתבע פר טביעת-אצבע של המפתח, אטומית בין instances.
+    """
+    from ...services.sumit_request_budget import (
+        SumitRequestBudgetError,
+        claim_daily_sync_run,
+    )
+
+    api_key = _resolve_sumit_key(db, org_id)
+    try:
+        claim_daily_sync_run(api_key, organization_id=org_id)
+    except SumitRequestBudgetError as exc:
+        return {
+            "organization_id": org_id, "source": "sumit",
+            "status": "skipped", "reason": str(exc),
+        }
+    return None
+
+
 def _daily_budget_gate(db: Session, org_id: int, source: str) -> Optional[dict]:
     """Return a skip-result dict if this org/source already had a successful
     full sync within the configured interval, else None to proceed.
@@ -331,8 +368,14 @@ async def scheduled_sync_sumit(db: Session = Depends(get_db_session)):
         gated = _daily_budget_gate(db, org_id, source)
         if gated:
             results.append(gated)
-        else:
-            to_run.add((org_id, source))
+            continue
+        # שער שני, בלתי-תלוי: ריצה אחת ביום **למפתח**. הראשון חוסם לפי
+        # ארגון ולכן אינו רואה שני ארגונים החולקים את מפתח המשרד.
+        key_gated = _per_key_daily_gate(db, org_id)
+        if key_gated:
+            results.append(key_gated)
+            continue
+        to_run.add((org_id, source))
 
     results.extend(await _run_sync_targets(db, to_run))
     return {"synced": len(results), "repaired_roster": repaired_roster, "results": results}

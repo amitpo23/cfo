@@ -307,13 +307,22 @@ def clear_sumit_sync_budget():
     שלא שוחזר ב-5 ריצות חוזרות. במקום לרדוף אחרי המזהם, הטסט שולט בתנאי שלו.
     """
     from cfo.database import SessionLocal
-    from cfo.models import SyncCheckpoint
+    from cfo.models import ProviderRequestBudget, SyncCheckpoint
 
     db = SessionLocal()
     try:
         db.query(SyncCheckpoint).filter(
             SyncCheckpoint.organization_id == 1,
             SyncCheckpoint.source == "sumit",
+        ).delete(synchronize_session=False)
+        # מ-17/08/2026 קיים שער שני ובלתי-תלוי: ריצת סנכרון אחת ביום
+        # **למפתח** (cron._per_key_daily_gate). הוא נתפס ברמת המפתח ולא
+        # ברמת הארגון, ולכן ניקוי ה-SyncCheckpoint לבדו אינו משחרר אותו —
+        # הטסט הראשון היה תופס את החלון והשני היה נחסם בסיבה שאינה קשורה
+        # למה שהוא בודק. אותו נימוק בדיוק שהוליד את ה-fixture הזה.
+        db.query(ProviderRequestBudget).filter(
+            ProviderRequestBudget.provider == "sumit",
+            ProviderRequestBudget.window_kind == "day",
         ).delete(synchronize_session=False)
         db.commit()
     finally:

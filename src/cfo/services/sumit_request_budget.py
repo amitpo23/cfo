@@ -6,6 +6,7 @@ the same burst and paid-action budget instead of each keeping a local counter.
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -27,6 +28,74 @@ class SumitRequestBudgetExceeded(SumitRequestBudgetError):
 
 class SumitRequestBudgetUnavailable(SumitRequestBudgetError):
     """The durable counter could not be proven/updated."""
+
+
+# ריצת סנכרון אחת ביום לכל מפתח (הנחיית הבעלים, 17/08/2026). המספר עצמו
+# הוא ההנחיה — לא ערך ניתן-לכיוונון שנשחק בהדרגה, ולכן הוא קבוע ולא Setting.
+DAILY_SYNC_RUNS_PER_KEY = 1
+
+
+def key_fingerprint(api_key: str | None) -> str:
+    """טביעת-אצבע חד-כיוונית של מפתח API, לשימוש כ-`scope_key`.
+
+    למה hash ולא המפתח: `scope_key` נכתב ל-DB ומופיע בלוגים ובהודעות
+    שגיאה. מפתח שנשמר שם הוא מפתח שדלף.
+
+    למה יציב בין תהליכים: כל instance של Vercel תובע את אותו חלון. hash
+    לא-דטרמיניסטי (כמו `hash()` של פייתון, שמשתנה בין תהליכים) היה נותן
+    לכל instance חלון משלו — כלומר מגבלה שאינה קיימת.
+    """
+    if not isinstance(api_key, str) or not api_key.strip():
+        # fail-closed ובקול: מפתח ריק היה ממפה את כל הארגונים לאותו חלון,
+        # כך שארגון בלי מפתח היה חוסם את כל השאר.
+        raise SumitRequestBudgetUnavailable(
+            "לא ניתן לתבוע חלון סנכרון יומי בלי מפתח SUMIT תקף",
+        )
+    digest = hashlib.sha256(api_key.strip().encode("utf-8")).hexdigest()
+    return f"key:{digest[:16]}"
+
+
+def claim_daily_sync_run(api_key: str | None, *, organization_id: int) -> None:
+    """תובע את חלון הסנכרון היומי **של המפתח**. נקרא פעם אחת בתחילת ריצה.
+
+    זו אינה מגבלת בקשות-HTTP: ריצה אחת מוציאה עשרות בקשות (עימוד, ריבוי
+    ישויות), ומגבלה מילולית של בקשה אחת הייתה שוברת את הסנכרון. המגבלה
+    היא על **הריצה**.
+
+    למה פר-מפתח ולא פר-ארגון: `SumitRequestLimiter.claim` תובע לפי
+    `org:{id}`, אבל `SUMIT_OFFICE_API_KEY` הוא הגדרה גלובלית אחת המשרתת
+    את כל הארגונים. עם scope לפי ארגון, N ארגונים שורפים כל אחד מכסה
+    מלאה על אותו מפתח — והמכסה בתשלום היא 50.
+    """
+    scope_key = key_fingerprint(api_key)
+    now = datetime.now(timezone.utc)
+    _, day_start = _utc_windows(now)
+    db = SessionLocal()
+    try:
+        with db.begin():
+            claimed = SumitRequestLimiter._claim_window(
+                db,
+                scope_key=scope_key,
+                organization_id=organization_id,
+                window_kind="day",
+                window_start=day_start,
+                limit_value=DAILY_SYNC_RUNS_PER_KEY,
+                now=now,
+            )
+        if not claimed:
+            raise SumitRequestBudgetExceeded(
+                f"מפתח SUMIT זה כבר ביצע את ריצת הסנכרון היומית שלו "
+                f"({DAILY_SYNC_RUNS_PER_KEY}/יום). הריצה נדחתה — לא נשלחה "
+                "שום בקשה. הנתונים ברצף הם המראה של המשיכה האחרונה."
+            )
+    except SumitRequestBudgetError:
+        raise
+    except SQLAlchemyError as exc:
+        raise SumitRequestBudgetUnavailable(
+            "חלון הסנכרון היומי לא ניתן לתביעה; הריצה נדחתה",
+        ) from exc
+    finally:
+        db.close()
 
 
 def _utc_windows(now: datetime) -> tuple[datetime, datetime]:
