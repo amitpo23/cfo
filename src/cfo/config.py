@@ -154,7 +154,14 @@ class Settings(BaseSettings):
     # ocr_daily_document_limit's role for the background pipeline).
     chat_receipt_daily_limit: int = 20
     # AI chat assistant (Wave 2 Step 9) — same anthropic_api_key as OCR above.
-    ai_chat_model: str = "claude-sonnet-5"
+    # Haiku 4.5 — המודל הזול ביותר. הכרעת בעלים 17/08/2026, כשיתרת
+    # החשבון עמדה על $1.92. זה אינו רק חיסכון: חשבון שנגמר באמצע יום
+    # עבודה משבית את מושקו לגמרי, בלי אזהרה. ברירת מחדל יקרה היא סיכון
+    # זמינות, לא רק סיכון תקציב.
+    #
+    # נשאר משתנה סביבה (`AI_CHAT_MODEL`) — משימה שדורשת מודל חזק יותר
+    # יכולה להעלות אותו נקודתית.
+    ai_chat_model: str = "claude-haiku-4-5-20251001"
     # JSON object keyed by exact model id. Rates are USD per one million
     # tokens: input_per_million_usd, output_per_million_usd and, when cache
     # tokens occur, cache_read_per_million_usd/cache_creation_per_million_usd.
