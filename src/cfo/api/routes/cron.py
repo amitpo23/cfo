@@ -672,18 +672,37 @@ def run_bookkeeper_morning(
     אם המחזור כבר הושלם היום לארגון זה)."""
     from ...services.morning_cycle_service import run_all_organizations, run_morning_cycle
 
+    # זריעת אינדקס הידע — צעד גלובלי אחד, לפני הלולאה הפר-ארגונית. הידע
+    # מקצועי ולא נתוני לקוח, ולכן אינו מוכפל פר ארגון.
+    #
+    # למה כאן: ה-KB משתנה רק בפריסה, וקריאת 25 קבצים היא זולה. בלי זריעה
+    # `kb_index.search` נופל תמיד חזרה לקבצים והאינדקס הוא משקל מת.
+    #
+    # כשל כאן **אינו** מפיל את המחזור: האחזור עדיין עובד דרך הקבצים.
+    kb_seed: dict = {}
+    try:
+        from ...services import kb_index as _kb_index
+        kb_seed = _kb_index.reindex(db)
+    except Exception as exc:  # pragma: no cover - נתיב עמידות
+        logger.warning("KB reindex skipped: %s", exc)
+        db.rollback()
+        kb_seed = {"error": str(exc)}
+
     today = date.today()
     if org_id is not None:
         try:
             result = run_morning_cycle(db, org_id, today, force=force)
-            return {"status": "ok", "orgs": 1, "results": [result], "errors": []}
+            return {"status": "ok", "orgs": 1, "results": [result],
+                    "errors": [], "kb_index": kb_seed}
         except Exception as exc:
             logger.error("Bookkeeper morning cycle failed for org %s: %s", org_id, exc)
             db.rollback()
             return {"status": "ok", "orgs": 1, "results": [],
                     "errors": [{"organization_id": org_id, "error": str(exc)}]}
 
-    return run_all_organizations(db, today, force=force)
+    outcome = run_all_organizations(db, today, force=force)
+    outcome["kb_index"] = kb_seed
+    return outcome
 
 
 @router.get("/cron/bank-gap-scan", dependencies=[Depends(_verify_cron_secret)])

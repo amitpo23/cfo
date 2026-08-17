@@ -27,6 +27,18 @@ export PATH="/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:$PAT
 [ -x .venv/bin/python ] || die ".venv חסר. הרץ: python3 -m venv .venv && .venv/bin/pip install -e ."
 ok "‎.env.prod ו-.venv קיימים"
 
+# היעד נגזר מ-alembic ולא מקובע. גרסה קודמת קיבעה 05c6d7e8f9a0 בשני
+# מקומות — כך שה-revision הבא היה גורם לסקריפט לדווח כישלון על ריצה
+# מוצלחת, ומאמן את הבעלים לא להאמין לפסיקה שלו.
+TARGET=$(PYTHONPATH=src .venv/bin/python -c "
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+heads = ScriptDirectory.from_config(Config('alembic.ini')).get_heads()
+print(heads[0] if len(heads) == 1 else '')
+" 2>/dev/null)
+[ -n "$TARGET" ] || die "אין head יחיד ב-alembic — יש לפתור לפני מיגרציה בפרוד"
+ok "יעד המיגרציה (נגזר מ-alembic): $TARGET"
+
 DB=$(grep -E '^DATABASE_URL=' .env.prod | head -1 | cut -d= -f2- | tr -d '"')
 JWT=$(grep -E '^JWT_SECRET_KEY=' .env.prod | head -1 | cut -d= -f2- | tr -d '"')
 [ ${#DB}  -gt 20 ] || die "DATABASE_URL ריק ב-.env.prod"
@@ -84,8 +96,8 @@ AFTER=$(docker run --rm -e PGURL="$DB" postgres:17-alpine \
 echo
 echo "  לפני:  ${BEFORE:-?}"
 echo "  אחרי:  ${AFTER:-?}"
-echo "  יעד:   05c6d7e8f9a0"
-if [ "$AFTER" = "05c6d7e8f9a0" ]; then
+echo "  יעד:   $TARGET"
+if [ "$AFTER" = "$TARGET" ]; then
   ok "המיגרציה הושלמה והגיעה ל-head היעד."
 else
   warn "ה-revision אינו היעד. **אל תריץ downgrade** — הוא מוחק טבלאות ואינו משחזר נתונים."

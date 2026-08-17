@@ -1992,6 +1992,48 @@ class TenantDatabase(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class KbChunk(Base):
+    """אינדקס מרכז הידע — קטע אחד לכל סעיף במסמך KB רשום.
+
+    **למה ב-DB ולא רק בקבצים.** `kb_loader.kb_search` סורק קבצי markdown
+    בכל בקשה עם regex. ה-DB נותן אחזור אינדקסי (טריגרמים), ומאפשר גם
+    תצוגה — לשאול "מה מושקו יודע" בלי לקרוא את הדיסק.
+
+    **הרישום נשאר `kb_loader.KB_CENTERS`.** הטבלה נזרעת ממנו ואינה רישום
+    שני — רישום כפול הוא בדיוק איך שמסמכים 07–11 נעשו בלתי-נראים.
+
+    **אין embedding.** ל-Anthropic אין API של embeddings, וספק נוסף הוא
+    עלות שלא אושרה. `content` נבדק לקסיקלית (`pg_trgm`; ל-PostgreSQL אין
+    תצורת חיפוש-טקסט לעברית — אומת מול פרוד). עמודת embedding ריקה בלי
+    כותב הייתה נקראת כיכולת קיימת, ולכן אינה כאן.
+
+    **גלובלי ולא פר-ארגון בכוונה:** זהו ידע מקצועי (דיני מס, נהלים),
+    לא נתוני לקוח. אין כאן `organization_id` — הוספתו הייתה מרמזת על
+    בידוד שאינו רלוונטי ומכפילה את אותו תוכן פר ארגון.
+    """
+    __tablename__ = "kb_chunks"
+
+    id = Column(Integer, primary_key=True)
+    center_key = Column(String(64), nullable=False)
+    filename = Column(String(255), nullable=False)
+    section_index = Column(Integer, nullable=False)
+    heading = Column(Text, nullable=False)
+    content = Column(Text, nullable=False)
+    title_he = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        # ייחודי פר (מרכז, קובץ, סעיף) — כך שזריעה חוזרת היא upsert ולא
+        # שכפול. בלעדיו האינדקס היה גדל בכל פריסה וכל חיפוש היה מחזיר את
+        # אותה פסקה שוב ושוב.
+        UniqueConstraint(
+            "center_key", "filename", "section_index",
+            name="uq_kb_chunk_center_file_section",
+        ),
+        Index("ix_kb_chunk_center_file", "center_key", "filename"),
+    )
+
+
 # Pydantic Models for API
 
 # ============= Organization Models =============
