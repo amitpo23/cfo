@@ -54,7 +54,17 @@ def test_alembic_upgrade_head_builds_a_complete_fresh_database(tmp_path):
         revision = connection.execute(
             sa.text("SELECT version_num FROM alembic_version")
         ).scalar_one()
-    assert revision == "05c6d7e8f9a0"
+    # ה-head נגזר מ-alembic ולא מקובע. ערך קשיח כאן חייב עריכה בכל
+    # revision חדש, ועד שנזכרים — הטסט מדווח כישלון על מיגרציה תקינה.
+    # אותו ליקוי בדיוק תוקן ב-scripts/run_prod_migration.sh.
+    from alembic.config import Config as _AlembicConfig
+    from alembic.script import ScriptDirectory as _ScriptDirectory
+
+    heads = _ScriptDirectory.from_config(
+        _AlembicConfig(str(ROOT / "alembic.ini"))
+    ).get_heads()
+    assert len(heads) == 1, f"יותר מ-head אחד: {heads}"
+    assert revision == heads[0]
     account_indexes = {
         index["name"]: index
         for index in sa.inspect(engine).get_indexes("accounts")

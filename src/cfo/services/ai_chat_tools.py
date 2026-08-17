@@ -737,13 +737,21 @@ async def _verify_filing(
 
 
 async def _kb_lookup(db, org_id: int, *, query: str | None = None, **_kwargs) -> dict:
-    """מרכז ידע חשבונאי/מיסויי (docs/bookkeeper_kb + docs/sumit_help_kb) —
-    חיפוש keyword על פני קבצי ה-KB בפועל. אין query -> אינדקס המרכזים
-    (כמו rezef_kb.get_topic(None)). honest-null אם ה-KB לא ארוז בסביבה זו."""
-    from .kb_loader import kb_index, kb_search
+    """מרכז ידע חשבונאי/מיסויי (docs/bookkeeper_kb + docs/sumit_help_kb).
+
+    מ-17/08/2026 החיפוש עובר דרך `kb_index` — אחזור אינדקסי מה-DB במקום
+    סריקת regex על הקבצים בכל בקשה. `kb_index.search` נופל אוטומטית חזרה
+    לקבצים כשהאינדקס ריק (סביבה חדשה, זריעה שטרם רצה), ולכן זו אינה
+    נקודת כשל חדשה.
+
+    אין query -> אינדקס המרכזים (כמו rezef_kb.get_topic(None)).
+    honest-null אם ה-KB לא ארוז בסביבה זו.
+    """
+    from .kb_index import search as index_search
+    from .kb_loader import kb_index
     if not query or not query.strip():
         return kb_index()
-    return kb_search(query)
+    return index_search(query)
 
 
 async def _rezef_help(db, org_id: int, *, topic: str | None = None, **_kwargs) -> dict:
