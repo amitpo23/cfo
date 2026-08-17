@@ -912,7 +912,11 @@ class DailySnapshot(Base):
     unreconciled_count = Column(Integer, nullable=True)
     open_expense_drafts = Column(Integer, nullable=True)
     exceptions_over_48h = Column(Integer, nullable=True)
-    parity_status = Column(String(20), nullable=True)  # ok | mismatch | stale
+    # ok | mismatch | stale | unknown
+    # "unknown" = שום בדיקה מהותית לא השוותה דבר (ר' parity_service). הוא
+    # נשמר ככל הכרעה אחרת — ריצה שלא הוכיחה כלום חייבת להותיר עקבה מדידה,
+    # אחרת אין מגמה ואי-אפשר לדעת מתי הפער נסגר.
+    parity_status = Column(String(20), nullable=True)
     credit_headroom = Column(Numeric(precision=14, scale=2), nullable=True)
     credit_breach_date = Column(Date, nullable=True)
     cycle_status = Column(String(10), nullable=True)  # green | yellow | red

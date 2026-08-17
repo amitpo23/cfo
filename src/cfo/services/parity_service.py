@@ -19,8 +19,17 @@
    מולה (אותה נוסחה כמו filing_verification.verify_filing בדיקה 3); אחרת —
    skipped, לא כשל (אין הצלבה מוקלטת עדיין).
 
-תוצאה כוללת: "ok" | "mismatch" | "stale". mismatch גובר תמיד; stale רק אם
-שום בדיקה סמכותית לא נכשלה בפועל; אחרת ok.
+תוצאה כוללת: "mismatch" | "stale" | "unknown" | "ok", בסדר קדימות זה.
+
+"unknown" נוסף ב-17/08/2026 אחרי שהתגלה fail-open: על ארגון מסונכרן-אך-ריק
+הריצה החזירה `freshness=ok · of_balance_walk=skipped ·
+internal_double_computation=ok(0 מול 0) · sumit_crosscheck=skipped` → "ok".
+שתי צלעות דילגו, השלישית השוותה אפס לאפס, וההכרעה ירוקה — בעוד
+`check_and_alert` סוגר התראות על "ok". דוח שלא בדק דבר סגר התראות אמיתיות.
+
+לכן: "ok" מחייב שלפחות בדיקה **מהותית** אחת השוותה בפועל. הטריות אינה
+כזו — היא מוכיחה שסנכרון רץ, לא שהמספרים תואמים. "unknown" הוא no-op גמור
+בהתראות (לא מתריע ולא סוגר), אך **כן נשמר** ב-DailySnapshot.parity_status.
 """
 from __future__ import annotations
 
