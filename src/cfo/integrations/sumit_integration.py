@@ -316,6 +316,23 @@ class SumitIntegration(BaseIntegration):
                 "too. Configure a real key, or use a fake connector in tests."
             )
 
+    def _assert_within_provider_quota(self, action: str) -> None:
+        """**האיסור המוחלט** — נמדד מול המכסה בפועל, לא מול מספר מוסכם.
+
+        קריאה חינמית ל-`listquotas` על תיק עמית פורת (17/08/2026) החזירה
+        `ActionsBilling/Operations: Usage 0, Quota 50`. התקרה שהייתה
+        בקוד היא 25 **ליום לארגון** — כלומר גדולה מהמכסה עצמה אם ה-50
+        חודשיים. זה מסביר את ₪62.23/יום שחויבו ב-17/07.
+
+        `quota_snapshot` מוזרק על ידי הקורא מהמדידה היומית. `None` —
+        כלומר אין מדידה — **חוסם**: מכסה לא-ידועה אינה מכסה פנויה.
+        """
+        from ..services.sumit_quota import assert_paid_action_within_quota
+
+        assert_paid_action_within_quota(
+            getattr(self, "quota_snapshot", None), endpoint=action,
+        )
+
     @staticmethod
     def _assert_paid_actions_enabled(action: str) -> None:
         """Kill-switch for billed per-document SUMIT actions.
@@ -804,6 +821,7 @@ class SumitIntegration(BaseIntegration):
             PDF content as bytes
         """
         self._assert_paid_actions_enabled("getpdf")
+        self._assert_within_provider_quota("getpdf")
         return await self._post_binary(
             "/accounting/documents/getpdf/",
             {
@@ -823,6 +841,7 @@ class SumitIntegration(BaseIntegration):
             DocumentResponse with document details
         """
         self._assert_paid_actions_enabled("getdetails")
+        self._assert_within_provider_quota("getdetails")
         data = await self._post(
             "/accounting/documents/getdetails/",
             {"DocumentID": self._to_int(document_id)}
@@ -1048,6 +1067,7 @@ class SumitIntegration(BaseIntegration):
         document — everything PCN874 needs, only reachable via getdetails.
         """
         self._assert_paid_actions_enabled("getdetails")
+        self._assert_within_provider_quota("getdetails")
         data = await self._post(
             "/accounting/documents/getdetails/",
             {"DocumentID": self._to_int(document_id)}
