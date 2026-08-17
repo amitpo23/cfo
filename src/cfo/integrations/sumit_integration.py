@@ -75,6 +75,15 @@ class PlaceholderCredentialsRefused(RuntimeError):
     """A request was attempted with an obviously fake API key. Never sent."""
 
 
+class SumitRateCeilingRefused(RuntimeError):
+    """The per-org/global request ceiling refused this call. Never sent.
+
+    Distinct from the caller-level budget gates in cron/services: this one
+    lives at the single network chokepoint, so no caller — new service,
+    manual script, console — can bypass it.
+    """
+
+
 class SumitRequestBudgetRequired(RuntimeError):
     """A real outbound request lacked the shared durable request limiter."""
 
@@ -374,6 +383,18 @@ class SumitIntegration(BaseIntegration):
         (e.g. /accounting/documents/getpdf/) and return the bytes.
         """
         self._assert_credentials_are_real(endpoint)
+        # `_post_binary` פותח חיבור בעצמו ואינו עובר ב-`_make_request`,
+        # ולכן הוא **חייב שער משלו**. עד 17/08/2026 הוא לא תפס מכסה כלל
+        # — והמסלול היחיד שעובר כאן הוא `/accounting/documents/getpdf/`,
+        # שהיא פעולה **בתשלום פר-מסמך**. כלומר המסלול היקר ביותר היה
+        # היחיד בלי תקרה.
+        if self.request_limiter is None:
+            raise SumitRequestBudgetRequired(
+                "SUMIT request refused: shared request budget is not configured",
+            )
+        # תפיסה סינכרונית לפני יצירת ה-coroutine, זהה ל-`_make_request`:
+        # אין בקשה עד שהמשבצת העמידה נרשמה.
+        self.request_limiter.claim(endpoint)
         data = self._with_credentials(payload or {})
         response = await self.client.post(endpoint, json=data)
         try:
