@@ -110,6 +110,11 @@ export default function VatReportScreen() {
   const [downloading, setDownloading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [crosscheckInput, setCrosscheckInput] = useState('');
+  // מע"מ עסקאות. עד 18/08/2026 המסך שלח **רק** תשומות, ולכן
+  // `_check_sumit_crosscheck` לעולם לא השווה את צד העסקאות — חצי
+  // מההצלבה היה בלתי-אפשרי להזנה. אופציונלי בשרת, ולכן נשלח רק
+  // כשהוקלד: מספר ריק ≠ אפס.
+  const [crosscheckOutput, setCrosscheckOutput] = useState('');
   const [crosschecking, setCrosschecking] = useState(false);
 
   const verifyUrl = `/api/daily-reports/vat/verify?year=${year}&month=${month}&months=${months}&basis=${basis}`;
@@ -144,10 +149,18 @@ export default function VatReportScreen() {
     if (Number.isNaN(value)) return;
     setCrosschecking(true);
     try {
+      const outRaw = crosscheckOutput.trim();
+      const outValue = outRaw === '' ? undefined : parseFloat(outRaw);
+      if (outValue !== undefined && Number.isNaN(outValue)) return;
       await api.post('/api/daily-reports/vat/crosscheck', {
-        year, month, months, basis, books_input_vat: value,
+        year, month, months, basis,
+        books_input_vat: value,
+        // honest-null: לא נשלח 0 כשלא הוקלד. אפס הוא הצהרה שאין
+        // עסקאות; ריק הוא "לא נבדק", והשרת מבחין ביניהם.
+        ...(outValue !== undefined ? { books_output_vat: outValue } : {}),
       });
       setCrosscheckInput('');
+      setCrosscheckOutput('');
       const v = await api.get<Verification>(verifyUrl);
       setVerification(v);
     } catch (e: any) {
