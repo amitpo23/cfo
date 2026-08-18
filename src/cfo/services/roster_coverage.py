@@ -40,6 +40,25 @@ STALE_AFTER_HOURS = 48
 # הכשל שהפיל אותה ומעוותת כל ספירה לפי סטטוס.
 ZOMBIE_AFTER_HOURS = 6
 
+# סף "פספס את הסנכרון של היום" — צר מ-STALE_AFTER_HOURS בכוונה.
+#
+# בקרת הנשירה (48ש') נועדה לתפוס תיק שנשר לשבועות (org2 ב-17/07, org3
+# ב-06/07). היא **אינה** תופסת כשל של יום אחד.
+#
+# החשבון שקובע את המספר: הסנכרון רץ ב-01:30 UTC והבקרה ב-05:30 UTC.
+#   • ריצה תקינה של אותו בוקר ⇒ גיל 4 שעות  — אסור להתריע
+#   • ריצה שפוספסה             ⇒ גיל 28 שעות — חייב להתריע
+# לכן הסף חייב לשבת בין 4 ל-28. 26 נותן מרווח של שעתיים לעיכוב cron
+# ומזדהה עם STALE_SYNC_HOURS של parity_service — אותו חלון, אותה משמעות.
+#
+# זה קרה בפועל ב-18/08: שער-המפתח דילג על org2 ו-org5 במשך יממה,
+# והבקרה של 05:30 לא התריעה כי הגיל היה 28 והסף היה 48.
+MISSED_DAILY_AFTER_HOURS = 26
+
+# סוג ההתראה שנשמרת ב-CfoInsight. שם נפרד מ-parity_mismatch כדי ששני
+# הסוגים לא יסגרו זה את זה.
+INSIGHT_TYPE = "sync_coverage"
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -336,3 +355,104 @@ def assert_intake_allowed(
     )
     if conflict:
         raise IntakeConflict(f"קליטת {company_id} נחסמה: {conflict}")
+
+
+# --------------------------------------------------------------------------
+# פספוס סנכרון יומי + עקבה ב-DB
+# --------------------------------------------------------------------------
+def missed_daily_sync(db: Session) -> list[dict[str, Any]]:
+    """ארגונים עם חיבור SUMIT **פעיל** שלא סונכרנו מעל MISSED_DAILY_AFTER_HOURS.
+
+    חיבור `paused`/`inactive` אינו נספר: הוא כבר מדווח ע"י בקרת הנשירה,
+    ודיווח כפול על אותו ארגון מייצר רעש שמאמן להתעלם.
+    """
+    from ..models import IntegrationConnection, SyncCheckpoint
+    from .sync_engine import SOURCE_CHECKPOINT_ENTITY
+
+    out: list[dict[str, Any]] = []
+    conns = db.query(IntegrationConnection).filter(
+        IntegrationConnection.source == "sumit",
+        IntegrationConnection.status == "active",
+    ).all()
+    for conn in conns:
+        cp = db.query(SyncCheckpoint).filter(
+            SyncCheckpoint.organization_id == conn.organization_id,
+            SyncCheckpoint.source == "sumit",
+            SyncCheckpoint.entity_type == SOURCE_CHECKPOINT_ENTITY,
+        ).first()
+        hours = _hours_since(cp.last_success_at) if cp else None
+        # honest-null: אין checkpoint כלל ⇒ מעולם לא סונכרן. זה ממצא,
+        # לא היעדר ממצא.
+        if hours is None or hours > MISSED_DAILY_AFTER_HOURS:
+            out.append({
+                "organization_id": conn.organization_id,
+                "hours_since": round(hours, 1) if hours is not None else None,
+            })
+    return out
+
+
+def persist_coverage_findings(db: Session) -> dict[str, Any]:
+    """שומר את ממצאי הכיסוי כ-CfoInsight — עקבה שאינה תלויה בערוץ.
+
+    **למה זה קיים.** `scheduled_roster_health` שולח **רק** דרך
+    `push_to_organization` (טלגרם/וואטסאפ). כל הערוצים ריקים בפרוד, ולכן
+    הבקרה חישבה ממצא מדויק וזרקה אותו. עקבה ב-DB נראית ב-UI תמיד.
+
+    fingerprint פר-ארגון (לא פר-חודש): פספוס סנכרון הוא מצב מתמשך, לא
+    אירוע תקופתי — הרצה חוזרת מעדכנת ואינה מכפילה. חזרה לסנכרון סוגרת.
+    """
+    from ..models import CfoInsight, IntegrationConnection
+
+    missed = {m["organization_id"]: m for m in missed_daily_sync(db)}
+    now = datetime.utcnow()
+    created, resolved = [], []
+
+    active_org_ids = {
+        c.organization_id
+        for c in db.query(IntegrationConnection).filter(
+            IntegrationConnection.source == "sumit",
+            IntegrationConnection.status == "active",
+        ).all()
+    }
+
+    for org_id in sorted(active_org_ids):
+        fingerprint = f"sync_coverage:missed_daily:{org_id}"
+        row = db.query(CfoInsight).filter(
+            CfoInsight.organization_id == org_id,
+            CfoInsight.fingerprint == fingerprint,
+        ).first()
+
+        if org_id in missed:
+            hours = missed[org_id]["hours_since"]
+            age = f"{hours:.0f} שעות" if hours is not None else "מעולם"
+            message = (
+                f"סנכרון SUMIT האחרון היה לפני {age}. הסף הוא "
+                f"{MISSED_DAILY_AFTER_HOURS} שעות — כלומר יום עבודה אבד. "
+                "יש לבדוק את שערי ה-cron לפני שהפער מצטבר."
+            )
+            if row is None:
+                row = CfoInsight(
+                    organization_id=org_id, fingerprint=fingerprint,
+                    insight_type=INSIGHT_TYPE, severity="high",
+                    title="ארגון לא סונכרן היום", message=message,
+                    evidence=missed[org_id], status="active",
+                )
+                db.add(row)
+            else:
+                row.severity = "high"
+                row.message = message
+                row.evidence = missed[org_id]
+                if row.status == "resolved":
+                    row.status = "active"
+                    row.resolved_at = None
+                row.updated_at = now
+            created.append(org_id)
+        elif row is not None and row.status == "active":
+            row.status = "resolved"
+            row.resolved_at = now
+            row.updated_at = now
+            resolved.append(org_id)
+
+    if created or resolved:
+        db.commit()
+    return {"missed": created, "recovered": resolved}

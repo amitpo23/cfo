@@ -832,6 +832,7 @@ async def scheduled_roster_health(db: Session = Depends(get_db_session)):
     from ...services.channel_notifier import push_to_organization
     from ...services.roster_coverage import (
         coverage_alert_lines,
+        persist_coverage_findings,
         roster_coverage_report,
     )
 
@@ -841,6 +842,17 @@ async def scheduled_roster_health(db: Session = Depends(get_db_session)):
 
     report = roster_coverage_report(db, office_organization_id=office_org_id)
     lines = coverage_alert_lines(report)
+
+    # עקבה ב-DB **לפני** ה-push. הדחיפה היא לערוץ שיחה, וכל הערוצים
+    # ריקים בפרוד — כלומר עד היום הבקרה חישבה ממצא מדויק וזרקה אותו.
+    # CfoInsight נראה ב-UI בלי תלות בטלגרם/וואטסאפ. כשל בשמירה אינו
+    # מפיל את הבקרה.
+    try:
+        coverage = persist_coverage_findings(db)
+    except Exception as exc:  # pragma: no cover - נתיב עמידות
+        logger.error("Coverage persistence failed: %s", exc)
+        db.rollback()
+        coverage = {"error": str(exc)}
 
     pushed = False
     if lines:
@@ -853,4 +865,5 @@ async def scheduled_roster_health(db: Session = Depends(get_db_session)):
             logger.error("Roster health push failed: %s", exc)
             db.rollback()
 
-    return {"report": report, "alerted": pushed, "alert_lines": lines}
+    return {"report": report, "alerted": pushed, "alert_lines": lines,
+            "coverage": coverage}
