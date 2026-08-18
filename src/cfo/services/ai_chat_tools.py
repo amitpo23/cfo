@@ -172,6 +172,54 @@ async def _get_ar_aging(db, org_id: int, **_kwargs) -> dict:
     return DashboardService(db, org_id).get_ar_aging()
 
 
+async def _get_ap_aging(db, org_id: int, **_kwargs) -> dict:
+    """AP aging עם דגל תנועת-בנק פר-חשבון (ר' DashboardService.get_ap_aging
+    לממצא ולנימוק). קריאה בלבד."""
+    from .dashboard_service import DashboardService
+    return DashboardService(db, org_id).get_ap_aging()
+
+
+async def _set_vehicle_profile(
+    db, org_id: int, *, label: str, vehicle_kind: str,
+    primarily_business: bool | None = None,
+    attached_to_employee_with_use_value: bool = False,
+    **_kwargs,
+) -> dict:
+    """יצירה/עדכון של פרופיל רכב — עיקר-השימוש קובע ניכוי מע"מ תשומות
+    רכב (israeli_tax_rules.claimable_vat, KB02 §1).
+
+    **honest-null, לא רק כלפי חוץ.** `primarily_business=None` הוא
+    ברירת המחדל בחתימת הפונקציה עצמה — לא רק תיעוד. אם המודל לא מילא
+    אותו כי המשתמש לא אמר במפורש, הוא נשאר None ו-`claimable_vat` ממשיך
+    לתור הכרעה, בדיוק כמו היום. הכלי לעולם אינו מנחש 'עסקי בעיקר'
+    מברירת מחדל.
+
+    upsert לפי (org, label) — שיחה חוזרת על אותו רכב מעדכנת, לא מכפילה.
+    """
+    from ..models import VehicleProfile
+
+    row = db.query(VehicleProfile).filter(
+        VehicleProfile.organization_id == org_id,
+        VehicleProfile.label == label,
+    ).first()
+    if row is None:
+        row = VehicleProfile(organization_id=org_id, label=label)
+        db.add(row)
+    row.vehicle_kind = vehicle_kind
+    row.primarily_business = primarily_business
+    row.attached_to_employee_with_use_value = attached_to_employee_with_use_value
+    db.commit()
+    db.refresh(row)
+
+    return {
+        "status": "saved",
+        "vehicle_profile": {
+            "id": row.id, "label": row.label, "vehicle_kind": row.vehicle_kind,
+            "primarily_business": row.primarily_business,
+        },
+    }
+
+
 async def _get_ap_bills(db, org_id: int, days_ahead: int = 30, **_kwargs) -> dict:
     from .dashboard_service import DashboardService
     return {"bills": DashboardService(db, org_id).get_ap_bills(days_ahead=days_ahead)}
@@ -1306,6 +1354,47 @@ TOOLS: dict[str, ChatTool] = {
         input_schema={"type": "object", "properties": {}},
         category="read",
         fn=_get_ar_aging,
+    ),
+    "get_ap_aging": ChatTool(
+        name="get_ap_aging",
+        description=(
+            "דוח גיול חובות לספקים (AP aging) — יתרות פתוחות לפי טווחי "
+            "איחור, עם דגל bank_movement_seen פר-חשבון: True = יש תנועת "
+            "בנק תואמת (כנראה עיכוב סנכרון, הכסף כבר יצא); False = אין "
+            "שום תנועת בנק — סיכון אמיתי שדורש תשומת לב."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_ap_aging,
+    ),
+    "set_vehicle_profile": ChatTool(
+        name="set_vehicle_profile",
+        description=(
+            "יצירה/עדכון פרופיל רכב (עיקר-שימוש עסקי/פרטי) — קובע ניכוי "
+            "מע\"מ תשומות רכב. השתמש בו רק אחרי שהמשתמש אמר במפורש את "
+            "עיקר השימוש; אל תמלא primarily_business מברירת מחדל או "
+            "מניחוש. פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "label": {"type": "string", "description": "כינוי/מספר רישוי לזיהוי הרכב"},
+                "vehicle_kind": {
+                    "type": "string",
+                    "enum": ["private", "commercial", "taxi", "rental",
+                             "driving_school", "dealer_stock"],
+                },
+                "primarily_business": {
+                    "type": ["boolean", "null"],
+                    "description": "רק אם המשתמש אמר במפורש — אחרת השאר null",
+                },
+                "attached_to_employee_with_use_value": {"type": "boolean"},
+            },
+            "required": ["label", "vehicle_kind"],
+        },
+        category="write",
+        policy_action="expenses.manage_vehicle_profile",
+        fn=_set_vehicle_profile,
     ),
     "get_ap_bills": ChatTool(
         name="get_ap_bills",

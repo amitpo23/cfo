@@ -564,6 +564,83 @@ class DashboardService:
             "invoices": sorted(invoice_list, key=lambda x: x["days_overdue"], reverse=True),
         }
 
+    def get_ap_aging(self) -> dict:
+        """AP aging buckets: 0-30, 31-60, 61-90, 90+ — מראה זהה בדיוק
+        ל-get_ar_aging, כדי שמושקו לא ילמד שני מבנים.
+
+        **הפער שסגר את זה (18/08/2026):** הבעלים ביקש הבחנה בין חשבון
+        ספק פתוח **עם** תנועת בנק תואמת (כנראה עיכוב סנכרון — הכסף כבר
+        יצא) לבין חשבון ספק פתוח **בלי** שום תנועת בנק (סיכון אמיתי).
+        `bank_movement_seen` נגזר מ-`BankTransaction.matched_entity_type
+        == 'bill'` — קריאה בלבד, אינו יוצר Payment ואינו כותב, אותו
+        מנוע קריאה כמו get_bank_reconciliation.
+        """
+        today = date.today()
+
+        open_bills = self.db.query(Bill).filter(
+            Bill.organization_id == self.org_id,
+            Bill.status.in_([
+                BillStatus.RECEIVED, BillStatus.APPROVED,
+                BillStatus.OVERDUE, BillStatus.PARTIALLY_PAID,
+            ]),
+            Bill.balance > 0,
+        ).all()
+
+        bill_ids = [b.id for b in open_bills]
+        matched_bill_ids = set()
+        if bill_ids:
+            matched_bill_ids = {
+                row[0] for row in self.db.query(BankTransaction.matched_entity_id)
+                .filter(
+                    BankTransaction.organization_id == self.org_id,
+                    BankTransaction.is_reconciled.is_(True),
+                    BankTransaction.matched_entity_type == "bill",
+                    BankTransaction.matched_entity_id.in_(bill_ids),
+                ).all()
+            }
+
+        buckets = {"0_30": Decimal("0"), "31_60": Decimal("0"),
+                  "61_90": Decimal("0"), "90_plus": Decimal("0")}
+        bucket_counts = {"0_30": 0, "31_60": 0, "61_90": 0, "90_plus": 0}
+        bill_list = []
+
+        for bill in open_bills:
+            days_overdue = 0
+            if bill.due_date:
+                days_overdue = max(0, (today - bill.due_date).days)
+
+            vendor_name = None
+            if bill.vendor_id:
+                vendor = self.db.get(Contact, bill.vendor_id)
+                if vendor:
+                    vendor_name = vendor.name
+
+            key = ("0_30" if days_overdue <= 30 else
+                  "31_60" if days_overdue <= 60 else
+                  "61_90" if days_overdue <= 90 else "90_plus")
+            buckets[key] += bill.balance
+            bucket_counts[key] += 1
+
+            bill_list.append({
+                "id": bill.id,
+                "bill_number": bill.bill_number,
+                "vendor": vendor_name,
+                "balance": float(bill.balance),
+                "days_overdue": days_overdue,
+                "bank_movement_seen": bill.id in matched_bill_ids,
+            })
+
+        total = sum(buckets.values())
+        return {
+            "bucket_0_30": float(buckets["0_30"]),
+            "bucket_31_60": float(buckets["31_60"]),
+            "bucket_61_90": float(buckets["61_90"]),
+            "bucket_90_plus": float(buckets["90_plus"]),
+            "total": float(total),
+            "count": len(bill_list),
+            "bills": sorted(bill_list, key=lambda x: x["days_overdue"], reverse=True),
+        }
+
     # ===== AP =====
 
     def _get_ap_summary(self) -> tuple:

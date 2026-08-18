@@ -152,7 +152,10 @@ def test_send_message_with_persona_passes_persona_prompt_to_the_client(monkeypat
 
         system_prompt = fake.messages.calls[0]["system"]
         assert "מנהלת חשבונות" in system_prompt
-        assert "רואה חשבון" not in system_prompt
+        # מ-18/08/2026 "רואה חשבון" מופיע גם ב-BASE (ערנות חשבונאית
+        # תמידית, לא תלוית-כובע) — ולכן הבידוד הנכון לבדוק הוא תוספת
+        # הכובע הייחודית של accountant, לא המחרוזת הגסה.
+        assert "בכובע רואה חשבון (Accountant)" not in system_prompt
     finally:
         db.close()
 

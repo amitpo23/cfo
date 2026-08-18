@@ -43,6 +43,10 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
         # שנוספו איתו הם read: הראשון מחשב מה-ledger של רצף, השני
         # מחזיר honest-null על פער הספק.
         "propose_books_batch",
+        # נוסף במודע 18/08/2026: עדכון פרופיל רכב משנה את
+        # VehicleProfile.primarily_business — עובדת-מס שקובעת ניכוי
+        # מע"מ תשומות רכב בפועל (israeli_tax_rules.claimable_vat).
+        "set_vehicle_profile",
     }
 
 
