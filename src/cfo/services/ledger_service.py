@@ -67,6 +67,11 @@ IMPORT_SOURCES: tuple[str, ...] = ("hashavshevet_mdb",)
 IMPORT_SUSPENSE_ACCOUNT = "9999"
 IMPORT_SUSPENSE_NAME_HE = "הפרשי יבוא לבירור"
 
+# כמה הוצאות אוחדו מול חשבון ספק בריצה האחרונה, פר ארגון. נכתב ע"י
+# build_journal ונקרא ע"י trial_balance — הדרך הפשוטה לחשוף את המספר
+# בלי לשנות את חתימת build_journal, שקוראים רבים תלויים בה.
+_LAST_DEDUP_COUNT: dict[int, int] = {}
+
 @dataclass
 class Entry:
     entry_date: Optional[date]
@@ -437,6 +442,14 @@ def build_journal(db, organization_id: int, *, start: Optional[date] = None,
         if e:
             entries.append(e)
 
+    # מזהי החשבונות שנרשמו בפועל — הבסיס לדה-דופליקציה מול ההוצאות.
+    #
+    # הממצא (17/08/2026, נמדד בפרוד): אותו מסמך SUMIT נקלט **לשתי**
+    # הטבלאות, ושתי הלולאות רשמו אותו. org1: 893 מסמכים ₪804,928 ·
+    # org2: 320 ₪665,272 · org5: 83 ₪645,021 — סה"כ ₪2,115,221 נספרים
+    # פעמיים. ב-org2 זה **כל** ההוצאות של התיק.
+    posted_bill_keys: set[str] = set()
+
     for bill in db.query(Bill).filter(Bill.organization_id == organization_id).all():
         status = getattr(bill.status, "value", bill.status)
         if str(status).lower() in _SKIP_BILL:
@@ -446,11 +459,22 @@ def build_journal(db, organization_id: int, *, start: Optional[date] = None,
         e = post_bill(bill)
         if e:
             entries.append(e)
+            # רק חשבון שנרשם בפועל חוסם הוצאה. חשבון מדולג (טיוטה/מבוטל,
+            # או מחוץ לתקופה) אינו רשומה בספרים, ולכן אינו רשאי להשתיק
+            # את ההוצאה המקבילה — אחרת הסכום היה נעלם משני הצדדים.
+            if bill.external_id:
+                posted_bill_keys.add(str(bill.external_id))
 
+    deduplicated = 0
     for exp in db.query(Expense).filter(Expense.organization_id == organization_id).all():
         if str(getattr(exp, "status", "") or "").lower() == "error":
             continue
         if not _in_period(exp.expense_date, start, end):
+            continue
+        # `external_id` ריק אינו מזהה. איחוד לפי NULL היה מכווץ את כל
+        # המסמכים חסרי-המזהה לאחד — נזק חמור בהרבה מהכפילות עצמה.
+        if exp.external_id and str(exp.external_id) in posted_bill_keys:
+            deduplicated += 1
             continue
         e = post_expense(exp)
         if e:
@@ -480,6 +504,9 @@ def build_journal(db, organization_id: int, *, start: Optional[date] = None,
             entries.append(e)
 
     entries.sort(key=lambda e: (e.entry_date or date.max))
+    # נחשף ל-trial_balance כדי שהאיחוד יהיה גלוי ולא שקט. תיקון שמשנה
+    # מספרים בלי לדווח עליו הוא תיקון שאיש אינו יכול לבקר.
+    _LAST_DEDUP_COUNT[organization_id] = deduplicated
     return entries
 
 
@@ -533,6 +560,7 @@ def trial_balance(db, organization_id: int, *, start: Optional[date] = None,
         "entry_count": len(entries),
         "derived": True,
         "disclaimer": DISCLAIMER,
+        "deduplicated_documents": _LAST_DEDUP_COUNT.get(organization_id, 0),
         "includes_imported": bool(imported),
         "imported_entry_count": len(imported),
     }
