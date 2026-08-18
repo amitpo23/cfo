@@ -21,8 +21,17 @@ def test_office_credentials_are_separate_fields():
 
 def test_office_credentials_default_to_none_not_to_the_org_key():
     """honest-null: בלי הגדרה מפורשת אין מפתח משרד. נפילה חזרה ל-
-    `sumit_api_key` הייתה שולחת קריאות ברמת משרד עם מפתח של תיק בודד."""
-    settings = Settings(sumit_api_key="org-level-key", sumit_company_id="439924597")
+    `sumit_api_key` הייתה שולחת קריאות ברמת משרד עם מפתח של תיק בודד.
+
+    `_env_file=None` מבודד מקבצי המעטפה. בלעדיו הטסט נשען על כך
+    שלמפתח אין ערך אצל המפתח/ת — והוא נשבר ברגע שמפתח משרד אמיתי נכנס
+    ל-`.env.local` (קרה ב-18/08/2026). הכוונה נשמרת: מה שנבדק הוא
+    היעדר **נפילה** מ-`sumit_api_key`, לא ריקנות הסביבה.
+    """
+    settings = Settings(
+        sumit_api_key="org-level-key", sumit_company_id="439924597",
+        _env_file=None,
+    )
 
     assert settings.sumit_office_api_key is None
     assert settings.sumit_office_company_id is None
