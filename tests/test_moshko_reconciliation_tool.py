@@ -50,6 +50,32 @@ async def test_it_reports_matched_and_unmatched(client, fresh_org):
 
 
 @pytest.mark.asyncio
+async def test_an_unmatched_transaction_is_actually_counted(client, fresh_org):
+    """**לא רק שהמפתח קיים — שהוא נכון.** הטסט הקודם בדק key-presence
+    בלבד, וזה החמיץ שהמפתח הפנימי האמיתי הוא unmatched_txns, לא
+    unmatched — כלומר הכלי דיווח 0 תמיד, בכל תרחיש, מאז שנבנה. נתפס רק
+    ע"י בדיקת מכלול חוצה-כלים (18/08/2026), לא ע"י הטסט הזה עצמו."""
+    from datetime import date
+
+    from cfo.database import SessionLocal
+    from cfo.models import BankTransaction
+
+    db = SessionLocal()
+    org_id = fresh_org()["org_id"]
+    db.add(BankTransaction(
+        organization_id=org_id, amount=-350.0,
+        transaction_date=date(2026, 5, 1), description="עמלת בנק ללא מסמך",
+    ))
+    db.commit()
+
+    result = await TOOLS["get_bank_reconciliation"].fn(db, org_id)
+
+    assert result["unmatched"] >= 1, (
+        f"תנועה ללא מסמך תואם נעלמה — unmatched={result['unmatched']}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_it_does_not_persist_matches(client, fresh_org):
     """שער נגדי מדיד: קריאה לכלי לא מסמנת תנועות כמותאמות ב-DB."""
     from datetime import date

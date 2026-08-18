@@ -816,7 +816,12 @@ async def _get_bank_reconciliation(db, org_id: int, **_kwargs) -> dict:
 
     result = reconcile_organization(db, org_id, persist=False)
     matches = result.get("matches") or []
-    unmatched = result.get("unmatched") or result.get("unmatched_bank") or []
+    # תוקן 18/08/2026: המפתח האמיתי מהמנוע הוא unmatched_txns (ר'
+    # bank_reconciliation.reconcile). "unmatched"/"unmatched_bank" אינם
+    # קיימים בתשובה — הכלי דיווח unmatched=0 **תמיד**, מאז שנבנה,
+    # והבטחת "X הותאמו, Y לא" הופרה מהיום הראשון. נתפס רק ע"י בדיקת
+    # מכלול חוצה-כלים, לא ע"י הטסט המבודד שבדק רק key-presence.
+    unmatched = result.get("unmatched_txns") or []
     return {
         "matched": len(matches),
         "unmatched": len(unmatched) if isinstance(unmatched, list) else unmatched,
