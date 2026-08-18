@@ -620,7 +620,7 @@ def contact_card(db, organization_id: int, contact_id: int, *,
     על החשבון הזה": חשבונית/חשבון ספק מגדילים את היתרה (סכום פתוח), תשלום
     מקטין אותה — ללא תלות אם מדובר בלקוח (הם חייבים לנו) או ספק (אנחנו חייבים).
     """
-    from sqlalchemy import or_
+    from sqlalchemy import and_, or_
     from ..models import Contact, Invoice, Bill, Payment
 
     contact = db.query(Contact).filter(
@@ -677,6 +677,47 @@ def contact_card(db, organization_id: int, contact_id: int, *,
             "description": "תשלום/תקבול", "amount": round(-_f(pay.amount), 2),
         }))
 
+    # ── כסף שהגיע לבנק ולא נרשם כתשלום ────────────────────────────
+    #
+    # **כשל חי שנמדד בפרוד 18/08/2026.** `bank_reconciliation` מסמן את
+    # תנועת הבנק (`is_reconciled`, `matched_entity_*`) אבל **אינו יוצר
+    # `Payment`**. org1 מחזיק 705 תנועות מותאמות מול **4** רשומות תשלום.
+    #
+    # התוצאה על הלקוח "אליהב כהן": ₪55,000 הגיעו לבנק כנגד 5 חשבוניות,
+    # והכרטיס דיווח יתרה ₪137,651 במקום ₪82,651 — הגזמה של ₪55,000 בחוב
+    # של לקוח. זו אותה משפחת כשל שכבר תועדה כאן על `Payment.contact_id`
+    # ריק ("overstating the outstanding balance"), במקור אחר.
+    #
+    # דה-דופליקציה: מסמך שכבר יש לו `Payment` אינו נספר שוב מהבנק.
+    from ..models import BankTransaction
+
+    settled_docs = {("invoice", p.invoice_id) for p in payment_query.all() if p.invoice_id}
+    settled_docs |= {("bill", p.bill_id) for p in payment_query.all() if p.bill_id}
+
+    if invoice_ids or bill_ids:
+        bank_rows = db.query(BankTransaction).filter(
+            BankTransaction.organization_id == organization_id,
+            BankTransaction.is_reconciled.is_(True),
+            or_(
+                and_(BankTransaction.matched_entity_type == "invoice",
+                     BankTransaction.matched_entity_id.in_(invoice_ids or [-1])),
+                and_(BankTransaction.matched_entity_type == "bill",
+                     BankTransaction.matched_entity_id.in_(bill_ids or [-1])),
+            ),
+        ).all()
+        for bt in bank_rows:
+            if (bt.matched_entity_type, bt.matched_entity_id) in settled_docs:
+                continue  # כבר נספר כ-Payment
+            d = bt.transaction_date
+            if not _in_period(d, start, end):
+                continue
+            raw_movements.append((d, {
+                "type": "bank_settlement",
+                "document": bt.external_id or f"BANK-{bt.id}",
+                "description": "תקבול/תשלום בבנק (לא נרשם כתשלום)",
+                "amount": round(-abs(_f(bt.amount)), 2),
+            }))
+
     raw_movements.sort(key=lambda m: m[0] or date.max)
 
     movements = []
@@ -685,11 +726,41 @@ def contact_card(db, organization_id: int, contact_id: int, *,
         running = round(running + m["amount"], 2)
         movements.append({**m, "date": d.isoformat() if d else None, "balance": running})
 
+    # ── סכומים מחושבים בכלי, לא במודל ─────────────────────────────
+    #
+    # **כשל חי (אותה שיחה).** הכלי החזיר `movements` בלבד, ומושקו סכם
+    # אותן בעצמו: "סך חשבוניות ₪637,851" ואז "₪512,651" — שני מספרים
+    # שונים לאותה שאלה בהפרש 42 שניות, כשהאמת ₪306,251. גם "26 תנועות"
+    # במקום 23.
+    #
+    # מודל שפה אינו כלי חישוב. כל סכום שהמודל עשוי לצטט חייב להגיע
+    # מחושב — אחרת מנהל החשבונות יצטט מספר מומצא בדוח לרשויות.
+    def _sum(kind: str) -> float:
+        """סכום **חתום**, לא מוחלט.
+
+        `abs()` היה הבאג הראשון בתיקון הזה: חשבוניות זיכוי נושאות סכום
+        שלילי, ו-abs ספר אותן כחיוב. על "אליהב כהן" בפרוד זה ניפח את
+        סך החשבוניות מ-₪306,251 ל-₪693,451 — ₪193,600 של זיכויים
+        שנספרו הפוך. בדיוק סוג המספר המומצא שהתיקון נועד למנוע.
+        """
+        return round(sum(m["amount"] for m in movements if m["type"] == kind), 2)
+
+    # תשלומים ותקבולי-בנק נשמרים שליליים ב-`movements` (הם מקטינים את
+    # היתרה). מדווחים אותם חיוביים כי "סך התשלומים" הוא גודל, אך
+    # ההיפוך נעשה פעם אחת וכאן — לא במודל.
+    totals = {
+        "invoices": _sum("invoice"),
+        "bills": _sum("bill"),
+        "payments": round(-(_sum("payment") + _sum("bank_settlement")), 2),
+        "movement_count": len(movements),
+    }
+
     return {
         "contact_id": contact.id,
         "contact_name": contact.name,
         "contact_type": getattr(contact.contact_type, "value", contact.contact_type),
         "movements": movements,
+        "totals": totals,
         "closing_balance": running,
         "derived": True,
         "disclaimer": DISCLAIMER,
