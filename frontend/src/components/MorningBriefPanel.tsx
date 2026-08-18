@@ -226,8 +226,20 @@ export default function MorningBriefPanel() {
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm mb-3">
         <span>
+          {/* 'unknown'/'stale' זוהו ב-18/08/2026 כמתמוטטים ל-'—' הגנרי —
+              אותו תג בדיוק כמו ארגון בלי שום נתון. ההבחנה חשובה:
+              'unknown' פירושו שהבדיקה רצה ולא הייתה לה בסיס להשוואה
+              (honest-null), לא ש"עדיין לא נבדק כלום". */}
           התאמה משולשת:{' '}
-          {p.parity.status === 'ok' ? 'תקינה' : p.parity.status === 'mismatch' ? 'אי-התאמה' : '—'}
+          {p.parity.status === 'ok'
+            ? 'תקינה'
+            : p.parity.status === 'mismatch'
+            ? 'אי-התאמה'
+            : p.parity.status === 'stale'
+            ? 'נתונים לא-טריים'
+            : p.parity.status === 'unknown'
+            ? 'אין בסיס להשוואה'
+            : '—'}
         </span>
         <span>
           {p.deadline.days_left != null

@@ -39,7 +39,7 @@ WRITE_ACTIONS = frozenset({
     "bank_connection.create",
     "mandate.propose", "recurring_cancel.propose",
     "refund.propose", "filing.prepare", "period_close.propose",
-    "accounting.writeback.propose", "expenses.manage_categories",
+    "accounting.writeback.propose", "expenses.manage_categories", "expenses.manage_vehicle_profile",
     "expenses.classify", "reports.email", "moshko.memory.write",
     "tasks.write", "users.manage", "policies.manage",
 })
@@ -57,7 +57,7 @@ ROLE_PRESETS: dict[UserRole, frozenset[str]] = {
         "bank_connection.create",
         "recurring_cancel.propose", "mandate.read", "refund.propose",
         "filing.prepare", "period_close.propose",
-        "accounting.writeback.propose", "expenses.manage_categories",
+        "accounting.writeback.propose", "expenses.manage_categories", "expenses.manage_vehicle_profile",
         "expenses.classify", "reports.email", "moshko.memory.write",
         "tasks.write", "users.manage", "policies.manage",
     }),
@@ -69,7 +69,7 @@ ROLE_PRESETS: dict[UserRole, frozenset[str]] = {
         "bank_payment.propose", "mandate.propose", "recurring_cancel.propose",
         "mandate.read", "refund.propose", "filing.prepare",
         "accounting.writeback.propose",
-        "expenses.manage_categories", "expenses.classify", "reports.email",
+        "expenses.manage_categories", "expenses.manage_vehicle_profile", "expenses.classify", "reports.email",
         "moshko.memory.write", "tasks.write",
     }),
     UserRole.MANAGER: frozenset({
