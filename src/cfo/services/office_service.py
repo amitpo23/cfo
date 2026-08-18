@@ -40,9 +40,23 @@ def set_office_credentials(
     sumit_api_key: Optional[str] = None,
     open_finance: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """Store the office-level default credentials (used by every client file unless
-    the client overrides them). One SUMIT key serves all company files — each file
-    just supplies its own CompanyID."""
+    """אישורי ברירת המחדל ברמת המשרד.
+
+    **תיקון לתיעוד קודם (18/08/2026).** כאן נכתב "One SUMIT key serves
+    all company files — each file just supplies its own CompanyID".
+    **נמדד חי מול SUMIT שזה אינו נכון:** צמד של מפתח המשרד עם CompanyID
+    של לקוח נדחה ב-`Invalid Credentials`. אומת מול org1/org2/org5,
+    בקריאות חינמיות בלבד.
+
+        מפתח משרד + תיק המשרד (844329067) → ✓ מכסה 0/50
+        מפתח משרד + כל תיק לקוח            → ✗ Invalid Credentials
+
+    לכן אישורים פר-תיק (`integration_connections.credentials_encrypted`)
+    נשארים הכרח, ומי שיבנה מסלול שמניח מפתח אחד לכולם ייכשל בפרוד.
+
+    מה שהמפתח כן נותן: חשבון עם **מכסה נפרדת** — קריאות ברמת משרד אינן
+    אוכלות את מכסת הלקוח.
+    """
     if sumit_api_key:
         _upsert_integration(db, office_organization_id, "sumit", {"api_key": sumit_api_key})
     if open_finance:
