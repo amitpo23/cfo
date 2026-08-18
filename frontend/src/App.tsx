@@ -73,6 +73,7 @@ import BudgetDashboard from './components/BudgetDashboard';
 import KPIDashboard from './components/KPIDashboard';
 import AIAnalyticsDashboard from './components/AIAnalyticsDashboard';
 import ChatAssistant from './components/ChatAssistant';
+import MoshkoSystemChat from './components/MoshkoSystemChat';
 import PolicyManagementDashboard from './components/PolicyManagementDashboard';
 
 // New Financial Operations Components
@@ -425,6 +426,11 @@ function App() {
                 <Route path="/expenses" element={<ExpenseFiling darkMode={darkMode} />} />
               </Routes>
             </main>
+
+            {/* מושקו כצ'אט מערכת — מחוץ ל-<Routes> בכוונה, כדי שיהיה
+                נגיש מכל מסך והשיחה תשרוד ניווט בין עמודים. קודם לכן
+                הוא היה route בלבד (/ai-chat) בלי קישור בניווט. */}
+            <MoshkoSystemChat darkMode={darkMode} />
           </div>
         </div>
       </Router>
