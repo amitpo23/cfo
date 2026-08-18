@@ -61,7 +61,11 @@ class ProfitLossReport:
     net_margin: float
     total_revenue: float
     total_expenses: float
-    
+    # סיוג כיסוי נתונים. רו"ה נכון אריתמטית יכול להיות חסר משמעות
+    # כלכלית כששני הצדדים אינם מסונכרנים באותה מידה — ר'
+    # `_coverage_disclosure`. אופציונלי כדי לא לשבור קוראים קיימים.
+    coverage: Optional[Dict] = None
+
     def to_dict(self) -> Dict:
         return asdict(self)
 
@@ -205,6 +209,79 @@ class FinancialReportsService:
     def __init__(self, db: Session):
         self.db = db
     
+
+    # יחס מסמכים שמתחתיו הצד הדל אינו אמין. 1:5 הוא שמרני בכוונה —
+    # עסק שמוציא חשבונית אחת לחודש מול 20 קבלות הוא תקין לגמרי.
+    COVERAGE_MIN_DOC_RATIO = 0.05
+    # פער בימים בין המסמך האחרון של כל צד. 45 יום = יותר מחודש שבו
+    # נכנסו הוצאות ולא נכנסו הכנסות.
+    COVERAGE_MAX_LAG_DAYS = 45
+
+    def _coverage_disclosure(self, organization_id: int,
+                             start_date: date, end_date: date) -> Dict:
+        """האם שני צדי הדוח מסונכרנים באותה מידה.
+
+        **הממצא שהוליד את זה (18/08/2026, פרוד).** ב-6 חודשים: org1 עם
+        3 חשבוניות מול 229 חשבונות ספק; חשבוניותיו נעצרות ב-03/2026
+        בזמן שהספקים ממשיכים ל-07/2026. רו"ה עבורו מראה הפסד — אבל זו
+        עדות לצד הכנסות שאינו מסתנכרן, לא להפסד.
+
+        אינו מנחש, אינו מתקן ואינו חוסם: מצרף את היחס ואת פער הכיסוי
+        כדי שההכרעה תהיה של הקורא. אותו כלל כמו ב-parity — לא להשתיק
+        את המספר ולא להגיש אותו חשוף.
+        """
+        from ..models import Bill, Invoice
+
+        inv_q = self.db.query(Invoice).filter(
+            Invoice.organization_id == organization_id,
+            Invoice.issue_date >= start_date, Invoice.issue_date <= end_date)
+        bill_q = self.db.query(Bill).filter(
+            Bill.organization_id == organization_id,
+            Bill.issue_date >= start_date, Bill.issue_date <= end_date)
+
+        inv_rows = inv_q.all()
+        bill_rows = bill_q.all()
+        n_inv, n_bill = len(inv_rows), len(bill_rows)
+
+        last_inv = max((r.issue_date for r in inv_rows if r.issue_date), default=None)
+        last_bill = max((r.issue_date for r in bill_rows if r.issue_date), default=None)
+
+        out: Dict = {
+            "revenue_documents": n_inv,
+            "expense_documents": n_bill,
+            "revenue_last_document": last_inv.isoformat() if last_inv else None,
+            "expense_last_document": last_bill.isoformat() if last_bill else None,
+        }
+
+        # honest-null: אפס משני הצדדים אינו "מאוזן" — אין מה להשוות.
+        if n_inv == 0 and n_bill == 0:
+            out["balanced"] = None
+            out["warning_he"] = None
+            return out
+
+        reasons = []
+        if n_bill > 0 and (n_inv / n_bill) < self.COVERAGE_MIN_DOC_RATIO:
+            reasons.append(
+                f"{n_inv} מסמכי הכנסה מול {n_bill} מסמכי הוצאה")
+        if last_inv and last_bill:
+            lag = (last_bill - last_inv).days
+            out["revenue_lag_days"] = lag
+            if lag > self.COVERAGE_MAX_LAG_DAYS:
+                reasons.append(
+                    f"ההכנסה האחרונה מ-{last_inv.isoformat()} וההוצאה "
+                    f"האחרונה מ-{last_bill.isoformat()} — פער {lag} ימים")
+        elif n_bill > 0 and n_inv == 0:
+            reasons.append("אין ולו מסמך הכנסה אחד בתקופה")
+
+        out["balanced"] = not reasons
+        out["warning_he"] = (
+            "⚠️ שני צדי הדוח אינם מסונכרנים באותה מידה: "
+            + "; ".join(reasons)
+            + ". המספרים נכונים לנתונים שקיימים, אך אינם עדות לרווחיות "
+              "עד שצד ההכנסות יושלם."
+        ) if reasons else None
+        return out
+
     def generate_profit_loss(
         self,
         organization_id: int,
@@ -315,7 +392,9 @@ class FinancialReportsService:
             net_income=float(net_income),
             net_margin=float(net_margin),
             total_revenue=float(total_revenue),
-            total_expenses=float(total_expenses)
+            total_expenses=float(total_expenses),
+            coverage=self._coverage_disclosure(
+                organization_id, start_date, end_date),
         )
     
     def generate_balance_sheet(
