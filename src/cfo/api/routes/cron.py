@@ -172,12 +172,39 @@ async def _run_sync_targets(db: Session, targets: set) -> list:
 
 
 def _resolve_sumit_key(db: Session, org_id: int) -> Optional[str]:
-    """המפתח שהארגון באמת ישתמש בו — אותו מסלול בדיוק כמו
-    `data_sync_service._get_sumit_client`, כולל הכלל שאישורי-סביבה שייכים
-    לארגון 1 בלבד. פתרון שונה כאן היה מייצר חלון על מפתח אחד בזמן
-    שהריצה משתמשת באחר, כלומר מגבלה שאינה חוסמת דבר."""
-    org = db.query(Organization).filter(Organization.id == org_id).first()
-    creds = org.api_credentials if org and org.api_credentials else {}
+    """המפתח שהארגון באמת ישתמש בו — מאותו מקור בדיוק כמו
+    `sync_engine.get_connector_for_org`, הנתיב שהסנכרון עובר בו.
+
+    **תיקון רגרסיה (18/08/2026).** הגרסה הראשונה קראה
+    `organizations.api_credentials`, שהוא `null` בפרוד לכל הארגונים —
+    אישורי SUMIT יושבים מוצפנים ב-
+    `integration_connections.credentials_encrypted`. לכן השער החזיר
+    `None`, נכשל-סגור כמתוכנן, ודילג על **כל ארגון שאינו org1** (שרק לו
+    יש נפילה לאישורי סביבה). נמדד למחרת: org2 ו-org5 לא סונכרנו.
+
+    שער שפותר מפתח ממקור שונה מזה שהריצה משתמשת בו אינו מגן — הוא או
+    חוסם את הכול או חוסם כלום.
+    """
+    from ...services.credentials_vault import decrypt_credentials
+
+    conn = db.query(IntegrationConnection).filter(
+        IntegrationConnection.organization_id == org_id,
+        IntegrationConnection.source == "sumit",
+        IntegrationConnection.status == "active",
+    ).order_by(IntegrationConnection.id).first()
+
+    creds: dict = {}
+    if conn and conn.credentials_encrypted:
+        try:
+            creds = decrypt_credentials(conn.credentials_encrypted) or {}
+        except Exception:  # pragma: no cover - אישורים פגומים
+            creds = {}
+    if not creds:
+        org = db.query(Organization).filter(Organization.id == org_id).first()
+        creds = (org.api_credentials if org and org.api_credentials else {}) or {}
+
+    # אישורי סביבה שייכים לארגון 1 בלבד — נפילה רחבה יותר הייתה שולחת
+    # קריאות של תיק אחד בשם תיק אחר.
     env_allowed = org_id == 1
     return creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
 
