@@ -754,6 +754,34 @@ async def _kb_lookup(db, org_id: int, *, query: str | None = None, **_kwargs) ->
     return index_search(query)
 
 
+async def _get_bank_reconciliation(db, org_id: int, **_kwargs) -> dict:
+    """מצב ההתאמות בין תנועות הבנק למסמכי ההנה"ח.
+
+    **קריאה בלבד** (`persist=False`). התאמה היא רישום שמשנה נתונים,
+    ולכן היא אינה נעשית כתופעת-לוואי של שאלה בצ'אט — אחרת "מה מצב
+    ההתאמות?" היה מבצע התאמות. שינוי מצב עובר במסלול האישור.
+
+    שני הצדדים מדווחים תמיד: "X הותאמו" בלי "Y לא" מסתיר בדיוק את מה
+    שמנהל החשבונות מחפש.
+    """
+    from .bank_reconciliation import reconcile_organization
+
+    result = reconcile_organization(db, org_id, persist=False)
+    matches = result.get("matches") or []
+    unmatched = result.get("unmatched") or result.get("unmatched_bank") or []
+    return {
+        "matched": len(matches),
+        "unmatched": len(unmatched) if isinstance(unmatched, list) else unmatched,
+        "matches_sample": matches[:10],
+        "unmatched_sample": unmatched[:10] if isinstance(unmatched, list) else [],
+        "persisted": False,
+        "note_he": (
+            "קריאה בלבד — ההתאמות לא נשמרו. שמירה מתבצעת במחזור הבוקר "
+            "או במסלול אישור ייעודי."
+        ),
+    }
+
+
 async def _rezef_help(db, org_id: int, *, topic: str | None = None, **_kwargs) -> dict:
     """Project knowledge-base lookup — "how do I / what can Rezef do / where
     is X". Ignores db/org_id (same signature as every other tool for
@@ -1705,6 +1733,18 @@ TOOLS: dict[str, ChatTool] = {
         input_schema={"type": "object", "properties": {}},
         category="read",
         fn=_get_bank_position,
+    ),
+    "get_bank_reconciliation": ChatTool(
+        name="get_bank_reconciliation",
+        description=(
+            "מצב ההתאמות בין תנועות הבנק למסמכי ההנה\"ח: כמה הותאמו, כמה "
+            "לא, ודוגמאות משני הצדדים. קריאה בלבד — אינו שומר התאמות."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        # "read" ולא "write" — הכלי מריץ את מנוע ההתאמות עם persist=False
+        # ואינו משנה שום שורה. שאלה בצ'אט לא מבצעת התאמות.
+        category="read",
+        fn=_get_bank_reconciliation,
     ),
     "get_missing_documents": ChatTool(
         name="get_missing_documents",
