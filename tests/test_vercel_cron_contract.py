@@ -14,34 +14,21 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # Vercel evaluates all expressions in UTC. These times preserve dependency
 # order and finish the full morning cycle before 08:00 Israel in winter and
 # summer without duplicate/DST-triggered provider calls.
-EXPECTED_DAILY_SCHEDULES = {
-    # /api/cron/sync-sumit הוסר 19/08/2026 — הנחיית בעלים מפורשת וחוזרת
-    # ("תעצור את כל הקריאות api מול סאמיט באופן מלא כעת" / "תעצור כל
-    # אוטומציה מול סאמיט"): עצירה מלאה של כל אוטומציית SUMIT, לא רק
-    # הגבלת-קצב. SUMIT_GLOBAL_REQUESTS_PER_MINUTE/SUMIT_ORG_DAILY_REQUEST_LIMIT
-    # הועברו ל-0 בפרוד (חוסמים כל קריאה fail-closed ב-_make_request), אבל
-    # הבעלים ביקש גם שהאוטומציה לא תרוץ בכלל — לא רק שתיכשל בשקט. ה-cron
-    # שכולל את כל הקריאות החיות ל-SUMIT (מסמכים/חשבונות/תשלומים) הוסר
-    # מה-schedule עד הוראה אחרת. להחזרה: אישור בעלים מפורש בלבד.
-    "/api/cron/sync-open-finance": "0 2 * * *",
-    # הוסרו 11/08/2026 — שניהם קוראים ל-/documents/getdetails, שהיא
-    # **פעולה בתשלום פר-מסמך** ש-SUMIT מחייבת על אמצעי התשלום של
-    # **חברת הלקוח**. הבעלים דיווח על חיובים של מאות שקלים לכל תיק
-    # ולחשבון המשרד. השערים בקוד (sumit_enrichment_daily_action_limit,
-    # ocr_llm_enabled) הועברו ל-0/false בפרוד, וה-cron הוסרו כדי
-    # שהשער לא יהיה ההגנה היחידה.
-    #
-    # להחזרה נדרש: אישור בעלים מפורש, אימות התעריף מול SUMIT, ותקרה
-    # יומית שנגזרת מהעלות בפועל ולא מהמספר 25 שנבחר בלי מחירון.
-    "/api/cron/bank-gap-scan": "15 3 * * *",
-    "/api/cron/bookkeeper-morning": "45 3 * * *",
-    "/api/cron/collection-reminders": "0 4 * * *",
-    # בקרת כיסוי: רצה אחרי שכל שערי הסנכרון סיימו, כדי שהיא תשפוט את
-    # תוצאת הבוקר הנוכחי ולא את זו של אתמול; ולפני התרעות הערוצים, כדי
-    # שנשירת תיק תגיע לבעלים באותו מחזור.
-    "/api/cron/roster-health": "30 5 * * *",
-    "/api/cron/channel-alerts": "0 6 * * *",
-}
+# 19/08/2026 16:05 — הנחיית בעלים מפורשת: "אין צורך בריצה יומית יזומה יותר
+# תבטל את זה... תוודא שאין קריאות בשלב זה עד שנאשר תוכנית פעולה מקיפה
+# ונאשר תכולה שלה". **כל** ה-crons הוסרו מ-vercel.json — לא רק אלה שנוגעים
+# ב-SUMIT: שתי שרשראות ה-SMS (collection-reminders, bookkeeper-morning →
+# morning_brief_service.send_sms) הגיעו ל-send_sms של SUMIT ונשענו עד כה רק
+# על מתגי ה-env; sync-open-finance צורך מכסת Open Finance; והשאר בוטלו יחד
+# איתם כחלק מ"אין ריצה יומית יזומה".
+#
+# רקע קודם: /api/cron/sync-sumit הוסר 19/08 בבוקר (עצירת חירום מלאה של
+# אוטומציית SUMIT), וה-cron-ים של getdetails הוסרו 11/08 (פעולה בתשלום
+# פר-מסמך עם תקרה שלא אומתה מול המחירון).
+#
+# להחזרת cron כלשהו נדרש: אישור בעלים מפורש לתוכנית שמגדירה מה רץ, באיזו
+# תדירות, עם איזה תקציב נמדד, ומה ראיית ההצלחה. עד אז החוזה הוא ריק.
+EXPECTED_DAILY_SCHEDULES: dict[str, str] = {}
 
 
 def _cron_config() -> dict[str, str]:
@@ -73,7 +60,13 @@ def test_vercel_crons_use_one_daily_utc_schedule_in_dependency_order():
 
 
 def test_morning_cycle_finishes_before_0800_israel_in_winter_and_summer():
-    schedule = _cron_config()["/api/cron/bookkeeper-morning"]
+    # כל עוד אין crons בכלל (הנחיית 19/08), אין מחזור בוקר לתזמן. אם/כאשר
+    # bookkeeper-morning יוחזר, האילוץ המקורי חוזר לתוקף אוטומטית.
+    schedules = _cron_config()
+    if "/api/cron/bookkeeper-morning" not in schedules:
+        assert schedules == EXPECTED_DAILY_SCHEDULES
+        return
+    schedule = schedules["/api/cron/bookkeeper-morning"]
     for year, month, day in ((2026, 1, 15), (2026, 7, 15)):
         local = _local_time(schedule, year=year, month=month, day=day)
         assert (local.hour, local.minute) <= (6, 45)
