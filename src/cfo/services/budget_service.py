@@ -580,36 +580,75 @@ class BudgetService:
         start_date: date,
         end_date: date
     ) -> Dict[str, float]:
-        """שליפת ביצוע בפועל לפי קטגוריה — נתונים אמיתיים בלבד.
+        """שליפת ביצוע בפועל לפי קטגוריה — מהספרים הנגזרים, לא מ-Transaction.
+
+        `Transaction` הוא הצינור הקפוא (ר' `LegacySyncRetiredError` ב-
+        data_sync_service.py): שום קוד חי לא כותב אליו יותר מאז המעבר ל-
+        SyncEngine (Invoice/Bill/Expense). קריאה ממנו תחזיר {} תמיד — honest-null
+        אבל חסר תועלת, כי יש הוצאות אמיתיות ב-Bill/Expense שלא נספרות.
+
+        `ledger_service.build_journal` הוא מקור האמת: אותם ספרים נגזרים ששאר
+        המערכת (מאזן בוחן, כרטיס לקוח, Moshko) כבר סומכת עליהם — כולל
+        הדה-דופליקציה חשבון/הוצאה (בחשבון גובר על הוצאה כפולה, ר'
+        test_bill_expense_double_count.py) בלי לשכפל אותה כאן.
 
         ללא fallback אקראי שקט: בכשל מחזיר {} ורושם לוג, כדי שלא יוצגו
         למשתמש מספרים מזויפים כאילו הם הביצוע בפועל.
         """
+        from ..models import Bill, Expense
+        from . import ledger_service
+
         try:
-            transactions = self.db.query(Transaction).filter(
-                Transaction.organization_id == self.organization_id,
-                Transaction.transaction_date >= start_date,
-                Transaction.transaction_date < end_date,
-            ).all()
+            entries = ledger_service.build_journal(
+                self.db, self.organization_id,
+                start=start_date, end=end_date, include_opening=False,
+            )
         except Exception:
-            logger.exception("budget actuals query failed for org %s", self.organization_id)
+            logger.exception("budget actuals ledger query failed for org %s", self.organization_id)
             return {}
 
         actuals: Dict[str, float] = {}
-        for tx in transactions:
-            category = self._categorize_transaction(tx)
-            actuals[category] = actuals.get(category, 0) + float(tx.amount)
+        for entry in entries:
+            ref = entry.source_ref or ""
+            if ref.startswith("invoice:"):
+                amount = sum(l.credit for l in entry.lines if l.account == "4000")
+                if amount:
+                    actuals["sales"] = actuals.get("sales", 0) + amount
+            elif ref.startswith("bill:"):
+                amount = sum(l.debit for l in entry.lines if l.account == "5000")
+                if not amount:
+                    continue
+                bill = self.db.get(Bill, int(ref.split(":", 1)[1]))
+                vendor_name = bill.vendor.name if (bill and bill.vendor) else ""
+                text = f"{vendor_name} {bill.bill_number if bill else ''}"
+                category = self._categorize_text(text, amount)
+                actuals[category] = actuals.get(category, 0) + amount
+            elif ref.startswith("expense:"):
+                amount = sum(l.debit for l in entry.lines if l.account == "5000")
+                if not amount:
+                    continue
+                exp = self.db.get(Expense, int(ref.split(":", 1)[1]))
+                text = " ".join(filter(None, [
+                    exp.category if exp else None,
+                    exp.sumit_item_name if exp else None,
+                    exp.supplier_name if exp else None,
+                    exp.description if exp else None,
+                ]))
+                category = self._categorize_text(text, amount)
+                actuals[category] = actuals.get(category, 0) + amount
+            # payment:/manual: entries הם סילוקים/התאמות — כבר מיוצגים דרך
+            # החשבון/הוצאה/חשבונית שמקורם; לספור גם אותם היה מכפיל את הביצוע.
         return actuals
-    
-    def _categorize_transaction(self, tx: Transaction) -> str:
-        """קטגוריזציה של עסקה"""
-        description = (tx.description or '').lower()
-        
+
+    def _categorize_text(self, description: str, amount: float) -> str:
+        """קטגוריזציה לפי מילות מפתח (חשבון/הוצאה/תיאור חופשי)."""
+        description = (description or '').lower()
+
         # מיפוי מילות מפתח לקטגוריות
         keywords = {
             'salary': ['משכורת', 'שכר', 'salary'],
             'rent': ['שכירות', 'rent'],
-            'utilities': ['חשמל', 'מים', 'גז', 'ארנונה'],
+            'utilities': ['חשמל', 'מים', 'גז', 'ארנונה', 'בזק', 'פרטנר', 'סלקום', 'הוט'],
             'marketing': ['פרסום', 'שיווק', 'marketing', 'google', 'facebook'],
             'software': ['תוכנה', 'software', 'saas', 'subscription'],
             'insurance': ['ביטוח', 'insurance'],
@@ -618,12 +657,16 @@ class BudgetService:
             'travel': ['נסיעות', 'דלק', 'travel'],
             'sales': ['מכירה', 'הכנסה', 'revenue', 'sale']
         }
-        
+
         for category, words in keywords.items():
             if any(word in description for word in words):
                 return category
-        
-        return 'other_expense' if tx.amount < 0 else 'other_income'
+
+        return 'other_expense' if amount >= 0 else 'other_income'
+
+    def _categorize_transaction(self, tx: Transaction) -> str:
+        """קטגוריזציה של עסקה (Transaction — נשאר לשימוש היסטורי/דוחות ישנים)."""
+        return self._categorize_text(tx.description or '', float(tx.amount))
     
     def _generate_alert_message(self, cat: BudgetCategory) -> str:
         """יצירת הודעת התראה"""

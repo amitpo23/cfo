@@ -554,12 +554,28 @@ class DashboardService:
 
         total = sum(buckets.values())
 
+        # זיכויים לא-משויכים (Invoice עם total שלילי, balance=0 במכוון —
+        # לא נספרים כחוב בפני עצמם). אין בנתונים קישור בין זיכוי לחשבונית
+        # ספציפית שהוא מקזז, ולכן אין דרך אמינה להקצות אותו לדלג — הגולמי
+        # (buckets/total) נשאר ללא שינוי. אבל החשיפה האמיתית-נטו כן ניתנת
+        # לחישוב ברמת סה"כ, ומדווחת בנפרד כדי שלא לטשטש את שני המספרים.
+        unapplied_credits = self.db.query(func.sum(Invoice.total)).filter(
+            Invoice.organization_id == self.org_id,
+            Invoice.total < 0,
+            Invoice.status.in_([
+                InvoiceStatus.SENT, InvoiceStatus.OVERDUE, InvoiceStatus.PARTIALLY_PAID,
+            ]),
+        ).scalar() or Decimal("0")
+        unapplied_credits_total = float(-unapplied_credits)  # לחיובי, לנוחות תצוגה
+
         return {
             "bucket_0_30": float(buckets["0_30"]),
             "bucket_31_60": float(buckets["31_60"]),
             "bucket_61_90": float(buckets["61_90"]),
             "bucket_90_plus": float(buckets["90_plus"]),
             "total": float(total),
+            "unapplied_credits_total": unapplied_credits_total,
+            "net_of_credits_total": float(total) - unapplied_credits_total,
             "count": len(invoice_list),
             "invoices": sorted(invoice_list, key=lambda x: x["days_overdue"], reverse=True),
         }
