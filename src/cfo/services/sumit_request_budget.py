@@ -69,7 +69,7 @@ def claim_daily_sync_run(api_key: str | None, *, organization_id: int) -> None:
     """
     scope_key = key_fingerprint(api_key)
     now = datetime.now(timezone.utc)
-    _, day_start = _utc_windows(now)
+    _, day_start, _ = _utc_windows(now)
     db = SessionLocal()
     try:
         with db.begin():
@@ -98,10 +98,11 @@ def claim_daily_sync_run(api_key: str | None, *, organization_id: int) -> None:
         db.close()
 
 
-def _utc_windows(now: datetime) -> tuple[datetime, datetime]:
+def _utc_windows(now: datetime) -> tuple[datetime, datetime, datetime]:
     minute = now.replace(second=0, microsecond=0)
     day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return minute, day
+    month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return minute, day, month
 
 
 class SumitRequestLimiter:
@@ -187,7 +188,7 @@ class SumitRequestLimiter:
         """
         del endpoint
         now = datetime.now(timezone.utc)
-        minute_start, day_start = _utc_windows(now)
+        minute_start, day_start, month_start = _utc_windows(now)
         db = SessionLocal()
         try:
             with db.begin():
@@ -217,6 +218,20 @@ class SumitRequestLimiter:
                     raise SumitRequestBudgetExceeded(
                         "SUMIT organization daily request budget exceeded",
                     )
+                if settings.sumit_environment == "test":
+                    month_ok = self._claim_window(
+                        db,
+                        scope_key="global",
+                        organization_id=None,
+                        window_kind="month",
+                        window_start=month_start,
+                        limit_value=settings.sumit_test_monthly_request_limit,
+                        now=now,
+                    )
+                    if not month_ok:
+                        raise SumitRequestBudgetExceeded(
+                            "SUMIT test monthly request budget exceeded",
+                        )
         except SumitRequestBudgetExceeded:
             raise
         except SQLAlchemyError as exc:

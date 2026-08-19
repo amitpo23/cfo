@@ -24,6 +24,14 @@ class _UnlimitedTestBudget:
         return None
 
 
+def _test_company_response(url):
+    request = httpx.Request("POST", "https://api.sumit.co.il" + url)
+    return httpx.Response(200, request=request, json={
+        "Status": 0,
+        "Data": {"Company": {"CorporateNumber": "999999998"}},
+    })
+
+
 def _sumit():
     return SumitIntegration(
         api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23",
@@ -40,6 +48,8 @@ def test_create_document_from_existing_clones_by_document_id():
 
     async def _run():
         async def _fake_post(method=None, url=None, json=None, **kwargs):
+            if url == "/website/companies/getdetails/":
+                return _test_company_response(url)
             captured["url"] = url
             captured["json"] = json
             request = httpx.Request("POST", "https://api.sumit.co.il" + url)
@@ -74,6 +84,8 @@ def test_create_document_sends_cash_payment_details():
 
     async def _run():
         async def _fake_post(method=None, url=None, json=None, **kwargs):
+            if url == "/website/companies/getdetails/":
+                return _test_company_response(url)
             captured["json"] = json
             request = httpx.Request("POST", "https://api.sumit.co.il" + url)
             return httpx.Response(200, request=request, json={
@@ -107,6 +119,8 @@ def test_create_document_sends_cheque_payment_details():
 
     async def _run():
         async def _fake_post(method=None, url=None, json=None, **kwargs):
+            if url == "/website/companies/getdetails/":
+                return _test_company_response(url)
             captured["json"] = json
             request = httpx.Request("POST", "https://api.sumit.co.il" + url)
             return httpx.Response(200, request=request, json={
@@ -149,6 +163,8 @@ def test_create_document_without_payments_omits_payments_key():
 
     async def _run():
         async def _fake_post(method=None, url=None, json=None, **kwargs):
+            if url == "/website/companies/getdetails/":
+                return _test_company_response(url)
             captured["json"] = json
             request = httpx.Request("POST", "https://api.sumit.co.il" + url)
             return httpx.Response(200, request=request, json={
@@ -179,6 +195,8 @@ def test_create_document_sends_original_document_id_for_credit_note():
 
     async def _run():
         async def _fake_post(method=None, url=None, json=None, **kwargs):
+            if url == "/website/companies/getdetails/":
+                return _test_company_response(url)
             captured["json"] = json
             request = httpx.Request("POST", "https://api.sumit.co.il" + url)
             return httpx.Response(200, request=request, json={

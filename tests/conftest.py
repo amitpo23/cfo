@@ -102,6 +102,16 @@ from fastapi.testclient import TestClient
 from cfo.api import app
 
 
+@pytest.fixture(autouse=True)
+def _isolate_sumit_environment_cache():
+    """A warm-instance cache must not make SUMIT tests order-dependent."""
+    from cfo.integrations import sumit_integration
+
+    sumit_integration._SUMIT_ENVIRONMENT_CACHE.clear()
+    yield
+    sumit_integration._SUMIT_ENVIRONMENT_CACHE.clear()
+
+
 def pytest_runtest_setup(item):
     """מחזיק את שם הטסט הנוכחי כדי שחומת הרשת תוכל להצביע על האשם."""
     _current_test["name"] = item.name

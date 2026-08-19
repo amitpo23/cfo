@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     # SUMIT API
     sumit_api_key: Optional[str] = None
     sumit_company_id: Optional[str] = None
+    # Fail closed into the free SUMIT testing track.  A live environment must
+    # be selected explicitly; misspellings must never enable live behavior.
+    sumit_environment: str = "test"
+    sumit_test_monthly_request_limit: int = 360
+    sumit_test_monthly_paid_action_limit: int = 90
+    sumit_test_org_daily_request_limit: int = 20
+    sumit_test_requests_per_minute: int = 10
     # פורטל ההנה"ח של המשרד (CompanyID 844329067) הוא ישות נפרדת מתיק
     # לקוח בודד: הוא מחזיק את כל התיקים, ורק מפתח שלו מורשה לפעולות
     # ברמת המשרד. `SUMIT_BOOKS_AMIT_PORAT.md` השאיר זאת כשאלה פתוחה —
@@ -238,6 +245,12 @@ class Settings(BaseSettings):
             return "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING"
         return value
 
+    @field_validator("sumit_environment", mode="before")
+    @classmethod
+    def normalize_sumit_environment(cls, value):
+        normalized = value.strip().lower() if isinstance(value, str) else "test"
+        return normalized if normalized in {"test", "live"} else "test"
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [
@@ -262,6 +275,27 @@ class Settings(BaseSettings):
         self.sumit_org_daily_request_limit = min(
             300, max(0, self.sumit_org_daily_request_limit),
         )
+        self.sumit_test_monthly_request_limit = min(
+            360, max(0, self.sumit_test_monthly_request_limit),
+        )
+        self.sumit_test_monthly_paid_action_limit = min(
+            90, max(0, self.sumit_test_monthly_paid_action_limit),
+        )
+        self.sumit_test_org_daily_request_limit = min(
+            20, max(0, self.sumit_test_org_daily_request_limit),
+        )
+        self.sumit_test_requests_per_minute = min(
+            10, max(0, self.sumit_test_requests_per_minute),
+        )
+        if self.sumit_environment == "test":
+            self.sumit_org_daily_request_limit = min(
+                self.sumit_org_daily_request_limit,
+                self.sumit_test_org_daily_request_limit,
+            )
+            self.sumit_global_requests_per_minute = min(
+                self.sumit_global_requests_per_minute,
+                self.sumit_test_requests_per_minute,
+            )
         self.sumit_enrichment_daily_action_limit = min(
             25,
             max(0, self.sumit_enrichment_daily_action_limit),

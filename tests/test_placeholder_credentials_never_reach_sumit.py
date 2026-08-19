@@ -86,21 +86,32 @@ async def test_a_realistic_key_is_not_refused(monkeypatch):
         status_code = 200
         text = '{"Status":0,"Data":{}}'
 
+        def __init__(self, payload):
+            self.payload = payload
+
         def raise_for_status(self):
             return None
 
         def json(self):
-            return {"Status": 0, "Data": {}}
+            return self.payload
 
     async def _capture(method=None, url=None, **kw):
         sent.append(url)
-        return _FakeResponse()
+        if url == "/website/companies/getdetails/":
+            return _FakeResponse({
+                "Status": 0,
+                "Data": {"Company": {"CorporateNumber": "999999998"}},
+            })
+        return _FakeResponse({"Status": 0, "Data": {}})
 
     monkeypatch.setattr(client.client, "request", _capture)
 
     await client._make_request("/accounting/documents/list/", data={})
 
-    assert sent == ["/accounting/documents/list/"]
+    assert sent == [
+        "/website/companies/getdetails/",
+        "/accounting/documents/list/",
+    ]
 
 
 @pytest.mark.asyncio

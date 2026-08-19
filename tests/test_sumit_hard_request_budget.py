@@ -83,7 +83,10 @@ def test_low_level_client_claims_before_network(monkeypatch, fresh_org):
             return None
 
         def json(self):
-            return {"Status": 0, "Data": {}}
+            return {
+                "Status": 0,
+                "Data": {"Company": {"CorporateNumber": "999999998"}},
+            }
 
     client = SumitIntegration(
         api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23",
@@ -98,6 +101,8 @@ def test_low_level_client_claims_before_network(monkeypatch, fresh_org):
     monkeypatch.setattr(client.client, "request", fake_request)
     asyncio.run(client._make_request("/accounting/documents/list/"))
     assert events == [
+        ("claim", "/website/companies/getdetails/"),
+        ("network", None),
         ("claim", "/accounting/documents/list/"),
         ("network", None),
     ]

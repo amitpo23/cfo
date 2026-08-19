@@ -36,6 +36,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from sqlalchemy.exc import SQLAlchemyError
+
+from ..config import settings
+from ..database import SessionLocal
+from .sumit_request_budget import (
+    SumitRequestBudgetUnavailable,
+    SumitRequestLimiter,
+    _utc_windows,
+)
+
 
 QUOTA_ENDPOINT = "/website/companies/listquotas/"
 
@@ -164,3 +174,49 @@ def assert_paid_action_within_quota(
             f"{snapshot.limit}. כל פעולה נוספת מחויבת לאמצעי התשלום של "
             "חברת הלקוח."
         )
+
+    if settings.sumit_environment == "test":
+        _claim_test_monthly_paid_action(
+            organization_id=snapshot.organization_id,
+            endpoint=endpoint,
+        )
+
+
+def _claim_test_monthly_paid_action(
+    *, organization_id: int, endpoint: str,
+) -> None:
+    """Conservatively reserve one paid-action slot for the UTC month.
+
+    The provider snapshot remains authoritative and is checked first.  This
+    additional durable counter keeps the free testing track below 100 paid
+    operations even when the provider does not identify the quota period.
+    A reserved slot is not refunded after a later provider failure: counting
+    an uncertain attempt is the fail-closed cost boundary.
+    """
+    now = datetime.now(timezone.utc)
+    _, _, month_start = _utc_windows(now)
+    db = SessionLocal()
+    try:
+        with db.begin():
+            claimed = SumitRequestLimiter._claim_window(
+                db,
+                scope_key=f"paid:org:{organization_id}",
+                organization_id=organization_id,
+                window_kind="month",
+                window_start=month_start,
+                limit_value=settings.sumit_test_monthly_paid_action_limit,
+                now=now,
+            )
+        if not claimed:
+            raise SumitQuotaExhausted(
+                f"SUMIT test monthly paid-action budget exceeded ({endpoint})",
+            )
+    except SumitQuotaError:
+        raise
+    except (SQLAlchemyError, SumitRequestBudgetUnavailable) as exc:
+        raise SumitQuotaUnknown(
+            f"SUMIT test monthly paid-action usage is unknown ({endpoint}); "
+            "the paid action was refused",
+        ) from exc
+    finally:
+        db.close()

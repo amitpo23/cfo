@@ -16,8 +16,10 @@ Documentation: https://app.sumit.co.il/developers/api/
 from typing import Any, Dict, List, Optional
 import httpx
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+
+from ..config import settings
 
 from .base import BaseIntegration
 from .sumit_models import (
@@ -66,6 +68,10 @@ class SumitAPIError(Exception):
     """Raised when SUMIT returns a business/API error envelope."""
 
 
+class SumitEnvironmentMismatch(SumitAPIError):
+    """Configured SUMIT environment does not match the authenticated company."""
+
+
 class PaidSumitActionDisabled(RuntimeError):
     """A billed per-document SUMIT action was attempted while the cost budget
     is zero. The request was never sent."""
@@ -86,6 +92,12 @@ class SumitRateCeilingRefused(RuntimeError):
 
 class SumitRequestBudgetRequired(RuntimeError):
     """A real outbound request lacked the shared durable request limiter."""
+
+
+SUMIT_TEST_CORPORATE_NUMBER = "999999998"
+_SUMIT_ENVIRONMENT_VERIFY_ENDPOINT = "/website/companies/getdetails/"
+_SUMIT_ENVIRONMENT_CACHE_TTL = timedelta(hours=20)
+_SUMIT_ENVIRONMENT_CACHE: dict[tuple[str, str], datetime] = {}
 
 
 # מחרוזות שמעידות שהמפתח אינו אמיתי. הרשימה מכוונת להיות צרה: חסימה
@@ -261,6 +273,11 @@ class SumitIntegration(BaseIntegration):
             raise SumitRequestBudgetRequired(
                 "SUMIT request refused: shared request budget is not configured",
             )
+        is_environment_verification = (
+            endpoint == _SUMIT_ENVIRONMENT_VERIFY_ENDPOINT
+        )
+        if not is_environment_verification:
+            await self._ensure_environment_verified()
         # Synchronous DB claim is intentional: no network coroutine is created
         # until the durable cross-instance slot is committed.
         self.request_limiter.claim(endpoint)
@@ -279,18 +296,93 @@ class SumitIntegration(BaseIntegration):
             self._log_response(response.status_code, response.text)
             response.raise_for_status()
 
-            return response.json()
+            payload = response.json()
+            if is_environment_verification:
+                self._validate_and_cache_environment(payload)
+            return payload
 
         except httpx.HTTPStatusError as e:
             self._log_error(e, f"HTTP error on {endpoint}")
+            if is_environment_verification:
+                raise SumitEnvironmentMismatch(
+                    "SUMIT company environment could not be verified",
+                ) from e
             # כולל את קוד הסטטוס בהודעה — ל-403 (rate limit) התגובה לרוב ריקה,
             # וקוראים מסתמכים על זיהוי "403" בטקסט כדי לבצע backoff.
             raise SumitAPIError(
                 f"SUMIT API error {e.response.status_code}: {e.response.text}"
             )
+        except SumitEnvironmentMismatch:
+            raise
         except Exception as e:
             self._log_error(e, f"Request failed on {endpoint}")
+            if is_environment_verification:
+                raise SumitEnvironmentMismatch(
+                    "SUMIT company environment could not be verified",
+                ) from e
             raise
+
+    @staticmethod
+    def _configured_sumit_environment() -> str:
+        value = str(getattr(settings, "sumit_environment", "test")).strip().lower()
+        return value if value in {"test", "live"} else "test"
+
+    def _environment_cache_key(self) -> tuple[str, str]:
+        from ..services.sumit_request_budget import key_fingerprint
+
+        return (
+            self._configured_sumit_environment(),
+            key_fingerprint(self.api_key),
+        )
+
+    async def _ensure_environment_verified(self) -> None:
+        cache_key = self._environment_cache_key()
+        verified_at = _SUMIT_ENVIRONMENT_CACHE.get(cache_key)
+        now = datetime.now(timezone.utc)
+        if verified_at is not None and now - verified_at < _SUMIT_ENVIRONMENT_CACHE_TTL:
+            return
+        if verified_at is not None:
+            _SUMIT_ENVIRONMENT_CACHE.pop(cache_key, None)
+
+        # This deliberately re-enters the normal request path.  The endpoint
+        # itself is exempt only from recursively demanding prior verification;
+        # credentials and the durable request limiter remain mandatory.
+        await self._make_request(_SUMIT_ENVIRONMENT_VERIFY_ENDPOINT)
+
+    def _validate_and_cache_environment(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            raise SumitEnvironmentMismatch(
+                "SUMIT company environment response was malformed",
+            )
+        if payload.get("Status") not in (0, "0", "Success"):
+            raise SumitEnvironmentMismatch(
+                "SUMIT company environment verification failed",
+            )
+        data = payload.get("Data")
+        company = data.get("Company") if isinstance(data, dict) else None
+        corporate_number = (
+            company.get("CorporateNumber") if isinstance(company, dict) else None
+        )
+        if corporate_number is None or not str(corporate_number).strip():
+            raise SumitEnvironmentMismatch(
+                "SUMIT company environment response lacked CorporateNumber",
+            )
+
+        actual_environment = (
+            "test"
+            if str(corporate_number).strip() == SUMIT_TEST_CORPORATE_NUMBER
+            else "live"
+        )
+        configured_environment = self._configured_sumit_environment()
+        if actual_environment != configured_environment:
+            raise SumitEnvironmentMismatch(
+                "SUMIT company environment mismatch: configured "
+                f"{configured_environment}, verified {actual_environment}",
+            )
+
+        _SUMIT_ENVIRONMENT_CACHE[self._environment_cache_key()] = datetime.now(
+            timezone.utc,
+        )
 
     def _assert_credentials_are_real(self, endpoint: str) -> None:
         """מסרב לצאת לרשת עם מפתח שנראה כמו placeholder.
@@ -409,6 +501,7 @@ class SumitIntegration(BaseIntegration):
             raise SumitRequestBudgetRequired(
                 "SUMIT request refused: shared request budget is not configured",
             )
+        await self._ensure_environment_verified()
         # תפיסה סינכרונית לפני יצירת ה-coroutine, זהה ל-`_make_request`:
         # אין בקשה עד שהמשבצת העמידה נרשמה.
         self.request_limiter.claim(endpoint)

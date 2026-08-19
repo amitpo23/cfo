@@ -28,6 +28,14 @@ class _UnlimitedTestBudget:
         return None
 
 
+def _test_company_response(url):
+    request = httpx.Request("POST", "https://api.sumit.co.il" + url)
+    return httpx.Response(200, request=request, json={
+        "Status": 0,
+        "Data": {"Company": {"CorporateNumber": "999999998"}},
+    })
+
+
 def _request() -> BooksBatchRequest:
     return BooksBatchRequest(
         database_id=777,
@@ -73,6 +81,8 @@ def test_create_books_batch_uses_the_versioned_swagger_contract_exactly():
 
     async def _run():
         async def _fake_post(method=None, url=None, json=None, **kwargs):
+            if url == "/website/companies/getdetails/":
+                return _test_company_response(url)
             captured["url"] = url
             captured["json"] = json
             request = httpx.Request("POST", "https://api.sumit.co.il" + url)
@@ -116,6 +126,8 @@ def test_create_books_batch_refuses_success_without_batch_url():
 
     async def _run():
         async def _fake_post(method=None, url=None, json=None, **kwargs):
+            if url == "/website/companies/getdetails/":
+                return _test_company_response(url)
             request = httpx.Request("POST", "https://api.sumit.co.il" + url)
             return httpx.Response(200, request=request, json={"Status": 0, "Data": {}})
 

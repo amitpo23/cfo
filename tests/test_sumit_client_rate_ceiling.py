@@ -91,11 +91,31 @@ async def test_the_binary_path_claims_before_the_network(monkeypatch):
         assert claimed, "יצאה בקשה בינארית לפני תפיסת מכסה"
         return _Resp()
 
+    class _VerifyResp:
+        status_code = 200
+        text = "{}"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "Status": 0,
+                "Data": {"Company": {"CorporateNumber": "999999998"}},
+            }
+
+    async def _verify(*_args, **_kwargs):
+        return _VerifyResp()
+
+    monkeypatch.setattr(client.client, "request", _verify)
     monkeypatch.setattr(client.client, "post", _post)
 
     await client._post_binary("/accounting/documents/getpdf/", {})
 
-    assert claimed == ["/accounting/documents/getpdf/"]
+    assert claimed == [
+        "/website/companies/getdetails/",
+        "/accounting/documents/getpdf/",
+    ]
 
 
 @pytest.mark.asyncio
