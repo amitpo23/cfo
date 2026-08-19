@@ -513,6 +513,72 @@ async def scheduled_enrich_expenses(db: Session = Depends(get_db_session)):
     return {"enriched_orgs": len(results), "results": results}
 
 
+SUMIT_QUOTA_CHECKPOINT = "quota_check"
+
+
+@router.get("/cron/sumit-quota-refresh", dependencies=[Depends(_verify_cron_secret)])
+async def scheduled_sumit_quota_refresh(db: Session = Depends(get_db_session)):
+    """ריענון יומי של מדידת מכסת SUMIT (`listquotas`, קריאה חינמית — ר'
+    docs/SUMIT_API_REFERENCE.md; **אין תיעוד רשמי לעלות/הגבלה על הקריאה
+    עצמה**, רק קריאה מאושרת בודדת ב-17/08/2026), פר-ארגון, פעם ביום.
+
+    **הממצא שהוליד את ה-cron הזה (19/08/2026).** `_assert_within_provider_quota`
+    (השער שחוסם getpdf/getdetails ללא מדידה טרייה) קורא `quota_snapshot`
+    שאף קוד לא מילא אף פעם — כלומר חסם *תמיד*, לא "כשמתקרבים". זה בטוח
+    (סגור-כברירת-מחדל) אבל לא מה שהתועד. ה-cron הזה סוגר את החוליה
+    החסרה: קורא, שומר, ואז `_assert_within_provider_quota` קורא מדידה
+    אמיתית בת עד 26 שעות.
+
+    אותו דפוס בדיוק כמו `EXPENSE_ENRICHMENT_CHECKPOINT`: claim לפני
+    השימוש בקונקטור, פעם ל-`sumit_sync_min_interval_hours` (≥20) לארגון.
+    """
+    from ...services.sumit_quota import refresh_quota_snapshot_for_org
+
+    targets = {
+        conn.organization_id
+        for conn in db.query(IntegrationConnection).filter(
+            IntegrationConnection.status == "active",
+            IntegrationConnection.source == "sumit",
+        ).all()
+    }
+    if settings.sumit_api_key:
+        targets.add(1)
+
+    results = []
+    for org_id in sorted(targets):
+        gated = _claim_periodic_provider_budget(
+            db,
+            org_id=org_id,
+            source="sumit",
+            entity_type=SUMIT_QUOTA_CHECKPOINT,
+            interval_hours=settings.sumit_sync_min_interval_hours,
+        )
+        if gated:
+            results.append(gated)
+            continue
+        try:
+            connector, _conn_id, _resolved = get_connector_for_org(db, org_id, "sumit")
+            res = await refresh_quota_snapshot_for_org(
+                db, org_id,
+                api_key=connector.api_key, company_id=connector.company_id,
+            )
+            _finish_periodic_provider_attempt(
+                db, org_id=org_id, source="sumit",
+                entity_type=SUMIT_QUOTA_CHECKPOINT,
+                success=bool(res.get("stored")),
+            )
+            results.append({"organization_id": org_id, **res})
+        except Exception as exc:
+            logger.warning("SUMIT quota refresh failed for org %s: %s", org_id, exc)
+            db.rollback()
+            _finish_periodic_provider_attempt(
+                db, org_id=org_id, source="sumit",
+                entity_type=SUMIT_QUOTA_CHECKPOINT, success=False,
+            )
+            results.append({"organization_id": org_id, "error": str(exc)})
+    return {"checked_orgs": len(results), "results": results}
+
+
 @router.get("/cron/process-ocr", dependencies=[Depends(_verify_cron_secret)])
 async def scheduled_process_ocr(db: Session = Depends(get_db_session)):
     """Daily OCR processing after provider sync/enrichment (02:45 UTC).

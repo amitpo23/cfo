@@ -1009,6 +1009,7 @@ def get_connector_for_org(
             api_key=api_key,
             company_id=company_id,
             organization_id=organization_id,
+            db=db,
         )
         return connector, conn.id if conn else None, source
 

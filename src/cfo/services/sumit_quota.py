@@ -133,6 +133,102 @@ def parse_quota_response(
     return None
 
 
+QUOTA_CHECKPOINT_ENTITY = "quota_check"
+
+
+def store_quota_snapshot(db, organization_id: int, snapshot: QuotaSnapshot) -> None:
+    """שומר מדידת מכסה ל-`SyncCheckpoint` הקיים — בלי טבלה/מיגרציה חדשה.
+
+    `entity_type="quota_check"` הוא שורת-סנטינל פר-ארגון (אותו דפוס
+    שהתיעוד של SyncCheckpoint כבר מתאר ל-`__source__`); ה-JSON נכנס
+    ל-`cursor` (String(500) — בהרבה מעבר למה שנדרש כאן). כתיבה חוזרת
+    דורסת את השורה הקיימת (UniqueConstraint על org+source+entity_type),
+    לא מצטברת.
+    """
+    import json
+
+    from ..models import SyncCheckpoint
+
+    row = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == organization_id,
+        SyncCheckpoint.source == "sumit",
+        SyncCheckpoint.entity_type == QUOTA_CHECKPOINT_ENTITY,
+    ).first()
+    if row is None:
+        row = SyncCheckpoint(
+            organization_id=organization_id, source="sumit",
+            entity_type=QUOTA_CHECKPOINT_ENTITY,
+        )
+        db.add(row)
+    row.cursor = json.dumps({
+        "used": snapshot.used,
+        "limit": snapshot.limit,
+        "measured_at": snapshot.measured_at.isoformat(),
+    })
+    row.last_success_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+def load_quota_snapshot(db, organization_id: int) -> Optional[QuotaSnapshot]:
+    """טוען את המדידה האחרונה שנשמרה. honest-null: שום שורה/JSON לא-תקין
+    ⇒ `None` — לא מכסה מומצאת, ולא מכסה 'פנויה' כברירת מחדל."""
+    import json
+
+    from ..models import SyncCheckpoint
+
+    row = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == organization_id,
+        SyncCheckpoint.source == "sumit",
+        SyncCheckpoint.entity_type == QUOTA_CHECKPOINT_ENTITY,
+    ).first()
+    if row is None or not row.cursor:
+        return None
+    try:
+        payload = json.loads(row.cursor)
+        measured_at = datetime.fromisoformat(payload["measured_at"])
+        return QuotaSnapshot(
+            organization_id=organization_id,
+            used=int(payload["used"]),
+            limit=int(payload["limit"]),
+            measured_at=measured_at,
+        )
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+async def refresh_quota_snapshot_for_org(
+    db, organization_id: int, *, api_key: str, company_id: Optional[str],
+) -> dict[str, Any]:
+    """קורא `listquotas` (חינמי — ר' docs/SUMIT_API_REFERENCE.md; **אין
+    תיעוד רשמי לעלות/הגבלה על הקריאה עצמה**, רק קריאה מאושרת בודדת
+    ב-17/08/2026) ושומר תוצאה. עוברת דרך אותו צוואר-בקבוק כמו כל קריאת
+    SUMIT אחרת (`request_limiter` אמיתי, נאכף fail-closed ברגע הרשת) —
+    אין כאן פטור. תדירות הקריאה (פעם ביום לארגון) נאכפת ע"י הקורא
+    (cron), לא כאן.
+
+    honest-null: תשובה בלי שורת ActionsBilling/Operations תקינה לא
+    נשמרת ולא ממציאה מכסה — ר' `parse_quota_response`.
+    """
+    from ..integrations.sumit_integration import SumitIntegration
+    from .sumit_request_budget import SumitRequestLimiter
+
+    client = SumitIntegration(
+        api_key=api_key, company_id=company_id,
+        request_limiter=SumitRequestLimiter(organization_id),
+    )
+    async with client:
+        payload = await client.list_quotas()
+
+    snapshot = parse_quota_response(payload, organization_id=organization_id)
+    if snapshot is None:
+        return {"organization_id": organization_id, "stored": False,
+                "reason": "malformed_or_missing_quota_row"}
+
+    store_quota_snapshot(db, organization_id, snapshot)
+    return {"organization_id": organization_id, "stored": True,
+            "used": snapshot.used, "limit": snapshot.limit}
+
+
 def assert_paid_action_within_quota(
     snapshot: Optional[QuotaSnapshot], *, endpoint: str,
 ) -> None:

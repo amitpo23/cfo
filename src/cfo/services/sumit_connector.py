@@ -59,10 +59,14 @@ class SumitConnector(AccountingConnector):
     Wraps the existing SumitIntegration and normalizes results.
     """
 
-    def __init__(self, api_key: str, company_id: str, organization_id: int):
+    def __init__(self, api_key: str, company_id: str, organization_id: int, db=None):
         self.api_key = api_key
         self.company_id = company_id
         self.organization_id = organization_id
+        # אופציונלי, אחורה-תואם: בלעדיו quota_snapshot נשאר None (חוסם
+        # getpdf/getdetails, בדיוק ההתנהגות הקיימת) — לא קריסה לקוראים
+        # ישנים שלא מעבירים session.
+        self.db = db
 
     async def _get_client(self):
         # A fresh instance per call: every fetch method wraps the client in
@@ -71,11 +75,20 @@ class SumitConnector(AccountingConnector):
         # subsequent one in the same sync run.
         from ..integrations.sumit_integration import SumitIntegration
         from .sumit_request_budget import SumitRequestLimiter
-        return SumitIntegration(
+        client = SumitIntegration(
             api_key=self.api_key,
             company_id=self.company_id,
             request_limiter=SumitRequestLimiter(self.organization_id),
         )
+        # מצרף מדידת-מכסה שמורה (ר' sumit_quota.py) לכל לקוח שנבנה כאן —
+        # נקודת-הצירוף היחידה, כדי שכל פעולה בתשלום (getpdf/getdetails,
+        # כל הצומתים שעוברים דרך _get_client) תיהנה מהמדידה בלי שכל
+        # מתודה תדע לטעון אותה בעצמה. ללא db (ברירת מחדל) — None, כלומר
+        # אותה חסימה שכבר קיימת היום.
+        if self.db is not None:
+            from .sumit_quota import load_quota_snapshot
+            client.quota_snapshot = load_quota_snapshot(self.db, self.organization_id)
+        return client
 
     async def test_connection(self) -> bool:
         try:
