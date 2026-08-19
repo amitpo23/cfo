@@ -15,7 +15,14 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # order and finish the full morning cycle before 08:00 Israel in winter and
 # summer without duplicate/DST-triggered provider calls.
 EXPECTED_DAILY_SCHEDULES = {
-    "/api/cron/sync-sumit": "30 1 * * *",
+    # /api/cron/sync-sumit הוסר 19/08/2026 — הנחיית בעלים מפורשת וחוזרת
+    # ("תעצור את כל הקריאות api מול סאמיט באופן מלא כעת" / "תעצור כל
+    # אוטומציה מול סאמיט"): עצירה מלאה של כל אוטומציית SUMIT, לא רק
+    # הגבלת-קצב. SUMIT_GLOBAL_REQUESTS_PER_MINUTE/SUMIT_ORG_DAILY_REQUEST_LIMIT
+    # הועברו ל-0 בפרוד (חוסמים כל קריאה fail-closed ב-_make_request), אבל
+    # הבעלים ביקש גם שהאוטומציה לא תרוץ בכלל — לא רק שתיכשל בשקט. ה-cron
+    # שכולל את כל הקריאות החיות ל-SUMIT (מסמכים/חשבונות/תשלומים) הוסר
+    # מה-schedule עד הוראה אחרת. להחזרה: אישור בעלים מפורש בלבד.
     "/api/cron/sync-open-finance": "0 2 * * *",
     # הוסרו 11/08/2026 — שניהם קוראים ל-/documents/getdetails, שהיא
     # **פעולה בתשלום פר-מסמך** ש-SUMIT מחייבת על אמצעי התשלום של
