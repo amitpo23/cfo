@@ -179,6 +179,27 @@ async def _get_ap_aging(db, org_id: int, **_kwargs) -> dict:
     return DashboardService(db, org_id).get_ap_aging()
 
 
+async def _get_budget_vs_actual(
+    db, org_id: int, *, year: int, month: int | None = None, **_kwargs
+) -> dict:
+    """תקציב מול ביצוע בפועל, לפי קטגוריה. הביצוע נגזר מ-Bill/Expense/Invoice
+    האמיתיים (ר' BudgetService._get_actual_by_category) — לא מ-Transaction
+    (הצינור הקפוא). ללא תקציב מוגדר לקטגוריה כלשהי, מוחזר categories=[]
+    (honest-null) — לעולם לא ברירת-מחדל מומצאת. קריאה בלבד."""
+    from dataclasses import asdict
+
+    from .budget_service import BudgetService, BudgetPeriod
+
+    svc = BudgetService(db, organization_id=org_id)
+    period = BudgetPeriod.MONTHLY if month else BudgetPeriod.YEARLY
+    summary = svc.get_budget_vs_actual(year=year, month=month, period=period)
+    result = asdict(summary)
+    for cat in result["categories"]:
+        cat["status"] = cat["status"].value if hasattr(cat["status"], "value") else cat["status"]
+    result["status"] = result["status"].value if hasattr(result["status"], "value") else result["status"]
+    return result
+
+
 async def _set_vehicle_profile(
     db, org_id: int, *, label: str, vehicle_kind: str,
     primarily_business: bool | None = None,
@@ -1355,7 +1376,13 @@ TOOLS: dict[str, ChatTool] = {
     ),
     "get_ar_aging": ChatTool(
         name="get_ar_aging",
-        description="קבלת דוח גיול חובות לקוחות (aging) — יתרות פתוחות לפי טווחי איחור.",
+        description=(
+            "דוח גיול חובות לקוחות (aging) — יתרות פתוחות לפי טווחי איחור. "
+            "'total' הוא גולמי (לא כולל זיכויים לא-משויכים — אין נתון "
+            "לאיזו חשבונית זיכוי מקזז, אז הוא לא מוקצה לדלג ספציפי). "
+            "כשמצטטים למשתמש כמה לקוח 'באמת' חייב, עדיף net_of_credits_total; "
+            "אם unapplied_credits_total > 0 — ציין זאת במפורש."
+        ),
         input_schema={"type": "object", "properties": {}},
         category="read",
         fn=_get_ar_aging,
@@ -1371,6 +1398,28 @@ TOOLS: dict[str, ChatTool] = {
         input_schema={"type": "object", "properties": {}},
         category="read",
         fn=_get_ap_aging,
+    ),
+    "get_budget_vs_actual": ChatTool(
+        name="get_budget_vs_actual",
+        description=(
+            "תקציב מול ביצוע בפועל לפי קטגוריה, לחודש/שנה נתונים. הביצוע "
+            "נגזר מ-Bill/Expense/Invoice אמיתיים (לא Transaction). קטגוריה "
+            "בלי תקציב מוגדר לא מופיעה — אל תניח 0 או שהכול בסדר; אמור "
+            "למשתמש שלא הוגדר תקציב לקטגוריה הזו אם categories ריק."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer", "description": "שנה, למשל 2026"},
+                "month": {
+                    "type": ["integer", "null"],
+                    "description": "חודש 1-12; השאר null להשוואה שנתית",
+                },
+            },
+            "required": ["year"],
+        },
+        category="read",
+        fn=_get_budget_vs_actual,
     ),
     "set_vehicle_profile": ChatTool(
         name="set_vehicle_profile",
