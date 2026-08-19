@@ -67,9 +67,9 @@ class Settings(BaseSettings):
     # Fail closed into the free SUMIT testing track.  A live environment must
     # be selected explicitly; misspellings must never enable live behavior.
     sumit_environment: str = "test"
-    # 200 — הנחיית בעלים 19/08/2026: "הגבלה ל-200 קריאות בחודש בלבד",
-    # מתחת למכסת מסלול הבדיקות (~400) בשוליים רחבים. תקרה גלובלית משותפת
-    # לכל הארגונים, לא פר-ארגון.
+    # 200 — הנחיית בעלים 19/08/2026: 200 קריאות בחודש **לכל ארגון**
+    # ("מאחר וכרגע מותר 400 לכל ארגון זה מרווח ביטחון מתאים") — שולי
+    # ביטחון של 50% מתחת למכסת מסלול הבדיקות של SUMIT.
     sumit_test_monthly_request_limit: int = 200
     sumit_test_monthly_paid_action_limit: int = 90
     sumit_test_org_daily_request_limit: int = 20

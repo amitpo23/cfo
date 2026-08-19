@@ -219,10 +219,13 @@ class SumitRequestLimiter:
                         "SUMIT organization daily request budget exceeded",
                     )
                 if settings.sumit_environment == "test":
+                    # פר-ארגון (הכרעת בעלים 19/08): מכסת מסלול הבדיקות של
+                    # SUMIT היא ~400 לכל עסק, ולכן 200 לכל ארגון הם שולי
+                    # ביטחון של 50% — לא תקציב משותף שגוזל ארגון מארגון.
                     month_ok = self._claim_window(
                         db,
-                        scope_key="global",
-                        organization_id=None,
+                        scope_key=f"org:{self.organization_id}",
+                        organization_id=self.organization_id,
                         window_kind="month",
                         window_start=month_start,
                         limit_value=settings.sumit_test_monthly_request_limit,
