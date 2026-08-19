@@ -99,6 +99,25 @@ _SUMIT_ENVIRONMENT_VERIFY_ENDPOINT = "/website/companies/getdetails/"
 _SUMIT_ENVIRONMENT_CACHE_TTL = timedelta(hours=20)
 _SUMIT_ENVIRONMENT_CACHE: dict[tuple[str, str], datetime] = {}
 
+# שער עלות אחיד (תוכנית ההפעלה 19/08/2026, סעיף 4.6). הא-סימטריה
+# ההיסטורית — רק getdetails/getpdf היו מוגנים בשער תשלום בעוד
+# create/send/sms/charge עברו רק בתקרת הבקשות הכללית — נסגרת כאן:
+# כל endpoint שמייצר "פעולה" בחיוב SUMIT עובר את שער הפעולות-בתשלום
+# (במצב test: המונה החודשי 90; במצב live: מכסה נמדדת בלבד, ומדידה
+# לא-ידועה אינה מכסה פנויה).
+PAID_ACTION_ENDPOINTS = frozenset({
+    "/accounting/documents/create/",
+    "/accounting/documents/send/",
+    "/accounting/documents/addexpense/",
+    "/sms/sms/send/",
+    "/sms/sms/sendmultiple/",
+    "/fax/fax/send/",
+    "/billing/payments/charge/",
+    "/billing/payments/multivendorcharge/",
+    "/billing/recurring/charge/",
+    "/creditguy/gateway/transaction/",
+})
+
 
 # מחרוזות שמעידות שהמפתח אינו אמיתי. הרשימה מכוונת להיות צרה: חסימה
 # גורפת מדי הייתה משביתה את הפרוד, ולכן היא מכילה רק דפוסים שאין להם
@@ -278,6 +297,11 @@ class SumitIntegration(BaseIntegration):
         )
         if not is_environment_verification:
             await self._ensure_environment_verified()
+        # שער עלות אחיד (תוכנית ההפעלה 19/08, סעיף 4.6): כל endpoint
+        # שעולה כסף עובר שער פעולות-בתשלום — לפני תפיסת משבצת הבקשה,
+        # כדי שסירוב-תשלום לא יבזבז את תקציב הקריאות.
+        if endpoint in PAID_ACTION_ENDPOINTS:
+            self._enforce_paid_action_budget(endpoint)
         # Synchronous DB claim is intentional: no network coroutine is created
         # until the durable cross-instance slot is committed.
         self.request_limiter.claim(endpoint)
@@ -406,6 +430,31 @@ class SumitIntegration(BaseIntegration):
                 "key. Repeated failed authentication gets the account and IP "
                 "blocked by the provider — which blocks the owner's real work "
                 "too. Configure a real key, or use a fake connector in tests."
+            )
+
+    def _enforce_paid_action_budget(self, endpoint: str) -> None:
+        """שער עלות אחיד לכל פעולה שעולה כסף (סעיף 4.6).
+
+        במצב test: תפיסת משבצת מהמונה החודשי העמיד (ברירת מחדל 90 —
+        מתחת למכסת ~100 הפעולות של מסלול הבדיקות). במצב live: נדרשת
+        מדידת מכסה טרייה מהספק — `quota_snapshot` — ומדידה לא-ידועה
+        חוסמת (החוק הקשיח מ-CLAUDE.md). fail-closed בשני המצבים.
+        """
+        from ..services.sumit_quota import (
+            _claim_test_monthly_paid_action,
+            assert_paid_action_within_quota,
+        )
+
+        if settings.sumit_environment == "test":
+            organization_id = getattr(
+                self.request_limiter, "organization_id", None,
+            )
+            _claim_test_monthly_paid_action(
+                organization_id=organization_id, endpoint=endpoint,
+            )
+        else:
+            assert_paid_action_within_quota(
+                getattr(self, "quota_snapshot", None), endpoint=endpoint,
             )
 
     def _assert_within_provider_quota(self, action: str) -> None:

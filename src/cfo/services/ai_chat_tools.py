@@ -805,6 +805,99 @@ async def _verify_filing(
     return verify_filing(db, org_id, year, month, months=months, basis=basis)
 
 
+async def _get_sumit_budget_status(db, org_id: int, **_kwargs) -> dict:
+    """כמה קריאות SUMIT נשארו החודש/היום — מהמונים העמידים ב-DB בלבד.
+
+    תוכנית ההפעלה 19/08/2026 סעיף 4.1: אפס קריאות API — הקריאה היחידה
+    היא ל-provider_request_budgets המקומי, ולכן מותר לשאול כמה שרוצים.
+    """
+    from datetime import datetime, timezone
+
+    from ..config import settings
+    from ..models import ProviderRequestBudget
+    from .sumit_request_budget import _utc_windows
+
+    now = datetime.now(timezone.utc)
+    _, day_start, month_start = _utc_windows(now)
+
+    def _used(scope_key: str, window_kind: str, window_start) -> int:
+        row = db.query(ProviderRequestBudget).filter_by(
+            provider="sumit", scope_key=scope_key,
+            window_kind=window_kind, window_start=window_start,
+        ).first()
+        return int(row.used) if row else 0
+
+    month_limit = settings.sumit_test_monthly_request_limit
+    day_limit = settings.sumit_org_daily_request_limit
+    paid_limit = settings.sumit_test_monthly_paid_action_limit
+    month_used = _used(f"org:{org_id}", "month", month_start)
+    day_used = _used(f"org:{org_id}", "day", day_start)
+    paid_used = _used(f"paid:org:{org_id}", "month", month_start)
+
+    return {
+        "environment": settings.sumit_environment,
+        "month": {
+            "limit": month_limit, "used": month_used,
+            "remaining": max(0, month_limit - month_used),
+        },
+        "day": {
+            "limit": day_limit, "used": day_used,
+            "remaining": max(0, day_limit - day_used),
+        },
+        "paid_month": {
+            "limit": paid_limit, "used": paid_used,
+            "remaining": max(0, paid_limit - paid_used),
+        },
+        "source": "local_db",
+        "note": (
+            "המונים נאכפים fail-closed בשכבת הרשת; התקרות הן פר-ארגון "
+            "(חודשי/יומי) והשאילתה הזו עצמה אינה צורכת קריאת API."
+        ),
+    }
+
+
+async def _prepare_vat_filing(
+    db, org_id: int, *, year: int, month: int, months: int = 1,
+    basis: str = "document", **_kwargs,
+) -> dict:
+    """הכנת דוח מע"מ לשידור ידני — הכל מה-DB המקומי, אפס קריאות API.
+
+    תוכנית ההפעלה 19/08/2026 סעיף 4.3: מושקו מרכיב את הדוח, מריץ אימות
+    משולש ובודק מוכנות PCN874 — והשידור עצמו נשאר ידני של הבעלים ב-SUMIT
+    (הגבול הקשיח: רצף לא משדרת לרשות המסים).
+    """
+    from .daily_reports_service import vat_report_period
+    from .expense_filing_service import ExpenseFilingService
+    from .filing_verification import verify_filing
+
+    report = vat_report_period(db, org_id, year, month, months=months, basis=basis)
+    verification = verify_filing(
+        db, org_id, year, month, months=months, basis=basis,
+    )
+    try:
+        pcn_readiness = ExpenseFilingService(
+            db, organization_id=org_id,
+        ).pcn874_readiness()
+    except Exception as exc:  # honest-null: אי-ידיעה מדווחת, לא מוסתרת
+        pcn_readiness = {"error": str(exc)}
+
+    checks = verification.get("checks", [])
+    all_passed = bool(checks) and all(c.get("passed") for c in checks)
+    return {
+        "period": {"year": year, "month": month, "months": months},
+        "report": report,
+        "verification": verification,
+        "pcn874_readiness": pcn_readiness,
+        "ready_to_transmit": all_passed,
+        "transmission": "manual_only",
+        "notice": (
+            "רצף אינה משדרת לרשות המסים. אם כל הבדיקות ירוקות — הבעלים "
+            "משדר ידנית בפורטל SUMIT (דיווח חכם), ובמסלול הבדיקות הנוכחי "
+            "אין חיבור לרשות המסים כלל."
+        ),
+    }
+
+
 async def _kb_lookup(db, org_id: int, *, query: str | None = None, **_kwargs) -> dict:
     """מרכז ידע חשבונאי/מיסויי (docs/bookkeeper_kb + docs/sumit_help_kb).
 
@@ -1615,6 +1708,35 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_get_ledger_card,
+    ),
+    "get_sumit_budget_status": ChatTool(
+        name="get_sumit_budget_status",
+        description=(
+            "כמה קריאות SUMIT נשארו החודש והיום (וכמה פעולות בתשלום) — "
+            "מהמונים המקומיים בלבד, בלי לצרוך אף קריאת API."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_sumit_budget_status,
+    ),
+    "prepare_vat_filing": ChatTool(
+        name="prepare_vat_filing",
+        description=(
+            "הכנת דוח מע\"מ לתקופה: מספרי הדוח + אימות משולש + מוכנות "
+            "PCN874, הכל מהנתונים המקומיים. אינו משדר — השידור ידני של "
+            "הבעלים בלבד."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer", "description": "שנת הדיווח"},
+                "month": {"type": "integer", "description": "חודש תחילת התקופה"},
+                "months": {"type": "integer", "description": "אורך התקופה בחודשים", "default": 1},
+            },
+            "required": ["year", "month"],
+        },
+        category="read",
+        fn=_prepare_vat_filing,
     ),
     "get_vat_position": ChatTool(
         name="get_vat_position",
