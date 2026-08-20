@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     sumit_test_monthly_paid_action_limit: int = 90
     sumit_test_org_daily_request_limit: int = 20
     sumit_test_requests_per_minute: int = 10
+    # W2.2 (20/08/2026): ב-live לא היה בלם חודשי בכלל — 300/יום ≈ 9,000
+    # בחודש. התקרות כאן הן תקציב עלות פנימי, לא מכסת ספק, ומוצמדות
+    # לתקרה קשיחה בקוד (ראה enforce_cost_protection_floors).
+    sumit_live_monthly_request_limit: int = 2000
+    sumit_live_monthly_paid_action_limit: int = 90
     # פורטל ההנה"ח של המשרד (CompanyID 844329067) הוא ישות נפרדת מתיק
     # לקוח בודד: הוא מחזיק את כל התיקים, ורק מפתח שלו מורשה לפעולות
     # ברמת המשרד. `SUMIT_BOOKS_AMIT_PORAT.md` השאיר זאת כשאלה פתוחה —
@@ -280,6 +285,12 @@ class Settings(BaseSettings):
         )
         self.sumit_test_monthly_request_limit = min(
             200, max(0, self.sumit_test_monthly_request_limit),
+        )
+        self.sumit_live_monthly_request_limit = min(
+            2000, max(0, self.sumit_live_monthly_request_limit),
+        )
+        self.sumit_live_monthly_paid_action_limit = min(
+            90, max(0, self.sumit_live_monthly_paid_action_limit),
         )
         self.sumit_test_monthly_paid_action_limit = min(
             90, max(0, self.sumit_test_monthly_paid_action_limit),

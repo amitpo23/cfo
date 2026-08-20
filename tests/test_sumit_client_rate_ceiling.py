@@ -78,6 +78,9 @@ async def test_the_binary_path_claims_before_the_network(monkeypatch):
     client = SumitIntegration(
         api_key=REAL_KEY, company_id="1", request_limiter=_Limiter(),
     )
+    # W2.5 (20/08): getpdf עובר שער פעולות-בתשלום שדורש מדידה. הטסט
+    # בודק את סדר התפיסה-לפני-רשת, לא את שער התשלום (מכוסה בנפרד).
+    client._enforce_paid_action_budget = lambda endpoint: None
 
     class _Resp:
         status_code = 200

@@ -109,6 +109,10 @@ PAID_ACTION_ENDPOINTS = frozenset({
     "/accounting/documents/create/",
     "/accounting/documents/send/",
     "/accounting/documents/addexpense/",
+    # W2.5 (20/08/2026): הפעולות שחייבו בפועל ב-17/07 היו מחוץ לרשימה —
+    # מוגנות רק ברמת המתודה, ו-_post_binary לא בדק את הרשימה כלל.
+    "/accounting/documents/getdetails/",
+    "/accounting/documents/getpdf/",
     "/sms/sms/send/",
     "/sms/sms/sendmultiple/",
     "/fax/fax/send/",
@@ -299,7 +303,8 @@ class SumitIntegration(BaseIntegration):
             await self._ensure_environment_verified()
         # שער עלות אחיד (תוכנית ההפעלה 19/08, סעיף 4.6): כל endpoint
         # שעולה כסף עובר שער פעולות-בתשלום — לפני תפיסת משבצת הבקשה,
-        # כדי שסירוב-תשלום לא יבזבז את תקציב הקריאות.
+        # כדי שסירוב-תשלום לא יבזבז את תקציב הקריאות. (החסימה המוקדמת,
+        # לפני כל רשת, יושבת בשומרי המתודות — `_assert_within_provider_quota`.)
         if endpoint in PAID_ACTION_ENDPOINTS:
             self._enforce_paid_action_budget(endpoint)
         # Synchronous DB claim is intentional: no network coroutine is created
@@ -432,30 +437,45 @@ class SumitIntegration(BaseIntegration):
                 "too. Configure a real key, or use a fake connector in tests."
             )
 
+    def _current_quota_snapshot(self):
+        """W2.1 — טעינה עצלה של מדידת המכסה האחרונה מה-DB.
+
+        הזרקה מפורשת (`self.quota_snapshot = ...`) גוברת תמיד; בהיעדרה
+        נטענת המדידה האחרונה שהרענון היומי שמר. כל כשל טעינה מחזיר
+        `None` — כלומר חוסם (מכסה לא-ידועה אינה מכסה פנויה), לעולם לא
+        פותח.
+        """
+        explicit = getattr(self, "quota_snapshot", None)
+        if explicit is not None:
+            return explicit
+        organization_id = getattr(self.request_limiter, "organization_id", None)
+        if not organization_id:
+            return None
+        try:
+            from ..database import SessionLocal
+            from ..services.sumit_quota import load_latest_snapshot
+
+            db = SessionLocal()
+            try:
+                return load_latest_snapshot(db, organization_id)
+            finally:
+                db.close()
+        except Exception:
+            return None
+
     def _enforce_paid_action_budget(self, endpoint: str) -> None:
         """שער עלות אחיד לכל פעולה שעולה כסף (סעיף 4.6).
 
-        במצב test: תפיסת משבצת מהמונה החודשי העמיד (ברירת מחדל 90 —
-        מתחת למכסת ~100 הפעולות של מסלול הבדיקות). במצב live: נדרשת
-        מדידת מכסה טרייה מהספק — `quota_snapshot` — ומדידה לא-ידועה
-        חוסמת (החוק הקשיח מ-CLAUDE.md). fail-closed בשני המצבים.
+        **בשתי הסביבות**: נדרשת מדידת מכסה טרייה מהספק (`quota_snapshot`
+        מוזרק, או המדידה היומית האחרונה מה-DB) — מדידה לא-ידועה חוסמת
+        (החוק הקשיח מ-CLAUDE.md). בנוסף נתבע המונה החודשי העמיד שלנו
+        (90 ב-test, לפי הקונפיג ב-live) בתוך אותה בדיקה. fail-closed.
         """
-        from ..services.sumit_quota import (
-            _claim_test_monthly_paid_action,
-            assert_paid_action_within_quota,
-        )
+        from ..services.sumit_quota import assert_paid_action_within_quota
 
-        if settings.sumit_environment == "test":
-            organization_id = getattr(
-                self.request_limiter, "organization_id", None,
-            )
-            _claim_test_monthly_paid_action(
-                organization_id=organization_id, endpoint=endpoint,
-            )
-        else:
-            assert_paid_action_within_quota(
-                getattr(self, "quota_snapshot", None), endpoint=endpoint,
-            )
+        assert_paid_action_within_quota(
+            self._current_quota_snapshot(), endpoint=endpoint,
+        )
 
     def _assert_within_provider_quota(self, action: str) -> None:
         """**האיסור המוחלט** — נמדד מול המכסה בפועל, לא מול מספר מוסכם.
@@ -470,8 +490,12 @@ class SumitIntegration(BaseIntegration):
         """
         from ..services.sumit_quota import assert_paid_action_within_quota
 
+        # בדיקה טהורה (claim_budget=False): החסימה המוקדמת לפני כל רשת.
+        # תפיסת המונה עצמה נעשית פעם אחת בלבד, בשער הרשת
+        # (`_enforce_paid_action_budget`).
         assert_paid_action_within_quota(
-            getattr(self, "quota_snapshot", None), endpoint=action,
+            self._current_quota_snapshot(), endpoint=action,
+            claim_budget=False,
         )
 
     @staticmethod
@@ -551,6 +575,10 @@ class SumitIntegration(BaseIntegration):
                 "SUMIT request refused: shared request budget is not configured",
             )
         await self._ensure_environment_verified()
+        # W2.5: אותו שער פעולות-בתשלום כמו ב-`_make_request` — getpdf היא
+        # פעולה בתשלום פר-מסמך והמסלול הזה הוא היחיד שמוביל אליה.
+        if endpoint in PAID_ACTION_ENDPOINTS:
+            self._enforce_paid_action_budget(endpoint)
         # תפיסה סינכרונית לפני יצירת ה-coroutine, זהה ל-`_make_request`:
         # אין בקשה עד שהמשבצת העמידה נרשמה.
         self.request_limiter.claim(endpoint)

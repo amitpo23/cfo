@@ -2355,6 +2355,148 @@ async def review_moshko_feedback(
     return _feedback_admin_payload(row)
 
 
+# ------------------------------------------------------------------ #
+# W1.1 — תור הכישלונות/פערי-היכולת של מושקו (moshko_gaps)
+# ------------------------------------------------------------------ #
+
+def _gap_payload(row) -> dict:
+    return {
+        "id": row.id,
+        "organization_id": row.organization_id,
+        "user_id": row.user_id,
+        "session_id": row.session_id,
+        "message_id": row.message_id,
+        "question": row.question,
+        "answer": row.answer,
+        "gap_kind": row.gap_kind,
+        "tool_name": row.tool_name,
+        "error": row.error,
+        "status": row.status,
+        "resolution": row.resolution,
+        "promoted_memory_id": row.promoted_memory_id,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+@router.get("/moshko/gaps", tags=["Moshko"])
+async def list_moshko_gaps(
+    organization_id: Optional[int] = None,
+    status: Optional[str] = None,
+    gap_kind: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=500),
+    db: Session = Depends(get_db_session),
+    _admin: User = Depends(get_super_admin),
+):
+    """תור הפערים: כלי שנפל / המודל ויתר / המשתמש דיגל. שורה = משהו
+    שמושקו לא ידע לעשות והבעלים יכול לענות עליו."""
+    from ...models import MoshkoGap
+
+    q = db.query(MoshkoGap)
+    if organization_id is not None:
+        q = q.filter(MoshkoGap.organization_id == organization_id)
+    if status is not None:
+        q = q.filter(MoshkoGap.status == status)
+    if gap_kind is not None:
+        q = q.filter(MoshkoGap.gap_kind == gap_kind)
+    rows = q.order_by(MoshkoGap.created_at.desc()).limit(limit).all()
+    return {"gaps": [_gap_payload(r) for r in rows]}
+
+
+class MoshkoGapReviewRequest(BaseModel):
+    status: Optional[str] = None          # answered | dismissed | open
+    resolution: Optional[str] = None
+    promote_to_memory: bool = False
+
+
+@router.patch("/moshko/gaps/{gap_id}", tags=["Moshko"])
+async def review_moshko_gap(
+    gap_id: int,
+    body: MoshkoGapReviewRequest,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """מענה לפער: תשובה חופשית, ובאופציה קידום לזיכרון ארגוני מאושר —
+    כך שהתשובה משפיעה על ההתנהגות מהשיחה הבאה (אותה לולאה כמו פידבק)."""
+    from ...models import MoshkoGap
+
+    row = db.query(MoshkoGap).filter(MoshkoGap.id == gap_id).first()
+    if row is None:
+        raise HTTPException(404, "Gap not found")
+    if body.status is not None and body.status not in {"open", "answered", "dismissed"}:
+        raise HTTPException(400, "Invalid gap status")
+    resolution = body.resolution.strip()[:8000] if body.resolution is not None else None
+    if body.promote_to_memory and not (resolution or row.resolution):
+        raise HTTPException(400, "A resolution is required before promotion")
+
+    now = datetime.utcnow()
+    if resolution is not None:
+        row.resolution = resolution
+    if body.status is not None:
+        row.status = body.status
+    elif resolution is not None:
+        row.status = "answered"
+    row.resolved_by = current_user.id
+    row.resolved_at = now
+    row.updated_at = now
+
+    if body.promote_to_memory:
+        content = row.resolution or ""
+        _validate_memory_capacity(
+            db,
+            organization_id=row.organization_id,
+            user_id=None,
+            content=content,
+            exclude_id=row.promoted_memory_id,
+        )
+        memory = None
+        if row.promoted_memory_id is not None:
+            memory = db.query(MoshkoMemory).filter(
+                MoshkoMemory.id == row.promoted_memory_id,
+                MoshkoMemory.organization_id == row.organization_id,
+            ).first()
+        if memory is None:
+            memory = MoshkoMemory(
+                organization_id=row.organization_id,
+                user_id=None,
+                content=content,
+                category="correction",
+                source="admin",
+                approved_at=now,
+                approved_by=current_user.id,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(memory)
+            db.flush()
+            row.promoted_memory_id = memory.id
+        else:
+            memory.content = content
+            memory.approved_at = now
+            memory.approved_by = current_user.id
+            memory.updated_at = now
+            db.flush()
+        db.add(AuditLog(
+            user_id=current_user.id,
+            organization_id=row.organization_id,
+            action="MOSHKO_MEMORY_CREATE",
+            entity_type="MoshkoMemory",
+            entity_id=memory.id,
+            details={"source_gap_id": row.id},
+        ))
+
+    db.add(AuditLog(
+        user_id=current_user.id,
+        organization_id=row.organization_id,
+        action="MOSHKO_GAP_REVIEW",
+        entity_type="MoshkoGap",
+        entity_id=row.id,
+        details={"status": row.status, "promoted": bool(body.promote_to_memory)},
+    ))
+    db.commit()
+    db.refresh(row)
+    return _gap_payload(row)
+
+
 @router.get("/moshko/memory", tags=["Moshko"])
 async def list_moshko_memory(
     organization_id: Optional[int] = None,

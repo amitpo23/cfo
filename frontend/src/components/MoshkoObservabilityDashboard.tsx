@@ -26,6 +26,8 @@ interface TranscriptMessage {
   id: number;
   role: 'user' | 'assistant';
   content: string;
+  pending_action: { tool?: string; description?: string } | null;
+  executed: boolean;
   created_at: string | null;
 }
 
@@ -41,6 +43,7 @@ interface ToolCall {
   organization_id: number;
   user_id: number;
   session_id: string;
+  message_id: number | null;
   tool_name: string;
   target_system: string;
   arguments: Record<string, unknown>;
@@ -82,6 +85,29 @@ interface QualityFeedback {
   created_at: string | null;
 }
 
+interface MoshkoGap {
+  id: number;
+  organization_id: number;
+  user_id: number | null;
+  session_id: string | null;
+  message_id: number | null;
+  question: string | null;
+  answer: string | null;
+  gap_kind: 'tool_failed' | 'model_gave_up' | 'user_flagged' | string;
+  tool_name: string | null;
+  error: string | null;
+  status: 'open' | 'answered' | 'dismissed' | string;
+  resolution: string | null;
+  promoted_memory_id: number | null;
+  created_at: string | null;
+}
+
+const gapKindLabel: Record<string, string> = {
+  tool_failed: 'כלי נכשל',
+  model_gave_up: 'מושקו ויתר',
+  user_flagged: 'דגל משתמש',
+};
+
 const channelLabel: Record<string, string> = {
   web: 'ווב',
   telegram: 'טלגרם',
@@ -106,7 +132,9 @@ export default function MoshkoObservabilityDashboard({
   const [toolCalls, setToolCalls] = useState<Page<ToolCall> | null>(null);
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [feedback, setFeedback] = useState<Page<QualityFeedback> | null>(null);
+  const [gaps, setGaps] = useState<MoshkoGap[] | null>(null);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
+  const [transcriptToolCalls, setTranscriptToolCalls] = useState<ToolCall[]>([]);
   const [loading, setLoading] = useState(true);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -121,6 +149,8 @@ export default function MoshkoObservabilityDashboard({
   const [feedbackCategory, setFeedbackCategory] = useState('');
   const [correctionDrafts, setCorrectionDrafts] = useState<Record<number, string>>({});
   const [reviewingId, setReviewingId] = useState<number | null>(null);
+  const [gapDrafts, setGapDrafts] = useState<Record<number, string>>({});
+  const [gapBusyId, setGapBusyId] = useState<number | null>(null);
 
   const params = useMemo(() => {
     const result: Record<string, string | number | boolean> = { limit: 50 };
@@ -146,16 +176,20 @@ export default function MoshkoObservabilityDashboard({
       if (channel) feedbackParams.channel = channel;
       if (feedbackStatus) feedbackParams.status = feedbackStatus;
       if (feedbackCategory) feedbackParams.category = feedbackCategory;
-      const [conversationData, toolData, usageData, feedbackData] = await Promise.all([
+      const gapParams: Record<string, string | number> = { status: 'open', limit: 100 };
+      if (organizationId) gapParams.organization_id = Number(organizationId);
+      const [conversationData, toolData, usageData, feedbackData, gapData] = await Promise.all([
         api.get<Page<Conversation>>('/admin/moshko/conversations', { params }),
         api.get<Page<ToolCall>>('/admin/moshko/tool-calls', { params: toolParams }),
         api.get<UsageResponse>('/admin/moshko/usage', { params: { ...params, group_by: 'day' } }),
         api.get<Page<QualityFeedback>>('/admin/moshko/feedback', { params: feedbackParams }),
+        api.get<{ gaps: MoshkoGap[] }>('/admin/moshko/gaps', { params: gapParams }),
       ]);
       setConversations(conversationData);
       setToolCalls(toolData);
       setUsage(usageData);
       setFeedback(feedbackData);
+      setGaps(gapData.gaps);
     } catch (requestError: any) {
       setError(requestError?.response?.data?.detail || 'טעינת נתוני מושקו נכשלה');
     } finally {
@@ -171,14 +205,51 @@ export default function MoshkoObservabilityDashboard({
     setTranscriptLoading(true);
     setError(null);
     try {
-      setTranscript(await api.get<Transcript>(
-        `/admin/moshko/conversations/${encodeURIComponent(row.session_id)}`,
-        { params: { organization_id: row.organization_id, user_id: row.user_id } },
-      ));
+      // ה-API של tool-calls אינו תומך בסינון session_id בצד השרת — מסננים
+      // בצד הלקוח לפי ה-session_id שחוזר בכל שורה (בהיקף ארגון+משתמש).
+      const [transcriptData, sessionToolData] = await Promise.all([
+        api.get<Transcript>(
+          `/admin/moshko/conversations/${encodeURIComponent(row.session_id)}`,
+          { params: { organization_id: row.organization_id, user_id: row.user_id } },
+        ),
+        api.get<Page<ToolCall>>('/admin/moshko/tool-calls', {
+          params: { organization_id: row.organization_id, user_id: row.user_id, limit: 500 },
+        }),
+      ]);
+      setTranscript(transcriptData);
+      setTranscriptToolCalls(
+        sessionToolData.items.filter((call) => call.session_id === row.session_id),
+      );
     } catch (requestError: any) {
       setError(requestError?.response?.data?.detail || 'טעינת התמלול נכשלה');
     } finally {
       setTranscriptLoading(false);
+    }
+  };
+
+  const reviewGap = async (row: MoshkoGap, action: 'answer' | 'promote' | 'dismiss') => {
+    const resolution = (gapDrafts[row.id] ?? row.resolution ?? '').trim();
+    if (action !== 'dismiss' && !resolution) {
+      setError('נדרשת תשובה/הקשר לפני מענה לפער.');
+      return;
+    }
+    setGapBusyId(row.id);
+    setError(null);
+    try {
+      await api.patch(`/admin/moshko/gaps/${row.id}`,
+        action === 'dismiss'
+          ? { status: 'dismissed' }
+          : {
+              status: 'answered',
+              resolution,
+              promote_to_memory: action === 'promote',
+            },
+      );
+      await load();
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.detail || 'שמירת המענה לפער נכשלה');
+    } finally {
+      setGapBusyId(null);
     }
   };
 
@@ -260,11 +331,12 @@ export default function MoshkoObservabilityDashboard({
           <div className="flex items-center justify-center gap-3 rounded-xl border bg-white p-16 text-slate-500"><Loader2 className="animate-spin" /> טוען נתונים…</div>
         ) : (
           <>
-            <section className="grid gap-4 md:grid-cols-4">
+            <section className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
               <div className="rounded-xl border bg-white p-5 shadow-sm"><MessageCircle className="mb-3 text-blue-600" /><div className="text-3xl font-bold">{conversations?.total ?? 0}</div><div className="text-sm text-slate-500">שיחות מסוננות</div></div>
               <div className="rounded-xl border bg-white p-5 shadow-sm"><Wrench className="mb-3 text-amber-600" /><div className="text-3xl font-bold">{toolCalls?.total ?? 0}</div><div className="text-sm text-slate-500">קריאות כלים</div></div>
               <div className="rounded-xl border bg-white p-5 shadow-sm"><Coins className="mb-3 text-emerald-600" /><div className="text-3xl font-bold">{formatCost(usage?.summary.cost_usd ?? null)}</div><div className="text-sm text-slate-500">עלות מתומחרת; לא ידוע נשאר NULL</div></div>
               <div className="rounded-xl border bg-white p-5 shadow-sm"><Brain className="mb-3 text-violet-600" /><div className="text-3xl font-bold">{feedback?.total ?? 0}</div><div className="text-sm text-slate-500">פריטי איכות בתור</div></div>
+              <div className="rounded-xl border bg-white p-5 shadow-sm"><AlertCircle className="mb-3 text-rose-600" /><div className="text-3xl font-bold">{gaps?.length ?? 0}</div><div className="text-sm text-slate-500">פערי יכולת פתוחים</div></div>
             </section>
 
             <section className="overflow-hidden rounded-xl border bg-white shadow-sm">
@@ -306,6 +378,54 @@ export default function MoshkoObservabilityDashboard({
               </div>
             </section>
 
+            <section className="overflow-hidden rounded-xl border bg-white shadow-sm">
+              <div className="border-b p-4">
+                <h2 className="text-lg font-semibold">פערי יכולת וכישלונות</h2>
+                <p className="text-sm text-slate-500">כלים שנפלו, שאלות שמושקו ויתר עליהן ודגלים של משתמשים — מענה כאן סוגר את הפער, וקידום לידע משפיע מהשיחה הבאה.</p>
+              </div>
+              <div className="max-h-[700px] divide-y overflow-auto">
+                {(gaps || []).map((row) => (
+                  <article key={row.id} className="space-y-3 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                      <span className="font-semibold text-slate-800">
+                        <span className="rounded bg-rose-50 px-2 py-0.5 text-rose-700">{gapKindLabel[row.gap_kind] || row.gap_kind}</span>
+                        <span className="mr-2">ארגון {row.organization_id}{row.user_id !== null ? ` · משתמש ${row.user_id}` : ''}</span>
+                        {row.tool_name && <span className="mr-2 font-mono text-slate-600">כלי: {row.tool_name}</span>}
+                      </span>
+                      <span>{formatDate(row.created_at)} · {row.status}</span>
+                    </div>
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-lg bg-blue-50 p-3 text-sm"><div className="mb-1 text-xs font-semibold text-blue-700">השאלה</div>{row.question || 'לא נשמרה שאלה'}</div>
+                      <div className="rounded-lg bg-slate-100 p-3 text-sm">
+                        <div className="mb-1 text-xs font-semibold text-slate-600">{row.error ? 'השגיאה' : 'התשובה'}</div>
+                        {row.error || row.answer || '—'}
+                      </div>
+                    </div>
+                    <textarea
+                      value={gapDrafts[row.id] ?? row.resolution ?? ''}
+                      onChange={(event) => setGapDrafts((current) => ({ ...current, [row.id]: event.target.value }))}
+                      rows={2}
+                      maxLength={8000}
+                      placeholder="תשובה/הקשר — מה מושקו היה צריך לדעת או לענות כאן"
+                      className="w-full rounded-lg border p-3 text-sm"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" disabled={gapBusyId === row.id} onClick={() => void reviewGap(row, 'answer')} className="rounded-lg border px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50">
+                        ענה
+                      </button>
+                      <button type="button" disabled={gapBusyId === row.id} onClick={() => void reviewGap(row, 'promote')} className="flex items-center gap-2 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50">
+                        {gapBusyId === row.id ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} ענה וקדם לידע
+                      </button>
+                      <button type="button" disabled={gapBusyId === row.id} onClick={() => void reviewGap(row, 'dismiss')} className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50">
+                        בטל
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {!gaps?.length && <p className="p-6 text-sm text-slate-500">אין פערים פתוחים במסנן שנבחר.</p>}
+              </div>
+            </section>
+
             <section className="rounded-xl border bg-white p-5 shadow-sm">
               <h2 className="mb-4 text-lg font-semibold">טוקנים ועלות לפי יום</h2>
               <div className="space-y-3">
@@ -340,12 +460,34 @@ export default function MoshkoObservabilityDashboard({
                 <h2 className="border-b p-4 text-lg font-semibold">תמלול מלא</h2>
                 <div className="max-h-[520px] space-y-3 overflow-auto p-4">
                   {transcriptLoading && <Loader2 className="mx-auto animate-spin text-slate-400" />}
-                  {!transcriptLoading && transcript?.messages.map((message) => (
-                    <div key={message.id} className={`max-w-[88%] rounded-xl p-3 text-sm ${message.role === 'user' ? 'mr-auto bg-blue-50 text-blue-950' : 'ml-auto bg-slate-100'}`}>
-                      <div className="mb-1 text-xs font-semibold text-slate-500">{message.role === 'user' ? 'משתמש' : 'מושקו'} · {formatDate(message.created_at)}</div>
-                      <div className="whitespace-pre-wrap">{message.content}</div>
-                    </div>
-                  ))}
+                  {!transcriptLoading && transcript?.messages.map((message) => {
+                    const messageToolCalls = transcriptToolCalls.filter((call) => call.message_id === message.id);
+                    return (
+                      <div key={message.id} className={`max-w-[88%] rounded-xl p-3 text-sm ${message.role === 'user' ? 'mr-auto bg-blue-50 text-blue-950' : 'ml-auto bg-slate-100'}`}>
+                        <div className="mb-1 text-xs font-semibold text-slate-500">{message.role === 'user' ? 'משתמש' : 'מושקו'} · {formatDate(message.created_at)}</div>
+                        <div className="whitespace-pre-wrap">{message.content}</div>
+                        {message.role === 'assistant' && message.pending_action && (
+                          <div className="mt-2 flex flex-wrap items-center gap-1 text-xs">
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800">פעולה הוצעה{message.pending_action.tool ? ` · ${message.pending_action.tool}` : ''}</span>
+                            {!message.executed && <span className="rounded-full bg-red-100 px-2 py-0.5 font-medium text-red-700">לא אושרה</span>}
+                          </div>
+                        )}
+                        {messageToolCalls.length > 0 && (
+                          <div className="mt-2 space-y-1 border-t border-slate-200 pt-2">
+                            {messageToolCalls.map((call) => (
+                              <div key={call.id} className="flex flex-wrap items-center gap-2 text-xs">
+                                <span className={`rounded-full px-2 py-0.5 font-medium ${call.succeeded ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-700'}`}>
+                                  {call.tool_name} · {call.succeeded ? 'הצליח' : 'נכשל'}
+                                </span>
+                                <span className="tabular-nums text-slate-400">{call.duration_ms}ms</span>
+                                {!call.succeeded && call.error && <span className="text-red-700">{call.error}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                   {!transcriptLoading && !transcript && <p className="text-sm text-slate-500">בחר שיחה כדי לצפות בתמלול.</p>}
                 </div>
               </section>

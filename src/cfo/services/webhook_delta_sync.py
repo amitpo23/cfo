@@ -38,8 +38,14 @@ logger = logging.getLogger(__name__)
 # rather than a genuinely new event and is skipped.
 DEBOUNCE_SECONDS = 120
 
+# W2.4 (20/08/2026): תקרת ריצות סנכרון מונעות-webhook ליום לכל (ארגון,
+# מקור). נתיב ה-webhook עקף את שער ה-20 שעות לחלוטין — עם debounce
+# בזיכרון בלבד, 15 מסירות ביום היו 15 ריצות סנכרון.
+WEBHOOK_SYNCS_PER_DAY = 6
+
 # (organization_id, source) -> monotonic timestamp of the last handled event
-# that triggered a sync. Module-level by design — see module docstring.
+# that triggered a sync. Warm-instance fast path only — the authoritative
+# gate is the durable claim in _claim_webhook_budget.
 _last_handled: dict[tuple[int, str], float] = {}
 
 
@@ -55,6 +61,69 @@ def _debounced(org_id: int, source: str) -> bool:
     return False
 
 
+def _debounce_bucket(now) -> int:
+    """דלי זמן של DEBOUNCE_SECONDS — מסירה חוזרת באותו דלי היא burst."""
+    return int(now.timestamp() // DEBOUNCE_SECONDS)
+
+
+def _claim_webhook_budget(org_id: int, source: str) -> Optional[str]:
+    """W2.4 — השער העמיד של נתיב ה-webhook. `None` = מותר לסנכרן.
+
+    שתי תביעות אטומיות ב-DB (חוצות instances, שורדות cold start):
+    1. debounce — תביעה אחת לכל דלי 120ש' לכל (ארגון, מקור).
+    2. תקרה יומית — WEBHOOK_SYNCS_PER_DAY ריצות ליום.
+    כשל DB = fail-closed (הסנכרון נדחה; המסירה עדיין נענית 200 —
+    הסנכרון היומי המתוזמן ישלים את הפער).
+    """
+    from datetime import datetime, timezone
+
+    from ..database import SessionLocal
+    from .sumit_request_budget import SumitRequestLimiter, _utc_windows
+
+    now = datetime.now(timezone.utc)
+    _, day_start, _ = _utc_windows(now)
+    bucket = _debounce_bucket(now)
+    db = SessionLocal()
+    try:
+        with db.begin():
+            burst_ok = SumitRequestLimiter._claim_window(
+                db,
+                scope_key=f"webhook:{source}:org:{org_id}:bucket:{bucket}",
+                organization_id=org_id,
+                window_kind="webhook",
+                window_start=day_start,
+                limit_value=1,
+                now=now,
+            )
+            if not burst_ok:
+                return "debounced"
+            day_ok = SumitRequestLimiter._claim_window(
+                db,
+                scope_key=f"webhook:{source}:org:{org_id}",
+                organization_id=org_id,
+                window_kind="day",
+                window_start=day_start,
+                limit_value=WEBHOOK_SYNCS_PER_DAY,
+                now=now,
+            )
+            if not day_ok:
+                # מגלגל אחורה גם את תביעת ה-burst (אותה טרנזקציה) — אבל
+                # זה רצוי: מסירה חוזרת תיחסם שוב על התקרה היומית ממילא.
+                raise _WebhookDailyBudgetExhausted()
+        return None
+    except _WebhookDailyBudgetExhausted:
+        return "daily_webhook_budget_exhausted"
+    except Exception as e:  # noqa: BLE001 - fail-closed, never raise upward
+        logger.warning("webhook budget claim failed (%s); sync refused", e)
+        return "budget_unavailable"
+    finally:
+        db.close()
+
+
+class _WebhookDailyBudgetExhausted(Exception):
+    pass
+
+
 def _resolve_of_org(db: Session, payload: dict) -> Optional[int]:
     """Resolve a local organization_id for an Open Finance webhook payload.
 
@@ -67,15 +136,22 @@ def _resolve_of_org(db: Session, payload: dict) -> Optional[int]:
     silently run a sync against the wrong org's data.
     """
     of_user_id = payload.get("userId") or payload.get("UserId")
-    if of_user_id:
-        rows = db.query(IntegrationConnection).filter(
-            IntegrationConnection.source == "open_finance",
-        ).all()
-        for conn in rows:
-            creds = decrypt_credentials(conn.credentials_encrypted) or {}
-            if creds.get("user_id") and str(creds["user_id"]) == str(of_user_id):
-                return conn.organization_id
-    return 1
+    if not of_user_id:
+        # W2.4: אירוע בלי מזהה אינו משויך לאף דייר — נדחה. הנפילה
+        # ההיסטורית ל-org 1 שרפה את התקציב שלו על אירועים זרים.
+        return None
+    rows = db.query(IntegrationConnection).filter(
+        IntegrationConnection.source == "open_finance",
+    ).all()
+    for conn in rows:
+        creds = decrypt_credentials(conn.credentials_encrypted) or {}
+        if creds.get("user_id") and str(creds["user_id"]) == str(of_user_id):
+            return conn.organization_id
+    from ..config import settings
+    if settings.open_finance_user_id and str(of_user_id) == str(settings.open_finance_user_id):
+        # org 1 מוגדר דרך משתני סביבה בלי IntegrationConnection.
+        return 1
+    return None
 
 
 def _resolve_sumit_org(db: Session, payload: dict) -> Optional[int]:
@@ -91,15 +167,21 @@ def _resolve_sumit_org(db: Session, payload: dict) -> Optional[int]:
     company_id = (
         payload.get("CompanyID") or payload.get("companyId") or payload.get("company_id")
     )
-    if company_id:
-        rows = db.query(IntegrationConnection).filter(
-            IntegrationConnection.source == "sumit",
-        ).all()
-        for conn in rows:
-            creds = decrypt_credentials(conn.credentials_encrypted) or {}
-            if creds.get("company_id") and str(creds["company_id"]) == str(company_id):
-                return conn.organization_id
-    return 1
+    if not company_id:
+        # W2.4: אירוע בלי CompanyID אינו משויך — נדחה, לא נופל ל-org 1.
+        return None
+    rows = db.query(IntegrationConnection).filter(
+        IntegrationConnection.source == "sumit",
+    ).all()
+    for conn in rows:
+        creds = decrypt_credentials(conn.credentials_encrypted) or {}
+        if creds.get("company_id") and str(creds["company_id"]) == str(company_id):
+            return conn.organization_id
+    from ..config import settings
+    if settings.sumit_company_id and str(company_id) == str(settings.sumit_company_id):
+        # org 1 מוגדר דרך משתני סביבה בלי IntegrationConnection.
+        return 1
+    return None
 
 
 async def _run_targeted_sync(
@@ -166,6 +248,9 @@ async def handle_open_finance_event(db: Session, payload: dict) -> dict:
                 return {"handled": False, "reason": "unresolvable_org"}
             if _debounced(org_id, "open_finance"):
                 return {"handled": False, "reason": "debounced"}
+            refused = _claim_webhook_budget(org_id, "open_finance")
+            if refused:
+                return {"handled": False, "reason": refused}
             result = await _run_targeted_sync(
                 db, org_id, "open_finance", ["accounts", "bank_transactions"],
             )
@@ -225,6 +310,9 @@ async def handle_sumit_trigger_event(db: Session, payload: dict) -> dict:
             return {"handled": False, "reason": "unresolvable_org"}
         if _debounced(org_id, "sumit"):
             return {"handled": False, "reason": "debounced"}
+        refused = _claim_webhook_budget(org_id, "sumit")
+        if refused:
+            return {"handled": False, "reason": refused}
 
         result = await _run_targeted_sync(db, org_id, "sumit", ["invoices", "bills", "payments"])
         return {"handled": True, "event": "document_change", "org_id": org_id, **result}

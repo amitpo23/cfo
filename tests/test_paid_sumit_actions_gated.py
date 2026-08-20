@@ -179,9 +179,24 @@ def test_every_paid_endpoint_call_site_lives_in_a_gated_method():
             current = stripped.split("(")[0].replace("async def ", "").replace("def ", "")
         owner_of_line[idx] = current
 
+    # שורות בתוך הגדרת הקבוע PAID_ACTION_ENDPOINTS הן רשימת השערים עצמה,
+    # לא נקודות קריאה — מדלגים עליהן בלבד (כל שימוש מודולרי אחר עדיין נתפס).
+    in_const_block = False
+    const_lines: set[int] = set()
+    for idx, line in enumerate(source):
+        stripped = line.strip()
+        if stripped.startswith("PAID_ACTION_ENDPOINTS"):
+            in_const_block = True
+        if in_const_block:
+            const_lines.add(idx)
+            if stripped == "})":
+                in_const_block = False
+
     offenders = []
     for idx, line in enumerate(source):
         if not any(f'"{ep}"' in line for ep in PAID_ENDPOINTS):
+            continue
+        if idx in const_lines:
             continue
         method = owner_of_line[idx]
         if method is None:

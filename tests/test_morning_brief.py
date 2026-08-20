@@ -387,7 +387,10 @@ def test_morning_brief_history_route_lists_composed_briefs(client, fresh_org):
     finally:
         db.close()
 
-    r = client.get("/api/daily-reports/morning-brief/history", params={"days": 30}, headers=iso["headers"])
+    # חלון ההיסטוריה נמדד מ-date.today() האמיתי בעוד TODAY קבוע — חלון
+    # קשיח של 30 נשבר ברגע שהמרחק ביניהם עובר 30 יום (קרה ב-2026-08-20).
+    window = min((date.today() - TODAY).days + 1, 365)
+    r = client.get("/api/daily-reports/morning-brief/history", params={"days": window}, headers=iso["headers"])
     assert r.status_code == 200
     history = r.json()["history"]
     assert len(history) == 1

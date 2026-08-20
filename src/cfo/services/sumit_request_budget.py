@@ -7,6 +7,7 @@ the same burst and paid-action budget instead of each keeping a local counter.
 from __future__ import annotations
 
 import hashlib
+from calendar import monthrange
 from datetime import datetime, timezone
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -105,6 +106,25 @@ def _utc_windows(now: datetime) -> tuple[datetime, datetime, datetime]:
     return minute, day, month
 
 
+def paced_daily_limit(
+    *, configured_daily: int, monthly_limit: int, month_used: int,
+    day_used: int = 0, days_left: int,
+) -> int:
+    """W2.3 — התקרה היומית האפקטיבית נגזרת מהיתרה החודשית.
+
+    בלי זה, 20/יום × 30 ימים = 600 מול 200/חודש: המכסה נשרפת עד יום ~10
+    ואז המערכת חסומה עד סוף החודש. הקצב מפזר את היתרה על הימים שנותרו:
+    `min(היומי המוגדר, ceil((יתרה + שימוש-היום) / ימים שנותרו))`.
+
+    שימוש-היום מוחזר לחישוב כדי שההקצבה תישאר יציבה לאורך היום: בלעדיו
+    כל תביעה מקטינה את היתרה החודשית ולכן מכווצת את ההקצבה תוך-כדי-יום,
+    וסדרת תביעות לגיטימית נחסמת באמצע למרות שההקצבה של הבוקר טרם נוצלה.
+    """
+    remaining = max(0, monthly_limit - month_used)
+    days = max(1, days_left)
+    return min(configured_daily, -(-(remaining + max(0, day_used)) // days))
+
+
 class SumitRequestLimiter:
     """Claim one global-minute slot and one per-org UTC-day slot atomically."""
 
@@ -180,6 +200,23 @@ class SumitRequestLimiter:
         ).returning(table.c.used)
         return db.execute(statement).scalar_one_or_none() is not None
 
+    @staticmethod
+    def _window_used(
+        db, *, scope_key: str, window_kind: str, window_start: datetime,
+    ) -> int:
+        """קריאת מונה חלון קיים (0 אם אין) — לצורך חישוב הקצב היומי."""
+        row = (
+            db.query(ProviderRequestBudget.used)
+            .filter(
+                ProviderRequestBudget.provider == "sumit",
+                ProviderRequestBudget.scope_key == scope_key,
+                ProviderRequestBudget.window_kind == window_kind,
+                ProviderRequestBudget.window_start == window_start,
+            )
+            .first()
+        )
+        return int(row[0]) if row else 0
+
     def claim(self, endpoint: str) -> None:
         """Consume both slots before the HTTP client is allowed to run.
 
@@ -189,6 +226,14 @@ class SumitRequestLimiter:
         del endpoint
         now = datetime.now(timezone.utc)
         minute_start, day_start, month_start = _utc_windows(now)
+        # פר-ארגון (הכרעת בעלים 19/08): מכסת מסלול הבדיקות של SUMIT היא
+        # ~400 לכל עסק, ולכן 200 לכל ארגון הם שולי ביטחון של 50% — לא
+        # תקציב משותף שגוזל ארגון מארגון. W2.2 (20/08): גם ל-live יש
+        # בלם חודשי — בלעדיו התקרה האפקטיבית הייתה 300/יום ללא סוף חודש.
+        if settings.sumit_environment == "test":
+            monthly_limit = settings.sumit_test_monthly_request_limit
+        else:
+            monthly_limit = settings.sumit_live_monthly_request_limit
         db = SessionLocal()
         try:
             with db.begin():
@@ -205,36 +250,58 @@ class SumitRequestLimiter:
                     raise SumitRequestBudgetExceeded(
                         "SUMIT global minute request budget exceeded",
                     )
+                # W2.3 — קצב: היתרה החודשית מתפזרת על הימים שנותרו במקום
+                # להישרף בתחילת החודש ולחסום את סופו. החודש נתבע לפני
+                # היום כדי שמיצוי חודשי ידווח "monthly" ולא "daily";
+                # כישלון יומי מגלגל את התביעה החודשית אחורה (אותה טרנזקציה).
+                month_used = self._window_used(
+                    db,
+                    scope_key=f"org:{self.organization_id}",
+                    window_kind="month",
+                    window_start=month_start,
+                )
+                day_used = self._window_used(
+                    db,
+                    scope_key=f"org:{self.organization_id}",
+                    window_kind="day",
+                    window_start=day_start,
+                )
+                days_in_month = monthrange(now.year, now.month)[1]
+                effective_daily = paced_daily_limit(
+                    configured_daily=self.daily_limit,
+                    monthly_limit=monthly_limit,
+                    month_used=month_used,
+                    day_used=day_used,
+                    days_left=days_in_month - now.day + 1,
+                )
+                month_ok = self._claim_window(
+                    db,
+                    scope_key=f"org:{self.organization_id}",
+                    organization_id=self.organization_id,
+                    window_kind="month",
+                    window_start=month_start,
+                    limit_value=monthly_limit,
+                    now=now,
+                )
+                if not month_ok:
+                    raise SumitRequestBudgetExceeded(
+                        "SUMIT monthly request budget exceeded"
+                        if settings.sumit_environment == "live"
+                        else "SUMIT test monthly request budget exceeded",
+                    )
                 day_ok = self._claim_window(
                     db,
                     scope_key=f"org:{self.organization_id}",
                     organization_id=self.organization_id,
                     window_kind="day",
                     window_start=day_start,
-                    limit_value=self.daily_limit,
+                    limit_value=effective_daily,
                     now=now,
                 )
                 if not day_ok:
                     raise SumitRequestBudgetExceeded(
                         "SUMIT organization daily request budget exceeded",
                     )
-                if settings.sumit_environment == "test":
-                    # פר-ארגון (הכרעת בעלים 19/08): מכסת מסלול הבדיקות של
-                    # SUMIT היא ~400 לכל עסק, ולכן 200 לכל ארגון הם שולי
-                    # ביטחון של 50% — לא תקציב משותף שגוזל ארגון מארגון.
-                    month_ok = self._claim_window(
-                        db,
-                        scope_key=f"org:{self.organization_id}",
-                        organization_id=self.organization_id,
-                        window_kind="month",
-                        window_start=month_start,
-                        limit_value=settings.sumit_test_monthly_request_limit,
-                        now=now,
-                    )
-                    if not month_ok:
-                        raise SumitRequestBudgetExceeded(
-                            "SUMIT test monthly request budget exceeded",
-                        )
         except SumitRequestBudgetExceeded:
             raise
         except SQLAlchemyError as exc:

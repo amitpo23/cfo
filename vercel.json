@@ -53,5 +53,10 @@
       ]
     }
   ],
-  "crons": []
+  "crons": [
+    {
+      "path": "/api/cron/refresh-sumit-quota",
+      "schedule": "30 3 * * *"
+    }
+  ]
 }

@@ -217,6 +217,20 @@ async def submit_chat_feedback(
         row.reviewed_by = None
         row.reviewed_at = None
     db.flush()
+    # W1.1 — "מושקו לא ידע" / "לא מדויק" הם פערים: שורה בתור הניתוח.
+    if category in ("unknown", "inaccurate"):
+        from ...services.moshko_observability import record_gap_best_effort
+
+        record_gap_best_effort(
+            db,
+            organization_id=org_id,
+            user_id=user.id,
+            session_id=row.session_id,
+            message_id=message.id,
+            gap_kind="user_flagged",
+            question=row.question,
+            answer=row.answer,
+        )
     db.add(AuditLog(
         user_id=user.id,
         organization_id=org_id,

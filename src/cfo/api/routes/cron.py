@@ -408,6 +408,100 @@ async def scheduled_sync_sumit(db: Session = Depends(get_db_session)):
     return {"synced": len(results), "repaired_roster": repaired_roster, "results": results}
 
 
+@router.get("/cron/refresh-sumit-quota", dependencies=[Depends(_verify_cron_secret)])
+async def scheduled_refresh_sumit_quota(db: Session = Depends(get_db_session)):
+    """W2.1 (אישור בעלים 20/08/2026): רענון יומי של מכסת הפעולות-בתשלום.
+
+    קריאת `listquotas` **חינמית** אחת ליום לכל ארגון עם SUMIT פעיל
+    (≈30 בחודש). בלי מדידה טרייה — כל פעולה בתשלום חסומה fail-closed,
+    ולכן זה ה-cron שמחזיק את הזמינות של `getpdf`/`getdetails`/יצירת
+    מסמכים. שער עמיד: רענון אחד ליום פר-ארגון גם אם ה-cron נורה פעמיים.
+    """
+    from ...database import SessionLocal
+    from ...services.sumit_quota import refresh_quota_measurement
+    from ...services.sumit_request_budget import (
+        SumitRequestBudgetError,
+        SumitRequestLimiter,
+        _utc_windows,
+    )
+    from datetime import datetime, timezone
+
+    targets = {
+        conn.organization_id
+        for conn in db.query(IntegrationConnection).filter(
+            IntegrationConnection.status == "active",
+            IntegrationConnection.source == "sumit",
+        ).all()
+    }
+    if settings.sumit_api_key:
+        targets.add(1)
+
+    results = []
+    for org_id in sorted(targets):
+        api_key = _resolve_sumit_key(db, org_id)
+        if not api_key:
+            results.append({
+                "organization_id": org_id, "status": "skipped",
+                "reason": "no_sumit_key",
+            })
+            continue
+        # שער עמיד: רענון מכסה אחד ליום פר-ארגון (scope נפרד משאר החלונות).
+        now = datetime.now(timezone.utc)
+        _, day_start, _ = _utc_windows(now)
+        budget_db = SessionLocal()
+        try:
+            with budget_db.begin():
+                claimed = SumitRequestLimiter._claim_window(
+                    budget_db,
+                    scope_key=f"quota-refresh:org:{org_id}",
+                    organization_id=org_id,
+                    window_kind="day",
+                    window_start=day_start,
+                    limit_value=1,
+                    now=now,
+                )
+        finally:
+            budget_db.close()
+        if not claimed:
+            results.append({
+                "organization_id": org_id, "status": "skipped",
+                "reason": "already_refreshed_today",
+            })
+            continue
+
+        from ...services.sync_engine import get_connector_for_org
+        try:
+            connector, _conn_id, _source = get_connector_for_org(
+                db, org_id, preferred_source="sumit",
+            )
+            integration = await connector._get_client()
+            try:
+                snapshot = await refresh_quota_measurement(db, org_id, integration)
+            finally:
+                await integration.client.aclose()
+            if snapshot is None:
+                results.append({
+                    "organization_id": org_id, "status": "no_measurement",
+                    "reason": "listquotas response had no paid-actions row",
+                })
+            else:
+                results.append({
+                    "organization_id": org_id, "status": "ok",
+                    "snapshot": snapshot.as_dict(),
+                })
+        except SumitRequestBudgetError as exc:
+            results.append({
+                "organization_id": org_id, "status": "skipped",
+                "reason": str(exc),
+            })
+        except Exception as exc:  # honest-null: כשל נרשם, לא מוסתר
+            results.append({
+                "organization_id": org_id, "status": "error",
+                "reason": str(exc)[:300],
+            })
+    return {"refreshed": len(targets), "results": results}
+
+
 @router.get("/cron/sync-open-finance", dependencies=[Depends(_verify_cron_secret)])
 async def scheduled_sync_open_finance(db: Session = Depends(get_db_session)):
     """Daily: run a sync for every organization with an active Open Finance

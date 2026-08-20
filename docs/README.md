@@ -45,6 +45,8 @@
 ## תוכניות ומצב
 
 - [`MASTER_EXECUTION_PLAN.md`](MASTER_EXECUTION_PLAN.md) — **לוח הביצוע הפעיל** (שערים 0-6)
+- [`REZEF_DEEP_PLAN_2026-08-20.md`](REZEF_DEEP_PLAN_2026-08-20.md) — **תוכנית העומק הפעילה**: בקאופיס האימון של מושקו, אטימת מכסות, והרחבת קטלוג הכלים (W1–W5, מבוסס 3 חקירות קוד עם ראיות)
+- [`../DEVELOPER.md`](../DEVELOPER.md) — מדריך המפתח: מפת תיקיות, הרצה, שערי איכות, "איפה כל דבר של מושקו"
 - [`superpowers/plans/`](superpowers/plans/) — תוכניות סשן והעברות מקל (chronological)
 - [`audits/`](audits/) — דוחות ביקורת
 

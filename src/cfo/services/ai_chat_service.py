@@ -26,6 +26,7 @@ from ..models import ChatMessage, User
 from . import moshko_memory
 from .ai_chat_tools import TOOLS, anthropic_tool_schemas, tool_target_system
 from .moshko_observability import (
+    record_gap_best_effort,
     redact_sensitive_text,
     record_llm_usage_best_effort,
     record_tool_call_best_effort,
@@ -224,6 +225,17 @@ class AIChatService:
                 error=str(exc),
                 duration_ms=elapsed,
             )
+            # W1.1 — כלי שנפל הוא פער: שורה בתור הניתוח, לא רק רישום.
+            record_gap_best_effort(
+                self.db,
+                organization_id=self.organization_id,
+                user_id=self.user_id,
+                session_id=session_id,
+                message_id=message_id,
+                gap_kind="tool_failed",
+                tool_name=tool.name,
+                error=str(exc),
+            )
             if propagate:
                 raise
             return {"error": str(exc), "tool": tool.name}
@@ -248,6 +260,41 @@ class AIChatService:
             result=result,
         )
         return result
+
+    # W1.1 — דפוסי ויתור. שמרני בכוונה: עדיף לפספס ניסוח נדיר מאשר להציף
+    # את התור בתשובות תקינות שמכילות "לא" כלשהו.
+    _GIVEUP_MARKERS = (
+        "לא הצלחתי",
+        "אין לי כלי",
+        "אין לי יכולת",
+        "איני יכול לבצע",
+        "אין לי גישה",
+        "לא יכול לבצע",
+    )
+
+    def _capture_gap_if_giveup(
+        self, *, session_id: str, message_id: int | None,
+        question: str, final_text: str,
+    ) -> None:
+        """תשובת ויתור של המודל היא פער-יכולת — נלכדת כשורה בתור הניתוח.
+
+        זו הדוגמה של הבעלים (20/08): "אני מבקש דוח כספי לשנת X והוא לא
+        מצליח — אני רוצה את זה בשורה בתוך ניהול השיחות". best-effort.
+        """
+        if not final_text:
+            return
+        if not any(marker in final_text for marker in self._GIVEUP_MARKERS):
+            return
+        record_gap_best_effort(
+            self.db,
+            organization_id=self.organization_id,
+            user_id=self.user_id,
+            session_id=session_id,
+            message_id=message_id,
+            gap_kind="model_gave_up",
+            question=question,
+            answer=final_text,
+        )
 
     async def send_message(
         self, session_id: str, text: str, persona: Optional[str] = None,
@@ -422,6 +469,13 @@ class AIChatService:
             action_status=_ACTION_PENDING if pending_action else None,
         )
         self.db.add(assistant_msg)
+        self.db.flush()
+        # W1.1: תשובת ויתור נלכדת בתור הפערים — פעולה מוצעת אינה ויתור.
+        if pending_action is None:
+            self._capture_gap_if_giveup(
+                session_id=session_id, message_id=assistant_msg.id,
+                question=text, final_text=final_text,
+            )
         self.db.commit()
         self.db.refresh(assistant_msg)
 

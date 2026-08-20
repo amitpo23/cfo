@@ -195,3 +195,50 @@ def record_tool_call_best_effort(
     except Exception:
         logger.exception("Failed to record Moshko tool call (best effort)")
         return None
+
+
+def record_gap_best_effort(
+    db: Session,
+    *,
+    organization_id: int,
+    user_id: int,
+    session_id: str,
+    message_id: int | None,
+    gap_kind: str,
+    question: str | None = None,
+    answer: str | None = None,
+    tool_name: str | None = None,
+    error: str | None = None,
+):
+    """W1.1 — רישום שורת פער בתור הניתוח. best-effort: כישלון תיעוד לעולם
+    לא מפיל את השיחה, בדיוק כמו רישום קריאות הכלים."""
+    from ..models import MoshkoGap
+
+    try:
+        if question is None and message_id is not None:
+            from ..models import ChatMessage
+
+            src = db.query(ChatMessage).filter(
+                ChatMessage.id == message_id,
+                ChatMessage.organization_id == organization_id,
+            ).first()
+            if src is not None:
+                question = src.content
+        with db.begin_nested():
+            row = MoshkoGap(
+                organization_id=organization_id,
+                user_id=user_id,
+                session_id=session_id,
+                message_id=message_id,
+                question=redact_sensitive_text(question) if question else None,
+                answer=redact_sensitive_text(answer) if answer else None,
+                gap_kind=gap_kind,
+                tool_name=tool_name,
+                error=redact_sensitive_text(error) if error else None,
+            )
+            db.add(row)
+            db.flush()
+        return row
+    except Exception:
+        logger.exception("Failed to record Moshko gap (best effort)")
+        return None

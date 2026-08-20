@@ -851,6 +851,33 @@ class ProviderRequestBudget(Base):
     )
 
 
+class SumitQuotaMeasurement(Base):
+    """W2.1 — מדידת מכסת הפעולות-בתשלום כפי שנקראה מ-SUMIT (`listquotas`).
+
+    שורה לכל רענון; הטרייה ביותר פר-ארגון היא המדידה המחייבת. אין שורה
+    טרייה (26h) ⇒ פעולות בתשלום חסומות — fail-closed, לא ניחוש.
+    """
+    __tablename__ = "sumit_quota_measurements"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    environment = Column(String(10), nullable=False)  # test | live
+    used = Column(Integer, nullable=False)
+    limit_value = Column(Integer, nullable=False)
+    measured_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_sumit_quota_measurements_org_measured",
+            "organization_id", "measured_at",
+        ),
+    )
+
+
 class SyncCheckpoint(Base):
     """Per (org, source, entity_type) sync-call-protection state (M1a).
 
@@ -1336,6 +1363,47 @@ class MoshkoFeedback(Base):
         ),
         Index("ix_moshko_feedback_org_status_created", "organization_id", "status", "created_at"),
         Index("ix_moshko_feedback_category_created", "category", "created_at"),
+    )
+
+
+class MoshkoGap(Base):
+    """W1.1 — תור הכישלונות/פערי-היכולת של מושקו.
+
+    כל כישלון — כלי שנפל, תשובת ויתור של המודל, או דגל משתמש — הופך
+    שורה שהבעלים יכול לענות עליה: התשובה מקודמת לזיכרון מאושר
+    (`MoshkoMemory`) או נפתחת כדרישת-יכולת. לעולם לא נכתב מתוך מסלול
+    השיחה בצורה שמפילה אותה (best-effort בלבד).
+    """
+    __tablename__ = "moshko_gaps"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    session_id = Column(String(128), nullable=False)
+    message_id = Column(Integer, ForeignKey("ai_chat_messages.id"), nullable=True)
+    question = Column(Text, nullable=True)
+    answer = Column(Text, nullable=True)
+    gap_kind = Column(String(30), nullable=False)  # tool_failed | model_gave_up | user_flagged
+    tool_name = Column(String(100), nullable=True)
+    error = Column(Text, nullable=True)
+    status = Column(String(20), nullable=False, default="open")  # open | answered | dismissed
+    resolution = Column(Text, nullable=True)
+    promoted_memory_id = Column(Integer, ForeignKey("moshko_memory.id"), nullable=True)
+    resolved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "gap_kind IN ('tool_failed','model_gave_up','user_flagged')",
+            name="ck_moshko_gaps_kind",
+        ),
+        CheckConstraint(
+            "status IN ('open','answered','dismissed')",
+            name="ck_moshko_gaps_status",
+        ),
+        Index("ix_moshko_gaps_org_status_created", "organization_id", "status", "created_at"),
     )
 
 

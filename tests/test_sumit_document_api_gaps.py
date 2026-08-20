@@ -33,11 +33,16 @@ def _test_company_response(url):
 
 
 def _sumit():
-    return SumitIntegration(
+    sumit = SumitIntegration(
         api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23",
         company_id="1",
         request_limiter=_UnlimitedTestBudget(),
     )
+    # הטסטים כאן בודקים צורת payload מול ה-swagger, לא שערי עלות; שער
+    # הפעולות-בתשלום (W2.5, דורש מדידת מכסה) מכוסה בנפרד ב-
+    # test_sumit_paid_gate_completeness.py / test_sumit_quota_refresh.py.
+    sumit._enforce_paid_action_budget = lambda endpoint: None
+    return sumit
 
 
 def test_create_document_from_existing_clones_by_document_id():

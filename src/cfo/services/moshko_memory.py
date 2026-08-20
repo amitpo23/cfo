@@ -25,7 +25,9 @@ from ..models import MoshkoMemory
 
 # בקנה מידה של הרמס (ראו התכנית) — תקרת תווים פר-scope שכופה על מושקו
 # לאחד/למחוק רשומות ישנות במקום להתנפח בלי גבול.
-ORG_MEMORY_CHAR_CAP = 2000
+# W1.4 (20/08/2026): 2000 חנק את לולאת האימון — תיקון admin מתקבל עד
+# 8000 תווים אבל קידומו נחסם על התקרה. 6000 מכיל תיקון מלא + זיכרונות.
+ORG_MEMORY_CHAR_CAP = 6000
 USER_MEMORY_CHAR_CAP = 1500
 
 # מעל 80% מהתקרה — עדיין כותב, אבל מצרף אזהרה לאחד רשומות (בדיוק כמו
@@ -123,6 +125,10 @@ def remember(
         organization_id=organization_id, user_id=target_user_id,
         content=normalized, category=category, source=source,
         created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+        # W1.4: "תזכור ש..." הוא הוראה מפורשת של המשתמש — זה האישור.
+        # בלעדי זה, אכיפת approved_at בהזרקה הייתה משתיקה את כלי הזיכרון.
+        approved_at=datetime.utcnow(),
+        approved_by=user_id,
     )
     db.add(row)
     db.commit()
@@ -247,9 +253,23 @@ def usage(db: Session, organization_id: int, user_id: Optional[int] = None) -> d
 
 def render_memory_block(db: Session, organization_id: int, user_id: Optional[int]) -> str:
     """מחזיר את שני בלוקי הזיכרון (עסק/משתמש) בעברית להזרקה קפואה
-    לפרומפט. מחרוזת ריקה אם אין זיכרונות בכלל — לעולם לא כותרות ריקות."""
-    org_rows = _scope_rows(db, organization_id, None)
-    user_rows = _scope_rows(db, organization_id, user_id) if user_id is not None else []
+    לפרומפט. מחרוזת ריקה אם אין זיכרונות בכלל — לעולם לא כותרות ריקות.
+
+    W1.4 (20/08/2026): רק זיכרונות **מאושרים** מוזרקים — עד עכשיו
+    `approved_at` היה דקורטיבי וכפתור "ביטול אישור" לא שינה דבר.
+    כל זיכרון שהוזרק נחתם `last_used_at` (בלי commit — התור השולח
+    מבצע commit), כדי שאפשר יהיה למדוד מה באמת משפיע.
+    """
+    now = datetime.utcnow()
+
+    def _approved(rows: list[MoshkoMemory]) -> list[MoshkoMemory]:
+        return [r for r in rows if r.approved_at is not None]
+
+    org_rows = _approved(_scope_rows(db, organization_id, None))
+    user_rows = (
+        _approved(_scope_rows(db, organization_id, user_id))
+        if user_id is not None else []
+    )
 
     blocks: list[str] = []
     if org_rows:
@@ -258,5 +278,8 @@ def render_memory_block(db: Session, organization_id: int, user_id: Optional[int
     if user_rows:
         lines = "\n".join(f"- {r.content}" for r in user_rows)
         blocks.append(f"## מה אני יודע עליך\n{lines}")
+
+    for row in (*org_rows, *user_rows):
+        row.last_used_at = now
 
     return "\n\n".join(blocks)

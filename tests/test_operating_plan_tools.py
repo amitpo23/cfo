@@ -105,6 +105,13 @@ async def test_paid_endpoint_consumes_monthly_paid_budget_in_test_mode(
         api_key=REALISTIC_KEY, company_id="1",
         request_limiter=SumitRequestLimiter(org_id),
     )
+    # W2.5 (20/08): גם ב-test נדרשת מדידת מכסה טרייה — מזריקים אחת עם
+    # יתרה, כך שהחסימה שנבדקת כאן היא של המונה החודשי (limit=1) בלבד.
+    from datetime import datetime, timezone
+    client_obj.quota_snapshot = sumit_quota.QuotaSnapshot(
+        organization_id=org_id, used=0, limit=50,
+        measured_at=datetime.now(timezone.utc),
+    )
 
     async def fake_request(*, url, **_kwargs):
         if url == VERIFY_ENDPOINT:

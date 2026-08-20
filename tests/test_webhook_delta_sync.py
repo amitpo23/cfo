@@ -19,11 +19,26 @@ from cfo.services import webhook_delta_sync as wds
 # fixtures
 # --------------------------------------------------------------------- #
 @pytest.fixture(autouse=True)
-def _reset_debounce():
-    """The debounce map is module-level state — isolate tests from each other."""
+def _reset_debounce(client):
+    """The debounce map is module-level state — isolate tests from each other.
+    W2.4: the durable webhook budget rows must be cleared too, or claims from
+    one test debounce/exhaust the next."""
+    from cfo.database import SessionLocal
+    from cfo.models import ProviderRequestBudget
+
+    def _clear_rows():
+        db = SessionLocal()
+        try:
+            db.query(ProviderRequestBudget).delete()
+            db.commit()
+        finally:
+            db.close()
+
     wds._last_handled.clear()
+    _clear_rows()
     yield
     wds._last_handled.clear()
+    _clear_rows()
 
 
 def _patch_targeted_sync(monkeypatch, calls):
@@ -142,11 +157,10 @@ def test_of_payment_event_logged_when_no_match(fresh_org):
         db.close()
 
 
-def test_of_org_resolution_matches_user_id_else_falls_back_to_org1(monkeypatch, fresh_org):
+def test_of_org_resolution_matches_user_id_else_rejects(monkeypatch, fresh_org):
     """Exercises the real _resolve_of_org (not monkeypatched) to make sure an
     event with no/unmatched userId never gets routed to an arbitrary tenant
-    that happens to have an open_finance IntegrationConnection — it must fall
-    back to organization 1, per the M1b spec ("else default org 1")."""
+    nor to org 1 — W2.4 (20/08/2026): unattributable events are rejected."""
     from cfo.database import SessionLocal
     from cfo.models import IntegrationConnection
     from cfo.services.credentials_vault import encrypt_credentials
@@ -174,14 +188,14 @@ def test_of_org_resolution_matches_user_id_else_falls_back_to_org1(monkeypatch, 
 
         wds._last_handled.clear()
 
-        # Missing/unmatched userId -> falls back to org 1, NOT to the org
-        # that happens to have a connection configured.
+        # W2.4: unmatched userId is REJECTED — routing an unattributable
+        # event to org 1 burned its budget on foreign events.
         result_unmatched = asyncio.run(wds.handle_open_finance_event(db, {
             "connectionStatus": "ACTIVE", "userId": "some-other-user",
         }))
-        assert result_unmatched["org_id"] == 1
-        assert calls == [(org_id, "open_finance", ["accounts", "bank_transactions"]),
-                          (1, "open_finance", ["accounts", "bank_transactions"])]
+        assert result_unmatched["handled"] is False
+        assert result_unmatched["reason"] == "unresolvable_org"
+        assert calls == [(org_id, "open_finance", ["accounts", "bank_transactions"])]
     finally:
         db.close()
 
@@ -213,10 +227,10 @@ def test_sumit_event_recognized_by_entity_id_alone(monkeypatch):
     assert len(calls) == 1
 
 
-def test_sumit_org_resolution_matches_company_id_else_falls_back_to_org1(monkeypatch, fresh_org):
+def test_sumit_org_resolution_matches_company_id_else_rejects(monkeypatch, fresh_org):
     """Mirrors test_of_org_resolution_... for the SUMIT resolver: an
-    unmatched/missing CompanyID must fall back to org 1, never to an
-    arbitrary tenant that happens to have a sumit IntegrationConnection."""
+    unmatched/missing CompanyID is rejected (W2.4) — never routed to an
+    arbitrary tenant nor to org 1."""
     from cfo.database import SessionLocal
     from cfo.models import IntegrationConnection
     from cfo.services.credentials_vault import encrypt_credentials
@@ -243,12 +257,13 @@ def test_sumit_org_resolution_matches_company_id_else_falls_back_to_org1(monkeyp
 
         wds._last_handled.clear()
 
+        # W2.4: unmatched CompanyID is REJECTED, not routed to org 1.
         result_unmatched = asyncio.run(wds.handle_sumit_trigger_event(db, {
             "TriggerType": "Create", "EntityID": "d2", "CompanyID": "some-other-company",
         }))
-        assert result_unmatched["org_id"] == 1
-        assert calls == [(org_id, "sumit", ["invoices", "bills", "payments"]),
-                          (1, "sumit", ["invoices", "bills", "payments"])]
+        assert result_unmatched["handled"] is False
+        assert result_unmatched["reason"] == "unresolvable_org"
+        assert calls == [(org_id, "sumit", ["invoices", "bills", "payments"])]
     finally:
         db.close()
 

@@ -135,7 +135,8 @@ def test_moshko_receives_the_coverage_block(client, fresh_org):
         _bill(db, org_id, TODAY - timedelta(days=i * 4), 500)
     db.commit()
 
-    out = asyncio.get_event_loop().run_until_complete(
-        TOOLS["get_pnl"].fn(db, org_id, months=6))
+    # asyncio.run ולא get_event_loop(): הדפוס הישן נשבר כשטסט קודם סגר
+    # את לולאת ה-event הגלובלית (order-dependent flake).
+    out = asyncio.run(TOOLS["get_pnl"].fn(db, org_id, months=6))
 
     assert "coverage" in out

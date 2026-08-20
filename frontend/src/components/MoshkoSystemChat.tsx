@@ -27,7 +27,11 @@ interface Msg {
   role: 'user' | 'assistant';
   content: string;
   error?: boolean;
+  /** מזהה ההודעה בשרת — קיים רק על תשובות assistant שנשמרו, ומאפשר פידבק. */
+  messageId?: number;
 }
+
+type FeedbackCategory = 'helpful' | 'inaccurate' | 'unknown';
 
 interface Props {
   darkMode?: boolean;
@@ -49,6 +53,14 @@ const MoshkoSystemChat: React.FC<Props> = ({ darkMode = false }) => {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
   const [messages, setMessages] = useState<Msg[]>([]);
+  // פידבק: איזו קטגוריה נשלחה בהצלחה לכל message_id (לצביעת הכפתור).
+  const [feedbackSent, setFeedbackSent] = useState<Record<number, FeedbackCategory>>({});
+  // טיוטת הערה פתוחה (אחרי 👎/❓) — הודעה אחת בכל רגע.
+  const [feedbackDraft, setFeedbackDraft] = useState<
+    { messageId: number; category: 'inaccurate' | 'unknown'; comment: string } | null
+  >(null);
+  const [feedbackBusyId, setFeedbackBusyId] = useState<number | null>(null);
+  const [feedbackErrors, setFeedbackErrors] = useState<Record<number, string>>({});
   const sessionId = useSessionId();
   const queryClient = useQueryClient();
   const endRef = useRef<HTMLDivElement>(null);
@@ -63,9 +75,11 @@ const MoshkoSystemChat: React.FC<Props> = ({ darkMode = false }) => {
     onSuccess: (data: any) => {
       const reply =
         data?.reply ?? data?.content ?? data?.message ?? '';
+      const messageId =
+        typeof data?.message_id === 'number' ? data.message_id : undefined;
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: reply || 'לא התקבלה תשובה.' },
+        { role: 'assistant', content: reply || 'לא התקבלה תשובה.', messageId },
       ]);
       queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
     },
@@ -81,6 +95,38 @@ const MoshkoSystemChat: React.FC<Props> = ({ darkMode = false }) => {
       ]);
     },
   });
+
+  const sendFeedback = async (
+    messageId: number,
+    category: FeedbackCategory,
+    comment?: string,
+  ) => {
+    setFeedbackBusyId(messageId);
+    setFeedbackErrors((prev) => {
+      const next = { ...prev };
+      delete next[messageId];
+      return next;
+    });
+    try {
+      await apiService.post(`/ai/chat/${messageId}/feedback`, {
+        category,
+        comment: comment?.trim() || null,
+      });
+      setFeedbackSent((prev) => ({ ...prev, [messageId]: category }));
+      setFeedbackDraft((current) =>
+        current?.messageId === messageId ? null : current,
+      );
+    } catch (err: any) {
+      // honest-null: מציגים את שגיאת השרת כלשונה.
+      const detail =
+        err?.response?.data?.detail ??
+        err?.message ??
+        'שליחת הפידבק נכשלה ללא פירוט מהשרת.';
+      setFeedbackErrors((prev) => ({ ...prev, [messageId]: String(detail) }));
+    } finally {
+      setFeedbackBusyId(null);
+    }
+  };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -162,6 +208,110 @@ const MoshkoSystemChat: React.FC<Props> = ({ darkMode = false }) => {
               )}
               {m.content}
             </div>
+            {m.role === 'assistant' && !m.error && m.messageId !== undefined && (
+              <div className="mt-1 space-y-1">
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    title="תשובה מועילה"
+                    aria-label="תשובה מועילה"
+                    disabled={feedbackBusyId === m.messageId}
+                    onClick={() => void sendFeedback(m.messageId!, 'helpful')}
+                    className={`rounded px-1.5 py-0.5 text-xs transition disabled:opacity-40 ${
+                      feedbackSent[m.messageId] === 'helpful'
+                        ? 'bg-emerald-100 ring-1 ring-emerald-400'
+                        : darkMode
+                        ? 'hover:bg-gray-700'
+                        : 'hover:bg-gray-100'
+                    }`}
+                  >
+                    👍
+                  </button>
+                  <button
+                    type="button"
+                    title="תשובה לא מדויקת"
+                    aria-label="תשובה לא מדויקת"
+                    disabled={feedbackBusyId === m.messageId}
+                    onClick={() =>
+                      setFeedbackDraft({
+                        messageId: m.messageId!,
+                        category: 'inaccurate',
+                        comment: '',
+                      })
+                    }
+                    className={`rounded px-1.5 py-0.5 text-xs transition disabled:opacity-40 ${
+                      feedbackSent[m.messageId] === 'inaccurate'
+                        ? 'bg-red-100 ring-1 ring-red-400'
+                        : darkMode
+                        ? 'hover:bg-gray-700'
+                        : 'hover:bg-gray-100'
+                    }`}
+                  >
+                    👎
+                  </button>
+                  <button
+                    type="button"
+                    title="מושקו לא ידע לענות"
+                    disabled={feedbackBusyId === m.messageId}
+                    onClick={() =>
+                      setFeedbackDraft({
+                        messageId: m.messageId!,
+                        category: 'unknown',
+                        comment: '',
+                      })
+                    }
+                    className={`rounded px-1.5 py-0.5 text-xs transition disabled:opacity-40 ${
+                      feedbackSent[m.messageId] === 'unknown'
+                        ? 'bg-amber-100 ring-1 ring-amber-400'
+                        : darkMode
+                        ? 'hover:bg-gray-700'
+                        : 'hover:bg-gray-100'
+                    } ${textDim}`}
+                  >
+                    ❓ לא ידע
+                  </button>
+                  {feedbackBusyId === m.messageId && (
+                    <Loader2 size={12} className={`animate-spin ${textDim}`} />
+                  )}
+                </div>
+                {feedbackDraft?.messageId === m.messageId && (
+                  <div className="flex items-center gap-1">
+                    <input
+                      value={feedbackDraft.comment}
+                      onChange={(e) =>
+                        setFeedbackDraft({ ...feedbackDraft, comment: e.target.value })
+                      }
+                      placeholder="הערה (אופציונלי)…"
+                      aria-label="הערה לפידבק"
+                      className={`flex-1 rounded border px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 ${
+                        darkMode
+                          ? 'border-gray-600 bg-gray-900 text-gray-100 placeholder-gray-500'
+                          : 'border-gray-300 bg-white text-gray-900 placeholder-gray-400'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      disabled={feedbackBusyId === m.messageId}
+                      onClick={() =>
+                        void sendFeedback(
+                          feedbackDraft.messageId,
+                          feedbackDraft.category,
+                          feedbackDraft.comment,
+                        )
+                      }
+                      className="rounded bg-blue-600 px-2 py-1 text-xs text-white transition hover:bg-blue-700 disabled:opacity-40"
+                    >
+                      שלח
+                    </button>
+                  </div>
+                )}
+                {feedbackErrors[m.messageId] && (
+                  <p className="text-xs text-amber-700">
+                    {feedbackErrors[m.messageId]}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         ))}
         {send.isPending && (
