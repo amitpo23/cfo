@@ -21,8 +21,10 @@ from typing import Any
 
 SEV_INFO, SEV_MED, SEV_HIGH = "info", "medium", "high"
 
-# חשבונית ישראל: סכום שמעליו נדרש מספר הקצאה. יורד שנתית — לאימות מול רשות המסים.
-ALLOCATION_THRESHOLD = 20000.0          # ₪ (2025; 2026 verify)
+# חשבונית ישראל: סכום שמעליו נדרש מספר הקצאה. יורד מדורג — אומת 20/08/2026
+# מול מרכז הידע (03-income:61 + חוק 5): מ-01/06/2026 החובה מעל ₪5,000.
+# הערך הקודם (20,000) החמיץ התראות על כל חשבונית ₪5K–₪20K.
+ALLOCATION_THRESHOLD = 5000.0           # ₪ (בתוקף מ-01/06/2026)
 OUTLIER_MIN_ABS = 50000.0               # below this, never flag as magnitude outlier
 OUTLIER_FACTOR = 8.0                    # flag if abs(total) > FACTOR × median of the rest
 DUPLICATE_DATE_WINDOW_DAYS = 3           # same vendor+amount within this many days

@@ -219,6 +219,81 @@ async def preview_masav(
             for p in payments
         ],
         "skipped": skipped,
+        # חוק 17 (מרכז הידע): מס"ב אינה מדווחת כשל על פרטי בנק שגויים —
+        # תשלום לחשבון סגור פשוט לא יגיע. הוולידציה כאן מבנית בלבד;
+        # אימות מול מאגר הבנקים: POST /api/masav/verify-accounts.
+        "bank_verification_notice": (
+            "מס\"ב אינה מדווחת כשל על פרטי בנק שגויים (חוק 17). החשבונות "
+            "עברו בדיקה מבנית בלבד — מומלץ להריץ אימות מול SUMIT "
+            "(verify-accounts) לפני יצירת הקובץ."
+        ),
+    }
+
+
+async def _verify_accounts_against_sumit(db, org_id: int, accounts: list) -> list:
+    """אימות חשבונות מול SUMIT (מאגר הבנקים) — קריאת API אחת לכל חשבון
+    ייחודי, דרך המגביל של הארגון."""
+    from ...integrations.sumit_models import BankAccountVerification
+    from ...services.recurring_billing_service import _client_for_org
+
+    client = await _client_for_org(db, org_id)
+    results = []
+    try:
+        for account in accounts:
+            outcome = await client.verify_bank_account(BankAccountVerification(
+                bank_number=account["bank_code"],
+                branch_number=account["branch"],
+                account_number=account["account_number"],
+            ))
+            data = outcome.get("Data") or outcome or {}
+            results.append({
+                **account,
+                "valid": bool(data.get("Result")),
+                "valid_branch": bool(data.get("ValidBranch")),
+                "is_limited_account": bool(data.get("IsLimitedAccount")),
+            })
+    finally:
+        await client.client.aclose()
+    return results
+
+
+@router.post("/verify-accounts")
+async def verify_masav_accounts(
+    request: MasavGenerateRequest,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """חוק 17: אימות חשבונות המוטבים מול SUMIT לפני יצירת קובץ מס"ב.
+
+    פעולה מפורשת (לא אוטומטית) כי כל חשבון ייחודי = קריאת API אחת;
+    חשבונות כפולים בין תשלומים מאומתים פעם אחת בלבד.
+    """
+    payments, _skipped = _gather(db, org_id, request.bill_ids)
+    if not payments:
+        return {"accounts": [], "verified_count": 0,
+                "note": "אין תשלומים ממתינים — אין מה לאמת."}
+
+    distinct: dict[tuple, dict] = {}
+    for p in payments:
+        key = (p.bank_code, p.branch, p.account_number)
+        distinct.setdefault(key, {
+            "bank_code": p.bank_code, "branch": p.branch,
+            "account_number": p.account_number,
+            "beneficiary_name": p.beneficiary_name,
+        })
+
+    results = await _verify_accounts_against_sumit(
+        db, org_id, list(distinct.values()),
+    )
+    invalid = [r for r in results if not r.get("valid")]
+    return {
+        "accounts": results,
+        "verified_count": len(results),
+        "invalid_count": len(invalid),
+        "warning": (
+            "יש חשבונות שלא עברו אימות — אין ליצור קובץ מס\"ב עבורם"
+            if invalid else None
+        ),
     }
 
 

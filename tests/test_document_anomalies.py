@@ -174,3 +174,41 @@ def test_persist_anomalies_creates_insights(fresh_org):
         assert res2["created"] == 0 and res2["updated"] >= 3
     finally:
         db.close()
+
+
+def test_allocation_threshold_matches_the_2026_law(fresh_org):
+    """מ-01/06/2026 חובת מספר הקצאה מעל ₪5,000 (מרכז הידע 03:61 + חוק 5).
+
+    הקבוע עמד על 20,000 עם הערת '2026 verify' שמעולם לא אומתה — כל
+    חשבונית ₪5K–₪20K בלי הקצאה חמקה מההתראה.
+    """
+    from datetime import date
+
+    from cfo.database import SessionLocal
+    from cfo.models import Contact, ContactType, Invoice, InvoiceStatus
+    from cfo.services import document_anomalies
+
+    assert document_anomalies.ALLOCATION_THRESHOLD == 5000.0
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        cust = Contact(organization_id=org_id, name="לקוח הקצאה",
+                       contact_type=ContactType.CUSTOMER, tax_id="222222222")
+        db.add(cust)
+        db.flush()
+        db.add(Invoice(
+            organization_id=org_id, external_id="AL-6K", source="anom-test",
+            invoice_number="6000", issue_date=date(2026, 7, 1),
+            status=InvoiceStatus.SENT, contact_id=cust.id,
+            subtotal=6000, tax=1080, total=7080, allocation_number=None,
+        ))
+        db.commit()
+
+        findings = document_anomalies.detect_document_anomalies(db, org_id)
+        assert any(
+            f["type"] == "missing_allocation" and "6000" in str(f)
+            for f in findings
+        ), findings
+    finally:
+        db.close()

@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # לתקרה קשיחה בקוד (ראה enforce_cost_protection_floors).
     sumit_live_monthly_request_limit: int = 2000
     sumit_live_monthly_paid_action_limit: int = 90
+    # מחיר פעולה לפי המסלול (מאמר 5507895) — נמצא בדף המחירון החיצוני,
+    # לא בתיעוד. None = הקאונטר מציג חריגות בכמויות בלבד (honest-null).
+    sumit_plan_action_price_ils: Optional[float] = None
     # פורטל ההנה"ח של המשרד (CompanyID 844329067) הוא ישות נפרדת מתיק
     # לקוח בודד: הוא מחזיק את כל התיקים, ורק מפתח שלו מורשה לפעולות
     # ברמת המשרד. `SUMIT_BOOKS_AMIT_PORAT.md` השאיר זאת כשאלה פתוחה —

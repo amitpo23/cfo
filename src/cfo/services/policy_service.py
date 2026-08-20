@@ -405,7 +405,12 @@ class PolicyService:
                 context["counterparty_id"] = int(customer_id)
             except (TypeError, ValueError):
                 context["counterparty_id"] = None
-        elif policy_action == "payment_link.create":
+        elif policy_action == "payment_link.create" and "invoice_id" in tool_input:
+            # W3 גל 2: הפעולה משרתת שני כלים — create_payment_link (לפי
+            # invoice_id, הסכום נגזר מיתרת החשבונית ב-DB) ו-
+            # begin_payment_redirect (סכום חופשי שכבר חולץ ע"י
+            # _payload_context). הענף רץ רק כשיש invoice_id, אחרת היה
+            # דורס את הסכום האמיתי ב-None וגורם דחיות-שווא תחת תקרות.
             invoice_id = tool_input.get("invoice_id")
             invoice = self.db.query(Invoice).filter(
                 Invoice.id == invoice_id,

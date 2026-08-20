@@ -42,6 +42,12 @@ WRITE_ACTIONS = frozenset({
     # פעולות write (מוצעות בצ'אט, מבוצעות רק ב-confirm מפורש); ביטול
     # מסמך הוא שינוי ספרים ולכן write אף הוא.
     "recurring.create", "recurring.update", "documents.cancel",
+    # W3 גל 2 (20/08/2026): כיסוי מלא של מתודות SUMIT ככלי מושקו —
+    # crm.manage: ניהול ישויות CRM ואמצעי תשלום שמורים (ללא פרטי כרטיס);
+    # billing.charge: חיוב לקוח באמצעי שמור בלבד (פעולה בתשלום אצל הספק);
+    # comms.send: פקס/טיקט/רשימות תפוצה — פנייה יוצאת שאינה גבייה;
+    # integrations.manage: הרשמה/ביטול טריגרים (webhooks) אצל הספק.
+    "crm.manage", "billing.charge", "comms.send", "integrations.manage",
     "refund.propose", "filing.prepare", "period_close.propose",
     "accounting.writeback.propose", "expenses.manage_categories", "expenses.manage_vehicle_profile",
     "expenses.classify", "reports.email", "moshko.memory.write",
@@ -65,6 +71,8 @@ ROLE_PRESETS: dict[UserRole, frozenset[str]] = {
         "accounting.writeback.propose", "expenses.manage_categories", "expenses.manage_vehicle_profile",
         "expenses.classify", "reports.email", "moshko.memory.write",
         "tasks.write", "users.manage", "policies.manage",
+        # W3 גל 2 — ADMIN מקבל את כל ארבע הפעולות החדשות.
+        "crm.manage", "billing.charge", "comms.send", "integrations.manage",
     }),
     UserRole.ACCOUNTANT: frozenset({
         "financial.read", "reports.read", "bank.read",
@@ -77,6 +85,9 @@ ROLE_PRESETS: dict[UserRole, frozenset[str]] = {
         "accounting.writeback.propose",
         "expenses.manage_categories", "expenses.manage_vehicle_profile", "expenses.classify", "reports.email",
         "moshko.memory.write", "tasks.write",
+        # W3 גל 2 — מנהל/ת חשבונות: CRM, חיוב באמצעי שמור ותקשורת;
+        # integrations.manage (טריגרים) נשאר ל-ADMIN בלבד — תשתית.
+        "crm.manage", "billing.charge", "comms.send",
     }),
     UserRole.MANAGER: frozenset({
         "financial.read", "reports.read", "bank.read", "invoices.draft",

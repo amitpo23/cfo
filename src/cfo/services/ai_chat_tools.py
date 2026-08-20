@@ -45,9 +45,10 @@ class ChatTool:
 async def _find_capability(db, org_id: int, task: str = "", reads_only: bool = False, **_kwargs) -> dict:
     """היכולות של SUMIT ו-Open Finance שמשרתות משימה נתונה.
 
-    הכלים הרשומים כאן מכסים 50 יכולות; ל-SumitIntegration ול-
-    OpenFinanceClient יש יחד 172. הכלי הזה נותן למושקו לגלות מה קיים
-    מעבר למה שנרשם ידנית, במקום להשיב "אין לי יכולת כזו" כשהיא קיימת.
+    מאז W3 גל 2 כל מתודות SumitIntegration מוכרעות במפורש (חשופה/מכוסה/
+    מוחרגת — ר' sumit_tool_manifest), אך ל-OpenFinanceClient עדיין יש
+    יכולות שאינן כלים. הכלי הזה נותן למושקו לגלות מה קיים מעבר למה
+    שנרשם ידנית, במקום להשיב "אין לי יכולת כזו" כשהיא קיימת.
 
     זהו כלי גילוי בלבד: הוא קורא את הקטלוג (introspection על הקוד) ואינו
     מפעיל דבר אצל הספק. `requires_approval` בכל תוצאה אומר למושקו מה
@@ -439,6 +440,440 @@ async def _send_collection_sms(
         "contact": contact.name,
         "phone": contact.phone,
         "message": message,
+    }
+
+
+# ------------------------------------------------------------------ #
+# W3 גל 2 (20/08/2026) — כיסוי מלא של מתודות SUMIT העטופות.
+# מקור האמת להכרעה פר-מתודה: services/sumit_tool_manifest.py; השער:
+# tests/test_sumit_tool_coverage.py. כל הכלים כאן בונים קליינט דרך
+# _client_for_org (מפתח מ-IntegrationConnection + מגביל אמיתי פר-ארגון,
+# דפוס גל 1) וסוגרים אותו ב-finally.
+# ------------------------------------------------------------------ #
+
+async def _sumit_call(db, org_id: int, call):
+    """הרצת קריאת SUMIT אחת בקליינט הארגון וסגירתו — דפוס גל 1 המשותף."""
+    from .recurring_billing_service import _client_for_org
+    client = await _client_for_org(db, org_id)
+    try:
+        return await call(client)
+    finally:
+        await client.client.aclose()
+
+
+async def _get_customer_debt(db, org_id: int, *, customer_id: str, **_kwargs) -> dict:
+    result = await _sumit_call(db, org_id, lambda c: c.get_debt(customer_id))
+    return {"customer_id": customer_id, "debt": result.get("Debt"), "response": result}
+
+
+async def _get_next_document_number(db, org_id: int, *, document_type: str, **_kwargs) -> dict:
+    number = await _sumit_call(
+        db, org_id, lambda c: c.get_next_document_number(document_type),
+    )
+    return {"document_type": document_type, "next_document_number": number}
+
+
+async def _set_next_document_number(
+    db, org_id: int, *, document_type: str, next_number: int, **_kwargs,
+) -> dict:
+    from ..integrations.sumit_models import DocumentNumberRequest
+    result = await _sumit_call(db, org_id, lambda c: c.set_next_document_number(
+        DocumentNumberRequest(document_type=document_type, next_number=next_number),
+    ))
+    return {
+        "status": "set",
+        "document_type": document_type,
+        "next_number": next_number,
+        "response": result,
+        "warning": "שינוי מספור משפיע על רצף המסמכים החוקי — אין ליצור חורים במספור.",
+    }
+
+
+def _serialize_sumit_document(doc) -> dict:
+    return {
+        "document_id": doc.document_id,
+        "document_number": doc.document_number,
+        "document_type": doc.document_type,
+        "customer_id": doc.customer_id,
+        "customer_name": doc.customer_name,
+        "total_amount": float(doc.total_amount or 0),
+        "vat_amount": float(doc.vat_amount or 0),
+        "status": doc.status,
+        "issue_date": doc.issue_date.isoformat() if doc.issue_date else None,
+    }
+
+
+async def _list_sumit_documents(
+    db, org_id: int, *, document_type: str | None = None,
+    from_date: str | None = None, to_date: str | None = None,
+    limit: int = 20, **_kwargs,
+) -> dict:
+    from ..integrations.sumit_models import DocumentListRequest
+    request = DocumentListRequest(
+        document_type=document_type,
+        from_date=_parse_date_safe(from_date),
+        to_date=_parse_date_safe(to_date),
+        limit=min(limit, 100),
+    )
+    docs = await _sumit_call(db, org_id, lambda c: c.list_documents(request))
+    return {"count": len(docs), "documents": [_serialize_sumit_document(d) for d in docs]}
+
+
+async def _move_document_to_books(db, org_id: int, *, document_id: str, **_kwargs) -> dict:
+    result = await _sumit_call(
+        db, org_id, lambda c: c.move_document_to_books(document_id),
+    )
+    return {
+        "status": "moved_to_books",
+        "document_id": document_id,
+        "response": result,
+        "warning": (
+            "תיוק לספרים הוא רישום בלתי-הפיך: מסמך מתויק נכנס לדוחות "
+            "ואינו ניתן לעריכה חופשית (חוק 7 ממרכז הידע — כל קובץ נשאר "
+            "טיוטה עד 'שמירה כמסמך סופי')."
+        ),
+    }
+
+
+async def _create_document_from_existing(db, org_id: int, *, document_id: str, **_kwargs) -> dict:
+    clones = await _sumit_call(
+        db, org_id, lambda c: c.create_document_from_existing(document_id),
+    )
+    return {
+        "source_document_id": document_id,
+        "created": [
+            {
+                "scheduled_document_id": r.scheduled_document_id,
+                "date": r.date.isoformat() if r.date else None,
+                "total": float(r.total),
+            }
+            for r in clones
+        ],
+        "note": "שכפול מסמך קיים למופע המתוזמן הבא — לא ניתן לתזמן מסמך מפרטים גולמיים.",
+    }
+
+
+# --- CRM --- #
+
+def _serialize_entity(entity) -> dict:
+    return {
+        "entity_id": entity.entity_id,
+        "folder_id": entity.folder_id,
+        "fields": entity.fields,
+    }
+
+
+def _entity_request(folder_id: str, fields: dict):
+    from ..integrations.sumit_models import EntityField, EntityRequest
+    return EntityRequest(
+        folder_id=folder_id,
+        fields=[EntityField(field_name=k, field_value=v) for k, v in (fields or {}).items()],
+    )
+
+
+async def _list_crm_entities(
+    db, org_id: int, *, folder_id: str, limit: int = 50, offset: int = 0, **_kwargs,
+) -> dict:
+    rows = await _sumit_call(
+        db, org_id, lambda c: c.list_entities(folder_id, limit=min(limit, 100), offset=offset),
+    )
+    return {"count": len(rows), "entities": [_serialize_entity(e) for e in rows]}
+
+
+async def _get_crm_entity(db, org_id: int, *, entity_id: str, **_kwargs) -> dict:
+    entity = await _sumit_call(db, org_id, lambda c: c.get_entity(entity_id))
+    return _serialize_entity(entity)
+
+
+async def _count_crm_entity_usage(db, org_id: int, *, entity_id: str, **_kwargs) -> dict:
+    count = await _sumit_call(db, org_id, lambda c: c.count_entity_usage(entity_id))
+    return {"entity_id": entity_id, "usage_count": count}
+
+
+async def _get_crm_entity_html(db, org_id: int, *, entity_id: str, **_kwargs) -> dict:
+    html = await _sumit_call(db, org_id, lambda c: c.get_entity_print_html(entity_id))
+    truncated = len(html) > 15000
+    return {"entity_id": entity_id, "html": html[:15000], "truncated": truncated}
+
+
+async def _get_crm_folder(db, org_id: int, *, folder_id: str, **_kwargs) -> dict:
+    folder = await _sumit_call(db, org_id, lambda c: c.get_folder(folder_id))
+    return {
+        "folder_id": folder.folder_id,
+        "folder_name": folder.folder_name,
+        "field_definitions": folder.field_definitions,
+    }
+
+
+async def _list_crm_folders(db, org_id: int, **_kwargs) -> dict:
+    folders = await _sumit_call(db, org_id, lambda c: c.list_folders())
+    return {"folders": [
+        {"folder_id": f.folder_id, "folder_name": f.folder_name} for f in folders
+    ]}
+
+
+async def _list_crm_views(db, org_id: int, *, folder_id: str, **_kwargs) -> dict:
+    views = await _sumit_call(db, org_id, lambda c: c.list_views(folder_id))
+    return {"folder_id": folder_id, "views": views}
+
+
+async def _create_crm_entity(db, org_id: int, *, folder_id: str, fields: dict, **_kwargs) -> dict:
+    entity = await _sumit_call(
+        db, org_id, lambda c: c.create_entity(_entity_request(folder_id, fields)),
+    )
+    return {"status": "created", **_serialize_entity(entity)}
+
+
+async def _update_crm_entity(
+    db, org_id: int, *, entity_id: str, folder_id: str, fields: dict, **_kwargs,
+) -> dict:
+    entity = await _sumit_call(
+        db, org_id, lambda c: c.update_entity(entity_id, _entity_request(folder_id, fields)),
+    )
+    return {"status": "updated", **_serialize_entity(entity)}
+
+
+async def _archive_crm_entity(db, org_id: int, *, entity_id: str, **_kwargs) -> dict:
+    result = await _sumit_call(db, org_id, lambda c: c.archive_entity(entity_id))
+    return {"status": "archived", "entity_id": entity_id, "response": result}
+
+
+async def _delete_crm_entity(db, org_id: int, *, entity_id: str, **_kwargs) -> dict:
+    result = await _sumit_call(db, org_id, lambda c: c.delete_entity(entity_id))
+    return {
+        "status": "deleted",
+        "entity_id": entity_id,
+        "response": result,
+        "warning": "מחיקה סופית אצל הספק — כשהישות בשימוש עדיף archive_crm_entity.",
+    }
+
+
+# --- אמצעי תשלום שמורים (לעולם לא פרטי כרטיס) --- #
+
+async def _get_payment_methods(db, org_id: int, *, customer_id: str, **_kwargs) -> dict:
+    methods = await _sumit_call(db, org_id, lambda c: c.get_payment_methods(customer_id))
+    # בטיחות פלט: מוחזרים אך ורק שדות ממוסכים (4 ספרות אחרונות) — לעולם
+    # לא PAN מלא. PaymentMethodResponse ממילא אינו נושא מספר מלא, וההיטל
+    # המפורש כאן מבטיח שגם שינוי עתידי במודל לא ידלוף לצ'אט.
+    return {"customer_id": customer_id, "payment_methods": [
+        {
+            "payment_method_id": m.payment_method_id,
+            "type": m.type,
+            "last_4_digits": m.last_4_digits,
+            "expiry_date": m.expiry_date,
+            "is_default": m.is_default,
+        }
+        for m in methods
+    ]}
+
+
+async def _set_payment_method(
+    db, org_id: int, *, customer_id: str, payment_method_id: str, **_kwargs,
+) -> dict:
+    result = await _sumit_call(
+        db, org_id, lambda c: c.set_payment_methods(customer_id, payment_method_id),
+    )
+    return {"status": "set", "customer_id": customer_id, "response": result}
+
+
+async def _remove_payment_method(db, org_id: int, *, customer_id: str, **_kwargs) -> dict:
+    result = await _sumit_call(
+        db, org_id, lambda c: c.remove_payment_method(customer_id, ""),
+    )
+    return {
+        "status": "removed",
+        "customer_id": customer_id,
+        "response": result,
+        "warning": "ללא אמצעי שמור — הוראות קבע פעילות של הלקוח ייכשלו בחיוב הבא.",
+    }
+
+
+# --- סליקה בטוחה (אמצעי שמור בלבד) --- #
+
+async def _charge_customer(
+    db, org_id: int, *, customer_id: str, amount: float,
+    description: str | None = None, payment_method_id: str | None = None,
+    installments: int = 1, **_kwargs,
+) -> dict:
+    from decimal import Decimal
+    from ..integrations.sumit_models import ChargeRequest
+
+    if amount <= 0:
+        return {"error": "סכום החיוב חייב להיות חיובי."}
+    # card=None תמיד — הכלי בונה ChargeRequest ללא שדה הכרטיס; חיוב
+    # אפשרי רק מאמצעי שמור/טוקן (payment_method), לעולם לא מפרטי כרטיס.
+    charge = ChargeRequest(
+        customer_id=customer_id,
+        amount=Decimal(str(amount)),
+        description=description,
+        payment_method=payment_method_id,
+        installments=installments,
+    )
+    payment = await _sumit_call(db, org_id, lambda c: c.charge_customer(charge))
+    return {
+        "payment_id": payment.payment_id,
+        "transaction_id": payment.transaction_id,
+        "amount": float(payment.amount),
+        "status": payment.status,
+        "authorization_number": payment.authorization_number,
+        "last_4_digits": payment.last_4_digits,
+        "warning": (
+            "ביטול עסקת אשראי אפשרי רק ביום העסקה ובסכום מלא; אחרת נדרש "
+            "זיכוי (חוק 16 ממרכז הידע)."
+        ),
+    }
+
+
+async def _begin_payment_redirect(
+    db, org_id: int, *, amount: float, description: str, return_url: str,
+    customer_id: str | None = None, **_kwargs,
+) -> dict:
+    from decimal import Decimal
+    if amount <= 0:
+        return {"error": "סכום התשלום חייב להיות חיובי."}
+    url = await _sumit_call(db, org_id, lambda c: c.begin_payment_redirect(
+        Decimal(str(amount)), description, return_url, customer_id=customer_id,
+    ))
+    return {"payment_url": url, "amount": amount, "description": description}
+
+
+async def _get_reference_numbers(
+    db, org_id: int, *, transaction_ids: list[str], **_kwargs,
+) -> dict:
+    refs = await _sumit_call(
+        db, org_id, lambda c: c.get_reference_numbers([str(t) for t in transaction_ids]),
+    )
+    return {"reference_numbers": refs}
+
+
+# --- תקשורת --- #
+
+async def _send_multiple_sms(
+    db, org_id: int, *, messages: list[dict], **_kwargs,
+) -> dict:
+    """אותו שער רגולטורי כמו send_collection_sms — opt-in ושם שולח חובה."""
+    from ..models import Organization
+    from ..integrations.sumit_models import SMSRequest
+
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if org is None or not org.collection_reminders_enabled:
+        return {"error": "שליחת SMS אינה מופעלת לארגון (נדרש opt-in רגולטורי בהגדרות)."}
+    if not org.collection_sms_sender:
+        return {"error": "לא הוגדר שם שולח SMS לארגון (collection_sms_sender)."}
+    if not messages:
+        return {"error": "לא סופקו הודעות לשליחה."}
+
+    requests = []
+    for m in messages:
+        phone, text = m.get("phone"), m.get("message")
+        if not phone or not text:
+            return {"error": "כל הודעה חייבת phone ו-message."}
+        requests.append(SMSRequest(
+            phone_number=str(phone), message=str(text),
+            sender_name=org.collection_sms_sender,
+        ))
+    responses = await _sumit_call(db, org_id, lambda c: c.send_multiple_sms(requests))
+    return {
+        "sent": len(responses),
+        "statuses": [r.status for r in responses],
+    }
+
+
+async def _send_fax(
+    db, org_id: int, *, fax_number: str, document_base64: str, **_kwargs,
+) -> dict:
+    from ..integrations.sumit_models import FaxRequest
+    result = await _sumit_call(db, org_id, lambda c: c.send_fax(FaxRequest(
+        fax_number=fax_number, document_content=document_base64,
+    )))
+    return {"status": "sent", "fax_id": result.get("fax_id"), "fax_number": fax_number}
+
+
+async def _create_ticket(
+    db, org_id: int, *, subject: str, description: str,
+    customer_id: str | None = None, **_kwargs,
+) -> dict:
+    from ..integrations.sumit_models import TicketRequest
+    ticket = await _sumit_call(db, org_id, lambda c: c.create_ticket(TicketRequest(
+        subject=subject, description=description, customer_id=customer_id,
+    )))
+    return {"ticket_id": ticket.ticket_id, "subject": ticket.subject, "status": ticket.status}
+
+
+async def _list_mailing_lists(db, org_id: int, **_kwargs) -> dict:
+    rows = await _sumit_call(db, org_id, lambda c: c.list_mailing_lists())
+    return {"mailing_lists": rows}
+
+
+async def _add_to_mailing_list(
+    db, org_id: int, *, list_id: str, email: str, name: str | None = None, **_kwargs,
+) -> dict:
+    from ..integrations.sumit_models import EmailListRequest
+    result = await _sumit_call(db, org_id, lambda c: c.add_to_mailing_list(
+        EmailListRequest(list_id=list_id, email=email, name=name),
+    ))
+    return {"status": "added", "list_id": list_id, "email": email, "response": result}
+
+
+async def _list_sms_senders(db, org_id: int, **_kwargs) -> dict:
+    senders = await _sumit_call(db, org_id, lambda c: c.list_sms_senders())
+    return {"senders": senders}
+
+
+# --- מלאי, טריגרים ואימות בנק --- #
+
+async def _list_stock(db, org_id: int, **_kwargs) -> dict:
+    items = await _sumit_call(db, org_id, lambda c: c.list_stock())
+    return {"count": len(items), "stock": [
+        {"item_id": i.item_id, "name": i.name, "quantity": float(i.quantity)}
+        for i in items
+    ]}
+
+
+async def _subscribe_trigger(
+    db, org_id: int, *, trigger_type: str, webhook_url: str, **_kwargs,
+) -> dict:
+    if not str(webhook_url).startswith("https://"):
+        return {"error": "webhook_url חייב להיות https — לא נרשם טריגר לכתובת לא מאובטחת."}
+    result = await _sumit_call(
+        db, org_id, lambda c: c.subscribe_trigger(trigger_type, webhook_url),
+    )
+    return {
+        "status": "subscribed",
+        "trigger_type": trigger_type,
+        "webhook_url": webhook_url,
+        "response": result,
+        "note": "timeout טריגר: 10 שניות, 5 ניסיונות ואז השהיה; אין חתימה (חוק 27).",
+    }
+
+
+async def _unsubscribe_trigger(db, org_id: int, *, webhook_url: str, **_kwargs) -> dict:
+    result = await _sumit_call(db, org_id, lambda c: c.unsubscribe_trigger(webhook_url))
+    return {"status": "unsubscribed", "webhook_url": webhook_url, "response": result}
+
+
+async def _verify_bank_account(
+    db, org_id: int, *, bank_number: str, branch_number: str, account_number: str,
+    **_kwargs,
+) -> dict:
+    """אימות פרטי חשבון בנק מול SUMIT — למשל לפני הוספת ספק לקובץ מס"ב.
+
+    שירות המס"ב (masav_service) הוא בונה-קובץ טהור ללא קריאות רשת — חיבור
+    ישיר היה מכניס תלות async לקוד סינכרוני; לכן האימות נחשף ככלי נפרד
+    שמריצים לפני בניית הקובץ (הכרעת גל 2)."""
+    from ..integrations.sumit_models import BankAccountVerification
+    result = await _sumit_call(db, org_id, lambda c: c.verify_bank_account(
+        BankAccountVerification(
+            bank_number=str(bank_number),
+            branch_number=str(branch_number),
+            account_number=str(account_number),
+        ),
+    ))
+    return {
+        "bank_number": bank_number,
+        "branch_number": branch_number,
+        "account_number": account_number,
+        "result": result,
     }
 
 
@@ -993,7 +1428,53 @@ async def _get_sumit_budget_status(db, org_id: int, **_kwargs) -> dict:
             "המונים נאכפים fail-closed בשכבת הרשת; התקרות הן פר-ארגון "
             "(חודשי/יומי) והשאילתה הזו עצמה אינה צורכת קריאת API."
         ),
+        # שכבת העלות (מאמר 5507895): הקאונטר יודע תמיד אם חורגים ומה
+        # העלות. included = מדידת הספק האחרונה (listquotas); בלי מחיר
+        # פעולה מוגדר — כמויות ונוסחה בלבד, אפס שקלים מומצאים.
+        "cost": _budget_cost_section(
+            db, org_id,
+            paid_used=paid_used, month_used=month_used,
+        ),
     }
+
+
+def _budget_cost_section(db, org_id: int, *, paid_used: int, month_used: int) -> dict:
+    from ..config import settings
+    from . import sumit_pricing
+    from .sumit_quota import load_latest_snapshot
+
+    snapshot = None
+    try:
+        snapshot = load_latest_snapshot(db, org_id)
+    except Exception:
+        snapshot = None
+
+    section: dict = {"pricing_model": dict(sumit_pricing.PRICING_MODEL_SUMMARY)}
+    if snapshot is not None:
+        estimate = sumit_pricing.estimate_costs(
+            actions_used=snapshot.used,
+            actions_included=snapshot.limit,
+            api_calls_used=month_used,
+            action_price_ils=settings.sumit_plan_action_price_ils,
+        )
+        section["provider_measurement"] = {
+            "used": snapshot.used, "included": snapshot.limit,
+            "measured_at": snapshot.measured_at.isoformat(),
+        }
+        section["estimate"] = estimate
+        if estimate["actions_overage"] > 0 or estimate["api_calls_overage"] > 0:
+            section["warning"] = (
+                "חריגה מהמכסה הכלולה — כל פעולה נוספת מחויבת לאמצעי התשלום "
+                "של חברת הלקוח."
+            )
+    else:
+        section["provider_measurement"] = None
+        section["estimate"] = None
+        section["note"] = (
+            "אין מדידת מכסה טרייה מהספק (הרענון היומי טרם רץ) — אומדן עלות "
+            "יוצג אחרי המדידה הראשונה. פעולות בתשלום ממילא חסומות בלי מדידה."
+        )
+    return section
 
 
 async def _prepare_vat_filing(
@@ -1035,6 +1516,27 @@ async def _prepare_vat_filing(
             "משדר ידנית בפורטל SUMIT (דיווח חכם), ובמסלול הבדיקות הנוכחי "
             "אין חיבור לרשות המסים כלל."
         ),
+        # מסלול השידור המלא בפורטל (מאמר 8818603 — "דיווחים מקוונים
+        # לרשויות API"): קיים שידור מקוון אמיתי דרך SUMIT, כולל מרוכז.
+        "sumit_online_filing_guide": {
+            "flow": (
+                "שמירת הדיווח ← 'מעבר לדיווח חכם!' ← 'שידור מקוון לרשות "
+                "המסים (API)' ← אישור הדיווח ← 'שידור דיווח לרשויות' ← "
+                "'שידור הדיווחים'. בהצלחה — הרשות מחזירה אישור PDF שנשמר בדיווח."
+            ),
+            "batch": (
+                "שידור מרוכז רב-תיקים (מאמר 9923083): ניהול המשרד ← "
+                "'דיווחים לשידור' ← שידור מע\"מ/מקדמות אוטומטי ← סימון תיקים."
+            ),
+            "constraints": [
+                "שידור עד המועד האחרון לדיווח בלבד — איחור גורר ריבית/חסימה",
+                "שוטף בלבד — תקופה רטרואקטיבית שאינה ברצף תיכשל",
+                "מקדמות ב-API: אין תשלום עודף/חסר ואין תיק שותפות",
+                "חיוב ב-API עלול שלא להתבצע בבנק — לוודא מול הבנק אחרי שידור",
+                "ניתן לשדר גם החזר מע\"מ; פריסת תשלומים רק בהרשאה לחיוב חשבון",
+            ],
+            "source": "docs/sumit_help_kb/09-books-periodic-reporting.md",
+        },
     }
 
 
@@ -1882,6 +2384,551 @@ TOOLS: dict[str, ChatTool] = {
         category="write",
         policy_action="collections.contact",
         fn=_send_collection_sms,
+    ),
+    # ---------------- W3 גל 2 (20/08/2026) — כיסוי SUMIT מלא ---------------- #
+    # מסמכים
+    "get_customer_debt": ChatTool(
+        name="get_customer_debt",
+        description=(
+            "יתרת החוב של לקוח בודד לפי הספרים ב-SUMIT (getdebt). "
+            "לדוח חובות של כל הלקוחות יש get_customer_debt_report. "
+            "קריאת API אחת."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"customer_id": {"type": "string", "description": "מזהה הלקוח ב-SUMIT"}},
+            "required": ["customer_id"],
+        },
+        category="read",
+        fn=_get_customer_debt,
+    ),
+    "get_next_document_number": ChatTool(
+        name="get_next_document_number",
+        description=(
+            "המספר הבא בסדרת מסמכים ב-SUMIT (חשבונית/קבלה וכו') — קריאה "
+            "בלבד, קריאת API אחת."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"document_type": {"type": "string", "description": "סוג המסמך, למשל invoice/receipt"}},
+            "required": ["document_type"],
+        },
+        category="read",
+        fn=_get_next_document_number,
+    ),
+    "set_next_document_number": ChatTool(
+        name="set_next_document_number",
+        description=(
+            "קביעת המספר הבא בסדרת מסמכים ב-SUMIT. זהירות: רצף המספור "
+            "הוא דרישה חוקית — אין לדלג/ליצור חורים במספור אלא בפתיחת "
+            "סדרה מסודרת. פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "document_type": {"type": "string"},
+                "next_number": {"type": "integer", "minimum": 1},
+            },
+            "required": ["document_type", "next_number"],
+        },
+        category="write",
+        policy_action="accounting.writeback.propose",
+        fn=_set_next_document_number,
+    ),
+    "list_sumit_documents": ChatTool(
+        name="list_sumit_documents",
+        description=(
+            "רשימת מסמכים ישירות מ-SUMIT (כולל טיוטות) עם סינון סוג/"
+            "תאריכים — בניגוד ל-list_invoices שקורא מהספרים המקומיים של "
+            "רצף. קריאת API אחת — להשתמש רק כשנדרש מצב הפורטל העדכני "
+            "ולא מספיק המידע המקומי (משמעת עלויות)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "document_type": {"type": "string", "description": "סוג מסמך (אופציונלי)"},
+                "from_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "to_date": {"type": "string", "description": "YYYY-MM-DD"},
+                "limit": {"type": "integer", "default": 20},
+            },
+        },
+        category="read",
+        fn=_list_sumit_documents,
+    ),
+    "move_document_to_books": ChatTool(
+        name="move_document_to_books",
+        description=(
+            "תיוק מסמך טיוטה לספרים ב-SUMIT (movetobooks) — פעולת ספרים "
+            "בלתי-הפיכה: מסמך מתויק נכנס לדוחות ואינו ניתן לעריכה חופשית "
+            "(חוק 7: כל קובץ נשאר טיוטה עד שמירה כמסמך סופי). פעולת "
+            "כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"document_id": {"type": "string"}},
+            "required": ["document_id"],
+        },
+        category="write",
+        policy_action="accounting.writeback.propose",
+        fn=_move_document_to_books,
+    ),
+    "create_document_from_existing": ChatTool(
+        name="create_document_from_existing",
+        description=(
+            "שכפול מסמך קיים ב-SUMIT למופע המתוזמן הבא שלו (scheduled "
+            "documents) — יוצר מסמך אמיתי חדש. אין ב-API תזמון מסמך "
+            "מפרטים גולמיים — רק שכפול DocumentID קיים. פעולת כתיבה — "
+            "דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"document_id": {"type": "string", "description": "מזהה המסמך המקורי ב-SUMIT"}},
+            "required": ["document_id"],
+        },
+        category="write",
+        policy_action="invoices.issue",
+        fn=_create_document_from_existing,
+    ),
+    # CRM
+    "list_crm_entities": ChatTool(
+        name="list_crm_entities",
+        description="רשימת ישויות CRM בתיקייה נתונה ב-SUMIT, עם עימוד. קריאת API אחת.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "folder_id": {"type": "string", "description": "שם/מזהה התיקייה (למשל Customers)"},
+                "limit": {"type": "integer", "default": 50},
+                "offset": {"type": "integer", "default": 0},
+            },
+            "required": ["folder_id"],
+        },
+        category="read",
+        fn=_list_crm_entities,
+    ),
+    "get_crm_entity": ChatTool(
+        name="get_crm_entity",
+        description="פרטי ישות CRM בודדת ב-SUMIT (כל השדות). קריאת API אחת.",
+        input_schema={
+            "type": "object",
+            "properties": {"entity_id": {"type": "string"}},
+            "required": ["entity_id"],
+        },
+        category="read",
+        fn=_get_crm_entity,
+    ),
+    "count_crm_entity_usage": ChatTool(
+        name="count_crm_entity_usage",
+        description=(
+            "בכמה מקומות ישות CRM נמצאת בשימוש — יש להריץ לפני מחיקה/"
+            "ארכוב כדי לא לשבור קישורים. קריאת API אחת."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"entity_id": {"type": "string"}},
+            "required": ["entity_id"],
+        },
+        category="read",
+        fn=_count_crm_entity_usage,
+    ),
+    "get_crm_entity_html": ChatTool(
+        name="get_crm_entity_html",
+        description=(
+            "תצוגת הדפסה (HTML) של ישות CRM — שימושי להצגת כרטיס לקוח "
+            "מלא. עד 15,000 תווים (truncated=true אם קוצץ). 3 קריאות API."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"entity_id": {"type": "string"}},
+            "required": ["entity_id"],
+        },
+        category="read",
+        fn=_get_crm_entity_html,
+    ),
+    "get_crm_folder": ChatTool(
+        name="get_crm_folder",
+        description=(
+            "סכימת תיקיית CRM — אילו שדות קיימים ומה שמותיהם. יש להריץ "
+            "לפני create_crm_entity כדי למלא שמות שדות אמיתיים ולא לנחש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"folder_id": {"type": "string"}},
+            "required": ["folder_id"],
+        },
+        category="read",
+        fn=_get_crm_folder,
+    ),
+    "list_crm_folders": ChatTool(
+        name="list_crm_folders",
+        description="רשימת כל תיקיות ה-CRM ב-SUMIT. קריאת API אחת.",
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_list_crm_folders,
+    ),
+    "list_crm_views": ChatTool(
+        name="list_crm_views",
+        description="רשימת ה-views השמורים של תיקיית CRM (לפי מזהה מספרי). קריאת API אחת.",
+        input_schema={
+            "type": "object",
+            "properties": {"folder_id": {"type": "string", "description": "מזהה תיקייה מספרי"}},
+            "required": ["folder_id"],
+        },
+        category="read",
+        fn=_list_crm_views,
+    ),
+    "create_crm_entity": ChatTool(
+        name="create_crm_entity",
+        description=(
+            "יצירת ישות CRM חדשה (לקוח/ספק/רשומה) ב-SUMIT. שמות השדות "
+            "חייבים להתאים לסכימת התיקייה (get_crm_folder) — אל תנחש "
+            "שמות שדות. פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "folder_id": {"type": "string"},
+                "fields": {
+                    "type": "object",
+                    "description": "מפת שם-שדה → ערך לפי סכימת התיקייה",
+                },
+            },
+            "required": ["folder_id", "fields"],
+        },
+        category="write",
+        policy_action="crm.manage",
+        fn=_create_crm_entity,
+    ),
+    "update_crm_entity": ChatTool(
+        name="update_crm_entity",
+        description=(
+            "עדכון שדות של ישות CRM קיימת ב-SUMIT. פעולת כתיבה — דורשת "
+            "אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string"},
+                "folder_id": {"type": "string"},
+                "fields": {"type": "object"},
+            },
+            "required": ["entity_id", "folder_id", "fields"],
+        },
+        category="write",
+        policy_action="crm.manage",
+        fn=_update_crm_entity,
+    ),
+    "archive_crm_entity": ChatTool(
+        name="archive_crm_entity",
+        description=(
+            "ארכוב ישות CRM (הסתרה בלי מחיקה) — הבחירה הבטוחה כשהישות "
+            "בשימוש. פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"entity_id": {"type": "string"}},
+            "required": ["entity_id"],
+        },
+        category="write",
+        policy_action="crm.manage",
+        fn=_archive_crm_entity,
+    ),
+    "delete_crm_entity": ChatTool(
+        name="delete_crm_entity",
+        description=(
+            "מחיקת ישות CRM לצמיתות ב-SUMIT. יש להריץ קודם "
+            "count_crm_entity_usage — ישות בשימוש עדיף לארכב "
+            "(archive_crm_entity) ולא למחוק. פעולת כתיבה בלתי-הפיכה — "
+            "דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"entity_id": {"type": "string"}},
+            "required": ["entity_id"],
+        },
+        category="write",
+        policy_action="crm.manage",
+        fn=_delete_crm_entity,
+    ),
+    # אמצעי תשלום שמורים
+    "get_payment_methods": ChatTool(
+        name="get_payment_methods",
+        description=(
+            "אמצעי התשלום השמורים של לקוח ב-SUMIT — סוג, 4 ספרות אחרונות "
+            "ותוקף בלבד (לעולם לא מספר כרטיס מלא). קריאת API אחת."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"customer_id": {"type": "string"}},
+            "required": ["customer_id"],
+        },
+        category="read",
+        fn=_get_payment_methods,
+    ),
+    "set_payment_method": ChatTool(
+        name="set_payment_method",
+        description=(
+            "קביעת אמצעי התשלום הפעיל של לקוח — לפי מזהה אמצעי קיים או "
+            "טוקן חד-פעמי מ-payments.js בלבד. לעולם לא מקבל פרטי כרטיס "
+            "(מספר/CVV/תוקף) — אם משתמש מכתיב פרטי כרטיס בצ'אט, סרב "
+            "והפנה לדף תשלום. פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string"},
+                "payment_method_id": {
+                    "type": "string",
+                    "description": "מזהה אמצעי שמור או טוקן חד-פעמי — לא מספר כרטיס",
+                },
+            },
+            "required": ["customer_id", "payment_method_id"],
+        },
+        category="write",
+        policy_action="crm.manage",
+        fn=_set_payment_method,
+    ),
+    "remove_payment_method": ChatTool(
+        name="remove_payment_method",
+        description=(
+            "הסרת אמצעי התשלום השמור של לקוח ב-SUMIT. זהירות: הוראות "
+            "קבע פעילות של הלקוח ייכשלו בחיוב הבא ללא אמצעי שמור. פעולת "
+            "כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"customer_id": {"type": "string"}},
+            "required": ["customer_id"],
+        },
+        category="write",
+        policy_action="crm.manage",
+        fn=_remove_payment_method,
+    ),
+    # סליקה בטוחה
+    "charge_customer": ChatTool(
+        name="charge_customer",
+        description=(
+            "חיוב לקוח בפועל מאמצעי התשלום השמור שלו (או טוקן) — כסף "
+            "אמיתי, פעולה בתשלום אצל הספק. לעולם לא מקבל פרטי כרטיס. "
+            "ביטול עסקה אפשרי רק ביום העסקה ובסכום מלא; אחרת זיכוי "
+            "(חוק 16). פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string"},
+                "amount": {"type": "number", "description": "בש\"ח, כולל מע\"מ"},
+                "description": {"type": "string"},
+                "payment_method_id": {
+                    "type": "string",
+                    "description": "אופציונלי — מזהה אמצעי שמור/טוקן; בהיעדרו האמצעי השמור הפעיל",
+                },
+                "installments": {"type": "integer", "default": 1},
+            },
+            "required": ["customer_id", "amount"],
+        },
+        category="write",
+        policy_action="billing.charge",
+        fn=_charge_customer,
+    ),
+    "begin_payment_redirect": ChatTool(
+        name="begin_payment_redirect",
+        description=(
+            "יצירת דף תשלום מאוחסן ב-SUMIT לסכום חופשי (לא צמוד "
+            "לחשבונית — לזה יש create_payment_link) עם כתובת חזרה. הלקוח "
+            "מזין את פרטי הכרטיס בדף המאובטח — לא בצ'אט. פעולת כתיבה — "
+            "דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "amount": {"type": "number"},
+                "description": {"type": "string"},
+                "return_url": {"type": "string", "description": "כתובת חזרה אחרי תשלום"},
+                "customer_id": {"type": "string"},
+            },
+            "required": ["amount", "description", "return_url"],
+        },
+        category="write",
+        policy_action="payment_link.create",
+        fn=_begin_payment_redirect,
+    ),
+    "get_reference_numbers": ChatTool(
+        name="get_reference_numbers",
+        description=(
+            "מספרי אסמכתא (שב\"א) לעסקאות סליקה לפי מזהי עסקה — לבירור "
+            "מול חברת האשראי. קריאת API אחת."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "transaction_ids": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["transaction_ids"],
+        },
+        category="read",
+        fn=_get_reference_numbers,
+    ),
+    # תקשורת
+    "send_multiple_sms": ChatTool(
+        name="send_multiple_sms",
+        description=(
+            "שליחת SMS למספר נמענים (אותו נוסח נשלח כ-batch אחד). אותו "
+            "שער רגולטורי כמו send_collection_sms: עובד רק אחרי opt-in "
+            "ושם שולח מוגדר. פעולה בתשלום — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "phone": {"type": "string"},
+                            "message": {"type": "string"},
+                        },
+                        "required": ["phone", "message"],
+                    },
+                },
+            },
+            "required": ["messages"],
+        },
+        category="write",
+        policy_action="collections.contact",
+        fn=_send_multiple_sms,
+    ),
+    "send_fax": ChatTool(
+        name="send_fax",
+        description=(
+            "שליחת פקס דרך SUMIT — מקבל את תוכן הקובץ כ-base64 (שליחה "
+            "לפי URL אינה נתמכת ב-API). פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "fax_number": {"type": "string"},
+                "document_base64": {"type": "string", "description": "תוכן PDF מקודד base64"},
+            },
+            "required": ["fax_number", "document_base64"],
+        },
+        category="write",
+        policy_action="comms.send",
+        fn=_send_fax,
+    ),
+    "create_ticket": ChatTool(
+        name="create_ticket",
+        description=(
+            "פתיחת פניית שירות (טיקט) במודול שירות הלקוחות של SUMIT. "
+            "פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string"},
+                "description": {"type": "string"},
+                "customer_id": {"type": "string"},
+            },
+            "required": ["subject", "description"],
+        },
+        category="write",
+        policy_action="comms.send",
+        fn=_create_ticket,
+    ),
+    "list_mailing_lists": ChatTool(
+        name="list_mailing_lists",
+        description="רשימות התפוצה (אימייל) הקיימות ב-SUMIT. קריאת API אחת.",
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_list_mailing_lists,
+    ),
+    "add_to_mailing_list": ChatTool(
+        name="add_to_mailing_list",
+        description=(
+            "הוספת נמען לרשימת תפוצה (אימייל) ב-SUMIT. יש לוודא שהנמען "
+            "הסכים לדיוור (חוק הספאם — תיקון 40) לפני ההוספה. פעולת "
+            "כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "list_id": {"type": "string"},
+                "email": {"type": "string"},
+                "name": {"type": "string"},
+            },
+            "required": ["list_id", "email"],
+        },
+        category="write",
+        policy_action="comms.send",
+        fn=_add_to_mailing_list,
+    ),
+    "list_sms_senders": ChatTool(
+        name="list_sms_senders",
+        description="שמות השולח המאושרים ל-SMS בתיק ה-SUMIT. קריאת API אחת.",
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_list_sms_senders,
+    ),
+    # מלאי, טריגרים ואימות בנק
+    "list_stock": ChatTool(
+        name="list_stock",
+        description="רשימת פריטי המלאי וכמויותיהם מ-SUMIT. קריאת API אחת.",
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_list_stock,
+    ),
+    "subscribe_trigger": ChatTool(
+        name="subscribe_trigger",
+        description=(
+            "הרשמה לטריגר (webhook) של SUMIT — התראה לכתובת https על "
+            "אירועים בתיק. מגבלות הספק (חוק 27): timeout 10 שניות, 5 "
+            "ניסיונות ואז השהיה, אין חתימה על ה-payload. פעולת כתיבה — "
+            "דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "trigger_type": {"type": "string", "description": "סוג הטריגר ב-SUMIT"},
+                "webhook_url": {"type": "string", "description": "כתובת https בלבד"},
+            },
+            "required": ["trigger_type", "webhook_url"],
+        },
+        category="write",
+        policy_action="integrations.manage",
+        fn=_subscribe_trigger,
+    ),
+    "unsubscribe_trigger": ChatTool(
+        name="unsubscribe_trigger",
+        description=(
+            "ביטול הרשמה לטריגר (webhook) — הביטול נעשה לפי הכתובת "
+            "שנרשמה, לא לפי מזהה. פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"webhook_url": {"type": "string", "description": "הכתובת שנרשמה"}},
+            "required": ["webhook_url"],
+        },
+        category="write",
+        policy_action="integrations.manage",
+        fn=_unsubscribe_trigger,
+    ),
+    "verify_bank_account": ChatTool(
+        name="verify_bank_account",
+        description=(
+            "אימות פרטי חשבון בנק (בנק/סניף/חשבון) מול SUMIT — מחזיר האם "
+            "הסניף תקין והאם החשבון מוגבל. יש להריץ לפני הוספת ספק "
+            "לקובץ מס\"ב או לפני העברה ראשונה לחשבון חדש. קריאת API אחת."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "bank_number": {"type": "string", "description": "קוד בנק"},
+                "branch_number": {"type": "string", "description": "מספר סניף"},
+                "account_number": {"type": "string", "description": "מספר חשבון"},
+            },
+            "required": ["bank_number", "branch_number", "account_number"],
+        },
+        category="read",
+        fn=_verify_bank_account,
     ),
     "log_collection_attempt": ChatTool(
         name="log_collection_attempt",
@@ -2756,6 +3803,18 @@ _SUMIT_TOOLS = {
     "list_recurring", "create_recurring", "cancel_recurring",
     "update_recurring", "cancel_document", "get_customer_debt_report",
     "send_collection_sms",
+    # W3 גל 2 (20/08/2026) — כיסוי SUMIT מלא (ר' sumit_tool_manifest)
+    "get_customer_debt", "get_next_document_number", "set_next_document_number",
+    "list_sumit_documents", "move_document_to_books", "create_document_from_existing",
+    "list_crm_entities", "get_crm_entity", "count_crm_entity_usage",
+    "get_crm_entity_html", "get_crm_folder", "list_crm_folders", "list_crm_views",
+    "create_crm_entity", "update_crm_entity", "archive_crm_entity", "delete_crm_entity",
+    "get_payment_methods", "set_payment_method", "remove_payment_method",
+    "charge_customer", "begin_payment_redirect", "get_reference_numbers",
+    "send_multiple_sms", "send_fax", "create_ticket",
+    "list_mailing_lists", "add_to_mailing_list", "list_sms_senders",
+    "list_stock", "subscribe_trigger", "unsubscribe_trigger",
+    "verify_bank_account",
 }
 _OPEN_FINANCE_TOOLS = {"create_bank_payment_request", "connect_bank_account"}
 _LOCAL_TOOLS = {"rezef_help", "kb_lookup", "email_report"}

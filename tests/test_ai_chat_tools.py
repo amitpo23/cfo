@@ -56,6 +56,35 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
         "update_recurring",
         "cancel_document",
         "send_collection_sms",
+        # W3 גל 2 (20/08/2026): כיסוי מלא של מתודות SUMIT (ר'
+        # sumit_tool_manifest + tests/test_sumit_tool_coverage.py).
+        # מסמכים: שינוי מספור ותיוק לספרים הם שינויי ספרים; שכפול מסמך
+        # יוצר מסמך אמיתי חדש — write.
+        "set_next_document_number",
+        "move_document_to_books",
+        "create_document_from_existing",
+        # CRM: יצירה/עדכון/ארכוב/מחיקה משנים נתונים אצל הספק — write.
+        # הקריאות (list/get/count/html/folder/views) הן read.
+        "create_crm_entity",
+        "update_crm_entity",
+        "archive_crm_entity",
+        "delete_crm_entity",
+        # אמצעי תשלום: קביעה/הסרה של אמצעי שמור — write (בלי פרטי
+        # כרטיס לעולם); get_payment_methods הוא read ממוסך.
+        "set_payment_method",
+        "remove_payment_method",
+        # סליקה: חיוב בפועל ודף תשלום — כסף אמיתי, write.
+        "charge_customer",
+        "begin_payment_redirect",
+        # תקשורת: כל פנייה יוצאת (SMS מרובה/פקס/טיקט/רשימת תפוצה) —
+        # write; הקריאות (רשימות/שולחים) הן read.
+        "send_multiple_sms",
+        "send_fax",
+        "create_ticket",
+        "add_to_mailing_list",
+        # טריגרים: הרשמה/ביטול webhook אצל הספק — שינוי תצורה, write.
+        "subscribe_trigger",
+        "unsubscribe_trigger",
     }
 
 
