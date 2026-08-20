@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, RefreshCw, Banknote, Repeat, TrendingUp, PiggyBank,
   Copy, ShieldAlert, Sparkles, Link2, CheckCircle2, XCircle, Loader2,
-  Scale, LineChart, Briefcase, Send, FileCheck2,
+  Scale, LineChart, Briefcase, Send, FileCheck2, DownloadCloud,
 } from 'lucide-react';
 import api from '../services/api';
 import ExportButtons from './ExportButtons';
@@ -79,6 +79,22 @@ const SEVERITY_LABEL: Record<string, string> = {
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 
+// חייב להיות זהה ל-REFRESH_ALL_CONFIRMATION בשרת (open_finance.py) —
+// אישור מפורש לפעולה בתשלום (20 קרדיטים, פעם ב-20 שעות).
+const REFRESH_ALL_CONFIRMATION = 'I_CONFIRM_OPEN_FINANCE_REFRESH_20_CREDITS';
+
+/** מציג את שגיאת השרת כלשונה — detail יכול להיות string או אובייקט {error, detail}. */
+function verbatimDetail(e: any, fallback: string): string {
+  const detail = e?.response?.data?.detail;
+  if (typeof detail === 'string' && detail) return detail;
+  if (detail && typeof detail === 'object') {
+    const parts = [detail.error, detail.detail].filter(Boolean);
+    if (parts.length) return parts.join(' — ');
+    return JSON.stringify(detail);
+  }
+  return fallback;
+}
+
 export default function BankInsightsDashboard() {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [loading, setLoading] = useState(false);
@@ -135,6 +151,34 @@ export default function BankInsightsDashboard() {
       }
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'שגיאה בפתיחת חיבור בנק');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * משיכת נתוני בנק טריים מהספק (POST /open-finance/connections/refresh-all).
+   * פעולה בתשלום (20 קרדיטים) המוגבלת בשרת לפעם ב-20 שעות — לכן דורשת
+   * אישור מפורש של המשתמש לפני השליחה, ומציגה את תשובת/שגיאת השרת כלשונה.
+   */
+  const refreshBankData = async () => {
+    const ok = window.confirm(
+      'משיכת נתוני בנק מהספק היא פעולה בתשלום (20 קרדיטים) ומוגבלת לפעם ב-20 שעות. להמשיך?'
+    );
+    if (!ok) return;
+    setBusy('refresh-all');
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.post<{ accepted: boolean; cost_credits: number; provider_response?: unknown }>(
+        '/api/open-finance/connections/refresh-all',
+        { confirmation: REFRESH_ALL_CONFIRMATION, reason: 'רענון ידני ממסך תובנות בנק' },
+      );
+      const provider = res.provider_response != null ? ` תשובת הספק: ${JSON.stringify(res.provider_response)}` : '';
+      setNotice(`בקשת הרענון התקבלה אצל הספק (עלות ${res.cost_credits} קרדיטים).${provider}`);
+      await loadInsights();
+    } catch (e: any) {
+      setError(verbatimDetail(e, 'שגיאה במשיכת נתוני בנק'));
     } finally {
       setBusy(null);
     }
@@ -233,6 +277,11 @@ export default function BankInsightsDashboard() {
             className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm hover:bg-indigo-700 disabled:opacity-50">
             {busy === 'connect' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
             חבר בנק
+          </button>
+          <button onClick={refreshBankData} disabled={!!busy}
+            className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-teal-600 text-white text-sm hover:bg-teal-700 disabled:opacity-50">
+            {busy === 'refresh-all' ? <Loader2 className="w-4 h-4 animate-spin" /> : <DownloadCloud className="w-4 h-4" />}
+            משוך נתוני בנק עכשיו
           </button>
           <button onClick={generate} disabled={!!busy}
             className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm hover:bg-emerald-700 disabled:opacity-50">

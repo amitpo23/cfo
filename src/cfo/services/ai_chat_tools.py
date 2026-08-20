@@ -302,6 +302,146 @@ async def _log_collection_attempt(
     return svc.case_to_dict(case)
 
 
+# ------------------------------------------------------------------ #
+# W3 גל 1 (20/08/2026) — הוראות קבע, מסמכים, חוב וגבייה מול SUMIT
+# ------------------------------------------------------------------ #
+
+async def _list_recurring(db, org_id: int, *, customer_id: str, **_kwargs) -> dict:
+    from .recurring_billing_service import list_recurring
+    return await list_recurring(db, org_id, customer_id=customer_id)
+
+
+async def _create_recurring(
+    db, org_id: int, *, customer_id: str, item_name: str, unit_price: float,
+    recurrence_months: int, start_date: str | None = None,
+    description: str | None = None, **_kwargs,
+) -> dict:
+    from .recurring_billing_service import RecurringValidationError, create_recurring
+    try:
+        return await create_recurring(
+            db, org_id, customer_id=customer_id, item_name=item_name,
+            unit_price=unit_price, recurrence_months=recurrence_months,
+            start_date=start_date, description=description,
+        )
+    except RecurringValidationError as exc:
+        return {"error": str(exc)}
+
+
+async def _cancel_recurring(
+    db, org_id: int, *, recurring_id: str, customer_id: str | None = None, **_kwargs,
+) -> dict:
+    from .recurring_billing_service import cancel_recurring
+    return await cancel_recurring(
+        db, org_id, recurring_id=recurring_id, customer_id=customer_id,
+    )
+
+
+async def _update_recurring(
+    db, org_id: int, *, recurring_id: str, customer_id: str, amount: float,
+    next_payment_date: str | None = None,
+    new_customer_id: str | None = None, new_item_name: str | None = None,
+    **_kwargs,
+) -> dict:
+    from .recurring_billing_service import (
+        RecurringValidationError,
+        update_recurring_amount,
+        validate_recurring_update,
+    )
+    try:
+        # חוק 18: שינוי לקוח/מוצר בהוראה פעילה — נדחה במפורש, לא בשקט.
+        validate_recurring_update(
+            new_customer_id=new_customer_id, new_item_name=new_item_name,
+        )
+        return await update_recurring_amount(
+            db, org_id, recurring_id=recurring_id, customer_id=customer_id,
+            amount=amount, next_payment_date=next_payment_date,
+        )
+    except RecurringValidationError as exc:
+        return {"error": str(exc)}
+
+
+async def _cancel_document_tool(db, org_id: int, *, document_id: str, **_kwargs) -> dict:
+    from .recurring_billing_service import _client_for_org
+    client = await _client_for_org(db, org_id)
+    try:
+        result = await client.cancel_document(document_id)
+    finally:
+        await client.client.aclose()
+    return {
+        "status": "cancelled_in_sumit",
+        "document_id": document_id,
+        "response": result,
+        "warning": "ביטול בסאמיט אינו מבטל בשע\"מ — אם המסמך שודר לרשות "
+                   "המסים, נדרש טיפול נפרד מול הרשות (חוק ממרכז הידע).",
+    }
+
+
+async def _get_customer_debt_report(
+    db, org_id: int, *, include_paid: bool = False, **_kwargs,
+) -> dict:
+    from ..integrations.sumit_models import DebtReportRequest
+    from .recurring_billing_service import _client_for_org
+    client = await _client_for_org(db, org_id)
+    try:
+        rows = await client.get_debt_report(DebtReportRequest(include_paid=include_paid))
+    finally:
+        await client.client.aclose()
+    return {"debt_report": rows, "count": len(rows)}
+
+
+async def _send_collection_sms(
+    db, org_id: int, *, contact_id: int, message: str | None = None, **_kwargs,
+) -> dict:
+    """SMS גבייה ללקוח — שער רגולטורי: רק כשהארגון הפעיל תזכורות גבייה
+    והגדיר שם שולח (opt-in). הודעת ברירת המחדל נבנית מהחוב בספרים
+    המקומיים (אפס קריאות API לצורך הניסוח)."""
+    from ..models import Contact, Organization
+    from ..integrations.sumit_models import SMSRequest
+    from .recurring_billing_service import _client_for_org
+
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if org is None or not org.collection_reminders_enabled:
+        return {"error": "תזכורות גבייה אינן מופעלות לארגון (נדרש opt-in רגולטורי בהגדרות)."}
+    if not org.collection_sms_sender:
+        return {"error": "לא הוגדר שם שולח SMS לארגון (collection_sms_sender)."}
+
+    contact = db.query(Contact).filter(
+        Contact.id == contact_id, Contact.organization_id == org_id,
+    ).first()
+    if contact is None:
+        return {"error": f"איש קשר {contact_id} לא נמצא בארגון"}
+    if not contact.phone:
+        return {"error": f"לאיש הקשר {contact.name} אין מספר טלפון במערכת"}
+
+    if not message:
+        from .ledger_service import contact_card
+        card = contact_card(db, org_id, contact_id) or {}
+        balance = card.get("balance") or card.get("total_debt")
+        if balance:
+            message = (
+                f"תזכורת ידידותית מ{org.name}: קיימת יתרה פתוחה על סך "
+                f"{float(balance):,.0f} ש\"ח. נשמח להסדרה. תודה!"
+            )
+        else:
+            return {"error": "לא נמצאה יתרת חוב פתוחה — אין מה לתזכר (honest-null)."}
+
+    client = await _client_for_org(db, org_id)
+    try:
+        response = await client.send_sms(SMSRequest(
+            phone_number=contact.phone,
+            message=message,
+            sender_name=org.collection_sms_sender,
+        ))
+    finally:
+        await client.client.aclose()
+    return {
+        "status": response.status,
+        "contact": contact.name,
+        "phone": contact.phone,
+        "message": message,
+    }
+
+
 async def _search_contacts(db, org_id: int, *, query: str, contact_type: str | None = None, **_kwargs) -> dict:
     from .contact_service import search_contacts
     from ..models import ContactType
@@ -1615,6 +1755,134 @@ TOOLS: dict[str, ChatTool] = {
         policy_action="invoices.issue",
         fn=_issue_document,
     ),
+    # ---------------- W3 גל 1 (20/08/2026) ---------------- #
+    "list_recurring": ChatTool(
+        name="list_recurring",
+        description=(
+            "רשימת הוראות הקבע (חיובים חוזרים) של לקוח ב-SUMIT — כולל "
+            "לא-פעילות, סכום ותאריך החיוב הבא. קריאת API אחת."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"customer_id": {"type": "string"}},
+            "required": ["customer_id"],
+        },
+        category="read",
+        fn=_list_recurring,
+    ),
+    "create_recurring": ChatTool(
+        name="create_recurring",
+        description=(
+            "יצירת הוראת קבע חדשה ללקוח (חיוב חודשי חוזר) דרך SUMIT. "
+            "משתמשת באמצעי התשלום השמור של הלקוח בלבד — לעולם לא מקבלת "
+            "פרטי כרטיס. ולידציות חוק 18 מובנות: אין תאריך רטרואקטיבי "
+            "(חיובי catch-up כפולים) ואין יום חיוב אחרי ה-28. פעולת "
+            "כתיבה בתשלום — דורשת אישור מפורש של המשתמש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string"},
+                "item_name": {"type": "string"},
+                "unit_price": {"type": "number", "description": "כולל מע\"מ"},
+                "recurrence_months": {"type": "integer", "description": "מספר חודשי חיוב (1–120)"},
+                "start_date": {"type": "string", "description": "YYYY-MM-DD, אופציונלי; לא רטרואקטיבי ולא אחרי ה-28"},
+                "description": {"type": "string"},
+            },
+            "required": ["customer_id", "item_name", "unit_price", "recurrence_months"],
+        },
+        category="write",
+        policy_action="recurring.create",
+        fn=_create_recurring,
+    ),
+    "cancel_recurring": ChatTool(
+        name="cancel_recurring",
+        description=(
+            "ביטול הוראת קבע פעילה של לקוח ב-SUMIT. פעולת כתיבה — "
+            "דורשת אישור מפורש של המשתמש לפני ביצוע."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "recurring_id": {"type": "string"},
+                "customer_id": {"type": "string"},
+            },
+            "required": ["recurring_id"],
+        },
+        category="write",
+        policy_action="recurring_cancel.propose",
+        fn=_cancel_recurring,
+    ),
+    "update_recurring": ChatTool(
+        name="update_recurring",
+        description=(
+            "עדכון סכום או תאריך-החיוב-הבא של הוראת קבע קיימת. שינוי "
+            "לקוח או מוצר בהוראה פעילה אסור (חוק 18) — לבטל וליצור חדשה. "
+            "פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "recurring_id": {"type": "string"},
+                "customer_id": {"type": "string"},
+                "amount": {"type": "number"},
+                "next_payment_date": {"type": "string", "description": "YYYY-MM-DD, לא רטרואקטיבי ולא אחרי ה-28"},
+            },
+            "required": ["recurring_id", "customer_id", "amount"],
+        },
+        category="write",
+        policy_action="recurring.update",
+        fn=_update_recurring,
+    ),
+    "cancel_document": ChatTool(
+        name="cancel_document",
+        description=(
+            "ביטול מסמך ב-SUMIT (חשבונית/קבלה). שים לב: ביטול בסאמיט "
+            "אינו מבטל בשע\"מ — מסמך ששודר לרשות דורש טיפול נפרד. "
+            "פעולת כתיבה — דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"document_id": {"type": "string"}},
+            "required": ["document_id"],
+        },
+        category="write",
+        policy_action="documents.cancel",
+        fn=_cancel_document_tool,
+    ),
+    "get_customer_debt_report": ChatTool(
+        name="get_customer_debt_report",
+        description=(
+            "דוח חובות לקוחות מ-SUMIT (getdebtreport) — מי חייב וכמה, "
+            "לפי הספרים בפורטל. קריאת API אחת."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"include_paid": {"type": "boolean"}},
+        },
+        category="read",
+        fn=_get_customer_debt_report,
+    ),
+    "send_collection_sms": ChatTool(
+        name="send_collection_sms",
+        description=(
+            "שליחת SMS תזכורת גבייה ללקוח. שער רגולטורי: עובד רק כשהארגון "
+            "הפעיל תזכורות גבייה (opt-in) והגדיר שם שולח. בלי הודעה "
+            "מפורשת — מנוסחת תזכורת מהחוב בספרים. פעולת כתיבה בתשלום — "
+            "דורשת אישור מפורש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "contact_id": {"type": "integer"},
+                "message": {"type": "string", "description": "אופציונלי — נוסח מותאם"},
+            },
+            "required": ["contact_id"],
+        },
+        category="write",
+        policy_action="collections.contact",
+        fn=_send_collection_sms,
+    ),
     "log_collection_attempt": ChatTool(
         name="log_collection_attempt",
         description=(
@@ -2482,7 +2750,13 @@ TOOLS: dict[str, ChatTool] = {
 # over already-normalized BankTransaction rows remain rezef_db. Knowledge and
 # SMTP helpers are local because the reporting taxonomy intentionally has only
 # sumit/open_finance/rezef_db/local.
-_SUMIT_TOOLS = {"issue_document", "create_payment_link", "file_expense"}
+_SUMIT_TOOLS = {
+    "issue_document", "create_payment_link", "file_expense",
+    # W3 גל 1 (20/08/2026)
+    "list_recurring", "create_recurring", "cancel_recurring",
+    "update_recurring", "cancel_document", "get_customer_debt_report",
+    "send_collection_sms",
+}
 _OPEN_FINANCE_TOOLS = {"create_bank_payment_request", "connect_bank_account"}
 _LOCAL_TOOLS = {"rezef_help", "kb_lookup", "email_report"}
 _REZEF_DB_TOOLS = set(TOOLS) - _SUMIT_TOOLS - _OPEN_FINANCE_TOOLS - _LOCAL_TOOLS

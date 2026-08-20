@@ -105,13 +105,16 @@ export const AIAnalyticsDashboard: React.FC = () => {
     },
   });
 
-  // Fetch recommendations
-  const { data: recommendations } = useQuery({
+  // Fetch recommendations — since 20/08/2026 the backend refuses to fabricate
+  // recommendations: it returns a not-configured error (400, Hebrew reason)
+  // instead of hardcoded amounts. Surface that reason honestly, don't retry.
+  const { data: recommendations, error: recommendationsError } = useQuery({
     queryKey: ['ai-recommendations'],
     queryFn: async () => {
       const response = await api.get('/api/financial/ai/recommendations') as { data: AIRecommendation[] };
       return response.data;
     },
+    retry: false,
   });
 
   // AI Analysis mutation
@@ -251,9 +254,9 @@ export const AIAnalyticsDashboard: React.FC = () => {
         </div>
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
           <h3 className="text-sm font-medium text-gray-500">המלצות לביצוע</h3>
-          <p className="text-3xl font-bold text-green-600 mt-2">{recommendations?.length || 0}</p>
+          <p className="text-3xl font-bold text-green-600 mt-2">{recommendationsError ? '—' : recommendations?.length || 0}</p>
           <p className="text-xs text-gray-400 mt-1">
-            תועלת: {formatCurrency(totalBenefit)}
+            {recommendationsError ? 'טרם הופעל' : `תועלת: ${formatCurrency(totalBenefit)}`}
           </p>
         </div>
       </div>
@@ -471,6 +474,12 @@ export const AIAnalyticsDashboard: React.FC = () => {
 
       {activeTab === 'recommendations' && (
         <div className="space-y-4">
+          {recommendationsError && (
+            <div className="p-4 rounded-xl bg-amber-50 border border-amber-300 text-amber-800 text-sm" role="alert">
+              <p className="font-bold mb-1">טרם הופעל — אין המלצות מומצאות</p>
+              <p>{extractErrorMessage(recommendationsError)}</p>
+            </div>
+          )}
           {recommendations?.sort((a, b) => b.priority_score - a.priority_score).map((rec) => (
             <div
               key={rec.recommendation_id}

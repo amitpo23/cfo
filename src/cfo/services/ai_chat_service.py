@@ -261,6 +261,83 @@ class AIChatService:
         )
         return result
 
+    def _build_proactive_flags(self) -> str:
+        """W-proactive (20/08/2026) — הדגלים האדומים שמושקו פותח בהם שיחה.
+
+        הדוגמה של הבעלים: "למה מושקו לא אומר לי שאין הכנסות ממרץ ושהתזרים
+        שלילי?" — הבלוק הזה נבנה בתחילת session מהנתונים המקומיים בלבד
+        (אפס קריאות API) ומוזרק ל-system prompt עם הוראה לפתוח בו ולשאול.
+        honest-null: אין דגלים ⇒ מחרוזת ריקה, מושקו לא ממציא בעיות.
+        best-effort: כל כשל כאן לעולם לא מפיל את השיחה.
+        """
+        try:
+            from datetime import date as date_type
+
+            from ..models import CfoInsight
+
+            lines: list[str] = []
+            listed_types: set[str] = set()
+            insights = (
+                self.db.query(CfoInsight)
+                .filter(
+                    CfoInsight.organization_id == self.organization_id,
+                    CfoInsight.status == "active",
+                    CfoInsight.severity.in_(("high", "critical")),
+                )
+                .order_by(CfoInsight.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            for row in insights:
+                listed_types.add(row.insight_type)
+                lines.append(f"- [{row.severity}] {row.title}")
+
+            # דממת הכנסות — נבדקת חיה גם אם מחזור הבוקר לא רץ.
+            if "revenue_silence" not in listed_types:
+                from . import revenue_watch
+
+                silence = revenue_watch.scan_and_alert(
+                    self.db, self.organization_id, today=date_type.today(),
+                )
+                if silence.get("status") == "silence":
+                    lines.append(
+                        f"- [{silence['severity']}] אין מסמכי הכנסה כבר "
+                        f"{silence['days_silent']} ימים "
+                        f"(האחרון: {silence['last_revenue_date']})"
+                    )
+
+            # תזרים מצטבר שלילי בשלושת השבועות הקרובים.
+            try:
+                from .dashboard_service import DashboardService
+
+                projection = DashboardService(
+                    self.db, self.organization_id,
+                ).get_cashflow_projection(weeks=3)
+                negative = [
+                    w for w in projection
+                    if (w.get("cumulative_balance") or 0) < 0
+                ]
+                if negative:
+                    first = negative[0]
+                    lines.append(
+                        f"- [high] תזרים מצטבר שלילי צפוי החל משבוע "
+                        f"{first.get('week')} ({first.get('cumulative_balance'):,.0f} ש\"ח)"
+                    )
+            except Exception:
+                pass
+
+            if not lines:
+                return ""
+            return (
+                "## דגלים אדומים כרגע (מהנתונים בפועל)\n"
+                + "\n".join(lines)
+                + "\n\nפתח את תשובתך הראשונה בהצפת הדגלים האלה בקצרה, "
+                  "ושאל את המשתמש שאלה ממוקדת על החמור שבהם. אל תמציא "
+                  "דגלים שאינם ברשימה."
+            )
+        except Exception:
+            return ""
+
     # W1.1 — דפוסי ויתור. שמרני בכוונה: עדיף לפספס ניסוח נדיר מאשר להציף
     # את התור בתשובות תקינות שמכילות "לא" כלשהו.
     _GIVEUP_MARKERS = (
@@ -334,6 +411,12 @@ class AIChatService:
             persona_obj, include_office=self.is_super_admin,
             memory_block=memory_block,
         )
+        # W-proactive: בתחילת session מושקו פותח בדגלים האדומים של הארגון
+        # ושואל עליהם — לא מחכה שישאלו אותו (הכל מקומי, אפס API).
+        if not history:
+            proactive_block = self._build_proactive_flags()
+            if proactive_block:
+                system_prompt = f"{system_prompt}\n\n{proactive_block}"
 
         pending_action: Optional[dict[str, Any]] = None
         final_text = ""

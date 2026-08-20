@@ -413,100 +413,19 @@ class AdvancedAIService:
         budget: Optional[float] = None,
         focus: Optional[str] = None
     ) -> List[AIRecommendation]:
+        """המלצות AI.
+
+        הגרסה הקודמת החזירה חמש המלצות קשיחות עם שקלים מומצאים
+        (₪25,000 / ₪30,000 / roi=9999) שהמסך רינדר כאילו נותחו מנתוני
+        העסק. אין מנוע המלצות אמיתי עדיין — עדיף להודות בכך מאשר להציג
+        מספר שנשמע מחושב (הוסר 20/08/2026 בהנחיית הבעלים: אפס פיברוק).
+        ההמלצות האמיתיות היום מגיעות מ-CFOBrainService (מבוסס נתונים).
         """
-        המלצות AI
-        AI Recommendations
-        """
-        recommendations = []
-        
-        # 1. המלצות לחיסכון
-        recommendations.append(AIRecommendation(
-            recommendation_id='REC-001',
-            category='חיסכון בעלויות',
-            title='אוטומציה של תהליכי גבייה',
-            description='הטמעת מערכת תזכורות אוטומטית לגבייה יכולה לקצר את DSO ב-20%',
-            expected_benefit=25000,
-            implementation_cost=5000,
-            roi=400,
-            effort_level='medium',
-            time_to_implement='1-2 חודשים',
-            prerequisites=['מערכת CRM', 'אימייל אוטומטי'],
-            risks=['התנגדות לקוחות', 'בעיות טכניות'],
-            priority_score=85
-        ))
-        
-        recommendations.append(AIRecommendation(
-            recommendation_id='REC-002',
-            category='אופטימיזציה פיננסית',
-            title='מו"מ מחודש עם ספקים',
-            description='5 הספקים הגדולים מהווים 60% מהרכישות - פוטנציאל לחיסכון 5-10%',
-            expected_benefit=30000,
-            implementation_cost=0,
-            roi=9999,  # עלות יישום אפסית = החזר השקעה גבוה מאוד
-            effort_level='low',
-            time_to_implement='1-4 שבועות',
-            prerequisites=['נתוני רכישות', 'הצעות מתחרים'],
-            risks=['פגיעה ביחסים עם ספקים'],
-            priority_score=90
-        ))
-        
-        recommendations.append(AIRecommendation(
-            recommendation_id='REC-003',
-            category='צמיחה בהכנסות',
-            title='תכנית Upsell ללקוחות קיימים',
-            description='30% מהלקוחות משתמשים רק בשירות אחד - פוטנציאל מכירה צולבת',
-            expected_benefit=50000,
-            implementation_cost=8000,
-            roi=525,
-            effort_level='medium',
-            time_to_implement='2-3 חודשים',
-            prerequisites=['ניתוח לקוחות', 'חבילות מוצרים'],
-            risks=['עומס על צוות מכירות'],
-            priority_score=80
-        ))
-        
-        recommendations.append(AIRecommendation(
-            recommendation_id='REC-004',
-            category='ניהול סיכונים',
-            title='הגדלת מסגרת אשראי לחירום',
-            description='Runway נמוך - מומלץ לאשר מסגרת אשראי טרם הצורך',
-            expected_benefit=0,
-            implementation_cost=2000,
-            roi=0,
-            effort_level='low',
-            time_to_implement='1-2 שבועות',
-            prerequisites=['דוחות כספיים', 'יחס עם הבנק'],
-            risks=['עלות ריבית'],
-            priority_score=95
-        ))
-        
-        recommendations.append(AIRecommendation(
-            recommendation_id='REC-005',
-            category='יעילות תפעולית',
-            title='מעבר לחשבונאות ענן',
-            description='חיסכון בזמן הנה"ח ושיפור דיוק הדוחות',
-            expected_benefit=15000,
-            implementation_cost=12000,
-            roi=25,
-            effort_level='high',
-            time_to_implement='3-6 חודשים',
-            prerequisites=['בחירת מערכת', 'הדרכת צוות'],
-            risks=['עקומת למידה', 'מיגרציית נתונים'],
-            priority_score=60
-        ))
-        
-        # סינון לפי תקציב
-        if budget:
-            recommendations = [r for r in recommendations if r.implementation_cost <= budget]
-        
-        # סינון לפי פוקוס
-        if focus:
-            recommendations = [r for r in recommendations if focus in r.category]
-        
-        # מיון לפי priority_score
-        recommendations.sort(key=lambda x: x.priority_score, reverse=True)
-        
-        return recommendations
+        raise AIAnalyticsNotConfiguredError(
+            "המלצות AI מנותחות-תיק עדיין לא הופעלו — אין להציג המלצות "
+            "עם סכומים שאינם מחושבים מהנתונים. ראה /cfo/brain/recommendations "
+            "להמלצות המבוססות על נתוני העסק בפועל."
+        )
     
     async def get_ai_analysis(
         self,

@@ -47,6 +47,15 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
         # VehicleProfile.primarily_business — עובדת-מס שקובעת ניכוי
         # מע"מ תשומות רכב בפועל (israeli_tax_rules.claimable_vat).
         "set_vehicle_profile",
+        # W3 גל 1 (20/08/2026, אישור בעלים): הוראות קבע (יצירה/ביטול/
+        # עדכון — כסף אמיתי אצל הספק), ביטול מסמך (רישום), ו-SMS גבייה
+        # (פעולה בתשלום + פנייה ללקוח) — כולם write במודע.
+        # `list_recurring` ו-`get_customer_debt_report` הם read.
+        "create_recurring",
+        "cancel_recurring",
+        "update_recurring",
+        "cancel_document",
+        "send_collection_sms",
     }
 
 

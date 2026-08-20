@@ -38,6 +38,10 @@ WRITE_ACTIONS = frozenset({
     "payment_link.create", "bank_payment.propose",
     "bank_connection.create",
     "mandate.propose", "recurring_cancel.propose",
+    # W3 גל 1 (20/08/2026): הוראות קבע ככלי מושקו — יצירה/עדכון הן
+    # פעולות write (מוצעות בצ'אט, מבוצעות רק ב-confirm מפורש); ביטול
+    # מסמך הוא שינוי ספרים ולכן write אף הוא.
+    "recurring.create", "recurring.update", "documents.cancel",
     "refund.propose", "filing.prepare", "period_close.propose",
     "accounting.writeback.propose", "expenses.manage_categories", "expenses.manage_vehicle_profile",
     "expenses.classify", "reports.email", "moshko.memory.write",
@@ -55,7 +59,8 @@ ROLE_PRESETS: dict[UserRole, frozenset[str]] = {
         "collections.read", "collections.contact", "collections.escalate",
         "payment_link.create", "bank_payment.propose", "mandate.propose",
         "bank_connection.create",
-        "recurring_cancel.propose", "mandate.read", "refund.propose",
+        "recurring_cancel.propose", "recurring.create", "recurring.update",
+        "documents.cancel", "mandate.read", "refund.propose",
         "filing.prepare", "period_close.propose",
         "accounting.writeback.propose", "expenses.manage_categories", "expenses.manage_vehicle_profile",
         "expenses.classify", "reports.email", "moshko.memory.write",
@@ -67,6 +72,7 @@ ROLE_PRESETS: dict[UserRole, frozenset[str]] = {
         "expenses.review", "expenses.file", "reconciliation.propose",
         "reconciliation.approve", "collections.read", "payment_link.create",
         "bank_payment.propose", "mandate.propose", "recurring_cancel.propose",
+        "recurring.create", "recurring.update", "documents.cancel",
         "mandate.read", "refund.propose", "filing.prepare",
         "accounting.writeback.propose",
         "expenses.manage_categories", "expenses.manage_vehicle_profile", "expenses.classify", "reports.email",

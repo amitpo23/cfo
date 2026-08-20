@@ -589,27 +589,24 @@ class KPIService:
     def compare_to_industry(
         self,
         industry: str = 'technology'
-    ) -> List[Dict]:
+    ) -> Dict:
+        """השוואה לממוצע הענף — honest-null.
+
+        ה"ממוצעים" שהוצגו כאן היו קבועים קשיחים בקוד (KPI_DEFINITIONS
+        'benchmark'), והפרמטר `industry` כלל לא היה בשימוש — לא היו שום
+        נתוני ענף מאחורי המספר. הוסר 20/08/2026 (הנחיית בעלים: אפס
+        פיברוק). כשיהיה מקור benchmarks אמיתי — יחובר כאן עם ציון המקור.
         """
-        השוואה לממוצע הענף
-        Industry Comparison
-        """
-        dashboard = self.get_kpi_dashboard()
-        comparison = []
-        
-        for kpi in dashboard.kpis:
-            if kpi.benchmark_industry:
-                diff = kpi.value - kpi.benchmark_industry
-                comparison.append({
-                    'kpi': kpi.kpi_id,
-                    'name_hebrew': kpi.name_hebrew,
-                    'our_value': kpi.value,
-                    'industry_average': kpi.benchmark_industry,
-                    'difference': diff,
-                    'better_than_average': (diff > 0) == KPI_DEFINITIONS[kpi.kpi_id].get('higher_is_better', True)
-                })
-        
-        return comparison
+        return {
+            "available": False,
+            "reason": (
+                "אין מקור נתוני-ענף אמיתי מחובר — הערכים שהוצגו בעבר היו "
+                "קבועים להמחשה, לא ממוצעי ענף. ההשוואה תופעל כשיחובר מקור "
+                "benchmarks מזוהה."
+            ),
+            "requested_industry": industry,
+            "comparison": [],
+        }
     
     def _calculate_kpi(self, kpi_id: str, data: Dict) -> float:
         """חישוב KPI"""

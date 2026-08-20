@@ -109,6 +109,26 @@ function isSyncObject(v: unknown): v is { sumit: string | null; open_finance: st
   return !!v && typeof v === 'object' && ('sumit' in (v as object) || 'open_finance' in (v as object));
 }
 
+/**
+ * הודעת שגיאה כנה לכפתור "סנכרן": 429 (cooldown ידני, RSF-029) מקבל ניסוח
+ * ייעודי עם זמן ההמתנה שהשרת החזיר; כל שגיאה אחרת מציגה את ה-detail כלשונו.
+ */
+function extractSyncErrorMessage(err: unknown): string {
+  const resp = (err as { response?: { status?: number; data?: { detail?: unknown } } })?.response;
+  const detail = resp?.data?.detail as
+    | string
+    | { error?: string; detail?: string; retry_after_seconds?: number }
+    | undefined;
+  if (resp?.status === 429) {
+    const secs = typeof detail === 'object' ? detail?.retry_after_seconds : undefined;
+    const mins = secs != null ? Math.max(1, Math.ceil(secs / 60)) : null;
+    return `סנכרון ידני הופעל לאחרונה — המתנה פעילה (cooldown).${mins != null ? ` נסו שוב בעוד כ-${mins} דקות.` : ''}`;
+  }
+  if (typeof detail === 'string' && detail) return detail;
+  if (detail && typeof detail === 'object') return detail.detail || detail.error || 'הסנכרון נכשל. נסו שוב.';
+  return 'הסנכרון נכשל. נסו שוב.';
+}
+
 interface MorningBriefChip {
   exists: boolean;
   brief_date?: string;
@@ -149,12 +169,29 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
     refetchInterval: 60000,
   });
 
+  const [syncing, setSyncing] = React.useState(false);
+  const [syncError, setSyncError] = React.useState<string | null>(null);
+  const [syncSuccess, setSyncSuccess] = React.useState(false);
+  const syncSuccessTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  React.useEffect(() => () => {
+    if (syncSuccessTimer.current) clearTimeout(syncSuccessTimer.current);
+  }, []);
+
   const handleSyncNow = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncError(null);
+    setSyncSuccess(false);
     try {
       await apiService.post('/sync/run');
       refetch();
+      setSyncSuccess(true);
+      if (syncSuccessTimer.current) clearTimeout(syncSuccessTimer.current);
+      syncSuccessTimer.current = setTimeout(() => setSyncSuccess(false), 5000);
     } catch (err) {
-      // Error handling - sync failed
+      setSyncError(extractSyncErrorMessage(err));
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -270,15 +307,24 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
         { label: 'התראות פעילות', value: String(alerts.length), tone: alerts.length ? 'rose' : 'emerald' },
       ]}
       actions={
-        <button
-          type="button"
-          onClick={handleSyncNow}
-          onKeyDown={(e) => { if (e.key === 'Enter') handleSyncNow(); }}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium"
-        >
-          <RefreshCw size={18} />
-          סנכרן עכשיו
-        </button>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            type="button"
+            onClick={handleSyncNow}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSyncNow(); }}
+            disabled={syncing}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition font-medium disabled:opacity-60"
+          >
+            <RefreshCw size={18} className={syncing ? 'animate-spin' : undefined} />
+            {syncing ? 'מסנכרן…' : 'סנכרן עכשיו'}
+          </button>
+          {syncError && (
+            <div className="max-w-xs text-xs text-red-600 text-right" role="alert">{syncError}</div>
+          )}
+          {syncSuccess && !syncError && (
+            <div className="text-xs text-emerald-600">סונכרן</div>
+          )}
+        </div>
       }
     >
       <div className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-200 bg-white text-slate-600'}`}>

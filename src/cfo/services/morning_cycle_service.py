@@ -197,6 +197,12 @@ def _step_credit_line(db, org_id: int) -> dict[str, Any]:
     return credit_line_service.check_and_alert(db, org_id)
 
 
+def _step_revenue_watch(db, org_id: int, today: date) -> dict[str, Any]:
+    from . import revenue_watch
+
+    return revenue_watch.scan_and_alert(db, org_id, today=today)
+
+
 def _compute_open_items(db, org_id: int) -> dict[str, Any]:
     """Read-only JSON summary of everything still open for this org, for the
     (future) morning brief: active CfoInsight counts by type/severity, active
@@ -357,6 +363,11 @@ def run_morning_cycle(
         db, lambda: _step_expense_queue(db, organization_id, today)
     )
     steps["credit_line"] = _run_step(db, lambda: _step_credit_line(db, organization_id))
+    # W-proactive (20/08/2026, פער מס' 1): דממת הכנסות — "אין מסמכי הכנסה
+    # מאז X" נכנסת ללולאת התובנות היומית במקום להיעלם בשקט.
+    steps["revenue_watch"] = _run_step(
+        db, lambda: _step_revenue_watch(db, organization_id, today)
+    )
 
     def _parity_status() -> Optional[str]:
         s = steps["parity"]

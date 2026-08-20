@@ -5,8 +5,8 @@
  * missing/absent value renders "—", never 0 — see
  * services/morning_brief_service.py module docstring.
  */
-import { useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Loader2, RefreshCw } from 'lucide-react';
 import api from '../services/api';
 
 interface RedItem {
@@ -105,29 +105,63 @@ export default function MorningBriefPanel() {
   const [scorecard, setScorecard] = useState<ScorecardRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const [b, s] = await Promise.all([
-          api.get<BriefResponse>('/api/daily-reports/morning-brief'),
-          api.get<ScorecardResponse>('/api/daily-reports/scorecard?days=30'),
-        ]);
-        if (!cancelled) {
-          setBrief(b);
-          setScorecard(s.scorecard || []);
-        }
-      } catch (e: any) {
-        if (!cancelled) setError(e?.response?.data?.detail || 'שגיאה בטעינת בריף הבוקר');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    setError(null);
+    try {
+      const [b, s] = await Promise.all([
+        api.get<BriefResponse>('/api/daily-reports/morning-brief'),
+        api.get<ScorecardResponse>('/api/daily-reports/scorecard?days=30'),
+      ]);
+      setBrief(b);
+      setScorecard(s.scorecard || []);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'שגיאה בטעינת בריף הבוקר');
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  /**
+   * הרצה ידנית של מחזור הבוקר (POST /daily-reports/morning-cycle/run) —
+   * ה-crons מבוטלים, כך שבלי הכפתור הזה הבריף וה-scorecard לא מתרעננים.
+   * המחזור מחשב מהנתונים המקומיים בלבד (אפס קריאות ספק) ואידמפוטנטי.
+   */
+  const runCycleNow = async () => {
+    if (running) return;
+    setRunning(true);
+    setRunError(null);
+    try {
+      await api.post<{ steps?: Record<string, unknown> }>('/api/daily-reports/morning-cycle/run');
+      await load({ silent: true });
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setRunError(typeof detail === 'string' ? detail : 'שגיאה בהרצת מחזור הבוקר');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const refreshButton = (prominent = false) => (
+    <button
+      type="button"
+      onClick={runCycleNow}
+      disabled={running}
+      className={
+        prominent
+          ? 'inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50'
+          : 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 text-xs hover:bg-slate-50 disabled:opacity-50'
+      }
+    >
+      {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+      רענן תובנות עכשיו
+    </button>
+  );
 
   if (loading) {
     return (
@@ -145,8 +179,17 @@ export default function MorningBriefPanel() {
 
   if (!brief || !brief.exists || !brief.payload) {
     return (
-      <div id="morning-brief" className="border rounded-xl p-4 mb-6 text-sm text-slate-400" dir="rtl">
-        אין עדיין בריף בוקר להיום — ירוץ אוטומטית במחזור-הבוקר הבא.
+      <div id="morning-brief" className="border rounded-xl p-4 mb-6" dir="rtl">
+        <div className="text-sm text-slate-500 mb-3">אין עדיין בריף בוקר להיום.</div>
+        <div className="flex items-center gap-3 flex-wrap">
+          {refreshButton(true)}
+          <span className="text-xs text-slate-500">
+            המחזור אינו רץ אוטומטית — לחץ לרענון מהנתונים המקומיים.
+          </span>
+        </div>
+        {runError && (
+          <div className="mt-2 text-xs text-red-600" role="alert">{runError}</div>
+        )}
       </div>
     );
   }
@@ -161,10 +204,16 @@ export default function MorningBriefPanel() {
     <div id="morning-brief" className="border rounded-xl p-4 mb-6" dir="rtl">
       <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
         <h2 className="font-semibold text-lg">בריף בוקר · {fmtDate(p.date)}</h2>
-        <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-sm font-medium ${badgeClass}`}>
-          {emoji} {label}
-        </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          {refreshButton()}
+          <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-sm font-medium ${badgeClass}`}>
+            {emoji} {label}
+          </span>
+        </div>
       </div>
+      {runError && (
+        <div className="mb-3 text-xs text-red-600" role="alert">{runError}</div>
+      )}
 
       {p.reds.length > 0 ? (
         <div className="mb-4 space-y-2">

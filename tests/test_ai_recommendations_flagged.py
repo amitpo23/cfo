@@ -1,16 +1,23 @@
-"""פאזה 2 — המלצות ה-AI הקשיחות מסומנות ביושר כ-illustrative (לא data-derived),
-כדי שלא יוצגו כאילו נותחו מנתוני העסק. מימוש אמיתי → פאזה 11 (תכנון/ייעוץ).
+"""היסטוריה: פאזה 2 סימנה את ההמלצות הקשיחות כ-illustrative; 20/08/2026
+הבעלים הנחה "אפס פיברוק" — ההמלצות-להמחשה הוסרו כליל והוחלפו בסירוב
+honest-null (ראה test_no_fabricated_analytics.py). הטסט הזה מקבע שהן
+לא יחזרו.
 """
-from cfo.services.ai_analytics_service import AdvancedAIService
+import pytest
+
+from cfo.services.ai_analytics_service import (
+    AdvancedAIService,
+    AIAnalyticsNotConfiguredError,
+)
 
 
-def test_recommendations_are_flagged_illustrative(client, owner):
+def test_illustrative_recommendations_are_gone_for_good(client, owner):
     from cfo.database import SessionLocal
+
     db = SessionLocal()
     try:
         svc = AdvancedAIService(db, organization_id=owner["user"]["organization_id"])
-        recs = svc.get_ai_recommendations()
-        assert recs, "expected example recommendations"
-        assert all(getattr(r, "is_illustrative", False) for r in recs)
+        with pytest.raises(AIAnalyticsNotConfiguredError):
+            svc.get_ai_recommendations()
     finally:
         db.close()

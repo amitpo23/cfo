@@ -269,6 +269,26 @@ def bank_expense_gap(
     return bank_expense_gap_service.gap_report(db, org_id, year, month)
 
 
+@router.post("/daily-reports/morning-cycle/run")
+def run_morning_cycle_now(
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db_session),
+):
+    """W-proactive (20/08/2026): הרצה ידנית של מחזור הבוקר לארגון הנוכחי.
+
+    כל ה-crons מבוטלים (הנחיית 19/08) — בלעדיה MorningBrief, ה-scorecard
+    והתובנות (parity, דממת הכנסות, אנומליות) לא מתרעננים לעולם. המחזור
+    מחשב מהנתונים המקומיים בלבד — **אפס קריאות ספק** — ולכן בטוח להרצה
+    ידנית. אידמפוטנטי: ריצה שנייה באותו יום מרעננת את אותה שורה.
+    """
+    from ...services import morning_cycle_service
+
+    result = morning_cycle_service.run_morning_cycle(
+        db, org_id, date.today(), force=True,
+    )
+    return result
+
+
 @router.get("/daily-reports/morning-brief")
 def morning_brief(
     as_of: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to latest available"),

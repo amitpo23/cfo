@@ -52,6 +52,23 @@ interface ExecutiveSummary {
   recommendations?: string[];
 }
 
+interface BenchmarkComparisonItem {
+  kpi?: string;
+  kpi_name?: string;
+  name_hebrew?: string;
+  our_value?: number;
+  company_value?: number;
+  industry_average?: number;
+  industry_avg?: number;
+}
+
+interface BenchmarkData {
+  available: boolean;
+  reason?: string;
+  requested_industry?: string | null;
+  comparison: BenchmarkComparisonItem[];
+}
+
 const KPI_CATEGORIES = [
   { id: 'profitability', name: 'רווחיות', icon: '💰' },
   { id: 'liquidity', name: 'נזילות', icon: '💧' },
@@ -92,18 +109,13 @@ export const KPIDashboard: React.FC = () => {
     },
   });
 
-  // Fetch industry comparison
+  // Fetch industry comparison. Since 20/08/2026 the backend is honest-null:
+  // it returns { available: false, reason, comparison: [] } instead of the
+  // old hardcoded "industry averages" (there is no real benchmark source yet).
   const { data: benchmarkData } = useQuery({
     queryKey: ['industry-benchmark'],
     queryFn: async () => {
-      const response = await api.get<{
-        data: { comparisons?: Array<{ kpi_name: string; company_value: number; industry_avg: number }> } | Array<{
-          kpi: string;
-          name_hebrew: string;
-          our_value: number;
-          industry_average: number;
-        }>;
-      }>('/api/financial/kpis/benchmark');
+      const response = await api.get<{ data: BenchmarkData }>('/api/financial/kpis/benchmark');
       return response.data;
     },
   });
@@ -179,9 +191,10 @@ export const KPIDashboard: React.FC = () => {
     ? kpis 
     : kpis.filter((kpi: KPI) => kpi.category === selectedCategory);
 
-  // Prepare radar data for benchmark comparison
-  const benchmarkItems = Array.isArray(benchmarkData) ? benchmarkData : benchmarkData?.comparisons || [];
-  const radarData = benchmarkItems.slice(0, 6).map((item: any) => ({
+  // Prepare radar data for benchmark comparison (empty when unavailable)
+  const benchmarkUnavailable = benchmarkData != null && benchmarkData.available === false;
+  const benchmarkItems = benchmarkData?.comparison || [];
+  const radarData = benchmarkItems.slice(0, 6).map((item) => ({
     subject: item.name_hebrew || item.kpi_name || item.kpi,
     company: item.our_value ?? item.company_value ?? 0,
     industry: item.industry_average ?? item.industry_avg ?? 0,
@@ -403,28 +416,34 @@ export const KPIDashboard: React.FC = () => {
         {/* Industry Comparison Radar */}
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
           <h2 className="text-xl font-bold text-gray-900 mb-4">השוואה לענף</h2>
-          <ResponsiveContainer width="100%" height={300}>
-            <RadarChart data={radarData}>
-              <PolarGrid />
-              <PolarAngleAxis dataKey="subject" />
-              <PolarRadiusAxis />
-              <Radar
-                name="החברה"
-                dataKey="company"
-                stroke="#3B82F6"
-                fill="#3B82F6"
-                fillOpacity={0.5}
-              />
-              <Radar
-                name="ממוצע ענף"
-                dataKey="industry"
-                stroke="#10B981"
-                fill="#10B981"
-                fillOpacity={0.3}
-              />
-              <Legend />
-            </RadarChart>
-          </ResponsiveContainer>
+          {benchmarkUnavailable ? (
+            <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm" role="status">
+              {benchmarkData?.reason || 'השוואה לענף אינה זמינה — אין מקור נתוני-ענף מחובר.'}
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={300}>
+              <RadarChart data={radarData}>
+                <PolarGrid />
+                <PolarAngleAxis dataKey="subject" />
+                <PolarRadiusAxis />
+                <Radar
+                  name="החברה"
+                  dataKey="company"
+                  stroke="#3B82F6"
+                  fill="#3B82F6"
+                  fillOpacity={0.5}
+                />
+                <Radar
+                  name="ממוצע ענף"
+                  dataKey="industry"
+                  stroke="#10B981"
+                  fill="#10B981"
+                  fillOpacity={0.3}
+                />
+                <Legend />
+              </RadarChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
