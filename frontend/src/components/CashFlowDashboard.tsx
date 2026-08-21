@@ -30,12 +30,21 @@ import {
   BarChart3,
   LineChart as LineChartIcon,
   PieChart as PieChartIcon,
+  Database,
 } from 'lucide-react';
 import api from '../services/api';
 import { AgentPanel, FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
 import ExportButtons, { ExportSheet } from './ExportButtons';
 
 const COLORS = ['#10B981', '#EF4444', '#3B82F6', '#F59E0B', '#8B5CF6', '#EC4899'];
+
+// תיוג עברי למקורות הנתונים החיים — אותה מוסכמה כמו ForecastingDashboard
+// (מסך התחזית, משימה 1): "נכון לתאריך" + תגיות מקור מעל התוכן.
+const SOURCE_LABELS: Record<string, string> = {
+  bank_transactions_actual: 'תזרים בנק בפועל',
+  invoices_open_ar: 'חשבוניות פתוחות (לקוחות)',
+  bills_open_ap: 'חשבונות ספק פתוחים',
+};
 
 interface MonthlyCashFlow {
   month: string;
@@ -46,21 +55,44 @@ interface MonthlyCashFlow {
   cumulative: number;
 }
 
+interface LiveMonthlyResponse {
+  as_of: string;
+  data_sources: string[];
+  months: MonthlyCashFlow[];
+  message: string | null;
+}
+
 interface DailyCashPosition {
   date: string;
   inflows: number;
   outflows: number;
   net_flow: number;
-  closing_balance: number;
+  closing_balance: number | null;
+}
+
+interface LiveDailyResponse {
+  as_of: string;
+  data_sources: string[];
+  days: DailyCashPosition[];
+  balance_basis: 'account_balance' | 'unavailable' | 'no_bank_data';
+  message: string | null;
 }
 
 interface BurnRate {
+  as_of?: string;
+  data_sources?: string[];
   monthly_burn_rate: number;
   monthly_income: number;
   net_monthly_burn: number;
   current_balance: number;
+  current_balance_available?: boolean;
   runway_months: number;
   analysis_period_months: number;
+  expected_receivables_30d?: number;
+  expected_receivables_30d_count?: number;
+  expected_payables_30d?: number;
+  expected_payables_30d_count?: number;
+  message?: string | null;
 }
 
 interface LiquidityRatios {
@@ -72,22 +104,31 @@ interface LiquidityRatios {
   current_liabilities: number;
 }
 
+interface CategoryBreakdownResponse {
+  as_of: string;
+  data_sources: string[];
+  categories: Record<string, { inflows: number; outflows: number; net: number }>;
+  message: string | null;
+}
+
 const CashFlowDashboard: React.FC = () => {
   const [timeRange, setTimeRange] = useState(12);
 
-  // Fetch monthly cash flow
-  const { data: monthlyCashFlow, isLoading: loadingMonthly } = useQuery<MonthlyCashFlow[]>({
+  // Fetch monthly cash flow — ספרים חיים (BankTransaction), honest-null.
+  const { data: monthlyResp, isLoading: loadingMonthly } = useQuery<LiveMonthlyResponse>({
     queryKey: ['monthly-cashflow', timeRange],
-    queryFn: () => api.get<MonthlyCashFlow[]>(`/cashflow/monthly?months=${timeRange}`),
+    queryFn: () => api.get<LiveMonthlyResponse>(`/cashflow/monthly?months=${timeRange}`),
   });
+  const monthlyCashFlow = monthlyResp?.months || [];
 
   // Fetch daily cash position
-  const { data: dailyCashPosition, isLoading: loadingDaily } = useQuery<DailyCashPosition[]>({
+  const { data: dailyResp, isLoading: loadingDaily } = useQuery<LiveDailyResponse>({
     queryKey: ['daily-cashflow'],
-    queryFn: () => api.get<DailyCashPosition[]>('/cashflow/daily?days=30'),
+    queryFn: () => api.get<LiveDailyResponse>('/cashflow/daily?days=30'),
   });
+  const dailyCashPosition = dailyResp?.days || [];
 
-  // Fetch burn rate
+  // Fetch burn rate — כולל תוספת צפי גבייה/תשלום מ-AR/AP פתוחים.
   const { data: burnRate } = useQuery<BurnRate>({
     queryKey: ['burn-rate'],
     queryFn: () => api.get<BurnRate>('/cashflow/burn-rate?months=3'),
@@ -100,12 +141,12 @@ const CashFlowDashboard: React.FC = () => {
   });
 
   // Fetch cash flow by category
-  const { data: categoryData, isLoading: loadingCategory } = useQuery<Record<string, { net: number }>>({
+  const { data: categoryResp, isLoading: loadingCategory } = useQuery<CategoryBreakdownResponse>({
     queryKey: ['cashflow-category'],
     queryFn: () => {
       const today = new Date();
       const startDate = new Date(today.getFullYear(), today.getMonth() - 6, 1);
-      return api.get<Record<string, { net: number }>>(
+      return api.get<CategoryBreakdownResponse>(
         `/cashflow/by-category?start_date=${startDate.toISOString().split('T')[0]}&end_date=${today.toISOString().split('T')[0]}`
       );
     },
@@ -121,18 +162,19 @@ const CashFlowDashboard: React.FC = () => {
   };
 
   // Calculate summary stats
-  const totalInflows = monthlyCashFlow?.reduce((sum, m) => sum + m.inflows, 0) || 0;
-  const totalOutflows = monthlyCashFlow?.reduce((sum, m) => sum + m.outflows, 0) || 0;
+  const totalInflows = monthlyCashFlow.reduce((sum, m) => sum + m.inflows, 0);
+  const totalOutflows = monthlyCashFlow.reduce((sum, m) => sum + m.outflows, 0);
   const netCashFlow = totalInflows - totalOutflows;
 
-  // Prepare category pie chart data
-  const categoryPieData = categoryData
-    ? Object.entries(categoryData).map(([key, value]: [string, any]) => ({
-        name: key === 'operating' ? 'פעילות שוטפת' : key === 'investing' ? 'השקעות' : 'מימון',
-        value: Math.abs(value.net),
-        isPositive: value.net >= 0,
-      }))
-    : [];
+  // Prepare category pie chart data — שמות הקטגוריה מגיעים ישירות מהמקור
+  // החי (Category.name / "לא מסווג"), לא ממיפוי operating/investing/financing
+  // קבוע-מראש שאין לו עוד בסיס נתונים.
+  const categoryEntries = Object.entries(categoryResp?.categories || {});
+  const categoryPieData = categoryEntries.map(([key, value]) => ({
+    name: key,
+    value: Math.abs(value.net),
+    isPositive: value.net >= 0,
+  }));
 
   const cashFlowExportSheets: ExportSheet[] = [
     {
@@ -144,7 +186,7 @@ const CashFlowDashboard: React.FC = () => {
         { key: 'net_flow', label: 'תזרים נקי' },
         { key: 'cumulative', label: 'מצטבר' },
       ],
-      rows: (monthlyCashFlow || []).map((m) => ({
+      rows: monthlyCashFlow.map((m) => ({
         month_name: m.month_name,
         inflows: m.inflows,
         outflows: m.outflows,
@@ -166,15 +208,22 @@ const CashFlowDashboard: React.FC = () => {
         { key: 'net_flow', label: 'תזרים נקי' },
         { key: 'closing_balance', label: 'יתרת סגירה' },
       ],
-      rows: (dailyCashPosition || []).map((d) => ({
+      rows: dailyCashPosition.map((d) => ({
         date: d.date,
         inflows: d.inflows,
         outflows: d.outflows,
         net_flow: d.net_flow,
-        closing_balance: d.closing_balance,
+        closing_balance: d.closing_balance ?? '',
       })),
     },
   ];
+
+  // מקורות הנתונים המוצגים בתגית העליונה — איחוד המקורות מכל הרכיבים
+  // שכבר נטענו, כדי לתת תמונה כנה אחת של "על מה זה מבוסס".
+  const asOf = monthlyResp?.as_of || dailyResp?.as_of || burnRate?.as_of;
+  const dataSources = Array.from(
+    new Set([...(monthlyResp?.data_sources || []), ...(dailyResp?.data_sources || [])])
+  );
 
   return (
     <FinancePageShell
@@ -208,10 +257,29 @@ const CashFlowDashboard: React.FC = () => {
       }
     >
 
+      {/* נכון לתאריך + מקורות נתונים חיים — אותה מוסכמה כמו מסך התחזית */}
+      {asOf && (
+        <div className="flex flex-wrap items-center gap-3 mb-6 text-sm">
+          <span className="flex items-center gap-1 text-gray-600">
+            <Calendar size={16} />
+            נכון לתאריך {asOf}
+          </span>
+          {dataSources.map((src) => (
+            <span
+              key={src}
+              className="flex items-center gap-1 px-3 py-1 bg-blue-50 text-blue-700 rounded-full"
+            >
+              <Database size={14} />
+              {SOURCE_LABELS[src] || src}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <MetricCard icon={ArrowUpRight} label="כניסות" value={formatCurrency(totalInflows)} detail="+12% מהתקופה הקודמת" tone="emerald" />
-        <MetricCard icon={ArrowDownRight} label="יציאות" value={formatCurrency(totalOutflows)} detail="+5% מהתקופה הקודמת" tone="rose" />
+        <MetricCard icon={ArrowUpRight} label="כניסות" value={formatCurrency(totalInflows)} detail={`${timeRange} חודשים אחרונים`} tone="emerald" />
+        <MetricCard icon={ArrowDownRight} label="יציאות" value={formatCurrency(totalOutflows)} detail={`${timeRange} חודשים אחרונים`} tone="rose" />
         <MetricCard icon={DollarSign} label="תזרים נקי" value={formatCurrency(netCashFlow)} detail={`${timeRange} חודשים אחרונים`} tone={netCashFlow >= 0 ? 'emerald' : 'rose'} />
         <MetricCard
           icon={Calendar}
@@ -230,6 +298,8 @@ const CashFlowDashboard: React.FC = () => {
             <div className="h-64 flex items-center justify-center">
               <RefreshCw className="animate-spin text-gray-400" size={32} />
             </div>
+          ) : monthlyCashFlow.length === 0 ? (
+            <EmptyState message={monthlyResp?.message} />
           ) : (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={monthlyCashFlow}>
@@ -254,6 +324,8 @@ const CashFlowDashboard: React.FC = () => {
             <div className="h-64 flex items-center justify-center">
               <RefreshCw className="animate-spin text-gray-400" size={32} />
             </div>
+          ) : monthlyCashFlow.length === 0 ? (
+            <EmptyState message={monthlyResp?.message} />
           ) : (
             <ResponsiveContainer width="100%" height={300}>
               <AreaChart data={monthlyCashFlow}>
@@ -291,24 +363,34 @@ const CashFlowDashboard: React.FC = () => {
             <div className="h-64 flex items-center justify-center">
               <RefreshCw className="animate-spin text-gray-400" size={32} />
             </div>
+          ) : dailyCashPosition.length === 0 ? (
+            <EmptyState message={dailyResp?.message} />
           ) : (
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={dailyCashPosition}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-                <YAxis tickFormatter={(v) => `₪${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 12 }} />
-                <Tooltip formatter={(value: number) => formatCurrency(value)} />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="closing_balance"
-                  name="יתרה"
-                  stroke="#3B82F6"
-                  strokeWidth={2}
-                  dot={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={dailyCashPosition}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                  <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                  <YAxis tickFormatter={(v) => `₪${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 12 }} />
+                  <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="closing_balance"
+                    name="יתרה"
+                    stroke="#3B82F6"
+                    strokeWidth={2}
+                    dot={false}
+                    connectNulls
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+              {dailyResp?.balance_basis === 'unavailable' && (
+                <p className="text-xs text-amber-600 mt-2">
+                  אין חשבון בנק/נכס עם יתרה חיה בארגון — יתרת הסגירה אינה זמינה (מוצגות רק כניסות/יציאות בפועל).
+                </p>
+              )}
+            </>
           )}
         </FinanceCard>
 
@@ -318,6 +400,8 @@ const CashFlowDashboard: React.FC = () => {
             <div className="h-64 flex items-center justify-center">
               <RefreshCw className="animate-spin text-gray-400" size={32} />
             </div>
+          ) : categoryPieData.length === 0 ? (
+            <EmptyState message={categoryResp?.message} />
           ) : (
             <ResponsiveContainer width="100%" height={250}>
               <PieChart>
@@ -408,8 +492,29 @@ const CashFlowDashboard: React.FC = () => {
             <div className="text-center p-4 bg-gray-50 rounded-lg">
               <p className="text-sm text-gray-600 mb-2">יתרה נוכחית</p>
               <p className="text-xl font-bold text-blue-600">{formatCurrency(burnRate.current_balance)}</p>
+              {burnRate.current_balance_available === false && (
+                <p className="text-xs text-amber-600 mt-1">אין חשבון בנק/נכס עם יתרה חיה</p>
+              )}
             </div>
           </div>
+
+          {/* תוספת AR/AP: צפי גבייה/תשלום 30 יום — לא מוזרם לתוך הריצה בפועל למעלה */}
+          {((burnRate.expected_receivables_30d_count || 0) > 0 || (burnRate.expected_payables_30d_count || 0) > 0) && (
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-sm">
+                <span className="text-green-700 font-medium">צפי גבייה (30 יום): </span>
+                <span className="text-green-800">
+                  {formatCurrency(burnRate.expected_receivables_30d || 0)} ({burnRate.expected_receivables_30d_count || 0} חשבוניות פתוחות)
+                </span>
+              </div>
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm">
+                <span className="text-red-700 font-medium">צפי תשלום (30 יום): </span>
+                <span className="text-red-800">
+                  {formatCurrency(burnRate.expected_payables_30d || 0)} ({burnRate.expected_payables_30d_count || 0} חשבונות ספק פתוחים)
+                </span>
+              </div>
+            </div>
+          )}
 
           {burnRate.net_monthly_burn > 0 && (
             <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-3">
@@ -453,6 +558,13 @@ const CashFlowDashboard: React.FC = () => {
     </FinancePageShell>
   );
 };
+
+const EmptyState: React.FC<{ message?: string | null }> = ({ message }) => (
+  <div className="h-64 flex flex-col items-center justify-center text-gray-400 gap-2 text-center px-4">
+    <AlertTriangle size={28} />
+    <p className="text-sm text-gray-500">{message || 'אין נתונים חיים להצגה'}</p>
+  </div>
+);
 
 interface RatioCardProps {
   title: string;

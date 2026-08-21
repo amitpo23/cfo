@@ -17,6 +17,7 @@ from ..models import (
     Transaction, Account, Organization, TransactionType, AccountType
 )
 from ..config import settings
+from . import ledger_service
 from .vat_utils import invoice_counts, bill_counts, expense_counts
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,12 @@ class BalanceSheetReport:
     # בדיקת איזון
     total_liabilities_and_equity: float
     is_balanced: bool
+    # פקודות מיובאות מהנה"ח חיצונית (חשבשבת) — הכרעת הבעלים 17/08/2026:
+    # "לניתוח בלבד, מסומן בנפרד" כי התקופה כבר דווחה לרשויות ע"י ההנה"ח
+    # החיצונית. אופציונלי כדי לא לשבור קוראים קיימים (כמו coverage ב-P&L).
+    includes_imported: bool = False
+    imported_entry_count: int = 0
+    imported_warning_he: Optional[str] = None
 
     def to_dict(self) -> Dict:
         data = asdict(self)
@@ -404,115 +411,76 @@ class FinancialReportsService:
         compare_previous: bool = True
     ) -> BalanceSheetReport:
         """
-        הפקת מאזן / דוח כספי
-        Generate Balance Sheet
+        הפקת מאזן / דוח כספי — נגזר ממנוע ה-ledger (פקודות יומן שנגזרות
+        מהמסמכים המסונכרנים: חשבוניות/חשבונות-ספק/הוצאות/תשלומים), לא
+        מטבלת Transaction הקפואה (~127 שורות ₪0, קפואה מ-19/08/2026).
+
+        נכסים/התחייבויות/הון כולם מגיעים מאותו trial balance (ledger_service),
+        ולכן is_balanced מתקיים בבנייה (לא נבדק מול חישוב עצמאי שעלול
+        להיות לא-עקבי) — ר' ledger_service.balance_sheet.
         """
-        # שליפת חשבונות
-        accounts = self.db.query(Account).filter(
-            Account.organization_id == organization_id
-        ).all()
-        
-        # יתרות עסקאות עד התאריך
-        transactions = self.db.query(Transaction).filter(
-            Transaction.organization_id == organization_id,
-            Transaction.transaction_date <= as_of_date
-        ).all()
-        
-        # חישוב יתרות לפי סוג חשבון
-        balances = self._calculate_account_balances(accounts, transactions)
-        
-        # תקופה קודמת להשוואה
-        prev_date = as_of_date - timedelta(days=365)
-        prev_transactions = []
+        ledger_bs = ledger_service.balance_sheet(self.db, organization_id, end=as_of_date)
+        tb = ledger_service.trial_balance(self.db, organization_id, end=as_of_date)
+
+        prev_assets_by_code: Dict[str, float] = {}
+        prev_liabilities_by_code: Dict[str, float] = {}
+        prev_opening_equity = 0.0
         if compare_previous:
-            prev_transactions = self.db.query(Transaction).filter(
-                Transaction.organization_id == organization_id,
-                Transaction.transaction_date <= prev_date
-            ).all()
-        prev_balances = self._calculate_account_balances(accounts, prev_transactions)
-        
-        # נכסים שוטפים
+            prev_date = as_of_date - timedelta(days=365)
+            prev_bs = ledger_service.balance_sheet(self.db, organization_id, end=prev_date)
+            prev_assets_by_code = {a["account"]: a["balance"] for a in prev_bs["assets"]}
+            prev_liabilities_by_code = {l["account"]: l["balance"] for l in prev_bs["liabilities"]}
+            prev_opening_equity = prev_bs["equity"]["opening_equity"]
+
+        # נכסים והתחייבויות: כל חשבון פעיל בפנקס ה-ledger, כפי שהוא —
+        # מיפוי החשבונות המפורט (cash/bank/inventory/equipment/vehicles/...)
+        # לא קיים במנוע ה-ledger (תרשים חשבונות מינימלי), ולכן לא מומצא כאן.
+        # fixed_assets/other_assets/long_term_liabilities נשארים ריקים
+        # (honest-null) — אין להם מקור חי, לא נופלים חזרה ל-Transaction.
         current_assets = [
-            BalanceSheetItem('cash', 'מזומנים', balances.get('cash', 0), prev_balances.get('cash', 0)),
-            BalanceSheetItem('bank', 'בנק', balances.get('bank', 0), prev_balances.get('bank', 0)),
-            BalanceSheetItem('accounts_receivable', 'חייבים', balances.get('accounts_receivable', 0), prev_balances.get('accounts_receivable', 0)),
-            BalanceSheetItem('inventory', 'מלאי', balances.get('inventory', 0), prev_balances.get('inventory', 0)),
-            BalanceSheetItem('prepaid_expenses', 'הוצאות מראש', balances.get('prepaid_expenses', 0), prev_balances.get('prepaid_expenses', 0)),
+            BalanceSheetItem(a["account"], a["name"], a["balance"],
+                             prev_assets_by_code.get(a["account"], 0.0))
+            for a in ledger_bs["assets"]
         ]
         current_assets = [a for a in current_assets if a.amount != 0 or a.previous_amount != 0]
-        total_current_assets = sum(a.amount for a in current_assets)
-        
-        # נכסים קבועים
-        fixed_assets = [
-            BalanceSheetItem('equipment', 'ציוד', balances.get('equipment', 0), prev_balances.get('equipment', 0)),
-            BalanceSheetItem('vehicles', 'רכבים', balances.get('vehicles', 0), prev_balances.get('vehicles', 0)),
-            BalanceSheetItem('property', 'נדל"ן', balances.get('property', 0), prev_balances.get('property', 0)),
-        ]
-        fixed_assets = [a for a in fixed_assets if a.amount != 0 or a.previous_amount != 0]
-        total_fixed_assets = sum(a.amount for a in fixed_assets)
-        
-        # נכסים אחרים
-        other_assets = [
-            BalanceSheetItem('other_assets', 'נכסים אחרים', balances.get('other_assets', 0), prev_balances.get('other_assets', 0)),
-        ]
-        other_assets = [a for a in other_assets if a.amount != 0]
-        total_other_assets = sum(a.amount for a in other_assets)
-        
-        total_assets = total_current_assets + total_fixed_assets + total_other_assets
-        
-        # התחייבויות שוטפות
+
         current_liabilities = [
-            BalanceSheetItem('accounts_payable', 'ספקים', balances.get('accounts_payable', 0), prev_balances.get('accounts_payable', 0)),
-            BalanceSheetItem('short_term_loans', 'הלוואות לז"ק', balances.get('short_term_loans', 0), prev_balances.get('short_term_loans', 0)),
-            BalanceSheetItem('accrued_expenses', 'הוצאות לשלם', balances.get('accrued_expenses', 0), prev_balances.get('accrued_expenses', 0)),
+            BalanceSheetItem(l["account"], l["name"], l["balance"],
+                             prev_liabilities_by_code.get(l["account"], 0.0))
+            for l in ledger_bs["liabilities"]
         ]
-        current_liabilities = [l for l in current_liabilities if l.amount != 0 or l.previous_amount != 0]
-        total_current_liabilities = sum(l.amount for l in current_liabilities)
-        
-        # התחייבויות לזמן ארוך
-        long_term_liabilities = [
-            BalanceSheetItem('long_term_loans', 'הלוואות לז"א', balances.get('long_term_loans', 0), prev_balances.get('long_term_loans', 0)),
-            BalanceSheetItem('mortgage', 'משכנתא', balances.get('mortgage', 0), prev_balances.get('mortgage', 0)),
+        current_liabilities = [
+            l for l in current_liabilities if l.amount != 0 or l.previous_amount != 0
         ]
-        long_term_liabilities = [l for l in long_term_liabilities if l.amount != 0 or l.previous_amount != 0]
-        total_long_term_liabilities = sum(l.amount for l in long_term_liabilities)
-        
-        total_liabilities = total_current_liabilities + total_long_term_liabilities
-        
-        # הון עצמי — עודפים נגזרים מרווח נקי מצטבר (חישוב עצמאי מ-P&L), לא
-        # plug של assets−liabilities−capital שמכריח is_balanced=True ומסתיר
-        # אי-התאמות במקור. is_balanced למטה הוא השוואה אמיתית.
-        accumulated = self.generate_profit_loss(
-            organization_id, date(1900, 1, 1), as_of_date, compare_previous=False
-        )
-        retained_earnings = accumulated.net_income
+
         equity = [
-            BalanceSheetItem('share_capital', 'הון מניות', balances.get('share_capital', 0), prev_balances.get('share_capital', 0)),
-            BalanceSheetItem('retained_earnings', 'עודפים', retained_earnings, prev_balances.get('retained_earnings', 0)),
+            BalanceSheetItem('share_capital', 'הון ויתרות פתיחה',
+                             ledger_bs["equity"]["opening_equity"], prev_opening_equity),
+            BalanceSheetItem('retained_earnings', 'עודפים',
+                             ledger_bs["equity"]["retained_earnings"], 0.0),
         ]
-        total_equity = sum(e.amount for e in equity)
-        
-        total_liabilities_and_equity = total_liabilities + total_equity
-        is_balanced = abs(total_assets - total_liabilities_and_equity) < 0.01
-        
+
         return BalanceSheetReport(
             as_of_date=as_of_date.isoformat(),
             current_assets=current_assets,
-            total_current_assets=float(total_current_assets),
-            fixed_assets=fixed_assets,
-            total_fixed_assets=float(total_fixed_assets),
-            other_assets=other_assets,
-            total_other_assets=float(total_other_assets),
-            total_assets=float(total_assets),
+            total_current_assets=ledger_bs["total_assets"],
+            fixed_assets=[],
+            total_fixed_assets=0.0,
+            other_assets=[],
+            total_other_assets=0.0,
+            total_assets=ledger_bs["total_assets"],
             current_liabilities=current_liabilities,
-            total_current_liabilities=float(total_current_liabilities),
-            long_term_liabilities=long_term_liabilities,
-            total_long_term_liabilities=float(total_long_term_liabilities),
-            total_liabilities=float(total_liabilities),
+            total_current_liabilities=ledger_bs["total_liabilities"],
+            long_term_liabilities=[],
+            total_long_term_liabilities=0.0,
+            total_liabilities=ledger_bs["total_liabilities"],
             equity=equity,
-            total_equity=float(total_equity),
-            total_liabilities_and_equity=float(total_liabilities_and_equity),
-            is_balanced=is_balanced
+            total_equity=ledger_bs["equity"]["total_equity"],
+            total_liabilities_and_equity=ledger_bs["total_equity_and_liabilities"],
+            is_balanced=ledger_bs["balanced"],
+            includes_imported=tb.get("includes_imported", False),
+            imported_entry_count=tb.get("imported_entry_count", 0),
+            imported_warning_he=tb.get("imported_warning_he"),
         )
     
     def generate_cash_flow_projection(
@@ -1243,28 +1211,6 @@ class FinancialReportsService:
         # מיון לפי סכום
         items.sort(key=lambda x: x.amount, reverse=True)
         return items
-    
-    def _calculate_account_balances(
-        self,
-        accounts: List[Account],
-        transactions: List[Transaction]
-    ) -> Dict[str, float]:
-        """חישוב יתרות חשבונות"""
-        balances = {}
-        
-        # יתרות מחשבונות
-        for acc in accounts:
-            key = acc.name.lower().replace(' ', '_')
-            balances[key] = float(acc.balance)
-        
-        # התאמה לפי עסקאות
-        for tx in transactions:
-            if tx.transaction_type == TransactionType.INCOME:
-                balances['bank'] = balances.get('bank', 0) + float(tx.amount)
-            else:
-                balances['bank'] = balances.get('bank', 0) - float(tx.amount)
-        
-        return balances
     
     def _group_by_month(self, transactions: List[Transaction]) -> Dict[str, float]:
         """קיבוץ עסקאות לפי חודש"""

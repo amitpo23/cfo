@@ -12,6 +12,7 @@ from ..dependencies import get_current_user, get_current_org_id, get_db
 from ...services.cash_flow_service import CashFlowService, CashFlowCategory
 from ...services.forecasting_service import ForecastingService, ForecastMethod
 from ...services.live_forecast_service import LiveForecastService
+from ...services.live_cash_flow_service import LiveCashFlowService
 from ...services.ml_models import EnsembleForecaster
 
 router = APIRouter()
@@ -43,34 +44,10 @@ class CashFlowStatementResponse(BaseModel):
     net_cash_flow: float
 
 
-class MonthlyCashFlowResponse(BaseModel):
-    """תזרים מזומנים חודשי"""
-    month: str
-    month_name: str
-    inflows: float
-    outflows: float
-    net_flow: float
-    cumulative: float
-
-
-class DailyCashPositionResponse(BaseModel):
-    """מצב מזומנים יומי"""
-    date: str
-    inflows: float
-    outflows: float
-    net_flow: float
-    closing_balance: float
-
-
-class BurnRateResponse(BaseModel):
-    """קצב שריפת מזומנים"""
-    monthly_burn_rate: float
-    monthly_income: float
-    net_monthly_burn: float
-    current_balance: float
-    runway_months: float
-    analysis_period_months: int
-
+# MonthlyCashFlowResponse / DailyCashPositionResponse / BurnRateResponse הוסרו:
+# /monthly, /daily, /burn-rate מוגשים כעת ע"י LiveCashFlowService, שמחזיר
+# payload עשיר-honest-null (as_of/data_sources/message) בלי response_model
+# קשיח — אותה מוסכמה כמו /forecast/live-monthly ו-/by-category.
 
 class LiquidityRatiosResponse(BaseModel):
     """יחסי נזילות"""
@@ -197,7 +174,7 @@ async def get_cash_flow_statement(
     )
 
 
-@router.get("/monthly", response_model=List[MonthlyCashFlowResponse])
+@router.get("/monthly")
 async def get_monthly_cash_flow(
     months: int = Query(12, ge=1, le=36, description="מספר חודשים"),
     db = Depends(get_db),
@@ -205,17 +182,13 @@ async def get_monthly_cash_flow(
     org_id: int = Depends(get_current_org_id),
 ):
     """
-    תזרים מזומנים חודשי
-    Get monthly cash flow analysis
+    תזרים מזומנים חודשי — ספרים חיים (BankTransaction), לא Transaction
+    הקפואה. honest-null + as_of, כמו LiveForecastService.
     """
-    service = CashFlowService(db)
-    organization_id = org_id
-    data = service.get_monthly_cash_flow(organization_id, months)
-    
-    return [MonthlyCashFlowResponse(**item) for item in data]
+    return LiveCashFlowService(db, org_id).monthly_cash_flow(months=months)
 
 
-@router.get("/daily", response_model=List[DailyCashPositionResponse])
+@router.get("/daily")
 async def get_daily_cash_position(
     days: int = Query(30, ge=1, le=90, description="מספר ימים"),
     db = Depends(get_db),
@@ -223,17 +196,13 @@ async def get_daily_cash_position(
     org_id: int = Depends(get_current_org_id),
 ):
     """
-    מצב מזומנים יומי
-    Get daily cash position
+    מצב מזומנים יומי — ספרים חיים (BankTransaction + יתרת Account חיה),
+    לא Transaction הקפואה.
     """
-    service = CashFlowService(db)
-    organization_id = org_id
-    data = service.get_daily_cash_position(organization_id, days)
-    
-    return [DailyCashPositionResponse(**item) for item in data]
+    return LiveCashFlowService(db, org_id).daily_cash_position(days=days)
 
 
-@router.get("/burn-rate", response_model=BurnRateResponse)
+@router.get("/burn-rate")
 async def get_burn_rate(
     months: int = Query(3, ge=1, le=12, description="תקופת חישוב"),
     db = Depends(get_db),
@@ -241,14 +210,10 @@ async def get_burn_rate(
     org_id: int = Depends(get_current_org_id),
 ):
     """
-    קצב שריפת מזומנים
-    Calculate cash burn rate
+    קצב שריפת מזומנים — ספרים חיים (BankTransaction + יתרת Account חיה),
+    עם תוספת צפי גבייה/תשלום מ-AR/AP פתוחים ב-30 הימים הקרובים.
     """
-    service = CashFlowService(db)
-    organization_id = org_id
-    data = service.get_cash_burn_rate(organization_id, months)
-    
-    return BurnRateResponse(**data)
+    return LiveCashFlowService(db, org_id).burn_rate(months=months)
 
 
 @router.get("/by-category")
@@ -260,27 +225,10 @@ async def get_cash_flow_by_category(
     org_id: int = Depends(get_current_org_id),
 ):
     """
-    תזרים מזומנים לפי קטגוריות
-    Get cash flow breakdown by category
+    תזרים מזומנים לפי קטגוריות — ספרים חיים (BankTransaction). honest-null
+    כש-BankTransaction.category_id אינו מאוכלס (המצב בפועל כיום).
     """
-    service = CashFlowService(db)
-    organization_id = org_id
-    data = service.get_cash_flow_by_category(
-        organization_id,
-        datetime.combine(start_date, datetime.min.time()),
-        datetime.combine(end_date, datetime.max.time())
-    )
-    
-    # המרה לפורמט JSON-friendly
-    result = {}
-    for category, values in data.items():
-        result[category] = {
-            'inflows': float(values['inflows']),
-            'outflows': float(values['outflows']),
-            'net': float(values['inflows'] - values['outflows'])
-        }
-    
-    return result
+    return LiveCashFlowService(db, org_id).by_category(start_date=start_date, end_date=end_date)
 
 
 @router.get("/liquidity-ratios", response_model=LiquidityRatiosResponse)

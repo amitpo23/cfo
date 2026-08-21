@@ -297,10 +297,10 @@ def test_non_super_cannot_edit_another_organization(client, owner, tenant):
 def test_cashflow_dashboard_honors_org_override(client, superadmin, fresh_org):
     """בחירת תיק במתג חייבת לשלוט במסך התזרים — נתוני ארגון אחר לא מודלפים.
 
-    רגרסיה ל-29 נקודות שקראו current_user.organization_id ישירות (תוקן 2026-07-06):
-    בקוד השבור, הבקשה הייתה נענית עם נתוני הארגון של המשתמש עצמו.
+    רגרסיה ל-29 נקודות שקראו current_user.organization_id ישירות (תוקן 2026-07-06).
+    מקור: BankTransaction (ספרים חיים) — /cashflow/daily הועבר ממשימה 2
+    מטבלת Transaction הקפואה ל-BankTransaction, ר' live_cash_flow_service.
     """
-    from datetime import datetime as _dt
     own_org = superadmin["own_org"]
     db = SessionLocal()
     try:
@@ -308,10 +308,9 @@ def test_cashflow_dashboard_honors_org_override(client, superadmin, fresh_org):
                        account_type=AccountType.BANK, balance=54321)
         db.add(acct)
         db.flush()
-        db.add(Transaction(organization_id=own_org, account_id=acct.id,
-                           transaction_type=TransactionType.INCOME,
-                           amount=54321, category="sales",
-                           transaction_date=_dt.now()))
+        db.add(BankTransaction(organization_id=own_org, account_id=acct.id,
+                               transaction_date=date.today(),
+                               description="סמן", amount=54321))
         db.commit()
     finally:
         db.close()

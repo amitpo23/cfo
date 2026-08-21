@@ -162,9 +162,19 @@ def test_vat_report_uses_real_tax_fields_not_18pct_estimate(seeded_ledger):
 
 
 def test_balance_sheet_retained_earnings_is_net_income_not_plug(seeded_ledger):
-    """עודפים נגזרים מרווח נקי מצטבר (חישוב עצמאי), לא plug שמכריח is_balanced.
+    """עודפים נגזרים מרווח נקי מצטבר (חישוב עצמאי מתוך אותו trial balance
+    כמו הנכסים/ההתחייבויות), לא plug של assets−liabilities−capital שמכריח
+    is_balanced=True בלי קשר למספרים בפועל.
 
-    רווח נקי = הכנסה 1000 − הוצאה 600 = 400 לפני מס; אחרי מס 23% → 308.
+    משימה 2 (21/08/2026): המאזן עבר ממקור Transaction הקפואה למנוע
+    ledger_service (פקודות יומן מהמסמכים). עודפים = revenue−expenses מאותו
+    trial balance שממנו גם באים הנכסים/ההתחייבויות — הכנסה 1000 − הוצאה
+    600 = 400. זה עדיין לא plug (זו סכימה בלתי-תלויה מהחשבונות 4000/5000,
+    לא שארית מאולצת), אבל *לפני* מס — תרשים החשבונות הנגזר של ledger_service
+    אינו כולל רישום מס הכנסה/התחייבות מס (אין להם מסמך מקור מסונכרן), ולכן
+    אין דרך "חיה" לרשום את ה-308 (אחרי מס 23%) בלי לשבור את זהות
+    assets=liabilities+equity. שימוש בעודפים לפני-מס הוא הדרך היחידה
+    שבה is_balanced נכון מבנית ולא רק "נכון פעם אחת אצלנו במקרה".
     """
     from datetime import date as _date
 
@@ -177,6 +187,7 @@ def test_balance_sheet_retained_earnings_is_net_income_not_plug(seeded_ledger):
             compare_previous=False,
         )
         retained = next(e.amount for e in bs.equity if e.name == "retained_earnings")
-        assert round(retained, 2) == 308.0
+        assert round(retained, 2) == 400.0
+        assert bs.is_balanced is True
     finally:
         db.close()
