@@ -39,6 +39,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models import BankTransaction, Bill, BillStatus, Expense, Invoice, InvoiceStatus
@@ -226,7 +227,10 @@ class LiveForecastService:
         self, as_of_date: date
     ) -> tuple[list[tuple[Decimal, date]], int]:
         """הוצאות ב-90 הימים האחרונים, בניכוי כאלה שכבר מיוצגות כ-Bill
-        (אותו external_id) כדי לא לכפול את אותו מסמך. מחזיר את השורות
+        (אותו external_id) כדי לא לכפול את אותו מסמך, ובניכוי הוצאות
+        שנכשלו (status="error" — OCR/סיווג כושל) — אותו פילטר בדיוק כמו
+        ב-DashboardService._month_expenses_accrual, כדי שהוצאות כושלות
+        לא יזהמו את בסיס ההוצאות החוזרות המוצג למשתמש. מחזיר את השורות
         (סכום, תאריך) ואת מספר החודשים הקלנדריים השונים שיש בהם נתונים."""
         bill_ext_ids = {
             r[0]
@@ -243,6 +247,7 @@ class LiveForecastService:
                 Expense.organization_id == self.organization_id,
                 Expense.expense_date >= lookback_start,
                 Expense.expense_date <= as_of_date,
+                func.lower(Expense.status) != "error",
             )
             .all()
         )

@@ -179,6 +179,36 @@ def test_monthly_forecast_expense_deduped_against_matching_bill_external_id(fres
     assert by_source["expenses_recurring_avg"]["count"] == 0
 
 
+def test_monthly_forecast_excludes_failed_expenses_from_recurring_baseline(fresh_org):
+    """הוצאה עם status='error' (OCR/סיווג כושל) לא אמורה לזהם את בסיס
+    ההוצאות החוזרות — אותו פילטר בדיוק כמו
+    DashboardService._month_expenses_accrual (func.lower(status)!='error')."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Expense(
+            organization_id=org_id, supplier_name="ספק תקין",
+            amount=Decimal("500"), total=Decimal("500"), status="pending",
+            expense_date=TODAY - timedelta(days=10),
+        ))
+        db.add(Expense(
+            organization_id=org_id, supplier_name="ספק כושל",
+            amount=Decimal("9999"), total=Decimal("9999"), status="error",
+            expense_date=TODAY - timedelta(days=15),
+        ))
+        db.commit()
+
+        result = LiveForecastService(db, org_id).monthly_forecast(periods=1, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    by_source = {c["source"]: c for c in result["months"][0]["components"]}
+    # רק ההוצאה התקינה (500) נכללת; ה-9999 הכושלת מודרת לגמרי — גם
+    # מהסכום וגם ממונה החודשים (חודש יחיד עם נתונים -> ממוצע = 500).
+    assert by_source["expenses_recurring_avg"]["amount"] == 500.0
+    assert by_source["expenses_recurring_avg"]["count"] == 1
+
+
 def test_monthly_forecast_overdue_ar_and_ap_are_not_dropped(fresh_org):
     """באג שנמצא בסקירה: חשבונית/חשבון-ספק שה-due_date שלהם כבר עבר (לפני
     תחילת חלון התחזית) לא התאימו לאף בקצת-חודש ונעלמו בשקט — 'אפסים
