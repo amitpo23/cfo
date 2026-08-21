@@ -174,7 +174,7 @@ const navigationConfig = [
   {
     section: 'Analysis',
     items: [
-      { to: '/forecasting', icon: TrendingUp, label: 'Forecasting', description: 'ML predictions' },
+      { to: '/forecasting', icon: TrendingUp, label: 'Forecasting', description: 'תזרים חודשי מספרים חיים (AR/AP + הוצאות חוזרות)' },
       { to: '/ai-analytics', icon: Brain, label: 'AI Analytics', description: 'AI-powered insights' },
     ]
   },

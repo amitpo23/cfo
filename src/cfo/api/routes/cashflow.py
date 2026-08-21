@@ -11,6 +11,7 @@ from decimal import Decimal
 from ..dependencies import get_current_user, get_current_org_id, get_db
 from ...services.cash_flow_service import CashFlowService, CashFlowCategory
 from ...services.forecasting_service import ForecastingService, ForecastMethod
+from ...services.live_forecast_service import LiveForecastService
 from ...services.ml_models import EnsembleForecaster
 
 router = APIRouter()
@@ -327,6 +328,24 @@ async def get_payables_aging(
     service = CashFlowService(db)
     organization_id = org_id
     return service.get_payables_aging(organization_id)
+
+
+# ============= Live-books Forecast (no ML, no Transaction) =============
+
+@router.get("/forecast/live-monthly")
+async def get_live_monthly_forecast(
+    periods: int = Query(6, ge=1, le=24, description="מספר חודשים לתחזית"),
+    db = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
+):
+    """
+    תחזית תזרים חודשית מבוססת ספרים חיים — חשבוניות/חשבונות-ספק פתוחים
+    (AR/AP לפי due_date) + בסיס הוצאות חוזרות (ממוצע היסטורי). לא טבלת
+    Transaction הקפואה. פירוק גלוי לכל חודש, honest-null כשאין נתונים.
+    """
+    service = LiveForecastService(db, org_id)
+    return service.monthly_forecast(periods=periods)
 
 
 # ============= Forecasting Endpoints =============
