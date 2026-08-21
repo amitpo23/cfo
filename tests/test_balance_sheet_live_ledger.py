@@ -165,6 +165,63 @@ def test_balance_sheet_no_imported_entries_no_warning(fresh_org):
     assert bs.imported_warning_he is None
 
 
+def test_balance_sheet_equity_labeled_pretax_with_explanatory_note(fresh_org):
+    """ביקורת המשימה (21/08/2026, IMPORTANT 2): עודפים לפני-מס לא יכולים
+    לשבת סתם ליד "רווח נקי" אחרי-מס בטאב אחר בלי הבחנה — התווית והערה
+    חייבות להסביר את זה."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed_invoice_and_bill(db, org_id)
+        svc = FinancialReportsService(db)
+        bs = svc.generate_balance_sheet(org_id, as_of_date=AS_OF, compare_previous=False)
+    finally:
+        db.close()
+
+    retained = next(e for e in bs.equity if e.name == "retained_earnings")
+    assert "לפני מס" in retained.name_hebrew
+    assert bs.equity_note
+    assert "לפני מס" in bs.equity_note
+
+
+def test_balance_sheet_is_balanced_note_labels_it_structural_not_independent(fresh_org):
+    """ביקורת המשימה (21/08/2026, IMPORTANT 1): is_balanced תמיד True
+    בבנייה (זהות אחד-trial-balance) — אסור שהוא יוצג כאילו הוא בדיקה
+    בלתי-תלויה שיכולה להיכשל."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed_invoice_and_bill(db, org_id)
+        svc = FinancialReportsService(db)
+        bs = svc.generate_balance_sheet(org_id, as_of_date=AS_OF, compare_previous=False)
+    finally:
+        db.close()
+
+    assert bs.is_balanced is True
+    assert bs.is_balanced_note
+    assert "בלתי-תלוי" in bs.is_balanced_note
+
+
+def test_balance_sheet_cross_check_compares_pretax_ledger_to_independent_posttax_pl(fresh_org):
+    """הבדיקה הבלתי-תלויה האמיתית (לא is_balanced הטאוטולוגי): עודפים
+    לפני-מס מהפנקס הנגזר מול רווח נקי אחרי-מס מחישוב P&L נפרד לגמרי."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _seed_invoice_and_bill(db, org_id)
+        svc = FinancialReportsService(db)
+        bs = svc.generate_balance_sheet(org_id, as_of_date=AS_OF, compare_previous=False)
+    finally:
+        db.close()
+
+    assert bs.cross_check is not None
+    assert bs.cross_check["ledger_retained_earnings_pretax"] == 600.0
+    posttax = bs.cross_check["independent_net_income_posttax"]
+    assert bs.cross_check["delta"] == round(600.0 - posttax, 2)
+    # רווח חייב חיובי (600 לפני מס) -> נטו אחרי-מס נמוך יותר, לא שווה.
+    assert posttax < 600.0
+
+
 # --------------------------------------------------------------------- #
 # route: GET /api/reports/balance-sheet
 # --------------------------------------------------------------------- #
@@ -183,6 +240,11 @@ def test_balance_sheet_route_returns_ledger_sourced_data(client, fresh_org):
     assert body["derived"] is True
     ar_item = next(a for a in body["current_assets"] if a["name"] == "1100")
     assert ar_item["amount"] == 1180.0
+    # שדות ה-honest-null/cross_check מהביקורת (21/08/2026) חייבים לצאת
+    # ב-JSON בפועל, לא רק להתקיים על ה-dataclass.
+    assert body["is_balanced_note"]
+    assert body["cross_check"]["ledger_retained_earnings_pretax"] == 600.0
+    assert body["equity_note"]
 
 
 def test_balance_sheet_route_requires_auth(client):

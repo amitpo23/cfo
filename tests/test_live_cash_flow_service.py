@@ -248,14 +248,18 @@ def test_burn_rate_honest_null_message_when_totally_empty(fresh_org):
 # --------------------------------------------------------------------- #
 # by_category
 # --------------------------------------------------------------------- #
-def test_by_category_groups_real_categories(fresh_org):
+def test_by_category_groups_real_categories_when_coverage_is_strong(fresh_org):
+    """כשרוב התנועות בחלון מסווגות (categorized_share >= הסף) — הפירוק
+    מוצג בביטחון מלא, message=None."""
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
         cat = Category(organization_id=org_id, name="שכירות", category_type="expense")
         db.add(cat); db.flush()
         db.add(BankTransaction(organization_id=org_id, transaction_date=TODAY,
-                                description="שכ״ד", amount=Decimal("-2000"), category_id=cat.id))
+                                description="שכ״ד 1", amount=Decimal("-2000"), category_id=cat.id))
+        db.add(BankTransaction(organization_id=org_id, transaction_date=TODAY,
+                                description="שכ״ד 2", amount=Decimal("-500"), category_id=cat.id))
         db.add(BankTransaction(organization_id=org_id, transaction_date=TODAY,
                                 description="לא מסווג", amount=Decimal("500")))
         db.commit()
@@ -267,9 +271,44 @@ def test_by_category_groups_real_categories(fresh_org):
         db.close()
 
     assert result["data_sources"] == ["bank_transactions_actual"]
-    assert result["categories"]["שכירות"]["outflows"] == 2000.0
+    assert result["categories"]["שכירות"]["outflows"] == 2500.0
     assert result["categories"]["לא מסווג"]["inflows"] == 500.0
+    assert result["coverage"] == {
+        "categorized_count": 2, "total_count": 3, "categorized_share": round(2 / 3, 4),
+    }
     assert result["message"] is None
+
+
+def test_by_category_discloses_partial_coverage_when_uncategorized_dominates(fresh_org):
+    """הממצא מהביקורת (21/08/2026): מיעוט תנועות מסווגות מול רוב "לא
+    מסווג" חייב לא להיראות כמו פירוק מלא ואמין. הפירוק עדיין מוצג (נתון
+    אמיתי, לא מוסתר) — אבל עם הודעת-כיסוי מפורשת, לא message=None."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        cat = Category(organization_id=org_id, name="שכירות", category_type="expense")
+        db.add(cat); db.flush()
+        db.add(BankTransaction(organization_id=org_id, transaction_date=TODAY,
+                                description="שכ״ד", amount=Decimal("-2000"), category_id=cat.id))
+        for i in range(3):
+            db.add(BankTransaction(organization_id=org_id, transaction_date=TODAY,
+                                    description=f"לא מסווג {i}", amount=Decimal("100")))
+        db.commit()
+
+        result = LiveCashFlowService(db, org_id).by_category(
+            start_date=TODAY - timedelta(days=1), end_date=TODAY, as_of_date=TODAY,
+        )
+    finally:
+        db.close()
+
+    # הנתון האמיתי עדיין מוצג — לא מוחבא מאחורי honest-null ריק.
+    assert result["categories"]["שכירות"]["outflows"] == 2000.0
+    assert result["categories"]["לא מסווג"]["inflows"] == 300.0
+    assert result["coverage"] == {
+        "categorized_count": 1, "total_count": 4, "categorized_share": 0.25,
+    }
+    assert result["message"]
+    assert "1 מתוך 4" in result["message"]
 
 
 def test_by_category_honest_null_when_uncategorized(fresh_org):
@@ -289,6 +328,7 @@ def test_by_category_honest_null_when_uncategorized(fresh_org):
         db.close()
 
     assert result["categories"] == {}
+    assert result["coverage"] == {"categorized_count": 0, "total_count": 1, "categorized_share": 0.0}
     assert result["message"]
 
 

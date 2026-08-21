@@ -108,6 +108,7 @@ interface CategoryBreakdownResponse {
   as_of: string;
   data_sources: string[];
   categories: Record<string, { inflows: number; outflows: number; net: number }>;
+  coverage?: { categorized_count: number; total_count: number; categorized_share: number };
   message: string | null;
 }
 
@@ -403,28 +404,35 @@ const CashFlowDashboard: React.FC = () => {
           ) : categoryPieData.length === 0 ? (
             <EmptyState message={categoryResp?.message} />
           ) : (
-            <ResponsiveContainer width="100%" height={250}>
-              <PieChart>
-                <Pie
-                  data={categoryPieData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
-                  dataKey="value"
-                  label={({ name }) => name}
-                >
-                  {categoryPieData.map((_entry, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={_entry.isPositive ? COLORS[0] : COLORS[1]}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value: number) => formatCurrency(value)} />
-              </PieChart>
-            </ResponsiveContainer>
+            <>
+              <ResponsiveContainer width="100%" height={250}>
+                <PieChart>
+                  <Pie
+                    data={categoryPieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={80}
+                    paddingAngle={5}
+                    dataKey="value"
+                    label={({ name }) => name}
+                  >
+                    {categoryPieData.map((_entry, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={_entry.isPositive ? COLORS[0] : COLORS[1]}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                </PieChart>
+              </ResponsiveContainer>
+              {/* כיסוי חלקי (רוב התנועות "לא מסווג") — הנתון אמיתי, לא
+                  מוסתר, אבל ההודעה חייבת להיראות לצד התרשים ולא רק ב-API. */}
+              {categoryResp?.message && (
+                <p className="text-xs text-amber-600 mt-2">{categoryResp.message}</p>
+              )}
+            </>
           )}
         </FinanceCard>
       </div>

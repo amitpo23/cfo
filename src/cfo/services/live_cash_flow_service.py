@@ -228,6 +228,13 @@ class LiveCashFlowService:
     # ------------------------------------------------------------------ #
     # פירוק לפי קטגוריה
     # ------------------------------------------------------------------ #
+    # מתחת לסף הזה (חלק מהתנועות המסווגות מכלל התנועות בחלון) הפירוק
+    # מוצג עדיין (אין למה להחביא נתון אמיתי), אבל עם הודעת-כיסוי מפורשת —
+    # אחרת "לא מסווג" שולט בעוגה ומוצג כמו כל פרוסה רגילה אחרת, ב-message
+    # None, כאילו הפירוק אמין באותה מידה. ר' CRITICAL 1 בביקורת המשימה
+    # (21/08/2026): 1 תנועה מסווגת מול 200 לא-מסווגות עדיין נתן message=None.
+    CATEGORY_COVERAGE_DISCLOSURE_THRESHOLD = 0.5
+
     def by_category(
         self, start_date: date, end_date: date, as_of_date: Optional[date] = None
     ) -> dict[str, Any]:
@@ -242,9 +249,10 @@ class LiveCashFlowService:
             )
             .all()
         )
-        categorized = [r for r in rows if r[1] is not None]
+        total_count = len(rows)
+        categorized_count = sum(1 for r in rows if r[1] is not None)
 
-        if not categorized:
+        if categorized_count == 0:
             # honest-null: לא בונים "עוגה" של פרוסה אחת "לא מסווג" — זה
             # מטעה יותר מהודעה כנה. BankTransaction.category_id כמעט אף
             # פעם אינו מאוכלס בפועל (אין כותב שממלא אותו כרגע).
@@ -256,6 +264,9 @@ class LiveCashFlowService:
             )
             return {
                 "as_of": as_of.isoformat(), "data_sources": [], "categories": {},
+                "coverage": {
+                    "categorized_count": 0, "total_count": total_count, "categorized_share": 0.0,
+                },
                 "message": message,
             }
 
@@ -273,11 +284,28 @@ class LiveCashFlowService:
             bucket["outflows"] = round(bucket["outflows"], 2)
             bucket["net"] = round(bucket["inflows"] - bucket["outflows"], 2)
 
+        categorized_share = round(categorized_count / total_count, 4) if total_count else 0.0
+        message = None
+        if categorized_share < self.CATEGORY_COVERAGE_DISCLOSURE_THRESHOLD:
+            # רוב התנועות בחלון אינן מסווגות — הפירוק המוצג הוא אמיתי (לא
+            # מומצא), אבל חלקי. "אפס אמון מוצג בביטחון" אסור: מגלים את
+            # הכיסוי במפורש במקום להשתיק אותו מאחורי message=None.
+            message = (
+                f"רק {categorized_count} מתוך {total_count} תנועות בטווח זה "
+                'מסווגות לקטגוריה (השאר תחת "לא מסווג") — ההתפלגות שלהלן '
+                "חלקית ואינה מייצגת את מלוא התזרים."
+            )
+
         return {
             "as_of": as_of.isoformat(),
             "data_sources": ["bank_transactions_actual"],
             "categories": categories,
-            "message": None,
+            "coverage": {
+                "categorized_count": categorized_count,
+                "total_count": total_count,
+                "categorized_share": categorized_share,
+            },
+            "message": message,
         }
 
     # ------------------------------------------------------------------ #

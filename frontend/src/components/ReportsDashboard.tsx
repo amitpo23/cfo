@@ -67,6 +67,14 @@ interface BalanceSheetItem {
   previous_amount: number;
 }
 
+interface BalanceSheetCrossCheck {
+  method: string;
+  ledger_retained_earnings_pretax: number;
+  independent_net_income_posttax: number;
+  delta: number;
+  note: string;
+}
+
 interface BalanceSheetReport {
   as_of_date: string;
   current_assets: BalanceSheetItem[];
@@ -82,6 +90,12 @@ interface BalanceSheetReport {
   equity: BalanceSheetItem[];
   total_equity: number;
   is_balanced: boolean;
+  is_balanced_note?: string | null;
+  cross_check?: BalanceSheetCrossCheck | null;
+  equity_note?: string | null;
+  includes_imported?: boolean;
+  imported_entry_count?: number;
+  imported_warning_he?: string | null;
 }
 
 interface CashFlowProjectionItem {
@@ -577,6 +591,21 @@ export const ReportsDashboard: React.FC = () => {
     }
 
     return (
+      <div className="space-y-4">
+        {/* אזהרת פקודות מיובאות מהנה"ח חיצונית (חשבשבת) — תקופה שכבר
+            דווחה לרשויות; המאזן כולל אותה לניתוח בלבד. */}
+        {bsReport.includes_imported && bsReport.imported_warning_he && (
+          <div className="flex items-start gap-3 p-4 rounded-xl border border-amber-300 bg-amber-50 text-amber-800">
+            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">
+                המאזן כולל {bsReport.imported_entry_count} פקודות מיובאות מהנה"ח חיצונית
+              </p>
+              <p className="text-sm mt-1">{bsReport.imported_warning_he}</p>
+            </div>
+          </div>
+        )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* נכסים */}
         <div className="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -697,6 +726,9 @@ export const ReportsDashboard: React.FC = () => {
                     <span>{formatCurrency(item.amount)}</span>
                   </div>
                 ))}
+                {bsReport.equity_note && (
+                  <p className="text-xs text-gray-500 mt-2 pt-2 border-t">{bsReport.equity_note}</p>
+                )}
               </div>
             )}
           </div>
@@ -707,14 +739,34 @@ export const ReportsDashboard: React.FC = () => {
               <span className="text-lg font-bold text-purple-800">סה"כ התחייבויות והון</span>
               <span className="text-2xl font-bold text-purple-800">{formatCurrency(bsReport.total_liabilities + bsReport.total_equity)}</span>
             </div>
-            {!bsReport.is_balanced && (
-              <div className="mt-2 flex items-center gap-2 text-red-600">
-                <AlertCircle className="w-4 h-4" />
-                <span className="text-sm">המאזן אינו מאוזן</span>
+            {/* is_balanced הוא זהות מבנית של פנקס ה-ledger (נכסים=התחייבויות+הון
+                מאותו trial balance) — מתקיימת תמיד בבנייה, אינה אימות עצמאי.
+                לכן אינו מוצג כאן כ"תקין/לא תקין" אלא כהערה עובדתית, לצד
+                הבדיקה העצמאית האמיתית (cross_check). */}
+            {bsReport.is_balanced_note && (
+              <p className="text-xs text-purple-700 mt-2">{bsReport.is_balanced_note}</p>
+            )}
+            {bsReport.cross_check && (
+              <div className="mt-3 pt-3 border-t border-purple-200 text-sm">
+                <p className="font-medium text-purple-900">בדיקה עצמאית: {bsReport.cross_check.method}</p>
+                <div className="flex justify-between text-purple-800 mt-1">
+                  <span>עודפים לפני מס (ledger)</span>
+                  <span>{formatCurrency(bsReport.cross_check.ledger_retained_earnings_pretax)}</span>
+                </div>
+                <div className="flex justify-between text-purple-800">
+                  <span>רווח נקי אחרי מס (P&L עצמאי)</span>
+                  <span>{formatCurrency(bsReport.cross_check.independent_net_income_posttax)}</span>
+                </div>
+                <div className="flex justify-between text-purple-900 font-semibold">
+                  <span>פער</span>
+                  <span>{formatCurrency(bsReport.cross_check.delta)}</span>
+                </div>
+                <p className="text-xs text-purple-600 mt-1">{bsReport.cross_check.note}</p>
               </div>
             )}
           </div>
         </div>
+      </div>
       </div>
     );
   };

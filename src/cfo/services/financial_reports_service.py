@@ -110,6 +110,17 @@ class BalanceSheetReport:
     includes_imported: bool = False
     imported_entry_count: int = 0
     imported_warning_he: Optional[str] = None
+    # is_balanced (למעלה) הוא זהות מבנית של אותו trial balance שממנו
+    # מגיעים גם הנכסים/ההתחייבויות/ההון — מתקיים בבנייה, לא אימות
+    # בלתי-תלוי (ביקורת המשימה, 21/08/2026: הצגתו כ"בדיקת תקינות" מטעה,
+    # כי הוא לא יכול להיכשל). is_balanced_note מתעד את זה במפורש; הבדיקה
+    # הבלתי-תלויה האמיתית נמצאת ב-cross_check.
+    is_balanced_note: Optional[str] = None
+    cross_check: Optional[Dict[str, Any]] = None
+    # עודפים (equity) נלקחים לפני-מס מפנקס ה-ledger (אין בו רישום מס —
+    # אין לו מסמך מקור מסונכרן) — שונה מ"רווח נקי" אחרי-מס בטאב רו"ה
+    # לאותה תקופה. equity_note מסביר את זה ליד השורה במסך.
+    equity_note: Optional[str] = None
 
     def to_dict(self) -> Dict:
         data = asdict(self)
@@ -456,9 +467,35 @@ class FinancialReportsService:
         equity = [
             BalanceSheetItem('share_capital', 'הון ויתרות פתיחה',
                              ledger_bs["equity"]["opening_equity"], prev_opening_equity),
-            BalanceSheetItem('retained_earnings', 'עודפים',
+            BalanceSheetItem('retained_earnings', 'עודפים (לפני מס)',
                              ledger_bs["equity"]["retained_earnings"], 0.0),
         ]
+        equity_note = (
+            "העודפים כאן הם לפני מס — פנקס ה-ledger הנגזר אינו כולל רישום "
+            "מס הכנסה (אין לו מסמך מקור מסונכרן). לרווח הנקי אחרי-מס לאותה "
+            "תקופה ר' טאב \"רווח והפסד\"; ההפרש בין השניים הוא בערך הפרשת "
+            "המס — ר' הבדיקה העצמאית למטה."
+        )
+
+        # בדיקה עצמאית (לא-תלויה בפנקס ה-ledger): P&L מחושב בנפרד, כדי
+        # לתת מספר-השוואה אמיתי. is_balanced למעלה הוא זהות מבנית של
+        # אותו trial balance שממנו מגיעים גם הנכסים/ההתחייבויות — הוא
+        # תמיד אמת ולכן *אינו* אימות בלתי-תלוי (ר' is_balanced_note).
+        independent_pl = self.generate_profit_loss(
+            organization_id, date(1900, 1, 1), as_of_date, compare_previous=False
+        )
+        ledger_retained_pretax = ledger_bs["equity"]["retained_earnings"]
+        independent_net_income_posttax = independent_pl.net_income
+        cross_check = {
+            "method": "עודפים לפני-מס (ledger) מול רווח נקי אחרי-מס (חישוב P&L עצמאי)",
+            "ledger_retained_earnings_pretax": ledger_retained_pretax,
+            "independent_net_income_posttax": independent_net_income_posttax,
+            "delta": round(ledger_retained_pretax - independent_net_income_posttax, 2),
+            "note": (
+                "פער צפוי בין השניים ≈ הפרשת המס שאינה רשומה בפנקס ה-ledger "
+                "הנגזר (אין לה מסמך מקור מסונכרן); פער חורג מעבר לכך מצריך בדיקה."
+            ),
+        }
 
         return BalanceSheetReport(
             as_of_date=as_of_date.isoformat(),
@@ -478,6 +515,13 @@ class FinancialReportsService:
             total_equity=ledger_bs["equity"]["total_equity"],
             total_liabilities_and_equity=ledger_bs["total_equity_and_liabilities"],
             is_balanced=ledger_bs["balanced"],
+            is_balanced_note=(
+                "בדיקת עקביות מבנית של פנקס ה-ledger (נכסים=התחייבויות+הון "
+                "מאותו trial balance) — מתקיימת תמיד בבנייה, אינה אימות "
+                "בלתי-תלוי. לבדיקה עצמאית ר' הבדיקה למטה."
+            ),
+            cross_check=cross_check,
+            equity_note=equity_note,
             includes_imported=tb.get("includes_imported", False),
             imported_entry_count=tb.get("imported_entry_count", 0),
             imported_warning_he=tb.get("imported_warning_he"),
