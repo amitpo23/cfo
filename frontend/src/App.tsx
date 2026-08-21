@@ -100,6 +100,8 @@ import CashFlowDashboard from './components/CashFlowDashboard';
 
 import RezefLanding from './components/RezefLanding';
 import PrivacyPolicy from './components/PrivacyPolicy';
+import ResetPassword from './components/ResetPassword';
+import TeamManagement from './components/TeamManagement';
 
 import './App.css';
 
@@ -183,6 +185,7 @@ const navigationConfig = [
       { to: '/customers', icon: Users, label: 'Customers', description: 'Customer management' },
       { to: '/bank', icon: Building2, label: 'Bank Import', description: 'Bank statements' },
       { to: '/settings', icon: Settings, label: 'Settings', description: 'System settings' },
+      { to: '/team', icon: Users, label: 'ניהול צוות', description: 'חברי הארגון, תפקידים והזמנות', adminOnly: true },
       { to: '/policies', icon: ClipboardCheck, label: 'הרשאות כספיות', description: 'תקרות, ערוצים ומורשי חתימה', adminOnly: true },
     ]
   }
@@ -214,6 +217,12 @@ function App() {
   // authentication.
   if (window.location.pathname.replace(/\/+$/, '') === '/privacy') {
     return <PrivacyPolicy />;
+  }
+
+  // Public, pre-auth route: שלב ב' של "שכחתי סיסמה" — המשתמש מגיע מקישור
+  // במייל בלי סשן, לכן חייב להיפתר לפני שער ההתחברות (כמו /privacy).
+  if (window.location.pathname.replace(/\/+$/, '') === '/reset-password') {
+    return <ResetPassword darkMode={darkMode} />;
   }
 
   if (!authed && !AUTH_BYPASS) {
@@ -411,6 +420,7 @@ function App() {
                     all) -- retired in favor of the real dashboards below. */}
                 <Route path="/analytics" element={<Navigate to="/kpis" replace />} />
                 <Route path="/settings" element={<SettingsPage darkMode={darkMode} />} />
+                <Route path="/team" element={<TeamManagement darkMode={darkMode} currentUser={currentUser} />} />
                 <Route path="/policies" element={<PolicyManagementDashboard currentUser={currentUser} />} />
 
                 {/* Financial Operations */}

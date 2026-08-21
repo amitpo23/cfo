@@ -1,6 +1,7 @@
 """
 Authentication and Security Utilities
 """
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from passlib.context import CryptContext
@@ -44,6 +45,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         "exp": expire,
         "iat": datetime.now(timezone.utc)
     })
+
+    # jti — מזהה ייחודי לטוקן, המאפשר ביטול נקודתי דרך denylist ב-logout.
+    # טוקנים ישנים בלי jti ממשיכים לעבוד (תאימות) אך אינם ניתנים לביטול.
+    to_encode.setdefault("jti", uuid.uuid4().hex)
     
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt

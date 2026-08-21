@@ -18,7 +18,7 @@ from cfo.services.roster_coverage import (
 )
 
 OFFICE = 1
-ORG_IDS = (201, 202)
+ORG_IDS = (987201, 987202)
 TEST_COMPANY_IDS = ("1999386278", "895072659")
 
 
@@ -45,12 +45,12 @@ def seeded(client):
 
     db = SessionLocal()
     _purge(db)
-    db.add(Organization(id=201, name="תיק תפוס", is_active=True))
-    db.add(Organization(id=202, name="תיק פנוי", is_active=True))
+    db.add(Organization(id=987201, name="תיק תפוס", is_active=True))
+    db.add(Organization(id=987202, name="תיק פנוי", is_active=True))
     db.flush()
     db.add(SumitCompany(
         office_organization_id=OFFICE, company_id="1999386278",
-        name="הבעלים החוקי", target_organization_id=201, status="active",
+        name="הבעלים החוקי", target_organization_id=987201, status="active",
     ))
     db.commit()
     yield db
@@ -62,25 +62,25 @@ def test_binding_a_second_company_to_a_claimed_org_is_blocked(seeded):
     """הכשל של may way בדיוק."""
     conflict = intake_conflict(
         seeded, office_organization_id=OFFICE,
-        company_id="895072659", target_organization_id=201,
+        company_id="895072659", target_organization_id=987201,
     )
     assert conflict is not None
     assert "1999386278" in conflict
-    assert "201" in conflict
+    assert "987201" in conflict
 
 
 def test_rebinding_a_company_to_its_own_org_is_allowed(seeded):
     """קליטה חוזרת של אותו תיק אינה התנגשות."""
     assert intake_conflict(
         seeded, office_organization_id=OFFICE,
-        company_id="1999386278", target_organization_id=201,
+        company_id="1999386278", target_organization_id=987201,
     ) is None
 
 
 def test_binding_to_a_free_org_is_allowed(seeded):
     assert intake_conflict(
         seeded, office_organization_id=OFFICE,
-        company_id="895072659", target_organization_id=202,
+        company_id="895072659", target_organization_id=987202,
     ) is None
 
 
@@ -93,7 +93,7 @@ def test_an_inactive_owner_does_not_block(seeded):
 
     assert intake_conflict(
         seeded, office_organization_id=OFFICE,
-        company_id="895072659", target_organization_id=201,
+        company_id="895072659", target_organization_id=987201,
     ) is None
 
 
@@ -101,7 +101,7 @@ def test_assert_raises_on_conflict(seeded):
     with pytest.raises(IntakeConflict) as exc:
         assert_intake_allowed(
             seeded, office_organization_id=OFFICE,
-            company_id="895072659", target_organization_id=201,
+            company_id="895072659", target_organization_id=987201,
         )
     assert "895072659" in str(exc.value)
 
@@ -109,7 +109,7 @@ def test_assert_raises_on_conflict(seeded):
 def test_assert_is_silent_when_allowed(seeded):
     assert_intake_allowed(
         seeded, office_organization_id=OFFICE,
-        company_id="895072659", target_organization_id=202,
+        company_id="895072659", target_organization_id=987202,
     )
 
 
@@ -120,7 +120,7 @@ def test_register_client_refuses_to_steal_a_claimed_org(seeded, monkeypatch):
     with pytest.raises(IntakeConflict):
         office_service._guard_intake(
             seeded, office_organization_id=OFFICE,
-            company_id="895072659", target_organization_id=201,
+            company_id="895072659", target_organization_id=987201,
         )
 
 
@@ -131,7 +131,7 @@ def test_repair_does_not_steal_an_org_owned_by_another_company(seeded, monkeypat
     שתי טענות בבדיקה אחת, בכוונה: שהשער מנע את הגניבה, **ושהבדיקה בכלל
     הגיעה אליו**. בלי הטענה השנייה, בדיקה שאינה מבקרת בשורה הייתה עוברת
     גם עם השער מנוטרל — אותו כשל כמו mock שמחזיר את הערך שנזרע.
-    ל-`ensure_row` יש דרך אחת להגיע ל-org 201: חיבור SUMIT פעיל שהקרדנשלים
+    ל-`ensure_row` יש דרך אחת להגיע ל-org 987201: חיבור SUMIT פעיל שהקרדנשלים
     שלו מפענחים ל-895072659.
     """
     from cfo.services import client_automation_service as cas
@@ -139,7 +139,7 @@ def test_repair_does_not_steal_an_org_owned_by_another_company(seeded, monkeypat
     from cfo.services.credentials_vault import encrypt_credentials
 
     seeded.add(IntegrationConnection(
-        organization_id=201, source="sumit", status="active",
+        organization_id=987201, source="sumit", status="active",
         credentials_encrypted=encrypt_credentials(
             {"api_key": "k", "company_id": "895072659"}
         ),
@@ -165,7 +165,7 @@ def test_repair_does_not_steal_an_org_owned_by_another_company(seeded, monkeypat
     )
     row = seeded.query(SumitCompany).filter(
         SumitCompany.company_id == "895072659").first()
-    assert row.target_organization_id != 201, (
+    assert row.target_organization_id != 987201, (
         "התיקון גנב ארגון שכבר שייך לחברה אחרת"
     )
 
@@ -177,7 +177,7 @@ def test_skipped_repair_is_reported_not_only_logged(seeded, monkeypatch):
     from cfo.services.credentials_vault import encrypt_credentials
 
     seeded.add(IntegrationConnection(
-        organization_id=201, source="sumit", status="active",
+        organization_id=987201, source="sumit", status="active",
         credentials_encrypted=encrypt_credentials(
             {"api_key": "k", "company_id": "895072659"}
         ),

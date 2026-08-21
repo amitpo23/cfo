@@ -118,6 +118,10 @@ PAID_ACTION_ENDPOINTS = frozenset({
     "/fax/fax/send/",
     "/billing/payments/charge/",
     "/billing/payments/multivendorcharge/",
+    # ביקורת 21/08 (הנחיית בעלים): יצירת דף תשלום — לא ידוע בוודאות אם
+    # מחויבת אצל הספק ⇒ fail-closed: נספרת בשער הפעולות-בתשלום.
+    "/billing/payments/beginredirect/",
+    "/creditguy/gateway/beginredirect/",
     "/billing/recurring/charge/",
     "/creditguy/gateway/transaction/",
 })

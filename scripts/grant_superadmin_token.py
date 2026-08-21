@@ -4,6 +4,10 @@
 Use only as a break-glass local operator tool. The token is printed to stdout;
 do not paste it into chat or commit command output.
 
+הטוקן נושא claim ‏jti וניתן לביטול מיידי דרך ה-denylist (טבלת
+revoked_tokens): קריאה ל-POST /api/admin/auth/logout עם הטוקן מבטלת אותו,
+או הוספת ה-jti ישירות לטבלה. אין צורך לחכות לפקיעה אם הטוקן דלף.
+
 Usage:
     DATABASE_URL=postgresql+psycopg://... JWT_SECRET_KEY=... python scripts/grant_superadmin_token.py <email>
 """

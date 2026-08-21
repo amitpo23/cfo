@@ -56,7 +56,9 @@ def test_inventory_upsert_item(client, owner, stock):
 
 
 def test_inventory_is_org_scoped(client, owner, tenant, stock):
-    tenant_report = client.get("/api/inventory/report", headers=tenant["headers"]).json()["data"]
+    resp = client.get("/api/inventory/report", headers=tenant["headers"])
+    assert resp.status_code == 200, resp.text
+    tenant_report = resp.json()["data"]
     assert tenant_report["summary"]["total_items"] == 0  # לא רואה את המלאי של owner
 
 

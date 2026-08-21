@@ -352,12 +352,64 @@ def compute_missing(engine: Engine) -> Dict:
     return {"tables": sorted(missing_tables), "columns": missing_columns}
 
 
+def _tighten_nullability_with_defaults(engine: Engine) -> Dict[str, List[str]]:
+    """סוגר drift של nullability רק כשהמודל נושא server_default.
+
+    W6.4 הקשיח את עמודות הכסף ל-NOT NULL. על מסד legacy הסגירה בטוחה
+    ודטרמיניסטית: UPDATE ‏NULL→default ואז הקשחה. עמודת NOT NULL בלי
+    server_default נשארת לשער ה-drift — אין לנו ערך נכון להשלים בה.
+    batch_alter_table עובד בשני הדיאלקטים (על SQLite — בנייה מחדש).
+    """
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    report = compute_schema_drift(engine)
+    tightened: Dict[str, List[str]] = {}
+    for table_name, cols in report.get("nullability", {}).items():
+        table = Base.metadata.tables.get(table_name)
+        if table is None:
+            continue
+        fixable = [
+            table.columns[col_name]
+            for col_name, info in cols.items()
+            if info.get("expected") is False and info.get("actual") is True
+            and table.columns[col_name].server_default is not None
+        ]
+        if not fixable:
+            continue
+        with engine.begin() as conn:
+            for col in fixable:
+                default_sql = str(col.server_default.arg)
+                conn.execute(sa_text(
+                    f"UPDATE {table_name} SET {col.name} = {default_sql} "
+                    f"WHERE {col.name} IS NULL"
+                ))
+        with engine.begin() as conn:
+            ctx = MigrationContext.configure(conn)
+            ops = Operations(ctx)
+            with ops.batch_alter_table(table_name) as batch:
+                for col in fixable:
+                    batch.alter_column(
+                        col.name,
+                        existing_type=col.type,
+                        nullable=False,
+                        server_default=str(col.server_default.arg),
+                    )
+        tightened[table_name] = [c.name for c in fixable]
+    return tightened
+
+
 def apply_additive(engine: Engine) -> Dict:
     """משלים את הסכמה החיה למודלים — additive בלבד.
 
-    יוצר טבלאות, עמודות ואינדקסים חסרים; לעולם לא מוחק ולא משנה עמודות
-    קיימות. בטוח להרצה חוזרת (idempotent). אילוצים שאינם ניתנים להוספה
-    בבטחה נשארים לשער ה-drift ולמיגרציית Alembic מפורשת.
+    יוצר טבלאות, עמודות ואינדקסים חסרים; לעולם לא מוחק נתונים ולא משנה
+    טיפוס של עמודה קיימת. שני חריגים דטרמיניסטיים ובטוחי-נתונים:
+    הידוק NOT NULL כשיש server_default (ראו
+    ``_tighten_nullability_with_defaults``), והחלפת אינדקס שקיים באותו שם
+    אך בחתימה שגויה (למשל non-unique→unique; אם קיימות שורות כפולות —
+    היצירה נכשלת וה-drift נשאר פתוח, fail-closed). בטוח להרצה חוזרת
+    (idempotent). כל שאר האילוצים נשארים לשער ה-drift ולמיגרציית Alembic
+    מפורשת.
     """
     from sqlalchemy.schema import CreateColumn
 
@@ -394,6 +446,12 @@ def apply_additive(engine: Engine) -> Dict:
     applied_indexes: Dict[str, List[Dict[str, Any]]] = {}
     for table_name, rows in index_drift.items():
         table = Base.metadata.tables[table_name]
+        live_by_name = {
+            idx.get("name"): (
+                tuple(idx.get("column_names") or ()), bool(idx.get("unique")),
+            )
+            for idx in inspect(engine).get_indexes(table_name)
+        }
         for row in rows:
             signature = (tuple(row["columns"]), bool(row["unique"]))
             model_index = next(
@@ -403,10 +461,21 @@ def apply_additive(engine: Engine) -> Dict:
                     bool(index.unique),
                 ) == signature
             )
+            # אינדקס קיים באותו שם אך בחתימה שגויה (למשל non-unique
+            # כשהמודל דורש unique) — checkfirst היה מדלג עליו וה-drift
+            # היה נשאר פתוח לנצח. מפילים ויוצרים מחדש; אם שורות כפולות
+            # מונעות unique — היצירה נכשלת וה-gate נשאר סגור (fail-closed).
+            if (model_index.name in live_by_name
+                    and live_by_name[model_index.name] != signature):
+                model_index.drop(bind=engine, checkfirst=True)
             model_index.create(bind=engine, checkfirst=True)
             applied_indexes.setdefault(table_name, []).append(row)
 
     if applied_indexes:
         missing["indexes"] = applied_indexes
+
+    tightened = _tighten_nullability_with_defaults(engine)
+    if tightened:
+        missing["nullability_tightened"] = tightened
 
     return missing

@@ -1,0 +1,57 @@
+# W6.3 (אישור בעלים 21/08/2026) — גיבוי יומי מתוזמן של מסד הפרוד.
+#
+# למה כאן ולא ב-Vercel: פונקציות serverless לא מריצות pg_dump. ה-runner
+# של GitHub כן. הגיבוי מוצפן (openssl AES-256, סיסמת BACKUP_PASSPHRASE)
+# לפני שהוא נשמר כ-artifact — נתוני לקוחות לעולם לא נשמרים גלויים.
+#
+# דרישות (פעולת בעלים, חד-פעמית): שני Secrets ברפו —
+#   PROD_DATABASE_URL   — מחרוזת החיבור של Neon (read-only מספיק)
+#   BACKUP_PASSPHRASE   — סיסמת הצפנה חזקה (לשמור במנהל סיסמאות!)
+# בלעדיהם ה-job נכשל בקול (לא מדלג בשקט) — כשל גיבוי חייב להיראות.
+#
+# שחזור: docs/RESTORE_RUNBOOK.md
+name: db-backup
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # 02:00 UTC יומי — לפני חלון ה-crons של האפליקציה
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install postgres client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      - name: Dump, verify and encrypt
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ] || [ -z "${PASSPHRASE:-}" ]; then
+            echo "::error::PROD_DATABASE_URL / BACKUP_PASSPHRASE חסרים — אין גיבוי. ראה W6.3."
+            exit 1
+          fi
+          STAMP="$(date -u +%Y%m%d-%H%M%S)"
+          pg_dump "$DATABASE_URL" --no-owner --no-privileges > "backup-${STAMP}.sql"
+          # אימות שלמות — אותו שער כמו scripts/run_prod_migration.sh
+          grep -q "PostgreSQL database dump complete" "backup-${STAMP}.sql"
+          TABLES=$(grep -c "^CREATE TABLE" "backup-${STAMP}.sql")
+          echo "dump ok: ${TABLES} tables"
+          [ "$TABLES" -ge 40 ] || { echo "::error::רק ${TABLES} טבלאות — גיבוי חשוד"; exit 1; }
+          openssl enc -aes-256-cbc -pbkdf2 -salt \
+            -in "backup-${STAMP}.sql" -out "backup-${STAMP}.sql.enc" \
+            -pass env:PASSPHRASE
+          rm "backup-${STAMP}.sql"
+          echo "STAMP=${STAMP}" >> "$GITHUB_ENV"
+
+      - name: Upload encrypted backup (30-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ env.STAMP }}
+          path: backup-*.sql.enc
+          retention-days: 30
+          if-no-files-found: error

@@ -34,8 +34,18 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # תדירות: פעם ביום (03:30 UTC); תקציב: קריאת listquotas **חינמית** אחת
 # לארגון ≈ 30 בחודש, עם שער עמיד של רענון אחד ליום פר-ארגון; ראיית הצלחה:
 # פעולות בתשלום עוברות שער מבוסס-מדידה במקום חסימה גורפת ("קוד מת").
+#
+# 21/08/2026 — אישור בעלים ("מאשר") ל-SWOT הבקרה (REZEF_CONTROL_SWOT) סעיף
+# W6.8: החזרת שכבת הבקרה היומית. מה רץ: bank-gap-scan (03:15) — פערי
+# בנק↔מסמכים; bookkeeper-morning (03:45) — המחזור המלא (parity, אנומליות,
+# data_quality, revenue_watch, action_reaper, בריף). תקציב: **אפס קריאות
+# SUMIT** — מוכח בטסט test_morning_cycle_makes_zero_sumit_network_calls
+# (וה-SMS של הבריף כבוי כברירת מחדל + מגודר בשער הפעולות-בתשלום).
+# ראיית הצלחה: CfoInsight/DailySnapshot/MorningBrief מתרעננים יומית.
 EXPECTED_DAILY_SCHEDULES: dict[str, str] = {
+    "/api/cron/bank-gap-scan": "15 3 * * *",
     "/api/cron/refresh-sumit-quota": "30 3 * * *",
+    "/api/cron/bookkeeper-morning": "45 3 * * *",
 }
 
 

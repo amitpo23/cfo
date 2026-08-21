@@ -203,6 +203,12 @@ def _step_revenue_watch(db, org_id: int, today: date) -> dict[str, Any]:
     return revenue_watch.scan_and_alert(db, org_id, today=today)
 
 
+def _step_action_reaper(db) -> dict[str, Any]:
+    from . import action_reaper
+
+    return action_reaper.sweep(db)
+
+
 def _compute_open_items(db, org_id: int) -> dict[str, Any]:
     """Read-only JSON summary of everything still open for this org, for the
     (future) morning brief: active CfoInsight counts by type/severity, active
@@ -368,6 +374,9 @@ def run_morning_cycle(
     steps["revenue_watch"] = _run_step(
         db, lambda: _step_revenue_watch(db, organization_id, today)
     )
+    # W6.2 (21/08/2026): פעולות כסף תקועות (executing>15ד'/unknown) עולות
+    # לתור הפערים ול-CfoInsight — לא נעלמות יותר בשקט.
+    steps["action_reaper"] = _run_step(db, lambda: _step_action_reaper(db))
 
     def _parity_status() -> Optional[str]:
         s = steps["parity"]

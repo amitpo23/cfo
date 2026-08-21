@@ -5,12 +5,13 @@ from datetime import datetime, date, timezone
 from decimal import Decimal
 from typing import Optional, List
 from enum import Enum
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, field_validator
 from sqlalchemy import (
     Column, Integer, String, Numeric, DateTime, Date,
     ForeignKey, Enum as SQLEnum, Boolean, Text, JSON,
     Index, Float, UniqueConstraint, CheckConstraint, func, true, false
 )
+from sqlalchemy import text
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -182,12 +183,51 @@ class User(Base):
     role = Column(SQLEnum(UserRole), default=UserRole.USER)
     is_active = Column(Boolean, default=True)
     last_login = Column(DateTime, nullable=True)
-    
+
+    # --- הקשחת login (W6.7) --- #
+    # מונה כישלונות רצופים; 5 כישלונות → נעילה זמנית (locked_until).
+    # הצלחה מאפסת. נשמר במסד ולא בזיכרון — serverless לא שומר state.
+    failed_login_attempts = Column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    locked_until = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+
     # Relationships
     organization = relationship("Organization", back_populates="users")
+
+
+class PasswordResetToken(Base):
+    """טוקן חד-פעמי לאיפוס סיסמה — נשמר רק sha256 של הטוקן, לעולם לא הטוקן עצמו.
+
+    תוקף 30 דקות; ``used_at`` אוכף חד-פעמיות. מי שמחזיק את המסד אינו
+    יכול לשחזר ממנו קישור איפוס עובד.
+    """
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class RevokedToken(Base):
+    """denylist של JWT — לפי claim ‏jti — לטוקנים שבוטלו ב-logout.
+
+    ``expires_at`` (ה-exp של הטוקן) מאפשר ניקוי הזדמנותי: אחרי שהטוקן
+    ממילא פג, אין טעם להחזיק את הרשומה. טוקנים ישנים בלי jti אינם
+    ניתנים לביטול — הם פגים מעצמם (תאימות לאחור מכוונת).
+    """
+    __tablename__ = "revoked_tokens"
+
+    id = Column(Integer, primary_key=True)
+    jti = Column(String(64), nullable=False, unique=True, index=True)
+    revoked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=True)
 
 
 class AuditLog(Base):
@@ -610,6 +650,11 @@ class Transaction(Base):
     
     organization = relationship("Organization", back_populates="transactions")
     account = relationship("Account", back_populates="transactions")
+
+    # W6.4 (21/08/2026): לטבלה לא היה אף אינדקס — אפילו לא organization_id.
+    __table_args__ = (
+        Index("ix_transaction_org", "organization_id"),
+    )
 
 
 # ============= CFO Extended Models =============
@@ -1110,11 +1155,13 @@ class Invoice(Base):
     due_date = Column(Date, nullable=True)
     status = Column(SQLEnum(InvoiceStatus), default=InvoiceStatus.DRAFT)
     currency = Column(String(10), default="ILS")
-    subtotal = Column(Numeric(precision=12, scale=2), default=0)
-    tax = Column(Numeric(precision=12, scale=2), default=0)
-    total = Column(Numeric(precision=12, scale=2), default=0)
-    paid_amount = Column(Numeric(precision=12, scale=2), default=0)
-    balance = Column(Numeric(precision=12, scale=2), default=0)  # total - paid
+    # W6.4 (21/08/2026): NOT NULL + server_default — INSERT שעוקף את ה-ORM
+    # (סנכרון bulk, SQL ידני) לא ישאיר NULL שמאפס SUM בשקט.
+    subtotal = Column(Numeric(precision=12, scale=2), default=0, nullable=False, server_default=text("0"))
+    tax = Column(Numeric(precision=12, scale=2), default=0, nullable=False, server_default=text("0"))
+    total = Column(Numeric(precision=12, scale=2), default=0, nullable=False, server_default=text("0"))
+    paid_amount = Column(Numeric(precision=12, scale=2), default=0, nullable=False, server_default=text("0"))
+    balance = Column(Numeric(precision=12, scale=2), default=0, nullable=False, server_default=text("0"))  # total - paid
     line_items = Column(JSON, nullable=True)  # [{description, qty, unit_price, total}, ...]
     notes = Column(Text, nullable=True)
     raw_data = Column(JSON, nullable=True)
@@ -1147,11 +1194,13 @@ class Bill(Base):
     due_date = Column(Date, nullable=True)
     status = Column(SQLEnum(BillStatus), default=BillStatus.DRAFT)
     currency = Column(String(10), default="ILS")
-    subtotal = Column(Numeric(precision=12, scale=2), default=0)
-    tax = Column(Numeric(precision=12, scale=2), default=0)
-    total = Column(Numeric(precision=12, scale=2), default=0)
-    paid_amount = Column(Numeric(precision=12, scale=2), default=0)
-    balance = Column(Numeric(precision=12, scale=2), default=0)
+    # W6.4 (21/08/2026): NOT NULL + server_default — INSERT שעוקף את ה-ORM
+    # (סנכרון bulk, SQL ידני) לא ישאיר NULL שמאפס SUM בשקט.
+    subtotal = Column(Numeric(precision=12, scale=2), default=0, nullable=False, server_default=text("0"))
+    tax = Column(Numeric(precision=12, scale=2), default=0, nullable=False, server_default=text("0"))
+    total = Column(Numeric(precision=12, scale=2), default=0, nullable=False, server_default=text("0"))
+    paid_amount = Column(Numeric(precision=12, scale=2), default=0, nullable=False, server_default=text("0"))
+    balance = Column(Numeric(precision=12, scale=2), default=0, nullable=False, server_default=text("0"))
     line_items = Column(JSON, nullable=True)
     notes = Column(Text, nullable=True)
     is_critical = Column(Boolean, default=False)
@@ -1198,6 +1247,10 @@ class Payment(Base):
 
     __table_args__ = (
         Index("ix_payment_org_ext", "organization_id", "external_id", "source", unique=True),
+        # W6.4: שיוך תשלומים ו-aging סרקו את הטבלה בלי אינדקס.
+        Index("ix_payment_invoice", "invoice_id"),
+        Index("ix_payment_bill", "bill_id"),
+        Index("ix_payment_org_date", "organization_id", "payment_date"),
     )
 
 
@@ -1485,7 +1538,13 @@ class Expense(Base):
 
     __table_args__ = (
         Index("ix_expense_org_status", "organization_id", "status"),
-        Index("ix_expense_org_ext", "organization_id", "external_id", "source"),
+        # W6.4: ייחודי כשיש external_id (partial) — היה לא-unique בכלל.
+        Index(
+            "ix_expense_org_ext", "organization_id", "external_id", "source",
+            unique=True,
+            postgresql_where=text("external_id IS NOT NULL"),
+            sqlite_where=text("external_id IS NOT NULL"),
+        ),
     )
 
 
@@ -1587,6 +1646,8 @@ class JournalEntry(Base):
 
     __table_args__ = (
         Index("ix_je_org_ext", "organization_id", "external_id", "source", unique=True),
+        # W6.4: 15K פקודות נסרקו מלא בכל סינון תקופה (OPENFRMT/דוחות).
+        Index("ix_je_org_entry_date", "organization_id", "entry_date"),
     )
 
 
@@ -2165,6 +2226,14 @@ class UserCreate(BaseModel):
     payment_template: Optional[str] = None
     checkout_session_id: Optional[str] = None
     payment_status: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def _password_min_length(cls, value: str) -> str:
+        """אורך מינימלי של 8 תווים — נאכף בסכימה, לא רק בנקודת קצה אחת."""
+        if len(value) < 8:
+            raise ValueError("הסיסמה חייבת להכיל לפחות 8 תווים")
+        return value
 
 
 class UserUpdate(BaseModel):

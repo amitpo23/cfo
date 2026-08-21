@@ -80,6 +80,25 @@ async def get_current_user(
             return _get_or_create_auth_bypass_user(db)
         raise invalid_credentials_exception
 
+    # טוקן שבוטל ב-logout (denylist לפי jti) נדחה — fail-closed, גם תחת
+    # auth_bypass: ביטול הוא פעולת אבטחה מפורשת ואין לעקוף אותה בשקט.
+    # שאילתה ממוקדת על אינדקס unique; טוקנים ישנים בלי jti עוברים (תאימות).
+    token_jti = payload.get("jti")
+    if token_jti:
+        from ..models import RevokedToken
+
+        revoked = (
+            db.query(RevokedToken.id)
+            .filter(RevokedToken.jti == token_jti)
+            .first()
+        )
+        if revoked is not None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="הטוקן בוטל (logout) — יש להתחבר מחדש",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         if settings.auth_bypass_enabled:

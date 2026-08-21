@@ -22,6 +22,9 @@ def test_run_checks_all_pass_on_clean_org(fresh_org):
             "invoice_balance_consistency", "currency_whitelist",
             "of_balance_freshness", "duplicate_external_ids",
             "empty_draft_expenses_count",
+            # W6.5 — בקרות ספרים שוטפות
+            "trial_balance_balanced", "document_number_continuity",
+            "near_duplicate_bills",
         }
         assert all(c["passed"] for c in result["checks"])
         assert "checked_at" in result
@@ -180,11 +183,14 @@ def test_of_balance_freshness_passes_on_fresh_balance(fresh_org):
         db.close()
 
 
-def test_duplicate_external_ids_fails_on_duplicate(fresh_org):
-    """invoices/bills/bank_transactions כבר מוגנים ב-unique index (org,
-    external_id, source) — הכפילות האמיתית שהבדיקה תופסת היא בטבלת
-    expenses (בכוונה לא unique, כי אותו מסמך SUMIT מסונכרן גם כ-Bill),
-    שם דו-רישום אמיתי (בטעות) עדיין אפשרי."""
+def test_duplicate_external_ids_blocked_structurally(fresh_org):
+    """W6.4 הפך את (org, external_id, source) ב-expenses ל-unique — דו-רישום
+    באותו source נחסם עכשיו במסד עצמו (IntegrityError), לא רק מתגלה בדיעבד.
+    אותו מסמך SUMIT כ-Bill+Expense נשאר אפשרי (טבלאות שונות), וכך גם
+    sumit מול sumit_fileexpense (source שונה). הבדיקה duplicate_external_ids
+    נשארת עבור מסדים שטרם הוחל עליהם האינדקס (פרוד לפני מיגרציה)."""
+    from sqlalchemy.exc import IntegrityError
+
     from cfo.database import SessionLocal
     from cfo.models import Expense
     from cfo.services.data_quality import run_checks
@@ -192,15 +198,20 @@ def test_duplicate_external_ids_fails_on_duplicate(fresh_org):
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
-        db.add(Expense(organization_id=org_id, external_id="DUP1", supplier_name="ספק",
-                       amount=100, total=118, expense_date=date(2026, 5, 1), status="filed"))
-        db.add(Expense(organization_id=org_id, external_id="DUP1", supplier_name="ספק",
-                       amount=100, total=118, expense_date=date(2026, 5, 1), status="filed"))
+        db.add(Expense(organization_id=org_id, external_id="DUP1", source="sumit",
+                       supplier_name="ספק", amount=100, total=118,
+                       expense_date=date(2026, 5, 1), status="filed"))
         db.commit()
+        db.add(Expense(organization_id=org_id, external_id="DUP1", source="sumit",
+                       supplier_name="ספק", amount=100, total=118,
+                       expense_date=date(2026, 5, 1), status="filed"))
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
 
         result = run_checks(db, org_id)
         check = next(c for c in result["checks"] if c["name"] == "duplicate_external_ids")
-        assert check["passed"] is False
+        assert check["passed"] is True
     finally:
         db.close()
 

@@ -29,14 +29,31 @@ interface TokenResponse {
 }
 
 const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [registrationCode, setRegistrationCode] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setInfo(null);
+    setLoading(true);
+    try {
+      await axios.post(`${API_BASE_URL}/admin/auth/request-password-reset`, { email });
+      setInfo('אם הכתובת קיימת במערכת, נשלח אליה קישור לאיפוס הסיסמה.');
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'שליחת בקשת האיפוס נכשלה. נסו שוב.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -130,10 +147,48 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
           </div>
           <h1 className={`text-2xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>CFO System</h1>
           <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-            {mode === 'login' ? 'התחברות למערכת' : 'הרשמה למערכת'}
+            {mode === 'login' ? 'התחברות למערכת' : mode === 'register' ? 'הרשמה למערכת' : 'איפוס סיסמה'}
           </p>
         </div>
 
+        {mode === 'forgot' ? (
+          <form onSubmit={handleForgotSubmit} className="space-y-4">
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="אימייל"
+              className={inputClass}
+              autoComplete="email"
+            />
+            {info && (
+              <div className="text-sm text-green-600 bg-green-50 dark:bg-green-900/20 rounded-lg px-3 py-2">{info}</div>
+            )}
+            {error && (
+              <div className="text-sm text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{error}</div>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-medium py-2.5 rounded-lg transition"
+            >
+              {loading ? <Loader2 size={18} className="animate-spin" /> : <LogIn size={18} />}
+              שליחת קישור איפוס
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode('login');
+                setError(null);
+                setInfo(null);
+              }}
+              className={`w-full text-sm ${darkMode ? 'text-blue-400' : 'text-blue-600'} hover:underline`}
+            >
+              חזרה להתחברות
+            </button>
+          </form>
+        ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
           {mode === 'register' && (
             <>
@@ -166,10 +221,10 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
           <input
             type="password"
             required
-            minLength={6}
+            minLength={mode === 'register' ? 8 : 6}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="סיסמה"
+            placeholder={mode === 'register' ? 'סיסמה (לפחות 8 תווים)' : 'סיסמה'}
             className={inputClass}
             autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
           />
@@ -192,24 +247,43 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
             )}
             {mode === 'login' ? 'התחברות' : 'הרשמה'}
           </button>
-        </form>
 
-        {GOOGLE_CLIENT_ID && (
-          <div className="mt-4 flex justify-center">
-            <div ref={googleButtonRef} />
-          </div>
+          {mode === 'login' && (
+            <button
+              type="button"
+              onClick={() => {
+                setMode('forgot');
+                setError(null);
+                setInfo(null);
+              }}
+              className={`w-full text-sm ${darkMode ? 'text-blue-400' : 'text-blue-600'} hover:underline`}
+            >
+              שכחתי סיסמה
+            </button>
+          )}
+        </form>
         )}
 
-        <button
-          type="button"
-          onClick={() => {
-            setMode(mode === 'login' ? 'register' : 'login');
-            setError(null);
-          }}
-          className={`w-full mt-4 text-sm ${darkMode ? 'text-blue-400' : 'text-blue-600'} hover:underline`}
-        >
-          {mode === 'login' ? 'אין לכם חשבון? הירשמו כאן' : 'יש לכם חשבון? התחברו כאן'}
-        </button>
+        {mode !== 'forgot' && (
+          <>
+            {GOOGLE_CLIENT_ID && (
+              <div className="mt-4 flex justify-center">
+                <div ref={googleButtonRef} />
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setMode(mode === 'login' ? 'register' : 'login');
+                setError(null);
+              }}
+              className={`w-full mt-4 text-sm ${darkMode ? 'text-blue-400' : 'text-blue-600'} hover:underline`}
+            >
+              {mode === 'login' ? 'אין לכם חשבון? הירשמו כאן' : 'יש לכם חשבון? התחברו כאן'}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

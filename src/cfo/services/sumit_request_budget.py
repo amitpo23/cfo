@@ -161,12 +161,13 @@ class SumitRequestLimiter:
         window_start: datetime,
         limit_value: int,
         now: datetime,
+        provider: str = "sumit",
     ) -> bool:
         if limit_value <= 0:
             return False
         table = ProviderRequestBudget.__table__
         values = {
-            "provider": "sumit",
+            "provider": provider,
             "scope_key": scope_key,
             "organization_id": organization_id,
             "window_kind": window_kind,

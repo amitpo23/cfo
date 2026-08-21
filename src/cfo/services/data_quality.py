@@ -157,6 +157,97 @@ def _empty_draft_expenses_count(db, org_id: int) -> dict[str, Any]:
     }
 
 
+def _trial_balance_balanced(db, org_id: int) -> dict[str, Any]:
+    """W6.5: איזון חובה=זכות נבדק שוטף — לא רק כשמדפיסים מאזן.
+
+    מאזן לא-מאוזן שמתגלה בהדפסת דוח הוא מאזן שהיה שבור שבועות.
+    """
+    from .ledger_service import trial_balance
+
+    try:
+        tb = trial_balance(db, org_id)
+    except Exception as exc:  # noqa: BLE001 — כשל חישוב הוא כשל בדיקה
+        return {"name": "trial_balance_balanced", "passed": False,
+                "details": f"חישוב מאזן הבוחן נכשל: {exc}"}
+    balanced = bool(tb.get("balanced", False))
+    entry_count = tb.get("entry_count", 0)
+    if entry_count == 0:
+        return {"name": "trial_balance_balanced", "passed": True,
+                "details": "אין פקודות יומן — אין מה לאזן"}
+    diff = abs(float(tb.get("total_debit", 0)) - float(tb.get("total_credit", 0)))
+    return {
+        "name": "trial_balance_balanced",
+        "passed": balanced,
+        "details": (
+            f"חובה {tb.get('total_debit')} מול זכות {tb.get('total_credit')}"
+            + ("" if balanced else f" — פער {diff:,.2f}")
+        ),
+    }
+
+
+def _document_number_continuity(db, org_id: int) -> dict[str, Any]:
+    """W6.5: רצף מספור חשבוניות (הוראות ניהול פנקסים) — פער במספור הוא
+    חשיפה ישירה מול רשות המסים. נבדקים רק מספרים ספרתיים טהורים."""
+    from ..models import Invoice, InvoiceStatus
+
+    rows = (
+        db.query(Invoice.invoice_number)
+        .filter(
+            Invoice.organization_id == org_id,
+            Invoice.status.notin_((InvoiceStatus.DRAFT, InvoiceStatus.CANCELLED)),
+            Invoice.invoice_number.isnot(None),
+        )
+        .all()
+    )
+    numbers = sorted({int(r[0]) for r in rows if str(r[0]).isdigit()})
+    if len(numbers) < 2:
+        return {"name": "document_number_continuity", "passed": True,
+                "details": "אין מספיק מסמכים ממוספרים לבדיקת רצף"}
+    gaps: list[str] = []
+    for prev, curr in zip(numbers, numbers[1:]):
+        if curr - prev > 1:
+            missing = list(range(prev + 1, min(curr, prev + 4)))
+            gaps.append(",".join(map(str, missing)) + ("..." if curr - prev > 4 else ""))
+        if len(gaps) >= 5:
+            break
+    if not gaps:
+        return {"name": "document_number_continuity", "passed": True,
+                "details": f"רצף תקין ({numbers[0]}–{numbers[-1]})"}
+    return {
+        "name": "document_number_continuity",
+        "passed": False,
+        "details": f"פערי מספור: חסרים {'; '.join(gaps)}",
+    }
+
+
+def _near_duplicate_bills(db, org_id: int) -> dict[str, Any]:
+    """W6.5: כפילות-כמעט בלי external_id — אותו ספק+סכום+תאריך פעמיים.
+
+    בדיוק התרחיש שניפח ₪150K בעבר (duplicate_gate) — הבדיקה הקיימת
+    (external_id) עיוורת להזנה ידנית כפולה.
+    """
+    from ..models import Bill
+
+    dupes = (
+        db.query(Bill.vendor_id, Bill.total, Bill.issue_date, func.count(Bill.id))
+        .filter(Bill.organization_id == org_id, Bill.vendor_id.isnot(None))
+        .group_by(Bill.vendor_id, Bill.total, Bill.issue_date)
+        .having(func.count(Bill.id) > 1)
+        .all()
+    )
+    if not dupes:
+        return {"name": "near_duplicate_bills", "passed": True,
+                "details": "אין חשבונות ספק כפולים (ספק+סכום+תאריך)"}
+    sample = "; ".join(
+        f"ספק {v} סכום {t} בתאריך {d} ×{n}" for v, t, d, n in dupes[:3]
+    )
+    return {
+        "name": "near_duplicate_bills",
+        "passed": False,
+        "details": f"{len(dupes)} קבוצות כפילות-כמעט: {sample}",
+    }
+
+
 _CHECKS = (
     _bills_nonnegative,
     _no_paid_invoice_with_open_balance,
@@ -165,6 +256,10 @@ _CHECKS = (
     _of_balance_freshness,
     _duplicate_external_ids,
     _empty_draft_expenses_count,
+    # W6.5 (21/08/2026) — בקרות ספרים שוטפות:
+    _trial_balance_balanced,
+    _document_number_continuity,
+    _near_duplicate_bills,
 )
 
 

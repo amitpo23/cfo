@@ -2,11 +2,13 @@
 Admin API routes
 ניהול מערכת, משתמשים, ארגונים וחברות
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
+from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
+import hashlib
 import secrets
 from urllib.parse import urlencode
 from datetime import date, datetime, timedelta, timezone
@@ -20,14 +22,20 @@ from ...models import (
     Alert, Task, OnboardingTask, AlertStatus, TaskStatus,
     OrganizationSigningAuthority, OrganizationMembership, Account,
     ChatMessage, LLMUsage, MoshkoToolCall, MoshkoMemory, MoshkoFeedback,
+    PasswordResetToken, RevokedToken,
 )
-from ...auth import verify_password, get_password_hash, create_access_token
+from ...auth import (
+    verify_password, get_password_hash, create_access_token,
+    decode_access_token,
+)
+from ...services.email_sender import send_email_smtp
 from ...config import settings
 from ...services.sync_engine import SyncEngine, get_connector_for_org
 from ...services.client_automation_service import mark_client_loop_result, run_post_sync_tasks
 from ...services.account_ownership import ownership_status, review_queue
 from ..dependencies import (
     get_current_user,
+    security,
     get_super_admin,
     get_organization_admin,
     get_sumit_integration,
@@ -572,28 +580,63 @@ async def google_login(
     return _token_for_user(new_user)
 
 
+# --- הקשחת login (W6.7) --- #
+# 5 כישלונות רצופים → נעילה ל-15 דקות. המונה במסד (serverless — אין state
+# בזיכרון). הודעת הכישלון זהה בין "מייל לא קיים" ל"סיסמה שגויה" כדי לא
+# לאפשר enumeration של חשבונות.
+LOGIN_LOCKOUT_THRESHOLD = 5
+LOGIN_LOCKOUT_MINUTES = 15
+LOGIN_FAILED_DETAIL = "אימייל או סיסמה שגויים"
+LOGIN_LOCKED_DETAIL = (
+    "החשבון נעול זמנית עקב ניסיונות התחברות כושלים חוזרים. "
+    f"נסו שוב בעוד כ-{LOGIN_LOCKOUT_MINUTES} דקות, או אפסו סיסמה."
+)
+
+
 @router.post("/auth/login", response_model=Token, tags=["Auth"])
 async def login(
     login_data: UserLogin,
     db: Session = Depends(get_db_session)
 ):
-    """התחברות למערכת"""
+    """התחברות למערכת — עם נעילה זמנית אחרי כישלונות חוזרים"""
     user = db.query(User).filter(User.email == login_data.email).first()
-    
+
+    # נעילה נבדקת לפני אימות הסיסמה: חשבון נעול נשאר נעול גם מול סיסמה
+    # נכונה, אחרת התוקף פשוט ממשיך לנחש בזמן הנעילה.
+    if user is not None and user.locked_until is not None:
+        if user.locked_until > datetime.utcnow():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=LOGIN_LOCKED_DETAIL,
+            )
+        # הנעילה פגה — מתחילים חלון ספירה נקי
+        user.locked_until = None
+        user.failed_login_attempts = 0
+        db.commit()
+
     if not user or not verify_password(login_data.password, user.password_hash):
+        if user is not None:
+            user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+            if user.failed_login_attempts >= LOGIN_LOCKOUT_THRESHOLD:
+                user.locked_until = datetime.utcnow() + timedelta(
+                    minutes=LOGIN_LOCKOUT_MINUTES,
+                )
+            db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
+            detail=LOGIN_FAILED_DETAIL,
         )
-    
+
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is disabled"
         )
-    
-    # Update last login
+
+    # Update last login; הצלחה מאפסת את מונה הכישלונות
     user.last_login = datetime.now(timezone.utc)
+    user.failed_login_attempts = 0
+    user.locked_until = None
     db.commit()
     
     # Log login
@@ -619,6 +662,210 @@ async def login(
         access_token=access_token,
         user=UserResponse.model_validate(user)
     )
+
+
+# ==================== סיסמאות וטוקנים (W6.7) ====================
+
+MIN_PASSWORD_LENGTH = 8
+SHORT_PASSWORD_DETAIL = "הסיסמה חייבת להכיל לפחות 8 תווים"
+RESET_TOKEN_TTL_MINUTES = 30
+# תשובה זהה בין מייל קיים ללא-קיים — anti-enumeration
+RESET_NEUTRAL_MESSAGE = "אם הכתובת קיימת במערכת, נשלח אליה קישור לאיפוס הסיסמה."
+
+
+def _require_min_password(password: str) -> None:
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=SHORT_PASSWORD_DETAIL,
+        )
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+    model_config = {"extra": "forbid"}
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+    model_config = {"extra": "forbid"}
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str
+
+    model_config = {"extra": "forbid"}
+
+
+@router.post("/auth/change-password", tags=["Auth"])
+async def change_password(
+    body: ChangePasswordRequest,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """שינוי סיסמה למשתמש מחובר — מאומת מול הסיסמה הנוכחית."""
+    _require_min_password(body.new_password)
+    if not verify_password(body.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="הסיסמה הנוכחית שגויה",
+        )
+    current_user.password_hash = get_password_hash(body.new_password)
+    db.add(AuditLog(
+        user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        action="PASSWORD_CHANGE",
+        entity_type="User",
+        entity_id=current_user.id,
+    ))
+    db.commit()
+    return {"message": "הסיסמה עודכנה בהצלחה"}
+
+
+@router.post("/auth/request-password-reset", tags=["Auth"])
+async def request_password_reset(
+    body: PasswordResetRequest,
+    request: Request,
+    db: Session = Depends(get_db_session),
+):
+    """שלב א' של "שכחתי סיסמה": הנפקת טוקן חד-פעמי ושליחתו במייל.
+
+    honest-null: בלי SMTP מוגדר אין דרך לשלוח קישור — 503 כן, לא "נשלח"
+    מומצא. הבדיקה נעשית לפני חיפוש המשתמש, ולכן אחידה לכל כתובת.
+    """
+    if not (settings.smtp_host and settings.smtp_from):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "שליחת מייל אינה מוגדרת במערכת (SMTP). "
+                "פנו למנהל המערכת לאיפוס סיסמה ידני."
+            ),
+        )
+
+    user = db.query(User).filter(User.email == body.email).first()
+    if user is not None and user.is_active:
+        raw_token = secrets.token_urlsafe(32)
+        db.add(PasswordResetToken(
+            user_id=user.id,
+            token_hash=hashlib.sha256(raw_token.encode()).hexdigest(),
+            expires_at=datetime.utcnow() + timedelta(minutes=RESET_TOKEN_TTL_MINUTES),
+        ))
+        db.commit()
+
+        base = str(request.base_url).rstrip("/")
+        reset_link = f"{base}/reset-password?token={raw_token}"
+        await send_email_smtp(
+            user.email,
+            "איפוס סיסמה — רצף",
+            (
+                "שלום,\n\n"
+                "התקבלה בקשה לאיפוס הסיסמה בחשבונך במערכת רצף.\n"
+                f"לאיפוס הסיסמה היכנסו לקישור הבא (תקף ל-{RESET_TOKEN_TTL_MINUTES} דקות):\n\n"
+                f"{reset_link}\n\n"
+                "אם לא ביקשתם איפוס — התעלמו מהודעה זו; הסיסמה לא שונתה.\n"
+            ),
+            settings,
+        )
+
+    # אותה תשובה בדיוק גם כשהמייל אינו קיים
+    return {"message": RESET_NEUTRAL_MESSAGE}
+
+
+@router.post("/auth/reset-password", tags=["Auth"])
+async def reset_password(
+    body: PasswordResetConfirm,
+    db: Session = Depends(get_db_session),
+):
+    """שלב ב' של "שכחתי סיסמה": אימות הטוקן וקביעת סיסמה חדשה."""
+    _require_min_password(body.new_password)
+
+    invalid_token = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "קישור האיפוס אינו תקף — ייתכן שפג תוקפו או שכבר נעשה בו "
+            "שימוש. בקשו קישור חדש."
+        ),
+    )
+
+    token_hash = hashlib.sha256(body.token.encode()).hexdigest()
+    row = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token_hash == token_hash,
+    ).first()
+    now = datetime.utcnow()
+    if row is None or row.used_at is not None or row.expires_at < now:
+        raise invalid_token
+
+    user = db.query(User).filter(User.id == row.user_id).first()
+    if user is None or not user.is_active:
+        raise invalid_token
+
+    user.password_hash = get_password_hash(body.new_password)
+    # איפוס מוצלח משחרר גם נעילת login — המשתמש הוכיח שליטה במייל
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    row.used_at = now
+    db.add(AuditLog(
+        user_id=user.id,
+        organization_id=user.organization_id,
+        action="PASSWORD_RESET",
+        entity_type="User",
+        entity_id=user.id,
+    ))
+    db.commit()
+    return {"message": "הסיסמה אופסה בהצלחה. אפשר להתחבר עם הסיסמה החדשה."}
+
+
+@router.post("/auth/logout", tags=["Auth"])
+async def logout(
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """התנתקות — ביטול הטוקן הנוכחי דרך denylist לפי jti.
+
+    טוקן ישן בלי jti אינו ניתן לביטול (תאימות לאחור) — התשובה אומרת
+    זאת בפירוש במקום להעמיד פני הצלחה.
+    """
+    # ניקוי הזדמנותי: רשומות denylist שהטוקן שלהן ממילא פג נמחקות
+    db.query(RevokedToken).filter(
+        RevokedToken.expires_at.isnot(None),
+        RevokedToken.expires_at < datetime.utcnow(),
+    ).delete(synchronize_session=False)
+
+    payload = decode_access_token(credentials.credentials) if credentials else None
+    jti = (payload or {}).get("jti")
+    if not jti:
+        db.commit()
+        return {
+            "revoked": False,
+            "message": (
+                "לטוקן הזה אין מזהה ביטול (jti) — טוקן מדור קודם שאינו "
+                "ניתן לביטול; הוא יפוג מעצמו במועד התפוגה."
+            ),
+        }
+
+    exp = payload.get("exp")
+    expires_at = datetime.utcfromtimestamp(exp) if exp else None
+    already = db.query(RevokedToken.id).filter(RevokedToken.jti == jti).first()
+    if already is None:
+        db.add(RevokedToken(
+            jti=jti,
+            revoked_at=datetime.utcnow(),
+            expires_at=expires_at,
+        ))
+    db.add(AuditLog(
+        user_id=current_user.id,
+        organization_id=current_user.organization_id,
+        action="LOGOUT",
+        entity_type="User",
+        entity_id=current_user.id,
+    ))
+    db.commit()
+    return {"revoked": True, "message": "ההתנתקות הושלמה והטוקן בוטל."}
 
 
 @router.post("/db/migrate", tags=["Admin"])

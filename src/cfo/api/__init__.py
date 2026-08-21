@@ -180,6 +180,23 @@ async def ai_analytics_not_configured_handler(_request, exc: AIAnalyticsNotConfi
         content={"detail": str(exc)},
     )
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request, exc: Exception):
+    """W6.1 (21/08/2026) — עד עכשיו חריגה לא-מטופלת נעלמה ב-stdout של
+    Vercel והמשתמש קיבל 500 סתמי בלי שאיש ידע. עכשיו: נספרת במונה כשלים
+    יומי עמיד (system_health) שה-health חושף, נרשמת ללוג עם ה-path,
+    ומוחזרת כ-500 כן — בלי להדליף פרטים פנימיים."""
+    from ..services.system_health import record_system_error_best_effort
+
+    record_system_error_best_effort(path=str(getattr(request, "url", "")))
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "שגיאת מערכת פנימית. הכשל נרשם ונספר — ראה /api/health.",
+        },
+    )
+
+
 # Include existing routers
 # SUMIT pass-through routers — every route already injects get_sumit_integration
 # (which is org-scoped + authenticated), but pin auth at the mount too so a future
@@ -391,5 +408,8 @@ async def root():
 @app.get("/health")
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint (also served at /api/health for Vercel rewrites)."""
-    return {"status": "healthy"}
+    """W6.1: health אמיתי — DB חי (SELECT 1), גרסת alembic, מונה כשלים
+    היום. עד 21/08 החזיר מחרוזת קבועה גם כשה-DB היה מת."""
+    from ..services.system_health import health_snapshot
+
+    return health_snapshot()

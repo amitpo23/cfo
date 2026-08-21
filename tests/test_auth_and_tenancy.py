@@ -1,6 +1,12 @@
 import pytest
 def test_health(client):
-    assert client.get("/api/health").json() == {"status": "healthy"}
+    # W6.1: ה-health מעשיר בשדות ניטור (database, alembic_revision,
+    # errors_today) — הצורה המלאה נבדקת ב-test_system_self_monitoring.
+    # בסוויטה מלאה טסטים קודמים מייצרים 500 מכוון ⇒ המונה היומי חיובי
+    # והסטטוס "degraded" — התנהגות נכונה של הניטור, לא כשל של ה-DB.
+    body = client.get("/api/health").json()
+    assert body["status"] in ("healthy", "degraded")
+    assert body["database"] == "ok"
 
 
 def test_protected_routes_require_token(client):

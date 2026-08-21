@@ -25,7 +25,7 @@ from cfo.services.roster_coverage import (
 )
 
 
-ORG_IDS = (101, 102, 103, 104)
+ORG_IDS = (987101, 987102, 987103, 987104)
 
 
 def _purge(db):
@@ -59,7 +59,7 @@ def seeded(client):
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     orgs = {}
-    for oid, name in [(101, "בריא"), (102, "מושהה"), (103, "מנותק"), (104, "מיושן")]:
+    for oid, name in [(987101, "בריא"), (987102, "מושהה"), (987103, "מנותק"), (987104, "מיושן")]:
         o = Organization(id=oid, name=name, is_active=True)
         db.add(o)
         orgs[oid] = o
@@ -71,16 +71,16 @@ def seeded(client):
             target_organization_id=oid, status="active",
         ))
 
-    db.add(IntegrationConnection(organization_id=101, source="sumit", status="active"))
-    db.add(IntegrationConnection(organization_id=102, source="sumit", status="paused"))
-    db.add(IntegrationConnection(organization_id=103, source="sumit", status="inactive"))
-    db.add(IntegrationConnection(organization_id=104, source="sumit", status="active"))
+    db.add(IntegrationConnection(organization_id=987101, source="sumit", status="active"))
+    db.add(IntegrationConnection(organization_id=987102, source="sumit", status="paused"))
+    db.add(IntegrationConnection(organization_id=987103, source="sumit", status="inactive"))
+    db.add(IntegrationConnection(organization_id=987104, source="sumit", status="active"))
 
-    # 101 סונכרן עכשיו; 104 פעיל אבל הסנכרון האחרון שלו עתיק.
-    db.add(SyncRun(organization_id=101, source="sumit", status=SyncStatus.COMPLETED,
+    # 987101 סונכרן עכשיו; 987104 פעיל אבל הסנכרון האחרון שלו עתיק.
+    db.add(SyncRun(organization_id=987101, source="sumit", status=SyncStatus.COMPLETED,
                    started_at=now - timedelta(minutes=10),
                    finished_at=now - timedelta(minutes=9)))
-    db.add(SyncRun(organization_id=104, source="sumit", status=SyncStatus.COMPLETED,
+    db.add(SyncRun(organization_id=987104, source="sumit", status=SyncStatus.COMPLETED,
                    started_at=now - timedelta(hours=STALE_AFTER_HOURS + 24),
                    finished_at=now - timedelta(hours=STALE_AFTER_HOURS + 24)))
     db.commit()
@@ -95,29 +95,29 @@ def _by_org(report):
 
 def test_healthy_client_reports_ok(seeded):
     rows = _by_org(roster_coverage_report(seeded))
-    assert rows[101]["verdict"] == "ok"
-    assert rows[101]["issues"] == []
+    assert rows[987101]["verdict"] == "ok"
+    assert rows[987101]["issues"] == []
 
 
 def test_paused_connection_is_reported_not_silently_dropped(seeded):
     """הכשל שקרה בפועל ל-org 2."""
     rows = _by_org(roster_coverage_report(seeded))
-    assert rows[102]["verdict"] == "disconnected"
-    assert "sumit:paused" in rows[102]["connection_statuses"]
-    assert any("paused" in i for i in rows[102]["issues"])
+    assert rows[987102]["verdict"] == "disconnected"
+    assert "sumit:paused" in rows[987102]["connection_statuses"]
+    assert any("paused" in i for i in rows[987102]["issues"])
 
 
 def test_inactive_connection_is_reported(seeded):
     """הכשל שקרה בפועל ל-org 3."""
     rows = _by_org(roster_coverage_report(seeded))
-    assert rows[103]["verdict"] == "disconnected"
-    assert any("inactive" in i for i in rows[103]["issues"])
+    assert rows[987103]["verdict"] == "disconnected"
+    assert any("inactive" in i for i in rows[987103]["issues"])
 
 
 def test_active_but_stale_sync_is_reported(seeded):
     rows = _by_org(roster_coverage_report(seeded))
-    assert rows[104]["verdict"] == "stale"
-    assert rows[104]["hours_since_last_ok"] > STALE_AFTER_HOURS
+    assert rows[987104]["verdict"] == "stale"
+    assert rows[987104]["hours_since_last_ok"] > STALE_AFTER_HOURS
 
 
 def test_report_summary_counts_problems(seeded):
@@ -143,14 +143,14 @@ def test_zombie_running_sync_runs_are_surfaced(seeded):
     והשער בפועל הוא `SyncCheckpoint.last_success_at`. זו תקלת נראוּת.
     """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    seeded.add(SyncRun(organization_id=101, source="sumit", status=SyncStatus.RUNNING,
+    seeded.add(SyncRun(organization_id=987101, source="sumit", status=SyncStatus.RUNNING,
                        started_at=now - timedelta(hours=ZOMBIE_AFTER_HOURS + 1)))
     seeded.commit()
 
     report = roster_coverage_report(seeded)
     zombies = report["zombie_runs"]
     assert len(zombies) == 1
-    assert zombies[0]["organization_id"] == 101
+    assert zombies[0]["organization_id"] == 987101
     assert zombies[0]["hours_stuck"] > ZOMBIE_AFTER_HOURS
     assert report["healthy"] is False
 
@@ -160,12 +160,12 @@ def test_duplicate_target_org_is_flagged(seeded):
     (הכשל של 'may way' על org 5)."""
     seeded.add(SumitCompany(
         office_organization_id=1, company_id="PHANTOM", name="phantom",
-        target_organization_id=101, status="active",
+        target_organization_id=987101, status="active",
     ))
     seeded.commit()
 
     report = roster_coverage_report(seeded)
-    assert 101 in report["duplicate_target_orgs"]
+    assert 987101 in report["duplicate_target_orgs"]
     assert report["healthy"] is False
 
 
@@ -173,12 +173,12 @@ def test_inactive_roster_rows_are_excluded(seeded):
     """רשומה מושבתת אינה נספרת ככפילות ואינה מדווחת."""
     seeded.add(SumitCompany(
         office_organization_id=1, company_id="PHANTOM", name="phantom",
-        target_organization_id=101, status="inactive",
+        target_organization_id=987101, status="inactive",
     ))
     seeded.commit()
 
     report = roster_coverage_report(seeded)
-    assert 101 not in report["duplicate_target_orgs"]
+    assert 987101 not in report["duplicate_target_orgs"]
     rows = _by_org(report)
     assert len([o for o in ORG_IDS if o in rows]) == 4
 
@@ -190,16 +190,16 @@ def test_one_healthy_source_does_not_mask_a_dead_one(seeded):
     שנשר לא הופיע בהתרעה בכלל. הכיסוי חייב להישפט פר-מקור.
     """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    # ל-102 (sumit מושהה) מוסיפים open_finance בריא שסונכרן ממש עכשיו.
+    # ל-987102 (sumit מושהה) מוסיפים open_finance בריא שסונכרן ממש עכשיו.
     seeded.add(IntegrationConnection(
-        organization_id=102, source="open_finance", status="active"))
-    seeded.add(SyncRun(organization_id=102, source="open_finance",
+        organization_id=987102, source="open_finance", status="active"))
+    seeded.add(SyncRun(organization_id=987102, source="open_finance",
                        status=SyncStatus.COMPLETED,
                        started_at=now, finished_at=now))
     seeded.commit()
 
     report = roster_coverage_report(seeded)
-    row = _by_org(report)[102]
+    row = _by_org(report)[987102]
 
     assert row["verdict"] == "disconnected", (
         "מקור מת חייב לגבור על מקור בריא באותו ארגון"
@@ -208,7 +208,7 @@ def test_one_healthy_source_does_not_mask_a_dead_one(seeded):
     assert "שף" not in str(row)  # שמירה על מיקוד: זה ארגון הבדיקה, לא פרוד
 
     lines = coverage_alert_lines(report)
-    assert any("102" in ln or (row["name"] or "") in ln for ln in lines), (
+    assert any("987102" in ln or (row["name"] or "") in ln for ln in lines), (
         "ארגון שנשר חייב להופיע בהתרעה"
     )
 
@@ -217,15 +217,15 @@ def test_stale_is_judged_per_source(seeded):
     """מקור פעיל שלא סונכרן זמן רב מסומן stale גם אם מקור אחר טרי."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     seeded.add(IntegrationConnection(
-        organization_id=101, source="open_finance", status="active"))
+        organization_id=987101, source="open_finance", status="active"))
     # open_finance פעיל אך לא סונכרן מעולם בהצלחה מזה שבוע.
-    seeded.add(SyncRun(organization_id=101, source="open_finance",
+    seeded.add(SyncRun(organization_id=987101, source="open_finance",
                        status=SyncStatus.COMPLETED,
                        started_at=now - timedelta(hours=STALE_AFTER_HOURS + 10),
                        finished_at=now - timedelta(hours=STALE_AFTER_HOURS + 10)))
     seeded.commit()
 
-    row = _by_org(roster_coverage_report(seeded))[101]
+    row = _by_org(roster_coverage_report(seeded))[987101]
     assert row["verdict"] == "stale"
     assert any("open_finance" in i for i in row["issues"])
 
@@ -243,17 +243,17 @@ def test_data_integrity_counts_orphans_and_blank_drafts(seeded):
     from cfo.models import Expense, Invoice
 
     db = seeded
-    db.add(Expense(organization_id=101, source="sumit", external_id="E1",
+    db.add(Expense(organization_id=987101, source="sumit", external_id="E1",
                    status="pending", total=0, expense_date=date.today(),
                    supplier_name="ריק"))
-    db.add(Expense(organization_id=101, source="sumit", external_id="E2",
+    db.add(Expense(organization_id=987101, source="sumit", external_id="E2",
                    status="pending", total=118, expense_date=date.today(),
                    supplier_name="מלא", supplier_tax_id="511402547"))
-    db.add(Invoice(organization_id=101, invoice_number="INV-1", total=100,
+    db.add(Invoice(organization_id=987101, invoice_number="INV-1", total=100,
                    issue_date=date.today(), contact_id=None))
     db.commit()
 
-    row = _by_org(roster_coverage_report(db))[101]
+    row = _by_org(roster_coverage_report(db))[987101]
     integrity = row["data_integrity"]
 
     assert integrity["expenses_total"] == 2
@@ -263,7 +263,7 @@ def test_data_integrity_counts_orphans_and_blank_drafts(seeded):
 
 
 def test_clean_org_reports_no_integrity_problems(seeded):
-    row = _by_org(roster_coverage_report(seeded))[101]
+    row = _by_org(roster_coverage_report(seeded))[987101]
     integrity = row["data_integrity"]
     assert integrity["expenses_total"] == 0
     assert integrity["expenses_blank_total"] == 0
