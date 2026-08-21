@@ -2621,6 +2621,10 @@ def _gap_payload(row) -> dict:
         "status": row.status,
         "resolution": row.resolution,
         "promoted_memory_id": row.promoted_memory_id,
+        "regression_status": row.regression_status,
+        "regression_checked_at": (
+            row.regression_checked_at.isoformat() if row.regression_checked_at else None
+        ),
         "created_at": row.created_at.isoformat() if row.created_at else None,
     }
 
@@ -2742,6 +2746,40 @@ async def review_moshko_gap(
     db.commit()
     db.refresh(row)
     return _gap_payload(row)
+
+
+@router.post("/moshko/regression/run", tags=["Moshko"])
+async def run_moshko_regression(
+    organization_id: Optional[int] = None,
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """W1.5 — regression runner: מריץ מחדש כל שאלה שקודמה לזיכרון (gap עם
+    promoted_memory_id) דרך AIChatService, ובודק (א) שהזיכרון שקודם אכן
+    הוזרק להקשר, (ב) שהתשובה אינה תשובת-ויתור (הגלאי הקיים). מקרה שנכשל
+    נפתח מחדש בתור הפערים לתיקון הבעלים — סיבוב הלולאה.
+
+    **ריצה ידנית בלבד**: עולה טוקני LLM אמיתיים (ולפעמים גם קריאות
+    SUMIT/Open-Finance דרך כלים שהמודל בוחר להפעיל, תחת שערי המכסה
+    הקיימים) — לכן route אדמין מפורש בלבד. אין cron; ראו
+    tests/test_vercel_cron_contract.py."""
+    from ...services.moshko_regression import run_regression
+
+    result = await run_regression(db, organization_id=organization_id, limit=limit)
+    db.add(AuditLog(
+        user_id=current_user.id,
+        organization_id=organization_id,
+        action="MOSHKO_REGRESSION_RUN",
+        entity_type="MoshkoGap",
+        details={
+            "total": result["total"], "passed": result["passed"],
+            "failed": result["failed"], "skipped": result["skipped"],
+            "errored": result["errored"],
+        },
+    ))
+    db.commit()
+    return result
 
 
 @router.get("/moshko/memory", tags=["Moshko"])

@@ -85,6 +85,26 @@ _ACTION_EXECUTED = "executed"
 _ACTION_CANCELLED = "cancelled"
 _ACTION_UNKNOWN = "unknown"
 
+# W1.1 — דפוסי ויתור. שמרני בכוונה: עדיף לפספס ניסוח נדיר מאשר להציף
+# את התור בתשובות תקינות שמכילות "לא" כלשהו. מודול-level (לא class attr)
+# כדי ש-W1.5 (moshko_regression.py) ישתמש באותו גלאי בדיוק דרך
+# is_giveup_answer — לא כתיבה כפולה של הגלאי.
+_GIVEUP_MARKERS = (
+    "לא הצלחתי",
+    "אין לי כלי",
+    "אין לי יכולת",
+    "איני יכול לבצע",
+    "אין לי גישה",
+    "לא יכול לבצע",
+)
+
+
+def is_giveup_answer(text: str | None) -> bool:
+    """True אם הטקסט הוא תשובת-ויתור של המודל (הגלאי הקיים של W1.1)."""
+    if not text:
+        return False
+    return any(marker in text for marker in _GIVEUP_MARKERS)
+
 
 class AIChatService:
     def __init__(
@@ -338,17 +358,6 @@ class AIChatService:
         except Exception:
             return ""
 
-    # W1.1 — דפוסי ויתור. שמרני בכוונה: עדיף לפספס ניסוח נדיר מאשר להציף
-    # את התור בתשובות תקינות שמכילות "לא" כלשהו.
-    _GIVEUP_MARKERS = (
-        "לא הצלחתי",
-        "אין לי כלי",
-        "אין לי יכולת",
-        "איני יכול לבצע",
-        "אין לי גישה",
-        "לא יכול לבצע",
-    )
-
     def _capture_gap_if_giveup(
         self, *, session_id: str, message_id: int | None,
         question: str, final_text: str,
@@ -358,9 +367,7 @@ class AIChatService:
         זו הדוגמה של הבעלים (20/08): "אני מבקש דוח כספי לשנת X והוא לא
         מצליח — אני רוצה את זה בשורה בתוך ניהול השיחות". best-effort.
         """
-        if not final_text:
-            return
-        if not any(marker in final_text for marker in self._GIVEUP_MARKERS):
+        if not is_giveup_answer(final_text):
             return
         record_gap_best_effort(
             self.db,

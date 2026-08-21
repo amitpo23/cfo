@@ -99,7 +99,17 @@ interface MoshkoGap {
   status: 'open' | 'answered' | 'dismissed' | string;
   resolution: string | null;
   promoted_memory_id: number | null;
+  regression_status: 'passed' | 'failed' | null;
+  regression_checked_at: string | null;
   created_at: string | null;
+}
+
+interface RegressionRunResult {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  errored: number;
 }
 
 const gapKindLabel: Record<string, string> = {
@@ -151,6 +161,8 @@ export default function MoshkoObservabilityDashboard({
   const [reviewingId, setReviewingId] = useState<number | null>(null);
   const [gapDrafts, setGapDrafts] = useState<Record<number, string>>({});
   const [gapBusyId, setGapBusyId] = useState<number | null>(null);
+  const [regressionRunning, setRegressionRunning] = useState(false);
+  const [regressionResult, setRegressionResult] = useState<RegressionRunResult | null>(null);
 
   const params = useMemo(() => {
     const result: Record<string, string | number | boolean> = { limit: 50 };
@@ -250,6 +262,27 @@ export default function MoshkoObservabilityDashboard({
       setError(requestError?.response?.data?.detail || 'שמירת המענה לפער נכשלה');
     } finally {
       setGapBusyId(null);
+    }
+  };
+
+  const runRegression = async () => {
+    // ריצה ידנית בלבד — עולה טוקני LLM אמיתיים, ולכן אף פעם לא אוטומטית
+    // (אין cron); הלחיצה הזו היא הפעולה היחידה שמפעילה אותה.
+    setRegressionRunning(true);
+    setError(null);
+    setRegressionResult(null);
+    try {
+      const params: Record<string, number> = {};
+      if (organizationId) params.organization_id = Number(organizationId);
+      const result = await api.post<RegressionRunResult>(
+        '/admin/moshko/regression/run', null, { params },
+      );
+      setRegressionResult(result);
+      await load();
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.detail || 'הרצת בדיקת הרגרסיה נכשלה');
+    } finally {
+      setRegressionRunning(false);
     }
   };
 
@@ -379,10 +412,28 @@ export default function MoshkoObservabilityDashboard({
             </section>
 
             <section className="overflow-hidden rounded-xl border bg-white shadow-sm">
-              <div className="border-b p-4">
-                <h2 className="text-lg font-semibold">פערי יכולת וכישלונות</h2>
-                <p className="text-sm text-slate-500">כלים שנפלו, שאלות שמושקו ויתר עליהן ודגלים של משתמשים — מענה כאן סוגר את הפער, וקידום לידע משפיע מהשיחה הבאה.</p>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+                <div>
+                  <h2 className="text-lg font-semibold">פערי יכולת וכישלונות</h2>
+                  <p className="text-sm text-slate-500">כלים שנפלו, שאלות שמושקו ויתר עליהן ודגלים של משתמשים — מענה כאן סוגר את הפער, וקידום לידע משפיע מהשיחה הבאה.</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={regressionRunning}
+                  onClick={() => void runRegression()}
+                  title="מריץ מחדש שאלות שקודמו לידע ובודק שהזיכרון עדיין מוזרק ושמושקו לא מוותר — ריצה ידנית בלבד, עולה טוקני LLM"
+                  className="flex shrink-0 items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                >
+                  {regressionRunning ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} הרץ בדיקת רגרסיה על שאלות שקודמו
+                </button>
               </div>
+              {regressionResult && (
+                <div className="border-b bg-slate-50 p-4 text-sm text-slate-700">
+                  נבדקו {regressionResult.total} מקרים — {regressionResult.passed} עברו,{' '}
+                  {regressionResult.failed} נכשלו ונפתחו מחדש כפער, {regressionResult.skipped} דולגו,{' '}
+                  {regressionResult.errored} נכשלו בקריאת ה-LLM עצמה (לא נבדקו).
+                </div>
+              )}
               <div className="max-h-[700px] divide-y overflow-auto">
                 {(gaps || []).map((row) => (
                   <article key={row.id} className="space-y-3 p-4">
@@ -391,6 +442,11 @@ export default function MoshkoObservabilityDashboard({
                         <span className="rounded bg-rose-50 px-2 py-0.5 text-rose-700">{gapKindLabel[row.gap_kind] || row.gap_kind}</span>
                         <span className="mr-2">ארגון {row.organization_id}{row.user_id !== null ? ` · משתמש ${row.user_id}` : ''}</span>
                         {row.tool_name && <span className="mr-2 font-mono text-slate-600">כלי: {row.tool_name}</span>}
+                        {row.regression_status && (
+                          <span className={`mr-2 rounded px-2 py-0.5 ${row.regression_status === 'passed' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                            רגרסיה: {row.regression_status === 'passed' ? 'עבר' : 'נכשל'} ({formatDate(row.regression_checked_at)})
+                          </span>
+                        )}
                       </span>
                       <span>{formatDate(row.created_at)} · {row.status}</span>
                     </div>

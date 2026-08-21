@@ -1446,6 +1446,11 @@ class MoshkoGap(Base):
     resolved_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    # W1.5 — regression runner: כשהשורה מקודמת לזיכרון (promoted_memory_id
+    # לא-ריק) היא *הופכת* למקרה רגרסיה — אין טבלה נפרדת. שתי העמודות האלה
+    # הן תוצאת ההרצה האחרונה בלבד; ריצה חדשה דורסת אותן.
+    regression_status = Column(String(10), nullable=True)  # passed | failed
+    regression_checked_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -1455,6 +1460,10 @@ class MoshkoGap(Base):
         CheckConstraint(
             "status IN ('open','answered','dismissed')",
             name="ck_moshko_gaps_status",
+        ),
+        CheckConstraint(
+            "regression_status IN ('passed','failed')",
+            name="ck_moshko_gaps_regression_status",
         ),
         Index("ix_moshko_gaps_org_status_created", "organization_id", "status", "created_at"),
     )
