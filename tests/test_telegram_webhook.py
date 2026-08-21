@@ -10,7 +10,7 @@ import re
 from cfo import config as config_module
 from cfo.api.routes import telegram_webhook as tw_module
 from cfo.database import SessionLocal
-from cfo.models import User
+from cfo.models import ChatMessage, MoshkoFeedback, MoshkoGap, User
 from cfo.services import channel_link_service as link_service_module
 from cfo.services.ai_chat_service import AIChatService
 from cfo.services.channel_link_service import issue_link_code, redeem_link_code
@@ -35,7 +35,10 @@ def telegram_configured(monkeypatch):
 @pytest.fixture
 def fake_gateway(monkeypatch):
     """Records every outbound call instead of hitting api.telegram.org."""
-    calls = {"send_text": [], "send_confirm_prompt": [], "answer_callback_query": []}
+    calls = {
+        "send_text": [], "send_confirm_prompt": [], "answer_callback_query": [],
+        "send_feedback_prompt": [],
+    }
 
     async def _send_text(self, chat_id, text):
         calls["send_text"].append((chat_id, text))
@@ -46,9 +49,13 @@ def fake_gateway(monkeypatch):
     async def _answer_callback_query(self, callback_query_id, text=None):
         calls["answer_callback_query"].append((callback_query_id, text))
 
+    async def _send_feedback_prompt(self, chat_id, text, message_id):
+        calls["send_feedback_prompt"].append((chat_id, text, message_id))
+
     monkeypatch.setattr(TelegramGateway, "send_text", _send_text)
     monkeypatch.setattr(TelegramGateway, "send_confirm_prompt", _send_confirm_prompt)
     monkeypatch.setattr(TelegramGateway, "answer_callback_query", _answer_callback_query)
+    monkeypatch.setattr(TelegramGateway, "send_feedback_prompt", _send_feedback_prompt)
     return calls
 
 
@@ -237,7 +244,10 @@ def test_linked_message_invokes_send_message_with_persona_and_replies(
     assert r.status_code == 200
     assert captured["persona"] == "cfo"  # default persona
     assert captured["session_id"] == "tg-chat-linked-1"
-    assert fake_gateway["send_text"][-1] == ("chat-linked-1", "התשובה שלי")
+    # כל תשובת מושקו רגילה יוצאת עם מקלדת פידבק 👍/👎/❓, לא עם send_text
+    # פשוט — כדי לפתוח את אותו מסלול הפידבק כמו בווב (W1.2).
+    assert fake_gateway["send_feedback_prompt"][-1] == ("chat-linked-1", "התשובה שלי", 42)
+    assert not fake_gateway["send_text"]
 
 
 def test_pending_action_sends_confirm_prompt(client, telegram_configured, fake_gateway, monkeypatch, fresh_org):
@@ -351,6 +361,170 @@ def test_callback_cancel_does_not_execute_anything(client, telegram_configured, 
     assert r.status_code == 200
     assert called == {"confirm": 0, "cancel": 1, "message_id": 77}
     assert any("בוטל" in text for _, text in fake_gateway["send_text"])
+
+
+def _seed_telegram_assistant_message(org_id, user_id, external_id, answer="התשובה שלי"):
+    """A real ChatMessage row (not mocked) — the feedback callback reads
+    through record_feedback the SAME way the web /ai/chat/{id}/feedback
+    route does, so it needs an actual row to find."""
+    db = SessionLocal()
+    try:
+        session_id = f"tg-{external_id}"
+        db.add(ChatMessage(
+            organization_id=org_id, user_id=user_id, session_id=session_id,
+            role="user", content="שאלה",
+        ))
+        db.flush()
+        assistant = ChatMessage(
+            organization_id=org_id, user_id=user_id, session_id=session_id,
+            role="assistant", content=answer,
+        )
+        db.add(assistant)
+        db.commit()
+        db.refresh(assistant)
+        return assistant.id
+    finally:
+        db.close()
+
+
+def _feedback_callback_payload(update_id, chat_id, category, message_id, callback_id="cbq-fb"):
+    return {
+        "update_id": update_id,
+        "callback_query": {
+            "id": callback_id,
+            "data": f"fb:{category}:{message_id}",
+            "message": {"chat": {"id": chat_id}},
+        },
+    }
+
+
+def test_callback_feedback_thumbs_down_creates_gap_and_acks(
+    client, telegram_configured, fake_gateway, fresh_org,
+):
+    iso = fresh_org()
+    org_id = iso["org_id"]
+    external_id = "chat-fb-1"
+    _link(org_id, external_id)
+    user_id = _user_id_for_org(org_id)
+    message_id = _seed_telegram_assistant_message(org_id, user_id, external_id)
+
+    r = _post(client, _feedback_callback_payload(950, external_id, "inaccurate", message_id))
+    assert r.status_code == 200
+    assert any("נרשם" in text for _, text in fake_gateway["send_text"])
+    assert fake_gateway["answer_callback_query"]
+
+    db = SessionLocal()
+    try:
+        feedback = db.query(MoshkoFeedback).filter(
+            MoshkoFeedback.organization_id == org_id,
+            MoshkoFeedback.message_id == message_id,
+        ).all()
+        assert len(feedback) == 1
+        assert feedback[0].category == "inaccurate"
+        assert feedback[0].channel == "telegram"
+
+        gaps = db.query(MoshkoGap).filter(MoshkoGap.organization_id == org_id).all()
+        assert len(gaps) == 1
+        assert gaps[0].gap_kind == "user_flagged"
+        # MoshkoGap אין לו עמודת source — הערוץ נישא ע"י תחילית session_id
+        # ("tg-"), בדיוק כמו ש-MoshkoFeedback.channel נגזר ממנה.
+        assert gaps[0].session_id.startswith("tg-")
+    finally:
+        db.close()
+
+
+def test_callback_feedback_thumbs_up_does_not_create_gap(
+    client, telegram_configured, fake_gateway, fresh_org,
+):
+    iso = fresh_org()
+    org_id = iso["org_id"]
+    external_id = "chat-fb-2"
+    _link(org_id, external_id)
+    user_id = _user_id_for_org(org_id)
+    message_id = _seed_telegram_assistant_message(org_id, user_id, external_id)
+
+    r = _post(client, _feedback_callback_payload(951, external_id, "helpful", message_id))
+    assert r.status_code == 200
+
+    db = SessionLocal()
+    try:
+        assert db.query(MoshkoFeedback).filter(
+            MoshkoFeedback.organization_id == org_id,
+            MoshkoFeedback.message_id == message_id,
+        ).count() == 1
+        assert db.query(MoshkoGap).filter(MoshkoGap.organization_id == org_id).count() == 0
+    finally:
+        db.close()
+
+
+def test_callback_feedback_double_tap_does_not_duplicate_rows(
+    client, telegram_configured, fake_gateway, fresh_org,
+):
+    """לחיצה כפולה על אותו כפתור (שני callback_query נפרדים, לא retry של
+    אותו update_id) לא יוצרת פידבק/gap כפולים."""
+    iso = fresh_org()
+    org_id = iso["org_id"]
+    external_id = "chat-fb-3"
+    _link(org_id, external_id)
+    user_id = _user_id_for_org(org_id)
+    message_id = _seed_telegram_assistant_message(org_id, user_id, external_id)
+
+    r1 = _post(client, _feedback_callback_payload(
+        952, external_id, "inaccurate", message_id, callback_id="cbq-a",
+    ))
+    r2 = _post(client, _feedback_callback_payload(
+        953, external_id, "inaccurate", message_id, callback_id="cbq-b",
+    ))
+    assert r1.status_code == 200 and r2.status_code == 200
+
+    db = SessionLocal()
+    try:
+        assert db.query(MoshkoFeedback).filter(
+            MoshkoFeedback.organization_id == org_id,
+            MoshkoFeedback.message_id == message_id,
+        ).count() == 1
+        assert db.query(MoshkoGap).filter(MoshkoGap.organization_id == org_id).count() == 1
+    finally:
+        db.close()
+
+
+def test_callback_feedback_switch_from_down_to_up_keeps_existing_gap(
+    client, telegram_configured, fake_gateway, fresh_org,
+):
+    """שינוי דעת המשתמש (👎 ואז 👍) מעדכן את שורת הפידבק, אבל לא מוחק
+    gap שכבר נפתח — הוא לא בגדר "לחיצה כפולה" אלא ורדיקט חדש."""
+    iso = fresh_org()
+    org_id = iso["org_id"]
+    external_id = "chat-fb-4"
+    _link(org_id, external_id)
+    user_id = _user_id_for_org(org_id)
+    message_id = _seed_telegram_assistant_message(org_id, user_id, external_id)
+
+    _post(client, _feedback_callback_payload(
+        954, external_id, "inaccurate", message_id, callback_id="cbq-c",
+    ))
+    _post(client, _feedback_callback_payload(
+        955, external_id, "helpful", message_id, callback_id="cbq-d",
+    ))
+
+    db = SessionLocal()
+    try:
+        feedback = db.query(MoshkoFeedback).filter(
+            MoshkoFeedback.organization_id == org_id,
+            MoshkoFeedback.message_id == message_id,
+        ).one()
+        assert feedback.category == "helpful"
+        assert db.query(MoshkoGap).filter(MoshkoGap.organization_id == org_id).count() == 1
+    finally:
+        db.close()
+
+
+def test_callback_feedback_from_unlinked_identity_is_rejected(
+    client, telegram_configured, fake_gateway,
+):
+    r = _post(client, _feedback_callback_payload(956, "chat-fb-unlinked", "helpful", 999))
+    assert r.status_code == 200
+    assert fake_gateway["answer_callback_query"][-1] == ("cbq-fb", "החשבון לא מקושר")
 
 
 def test_sticker_message_is_still_silently_ignored(client, telegram_configured, fake_gateway, fresh_org):

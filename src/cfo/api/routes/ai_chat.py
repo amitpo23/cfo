@@ -7,13 +7,18 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
-from ...models import AuditLog, ChatMessage, MoshkoFeedback, User, UserRole
+from ...models import ChatMessage, MoshkoFeedback, User, UserRole
 from ..dependencies import get_current_org_id, get_current_user
 from ...services.ai_chat_service import AIChatService, ChatConfirmationError
+from ...services.moshko_feedback_service import (
+    FEEDBACK_CATEGORIES as _FEEDBACK_CATEGORIES,
+    FeedbackNotFoundError,
+    FeedbackValidationError,
+    record_feedback,
+)
 
 router = APIRouter(prefix="/ai", tags=["AI Chat"])
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_FEEDBACK_CATEGORIES = {"helpful", "inaccurate", "unknown", "unsafe"}
 
 
 def _validate_session_id(value: object) -> str:
@@ -156,7 +161,12 @@ async def submit_chat_feedback(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db_session),
 ):
-    """Record or replace the current user's verdict on one assistant answer."""
+    """Record or replace the current user's verdict on one assistant answer.
+
+    Thin HTTP wrapper: all the actual logic (idempotent upsert, gap-queue
+    trigger, audit log) lives in moshko_feedback_service.record_feedback,
+    shared verbatim with the Telegram inline-keyboard callback — one
+    mechanism, not a parallel path per channel."""
     category = body.get("category")
     if category not in _FEEDBACK_CATEGORIES:
         raise HTTPException(400, "Invalid feedback category")
@@ -165,80 +175,17 @@ async def submit_chat_feedback(
         raise HTTPException(400, "comment must be text")
     comment = comment_value.strip()[:2000] if comment_value else None
 
-    message = db.query(ChatMessage).filter(
-        ChatMessage.id == message_id,
-        ChatMessage.organization_id == org_id,
-        ChatMessage.user_id == user.id,
-    ).first()
-    if message is None:
-        raise HTTPException(404, "Assistant message not found")
-    if message.role != "assistant":
-        raise HTTPException(400, "Feedback can be submitted only for an assistant answer")
-
-    question = (
-        db.query(ChatMessage)
-        .filter(
-            ChatMessage.organization_id == org_id,
-            ChatMessage.user_id == user.id,
-            ChatMessage.session_id == message.session_id,
-            ChatMessage.role == "user",
-            ChatMessage.id < message.id,
-        )
-        .order_by(ChatMessage.id.desc())
-        .first()
-    )
-    row = db.query(MoshkoFeedback).filter(
-        MoshkoFeedback.user_id == user.id,
-        MoshkoFeedback.message_id == message.id,
-    ).first()
-    if row is None:
-        session_id = message.session_id
-        channel = "whatsapp" if session_id.startswith("wa-") else (
-            "telegram" if session_id.startswith("tg-") else "web"
-        )
-        row = MoshkoFeedback(
-            organization_id=org_id,
-            user_id=user.id,
-            message_id=message.id,
-            session_id=session_id,
-            channel=channel,
-            question=question.content if question else None,
-            answer=message.content,
-            category=category,
-            comment=comment,
-            status="open",
-        )
-        db.add(row)
-    else:
-        row.category = category
-        row.comment = comment
-        row.status = "open"
-        row.correction = None
-        row.reviewed_by = None
-        row.reviewed_at = None
-    db.flush()
-    # W1.1 — "מושקו לא ידע" / "לא מדויק" הם פערים: שורה בתור הניתוח.
-    if category in ("unknown", "inaccurate"):
-        from ...services.moshko_observability import record_gap_best_effort
-
-        record_gap_best_effort(
+    try:
+        row = record_feedback(
             db,
             organization_id=org_id,
             user_id=user.id,
-            session_id=row.session_id,
-            message_id=message.id,
-            gap_kind="user_flagged",
-            question=row.question,
-            answer=row.answer,
+            message_id=message_id,
+            category=category,
+            comment=comment,
         )
-    db.add(AuditLog(
-        user_id=user.id,
-        organization_id=org_id,
-        action="MOSHKO_FEEDBACK_SUBMIT",
-        entity_type="MoshkoFeedback",
-        entity_id=row.id,
-        details={"message_id": message.id, "category": category},
-    ))
-    db.commit()
-    db.refresh(row)
+    except FeedbackNotFoundError as exc:
+        raise HTTPException(404, str(exc))
+    except FeedbackValidationError as exc:
+        raise HTTPException(400, str(exc))
     return _feedback_payload(row)

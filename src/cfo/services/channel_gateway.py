@@ -74,6 +74,29 @@ class TelegramGateway:
             {"chat_id": chat_id, "text": text, "reply_markup": keyboard},
         )
 
+    async def send_feedback_prompt(self, chat_id: str, text: str, message_id: int) -> None:
+        """Send an assistant reply with an inline 👍/👎/❓ keyboard (W1.2).
+
+        callback_data carries ONLY the category and the ChatMessage id
+        (``fb:<category>:<message_id>``) — the actual message row is
+        re-read server-side on tap, same discipline as send_confirm_prompt.
+        Not part of the shared ChannelGateway interface (Telegram-specific),
+        same as answer_callback_query below."""
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "👍", "callback_data": f"fb:helpful:{message_id}"},
+                {"text": "👎", "callback_data": f"fb:inaccurate:{message_id}"},
+                {"text": "❓", "callback_data": f"fb:unknown:{message_id}"},
+            ]]
+        }
+        chunks = _split_message(text)
+        for chunk in chunks[:-1]:
+            await self._post("sendMessage", {"chat_id": chat_id, "text": chunk})
+        await self._post(
+            "sendMessage",
+            {"chat_id": chat_id, "text": chunks[-1], "reply_markup": keyboard},
+        )
+
     async def answer_callback_query(
         self, callback_query_id: str, text: Optional[str] = None,
     ) -> None:

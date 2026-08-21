@@ -41,6 +41,11 @@ from ...services.channel_link_service import (
     resolve_identity,
     start_email_verification,
 )
+from ...services.moshko_feedback_service import (
+    FeedbackNotFoundError,
+    FeedbackValidationError,
+    record_feedback,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -147,6 +152,28 @@ def _parse_message_id(callback_data: str) -> int | None:
     try:
         return int(callback_data.split(":", 1)[1])
     except (IndexError, ValueError):
+        return None
+
+
+# W1.2 — the buttons TelegramGateway.send_feedback_prompt actually renders
+# (👍/👎/❓). Deliberately narrower than moshko_feedback_service's
+# FEEDBACK_CATEGORIES ("unsafe" has no Telegram button, same as the web
+# MoshkoSystemChat UI — see frontend feedback buttons).
+_TELEGRAM_FEEDBACK_CATEGORIES = {"helpful", "inaccurate", "unknown"}
+
+
+def _parse_feedback_callback(callback_data: str) -> tuple[str, int] | None:
+    """``fb:<category>:<message_id>`` -> (category, message_id), or None if
+    malformed or the category isn't one of the buttons we actually send."""
+    parts = callback_data.split(":", 2)
+    if len(parts) != 3:
+        return None
+    _, category, message_id_str = parts
+    if category not in _TELEGRAM_FEEDBACK_CATEGORIES:
+        return None
+    try:
+        return category, int(message_id_str)
+    except ValueError:
         return None
 
 
@@ -325,13 +352,20 @@ async def _handle_message(db: Session, message: dict) -> None:
     )
     pending = result.get("pending_action")
     if pending:
+        # A pending write already carries its own confirm/cancel gate — a
+        # quality-feedback keyboard stacked on top of an approval prompt
+        # would muddy both. Feedback is offered on ordinary answers only.
         await gateway.send_confirm_prompt(
             external_id,
             _render_pending_action(result["reply"], pending),
             result["message_id"],
         )
     else:
-        await gateway.send_text(external_id, result["reply"])
+        # W1.2 — every ordinary Moshko reply carries a 👍/👎/❓ keyboard so
+        # Telegram writes through the exact same feedback mechanism as the
+        # web chat (moshko_feedback_service.record_feedback), never a
+        # parallel path.
+        await gateway.send_feedback_prompt(external_id, result["reply"], result["message_id"])
 
 
 _INTAKE_STATUS_FALLBACK_MESSAGE = {
@@ -426,6 +460,25 @@ async def _handle_callback(db: Session, callback_query: dict) -> None:
                 await gateway.send_text(external_id, "בוטל.")
             except ChatConfirmationError as exc:
                 await gateway.send_text(external_id, str(exc))
+        if callback_id:
+            await gateway.answer_callback_query(callback_id)
+    elif data.startswith("fb:"):
+        parsed = _parse_feedback_callback(data)
+        if parsed is not None:
+            category, message_id = parsed
+            try:
+                record_feedback(
+                    db,
+                    organization_id=identity.organization_id,
+                    user_id=identity.user_id,
+                    message_id=message_id,
+                    category=category,
+                )
+                await gateway.send_text(external_id, "תודה, נרשם")
+            except FeedbackNotFoundError:
+                await gateway.send_text(external_id, "לא מצאתי את ההודעה הזו לדירוג.")
+            except FeedbackValidationError:
+                await gateway.send_text(external_id, "לא ניתן לדרג הודעה זו.")
         if callback_id:
             await gateway.answer_callback_query(callback_id)
     else:
