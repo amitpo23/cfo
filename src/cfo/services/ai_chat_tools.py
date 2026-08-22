@@ -466,6 +466,29 @@ async def _get_customer_debt(db, org_id: int, *, customer_id: str, **_kwargs) ->
     return {"customer_id": customer_id, "debt": result.get("Debt"), "response": result}
 
 
+# --- W3 גל 2 (המשך, 21/08/2026) — סטטוס עסקאות סליקה (מסוף אשראי) --- #
+# get_billing_status/get_transaction נשארו ALREADY_COVERED (routes/
+# payments.py) עד עכשיו; נחשפים כאן גם למושקו — אותו תחום "עסקאות
+# סליקה" שכבר נחשף חלקית ב-get_reference_numbers. שני ה-endpoints אינם
+# ב-PAID_ACTION_ENDPOINTS (קריאה חינמית, תחת המגביל הכללי). אם מודול
+# הסליקה אינו מותקן בעסק — SUMIT מחזירה שגיאה, וזו עולה honest-null
+# דרך ai_chat_service (בלי try/except מקומי, כמו שאר הכלים כאן).
+
+async def _get_billing_status(db, org_id: int, *, transaction_id: str, **_kwargs) -> dict:
+    result = await _sumit_call(db, org_id, lambda c: c.get_billing_status(transaction_id))
+    return {"transaction_id": transaction_id, "response": result}
+
+
+async def _get_transaction_status(db, org_id: int, *, transaction_id: str, **_kwargs) -> dict:
+    result = await _sumit_call(db, org_id, lambda c: c.get_transaction(transaction_id))
+    return {
+        "transaction_id": result.transaction_id,
+        "status": result.status,
+        "amount": float(result.amount),
+        "currency": result.currency,
+    }
+
+
 async def _get_next_document_number(db, org_id: int, *, document_type: str, **_kwargs) -> dict:
     number = await _sumit_call(
         db, org_id, lambda c: c.get_next_document_number(document_type),
@@ -2402,6 +2425,43 @@ TOOLS: dict[str, ChatTool] = {
         category="read",
         fn=_get_customer_debt,
     ),
+    # ---------------- W3 גל 2 (המשך, 21/08/2026) — סטטוס עסקאות סליקה ---------------- #
+    "get_billing_status": ChatTool(
+        name="get_billing_status",
+        description=(
+            "סטטוס הרצת חיוב (billing batch) במסוף האשראי של SUMIT, כולל "
+            "פירוט העסקאות שבתוכה (getstatus). אם מודול הסליקה אינו "
+            "מותקן בעסק — הקריאה נכשלת בהודעת שגיאה מהספק (honest-null, "
+            "לא הצלחה מדומה). קריאת API אחת, קריאה חינמית."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "transaction_id": {"type": "string", "description": "מזהה הרצת החיוב (BillingIdentifier)"},
+            },
+            "required": ["transaction_id"],
+        },
+        category="read",
+        fn=_get_billing_status,
+    ),
+    "get_transaction_status": ChatTool(
+        name="get_transaction_status",
+        description=(
+            "סטטוס עסקת סליקה בודדת במסוף האשראי (gateway) של SUMIT — "
+            "לפי מזהה עסקה ידוע (gettransaction). אם מודול הסליקה אינו "
+            "מותקן בעסק — הקריאה נכשלת בהודעת שגיאה מהספק. קריאת API "
+            "אחת, קריאה חינמית."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "transaction_id": {"type": "string", "description": "מזהה העסקה במסוף"},
+            },
+            "required": ["transaction_id"],
+        },
+        category="read",
+        fn=_get_transaction_status,
+    ),
     "get_next_document_number": ChatTool(
         name="get_next_document_number",
         description=(
@@ -3804,6 +3864,7 @@ _SUMIT_TOOLS = {
     "update_recurring", "cancel_document", "get_customer_debt_report",
     "send_collection_sms",
     # W3 גל 2 (20/08/2026) — כיסוי SUMIT מלא (ר' sumit_tool_manifest)
+    "get_billing_status", "get_transaction_status",
     "get_customer_debt", "get_next_document_number", "set_next_document_number",
     "list_sumit_documents", "move_document_to_books", "create_document_from_existing",
     "list_crm_entities", "get_crm_entity", "count_crm_entity_usage",

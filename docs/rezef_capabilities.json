@@ -60,7 +60,8 @@
         "tests/test_expense_ocr_scheduler.py",
         "tests/test_expense_ocr_pipeline.py",
         "tests/test_vercel_cron_contract.py",
-        "tests/test_roster_coverage.py"
+        "tests/test_roster_coverage.py",
+        "tests/test_w3_wave2_readonly_tools.py"
       ],
       "gates": [
         "organization_scope",

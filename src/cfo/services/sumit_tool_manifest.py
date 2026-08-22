@@ -127,8 +127,6 @@ ALREADY_COVERED: dict[str, str] = {
     "list_income_items": "data_sync_service + routes/accounting.py",
     "load_billing_transactions": "data_sync_service + routes/payments.py",
     "process_billing_transactions": "routes/payments.py",
-    "get_billing_status": "routes/payments.py",
-    "get_transaction": "routes/payments.py",
     "begin_redirect": "payment_request_service + routes/payments.py",
     "get_payment": "routes/payments.py",
     "list_payments": "data_sync_service + sumit_connector (סנכרון יומי)",
@@ -155,6 +153,12 @@ TOOL_METHOD_MAP: dict[str, tuple[str, ...]] = {
     "cancel_document": ("cancel_document",),
     "get_customer_debt_report": ("get_debt_report",),
     "send_collection_sms": ("send_sms",),
+    # W3 גל 2 (המשך, 21/08/2026) — סטטוס עסקאות סליקה (Credit Card
+    # Terminal — Billing/Gateway). שני ה-endpoints משמשים גם את
+    # routes/payments.py (GET /payments/billing/status, /transactions);
+    # החשיפה כאן היא בנוסף, לא במקום.
+    "get_billing_status": ("get_billing_status",),
+    "get_transaction_status": ("get_transaction",),
     # W3 גל 2 — קריאה
     "get_customer_debt": ("get_debt",),
     "get_next_document_number": ("get_next_document_number",),
