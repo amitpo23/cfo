@@ -166,8 +166,8 @@ SCREENS: tuple[ScreenEntry, ...] = (
                 "/api/open-finance/payments"),
     # --- Analysis ---
     ScreenEntry("/forecasting", "Forecasting",
-                "תחזיות ML לתזרים/הכנסות. **חלקי** — אותה טבלת-תנועות קפואה כמו /cashflow-detail.",
-                "/api/cashflow/forecast/revenue"),
+                "תחזית תזרים חודשית על ספרים חיים — AR/AP פתוחים + הוצאות חוזרות, לא Transaction הקפואה.",
+                "/api/cashflow/forecast/live-monthly"),
     ScreenEntry("/ai-analytics", "AI Analytics",
                 "תובנות AI. **חלקי** — לשונית אנומליות מבוססת נתון קפוא; "
                 "תובנות/המלצות אחרות מסומנות `is_illustrative` כשרלוונטי.",

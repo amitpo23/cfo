@@ -3,46 +3,24 @@ Cash Flow & Forecasting API Routes
 נתיבי API לתזרים מזומנים ותחזיות
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from datetime import datetime, date, timedelta
 from pydantic import BaseModel, Field
 from decimal import Decimal
 
 from ..dependencies import get_current_user, get_current_org_id, get_db
 from ...services.cash_flow_service import CashFlowService, CashFlowCategory
-from ...services.forecasting_service import ForecastingService, ForecastMethod
+from ...services.forecasting_service import ForecastingService
 from ...services.live_forecast_service import LiveForecastService
 from ...services.live_cash_flow_service import LiveCashFlowService
-from ...services.ml_models import EnsembleForecaster
 
 router = APIRouter()
 
 
 # ============= Pydantic Models =============
 
-class CashFlowItemResponse(BaseModel):
-    """פריט תזרים מזומנים"""
-    category: str
-    name: str
-    name_he: str
-    amount: float
-    is_inflow: bool
-
-
-class CashFlowStatementResponse(BaseModel):
-    """דוח תזרים מזומנים"""
-    period_start: datetime
-    period_end: datetime
-    opening_balance: float
-    closing_balance: float
-    operating_items: List[CashFlowItemResponse]
-    operating_total: float
-    investing_items: List[CashFlowItemResponse]
-    investing_total: float
-    financing_items: List[CashFlowItemResponse]
-    financing_total: float
-    net_cash_flow: float
-
+# CashFlowItemResponse / CashFlowStatementResponse הוסרו יחד עם /statement
+# (מבוסס CashFlowService על Transaction הקפואה; לא נצרך ע"י frontend/מושקו).
 
 # MonthlyCashFlowResponse / DailyCashPositionResponse / BurnRateResponse הוסרו:
 # /monthly, /daily, /burn-rate מוגשים כעת ע"י LiveCashFlowService, שמחזיר
@@ -59,30 +37,13 @@ class LiquidityRatiosResponse(BaseModel):
     current_liabilities: float
 
 
-class ForecastResultResponse(BaseModel):
-    """תוצאת תחזית"""
-    date: str
-    predicted_value: float
-    lower_bound: float
-    upper_bound: float
-    confidence: float
-
-
-class CashFlowForecastResponse(BaseModel):
-    """תחזית תזרים מזומנים"""
-    date: str
-    projected_inflows: float
-    projected_outflows: float
-    projected_net_flow: float
-    projected_balance: float
-    confidence: float
-
-
-class ScenarioAnalysisResponse(BaseModel):
-    """ניתוח תרחישים"""
-    expected: List[CashFlowForecastResponse]
-    optimistic: List[CashFlowForecastResponse]
-    pessimistic: List[CashFlowForecastResponse]
+# ForecastResultResponse / CashFlowForecastResponse / ScenarioAnalysisResponse
+# / TrendAnalysisResponse הוסרו עם משפחת ה-ML forecast המתה
+# (/forecast/revenue, /forecast/expenses, /forecast/cash-flow,
+# /forecast/scenarios, /forecast/trends, /forecast/ml/ensemble,
+# /forecast/accuracy) — ForecastingService מבוסס Transaction הקפואה, לא
+# נצרך ע"י frontend/מושקו. ForecastingService עצמו נשאר (עדיין משרת
+# /forecast/budget-variance ו-/forecast/ratios).
 
 
 class BudgetVarianceResponse(BaseModel):
@@ -98,81 +59,14 @@ class BudgetVarianceResponse(BaseModel):
 class BudgetRequest(BaseModel):
     """בקשת תקציב"""
     budget: Dict[str, float] = Field(
-        ..., 
+        ...,
         example={"sales": 100000, "salaries": 50000, "rent": 10000}
     )
     start_date: date
     end_date: date
 
 
-class TrendAnalysisResponse(BaseModel):
-    """ניתוח מגמות"""
-    revenue: Dict[str, Any]
-    expenses: Dict[str, Any]
-    seasonality: Dict[str, Any]
-    profit_margin_trend: List[float]
-
-
 # ============= Cash Flow Endpoints =============
-
-@router.get("/statement", response_model=CashFlowStatementResponse)
-async def get_cash_flow_statement(
-    start_date: date = Query(..., description="תאריך התחלה"),
-    end_date: date = Query(..., description="תאריך סיום"),
-    db = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    org_id: int = Depends(get_current_org_id),
-):
-    """
-    דוח תזרים מזומנים
-    Get cash flow statement for a period
-    """
-    service = CashFlowService(db)
-    organization_id = org_id
-    statement = service.get_cash_flow_statement(
-        organization_id=organization_id,
-        start_date=datetime.combine(start_date, datetime.min.time()),
-        end_date=datetime.combine(end_date, datetime.max.time())
-    )
-    
-    return CashFlowStatementResponse(
-        period_start=statement.period_start,
-        period_end=statement.period_end,
-        opening_balance=float(statement.opening_balance),
-        closing_balance=float(statement.closing_balance),
-        operating_items=[
-            CashFlowItemResponse(
-                category=item.category.value,
-                name=item.name,
-                name_he=item.name_he,
-                amount=float(item.amount),
-                is_inflow=item.is_inflow
-            ) for item in statement.operating_items
-        ],
-        operating_total=float(statement.operating_total),
-        investing_items=[
-            CashFlowItemResponse(
-                category=item.category.value,
-                name=item.name,
-                name_he=item.name_he,
-                amount=float(item.amount),
-                is_inflow=item.is_inflow
-            ) for item in statement.investing_items
-        ],
-        investing_total=float(statement.investing_total),
-        financing_items=[
-            CashFlowItemResponse(
-                category=item.category.value,
-                name=item.name,
-                name_he=item.name_he,
-                amount=float(item.amount),
-                is_inflow=item.is_inflow
-            ) for item in statement.financing_items
-        ],
-        financing_total=float(statement.financing_total),
-        net_cash_flow=float(statement.net_cash_flow)
-    )
-
 
 @router.get("/monthly")
 async def get_monthly_cash_flow(
@@ -244,7 +138,7 @@ async def get_liquidity_ratios(
     service = CashFlowService(db)
     organization_id = org_id
     data = service.get_liquidity_ratios(organization_id)
-    
+
     return LiquidityRatiosResponse(**data)
 
 
@@ -298,106 +192,6 @@ async def get_live_monthly_forecast(
 
 # ============= Forecasting Endpoints =============
 
-@router.get("/forecast/revenue", response_model=List[ForecastResultResponse])
-async def forecast_revenue(
-    periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
-    method: str = Query("exponential_smoothing", description="שיטת תחזית"),
-    db = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    org_id: int = Depends(get_current_org_id),
-):
-    """
-    תחזית הכנסות
-    Forecast revenue
-    """
-    service = ForecastingService(db)
-    organization_id = org_id
-    try:
-        forecast_method = ForecastMethod(method)
-    except ValueError:
-        forecast_method = ForecastMethod.EXPONENTIAL_SMOOTHING
-    
-    results = service.forecast_revenue(organization_id, periods, forecast_method)
-    
-    return [
-        ForecastResultResponse(
-            date=r.date.strftime('%Y-%m'),
-            predicted_value=r.predicted_value,
-            lower_bound=r.lower_bound,
-            upper_bound=r.upper_bound,
-            confidence=r.confidence
-        ) for r in results
-    ]
-
-
-@router.get("/forecast/expenses", response_model=List[ForecastResultResponse])
-async def forecast_expenses(
-    periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
-    method: str = Query("exponential_smoothing", description="שיטת תחזית"),
-    db = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    org_id: int = Depends(get_current_org_id),
-):
-    """
-    תחזית הוצאות
-    Forecast expenses
-    """
-    service = ForecastingService(db)
-    organization_id = org_id
-    try:
-        forecast_method = ForecastMethod(method)
-    except ValueError:
-        forecast_method = ForecastMethod.EXPONENTIAL_SMOOTHING
-    
-    results = service.forecast_expenses(organization_id, periods, forecast_method)
-    
-    return [
-        ForecastResultResponse(
-            date=r.date.strftime('%Y-%m'),
-            predicted_value=r.predicted_value,
-            lower_bound=r.lower_bound,
-            upper_bound=r.upper_bound,
-            confidence=r.confidence
-        ) for r in results
-    ]
-
-
-@router.get("/forecast/cash-flow", response_model=List[CashFlowForecastResponse])
-async def forecast_cash_flow(
-    periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
-    current_balance: float = Query(0, description="יתרה נוכחית"),
-    db = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    org_id: int = Depends(get_current_org_id),
-):
-    """
-    תחזית תזרים מזומנים
-    Forecast cash flow
-    """
-    service = ForecastingService(db)
-    organization_id = org_id
-    results = service.forecast_cash_flow(organization_id, periods, current_balance)
-    
-    return [CashFlowForecastResponse(**r) for r in results]
-
-
-@router.get("/forecast/scenarios")
-async def get_scenario_analysis(
-    periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
-    current_balance: float = Query(0, description="יתרה נוכחית"),
-    db = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    org_id: int = Depends(get_current_org_id),
-):
-    """
-    ניתוח תרחישים
-    Get scenario analysis (best/worst/expected)
-    """
-    service = ForecastingService(db)
-    organization_id = org_id
-    return service.get_scenario_analysis(organization_id, periods, current_balance)
-
-
 @router.post("/forecast/budget-variance", response_model=List[BudgetVarianceResponse])
 async def analyze_budget_variance(
     request: BudgetRequest,
@@ -417,7 +211,7 @@ async def analyze_budget_variance(
         datetime.combine(request.start_date, datetime.min.time()),
         datetime.combine(request.end_date, datetime.max.time())
     )
-    
+
     return [
         BudgetVarianceResponse(
             category=r.category,
@@ -428,22 +222,6 @@ async def analyze_budget_variance(
             is_favorable=r.is_favorable
         ) for r in results
     ]
-
-
-@router.get("/forecast/trends", response_model=TrendAnalysisResponse)
-async def detect_trends(
-    months: int = Query(12, ge=3, le=36, description="תקופת ניתוח"),
-    db = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    org_id: int = Depends(get_current_org_id),
-):
-    """
-    זיהוי מגמות
-    Detect financial trends
-    """
-    service = ForecastingService(db)
-    organization_id = org_id
-    return service.detect_trends(organization_id, months)
 
 
 @router.get("/forecast/ratios")
@@ -460,67 +238,3 @@ async def forecast_financial_ratios(
     service = ForecastingService(db)
     organization_id = org_id
     return service.calculate_financial_ratios_forecast(organization_id, periods)
-
-
-@router.get("/forecast/accuracy")
-async def evaluate_forecast_accuracy(
-    test_months: int = Query(3, ge=1, le=6, description="חודשי מבחן"),
-    db = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    org_id: int = Depends(get_current_org_id),
-):
-    """
-    הערכת דיוק תחזית
-    Evaluate forecast accuracy
-    """
-    service = ForecastingService(db)
-    organization_id = org_id
-    metrics = service.evaluate_forecast_accuracy(organization_id, test_months)
-    
-    return {
-        'mae': metrics.mae,
-        'mape': metrics.mape,
-        'rmse': metrics.rmse,
-        'r2': metrics.r2
-    }
-
-
-# ============= ML Forecasting Endpoints =============
-
-@router.get("/forecast/ml/ensemble")
-async def get_ml_ensemble_forecast(
-    periods: int = Query(12, ge=1, le=24, description="מספר תקופות לתחזית"),
-    db = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
-    org_id: int = Depends(get_current_org_id),
-):
-    """
-    תחזית ML משולבת
-    Get ensemble ML forecast (LSTM + Prophet + XGBoost)
-    """
-    forecasting_service = ForecastingService(db)
-    organization_id = org_id
-    # שליפת נתונים היסטוריים
-    historical = forecasting_service._get_monthly_revenue(organization_id, 24)
-    
-    if len(historical) < 12:
-        return {
-            "ensemble": [],
-            "lstm": [],
-            "prophet": [],
-            "xgboost": [],
-            "weights": {"lstm": 0, "prophet": 0, "xgboost": 0},
-            "status": "insufficient_data",
-            "detail": "אין מספיק נתונים היסטוריים לתחזית ML (נדרשים לפחות 12 חודשים)",
-            "required_months": 12,
-            "available_months": len(historical),
-        }
-    
-    dates = [h['date'] for h in historical]
-    values = [h['amount'] for h in historical]
-    
-    # יצירת תחזית משולבת
-    ensemble = EnsembleForecaster()
-    ensemble.train_all(dates, values)
-    
-    return ensemble.forecast(dates, values, periods)
