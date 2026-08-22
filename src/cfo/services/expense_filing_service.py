@@ -177,6 +177,14 @@ class ExpenseFilingService:
             )
             if new_cat != exp.category:
                 exp.category = new_cat
+                # קטגוריה חדשה = חוקי-מס חדשים (israeli_tax_rules) — ניכוי
+                # התשומות של הקטגוריה הקודמת אינו רלוונטי עוד ולא ייתכן
+                # שיישאר תקוע במסד; מחשבים מחדש דרך אותו משפך כמו
+                # create_expense/update_expense (F: "same computation").
+                exp.vat_claimable = _compute_vat_claimable(
+                    self.db, self.organization_id, category=new_cat,
+                    vat_amount=exp.vat_amount, doc_kind=exp.doc_kind,
+                )
                 updated += 1
         self.db.commit()
         return {"classified": updated}
@@ -216,6 +224,13 @@ class ExpenseFilingService:
             )
             if new_cat != exp.category:
                 exp.category = new_cat
+                # ר' הערה זהה ב-classify_uncategorized: קטגוריה חדשה חייבת
+                # לחשב מחדש vat_claimable, אחרת נשאר ניכוי-תשומות מהקטגוריה
+                # הקודמת שכבר אינו נכון.
+                exp.vat_claimable = _compute_vat_claimable(
+                    self.db, self.organization_id, category=new_cat,
+                    vat_amount=exp.vat_amount, doc_kind=exp.doc_kind,
+                )
                 updated += 1
             by_category[new_cat] = by_category.get(new_cat, 0) + 1
         self.db.commit()
@@ -305,6 +320,13 @@ class ExpenseFilingService:
             )
             if new_cat != e.category:
                 e.category = new_cat
+                # ר' הערה זהה ב-classify_uncategorized/classify_pending:
+                # שם-ספק שהתגלה עכשיו (getdetails) יכול לשנות קטגוריה, ולכן
+                # גם את ניכוי התשומות — לא להשאיר ערך מהקטגוריה הקודמת.
+                e.vat_claimable = _compute_vat_claimable(
+                    self.db, self.organization_id, category=new_cat,
+                    vat_amount=e.vat_amount, doc_kind=e.doc_kind,
+                )
                 reclassified += 1
             if i % 25 == 0:
                 self.db.commit()  # שמירת התקדמות
@@ -576,6 +598,18 @@ class ExpenseFilingService:
                 or "ספק SUMIT"
             )
             invoice_no = getattr(d, "document_number", None)
+            category = classify_expense(
+                supplier, None, invoice_no,
+                org_categories=org_categories, learned_rules=learned_rules,
+            )
+            # /documents/list אינו מספק שער-מסמך (tax_invoice/receipt) — doc_kind
+            # נשאר None. israeli_tax_rules.claimable_vat עדיין נקרא כאן (המנוע
+            # הוא המקור היחיד לקביעה, גם כשהתשובה honest-null): ללא doc_kind
+            # ידוע התוצאה נשארת None לעולם — תור הכרעה, לא ניחוש 100%/0%.
+            vat_claimable = _compute_vat_claimable(
+                self.db, self.organization_id, category=category,
+                vat_amount=vat, doc_kind=None,
+            )
             exp = Expense(
                 organization_id=self.organization_id,
                 external_id=ext,
@@ -586,10 +620,8 @@ class ExpenseFilingService:
                 total=total,
                 expense_date=getattr(d, "issue_date", None) or date.today(),
                 invoice_number=invoice_no,
-                category=classify_expense(
-                    supplier, None, invoice_no,
-                    org_categories=org_categories, learned_rules=learned_rules,
-                ),
+                category=category,
+                vat_claimable=vat_claimable,
                 # טיוטה = ממתינה לאישור; מסמך סופי = כבר מתויק ב-SUMIT
                 status="pending" if is_draft else "filed",
                 sumit_expense_id=None if is_draft else ext,
