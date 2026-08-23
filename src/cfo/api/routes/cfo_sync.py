@@ -90,10 +90,23 @@ async def integration_status(
         settings.open_finance_user_id,
     ]))
     # WhatsApp is a global (env-level) config, same as Telegram — never
-    # per-organization credentials — so this mirrors
-    # channel_notifier._provider_configured("whatsapp") exactly rather than
-    # re-deriving a second definition of "is the channel on".
-    whatsapp_configured = bool(settings.whatsapp_phone_number_id and settings.whatsapp_access_token)
+    # per-organization credentials. This is deliberately a STRICTER
+    # condition than channel_notifier._provider_configured("whatsapp"),
+    # which only gates whether an OUTBOUND push may be attempted
+    # (phone_number_id + access_token). SettingsPage's WhatsApp section is
+    # about the LINKING flow, which runs through the INBOUND webhook path
+    # (whatsapp_webhook.py): POST /webhook returns 503 without
+    # whatsapp_app_secret (HMAC signature verification), and the one-time
+    # GET /webhook subscription handshake returns 503 without
+    # whatsapp_verify_token — either missing means Meta can never deliver a
+    # message to complete email-verification, no matter how correct the
+    # two send credentials are. All four must be present for this flag.
+    whatsapp_configured = bool(
+        settings.whatsapp_phone_number_id
+        and settings.whatsapp_access_token
+        and settings.whatsapp_app_secret
+        and settings.whatsapp_verify_token
+    )
     configured = {
         "production_database": not settings.database_url.startswith("sqlite:"),
         "security": settings.jwt_secret_key != "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING",
@@ -108,7 +121,14 @@ async def integration_status(
         "sumit": [] if sumit_configured else ["SUMIT_API_KEY"],
         "open_finance": [],
         "ai": [] if configured["ai"] else ["OPENAI_API_KEY"],
-        "whatsapp": [] if whatsapp_configured else ["WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_ACCESS_TOKEN"],
+        "whatsapp": [] if whatsapp_configured else [
+            name for name, value in {
+                "WHATSAPP_PHONE_NUMBER_ID": settings.whatsapp_phone_number_id,
+                "WHATSAPP_ACCESS_TOKEN": settings.whatsapp_access_token,
+                "WHATSAPP_APP_SECRET": settings.whatsapp_app_secret,
+                "WHATSAPP_VERIFY_TOKEN": settings.whatsapp_verify_token,
+            }.items() if not value
+        ],
     }
     if not open_finance_configured:
         if connections.get("open_finance") == "active":

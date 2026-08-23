@@ -110,12 +110,14 @@ class WhatsAppGateway:
             response = await client.post(
                 self._messages_url(), json=payload, headers=self._headers(),
             )
-        if response.status_code >= 400:
+        if not (200 <= response.status_code < 300):
             # Explicit status+body check (not a bare raise_for_status()) so
             # the exception carries Meta's own error detail — the whole
             # reason this existed to catch is a 4xx that quietly meant
             # "unapproved template" or "recipient blocked", not just "some
-            # request failed".
+            # request failed". Only 2xx counts as success: a 3xx redirect
+            # is not a delivered message either, and treating "anything
+            # under 400" as success let one slip through as a false `sent`.
             try:
                 detail = response.json()
             except ValueError:

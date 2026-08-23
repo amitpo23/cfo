@@ -54,7 +54,11 @@ const SettingsPage: React.FC<Props> = ({ darkMode }) => {
   });
   const orgId = currentUser?.organization_id ?? null;
 
-  const { data: integrationStatus } = useQuery<IntegrationStatus>({
+  const {
+    data: integrationStatus,
+    isLoading: integrationStatusLoading,
+    isError: integrationStatusError,
+  } = useQuery<IntegrationStatus>({
     queryKey: ['integration-status'],
     queryFn: () => apiService.get('/integration/status'),
   });
@@ -277,7 +281,13 @@ const SettingsPage: React.FC<Props> = ({ darkMode }) => {
               triggered by messaging the bot, not by anything issued here. */}
           <div className={`mt-6 pt-6 border-t ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
             <h3 className="text-lg font-semibold mb-2">וואטסאפ</h3>
-            {integrationStatus?.configured?.whatsapp ? (
+            {integrationStatusLoading ? (
+              <p className={`text-sm ${mutedClass}`}>בודק זמינות ערוץ הוואטסאפ...</p>
+            ) : integrationStatusError ? (
+              <p className="text-sm text-red-600">
+                לא הצלחנו לבדוק את סטטוס ערוץ הוואטסאפ. רענן את הדף ונסה שוב.
+              </p>
+            ) : integrationStatus?.configured?.whatsapp ? (
               <p className={`text-sm ${mutedClass}`}>
                 הערוץ פעיל. כדי לקשר את הוואטסאפ שלך, שלח הודעה למספר הבוט העסקי של רצף
                 (לקבלת המספר יש לפנות למנהל המערכת אצלכם) עם כתובת המייל הרשומה שלך ברצף.

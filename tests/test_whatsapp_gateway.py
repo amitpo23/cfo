@@ -50,6 +50,22 @@ def test_post_messages_raises_on_5xx_response(monkeypatch):
     assert "500" in str(exc_info.value)
 
 
+def test_post_messages_raises_on_3xx_redirect_response(monkeypatch):
+    """A redirect is not success either — Codex review finding: the original
+    fix only checked `status_code >= 400`, so a 3xx silently fell through as
+    success and channel_notifier would have counted it as `sent` and
+    stamped `last_push_at`, exactly the bug this whole file exists to
+    close. Only 2xx may count as success."""
+    monkeypatch.setattr(
+        httpx.AsyncClient, "post",
+        _mock_post(302, text="", json_body=None),
+    )
+    gateway = _gateway()
+    with pytest.raises(WhatsAppSendError) as exc_info:
+        asyncio.run(gateway._post_messages({"messaging_product": "whatsapp"}))
+    assert "302" in str(exc_info.value)
+
+
 def test_post_messages_succeeds_silently_on_2xx_response(monkeypatch):
     monkeypatch.setattr(
         httpx.AsyncClient, "post",

@@ -161,22 +161,46 @@ def test_integration_status_omits_last_sync_error_when_none_recorded(client, fre
 
 def test_integration_status_reports_whatsapp_configured_flag(client, fresh_org, monkeypatch):
     """SettingsPage's WhatsApp linking section (task 2, 2026-08-23
-    moshko-usability plan) needs an honest signal for whether the channel
-    was ever turned on by the office, to choose between "not activated" and
-    the email-verification explanation — same env-only config check
-    channel_notifier._provider_configured already uses for whatsapp."""
+    moshko-usability plan) needs an honest signal for whether the LINKING
+    path — not just outbound sending — actually works, to choose between
+    "not activated" and the email-verification explanation.
+
+    This is deliberately a STRICTER condition than
+    channel_notifier._provider_configured (which only gates whether
+    outbound pushes may be attempted, phone_number_id+access_token). The
+    linking flow runs through whatsapp_webhook.py's INBOUND path: POST
+    /webhook 503s without whatsapp_app_secret (HMAC signature check), and
+    the one-time GET /webhook subscription handshake 503s without
+    whatsapp_verify_token — either missing means Meta can never deliver a
+    message to complete the flow no matter how correct the two send
+    credentials are. All four must be present."""
     import cfo.config as config_module
 
     org = fresh_org()
 
-    monkeypatch.setattr(config_module.settings, "whatsapp_phone_number_id", None, raising=False)
-    monkeypatch.setattr(config_module.settings, "whatsapp_access_token", None, raising=False)
+    all_set = {
+        "whatsapp_phone_number_id": "phone-id",
+        "whatsapp_access_token": "wa-token",
+        "whatsapp_app_secret": "app-secret",
+        "whatsapp_verify_token": "verify-token",
+    }
+    for name, value in all_set.items():
+        monkeypatch.setattr(config_module.settings, name, value, raising=False)
     resp = client.get("/api/integration/status", headers=org["headers"])
     assert resp.status_code == 200, resp.text
-    assert resp.json()["configured"]["whatsapp"] is False
+    assert resp.json()["configured"]["whatsapp"] is True
 
-    monkeypatch.setattr(config_module.settings, "whatsapp_phone_number_id", "phone-id", raising=False)
-    monkeypatch.setattr(config_module.settings, "whatsapp_access_token", "wa-token", raising=False)
-    resp2 = client.get("/api/integration/status", headers=org["headers"])
-    assert resp2.status_code == 200, resp2.text
-    assert resp2.json()["configured"]["whatsapp"] is True
+    # Each one of the four missing individually must flip the flag back to
+    # False — phone_number_id/access_token alone (the outbound-only
+    # condition) must NOT be reported as "configured" for linking purposes.
+    for missing_name in all_set:
+        for name, value in all_set.items():
+            monkeypatch.setattr(
+                config_module.settings, name, None if name == missing_name else value,
+                raising=False,
+            )
+        resp = client.get("/api/integration/status", headers=org["headers"])
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["configured"]["whatsapp"] is False, f"missing {missing_name} should read as not-configured"
+        assert missing_name.upper() in body["missing"]["whatsapp"]
