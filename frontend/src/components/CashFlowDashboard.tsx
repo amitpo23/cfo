@@ -322,7 +322,7 @@ const CashFlowDashboard: React.FC = () => {
           icon={Calendar}
           label="Runway"
           value={formatRunway(burnRate)}
-          detail={burnRate?.net_monthly_burn && burnRate.net_monthly_burn > 0 ? `שריפה: ${formatCurrency(burnRate.net_monthly_burn)}/חודש` : 'ללא שריפת מזומנים'}
+          detail={burnRate?.runway_reason || (burnRate?.net_monthly_burn && burnRate.net_monthly_burn > 0 ? `שריפה: ${formatCurrency(burnRate.net_monthly_burn)}/חודש` : 'ללא שריפת מזומנים')}
           tone={runwayTone(burnRate)}
         />
       </div>
@@ -422,11 +422,9 @@ const CashFlowDashboard: React.FC = () => {
                   />
                 </LineChart>
               </ResponsiveContainer>
-              {/* P0-B: הטקסט הקשיח הקודם ("אין חשבון בנק/נכס...") הפך לשקרי
-                  ברגע שההגדרה הוחמרה ל-BANK+Open Finance+טרי בלבד — הסיבה
-                  האמיתית (אין חשבון כשיר / יתרה לא טרייה / חלקית) מגיעה
-                  עכשיו מה-API עצמו. מוצג גם כשהיתרה זמינה-חלקית (reason
-                  יכול להיות מוגדר גם ל-balance_basis="account_balance"). */}
+              {/* P0-B: הסיבה האמיתית (אין חשבון כשיר / יתרה לא טרייה /
+                  תמהיל חשבונות לא שלם) מגיעה מה-API. תמהיל נסגר כולו
+                  ל-unavailable; לא מוצגת יתרה ארגונית חלקית. */}
               {dailyResp?.balance_reason && (
                 <p className="text-xs text-amber-600 mt-2">{dailyResp.balance_reason}</p>
               )}
@@ -541,8 +539,8 @@ const CashFlowDashboard: React.FC = () => {
               <p className="text-xl font-bold text-blue-600">
                 {burnRate.current_balance != null ? formatCurrency(burnRate.current_balance) : '—'}
               </p>
-              {/* P0-B: reason מגיע מה-API — יכול להסביר גם "לא זמין
-                  בכלל" וגם "זמין-חלקית" (כמה חשבונות הודרו כי אינם טריים). */}
+              {/* P0-B: reason מגיע מה-API ומפרט מדוע היתרה הארגונית נפסלה,
+                  כולל שמות/מזהי חשבונות שלא עברו את שער הטריות. */}
               {burnRate.current_balance_reason && (
                 <p className="text-xs text-amber-600 mt-1">{burnRate.current_balance_reason}</p>
               )}
@@ -583,12 +581,18 @@ const CashFlowDashboard: React.FC = () => {
           )}
 
           {burnRate.net_monthly_burn <= 0 && (
-            <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
-              <CheckCircle className="text-green-600 flex-shrink-0 mt-0.5" size={20} />
+            <div className={`mt-6 p-4 rounded-lg flex items-start gap-3 ${burnRate.runway_status === 'infinite' ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`}>
+              {burnRate.runway_status === 'infinite' ? (
+                <CheckCircle className="text-green-600 flex-shrink-0 mt-0.5" size={20} />
+              ) : (
+                <AlertTriangle className="text-amber-600 flex-shrink-0 mt-0.5" size={20} />
+              )}
               <div>
-                <p className="font-medium text-green-800">מצב תזרים חיובי</p>
-                <p className="text-sm text-green-700 mt-1">
-                  ההכנסות עולות על ההוצאות. המשיכו כך!
+                <p className={`font-medium ${burnRate.runway_status === 'infinite' ? 'text-green-800' : 'text-amber-800'}`}>
+                  {burnRate.runway_status === 'infinite' ? 'ללא שריפת מזומנים' : 'Runway לא זמין'}
+                </p>
+                <p className={`text-sm mt-1 ${burnRate.runway_status === 'infinite' ? 'text-green-700' : 'text-amber-700'}`}>
+                  {burnRate.runway_reason || 'לא ניתן לחשב כמה זמן הכסף יספיק.'}
                 </p>
               </div>
             </div>

@@ -97,12 +97,22 @@ def get_credit_line_status(db: Session, organization_id: int, days: int = 30) ->
 
     daily = LiveCashFlowService(db, organization_id).daily_cash_position(days=days)
 
-    if daily.get("balance_basis") != "account_balance" or not daily.get("days"):
+    balance_reason = daily.get("balance_reason")
+    if (
+        balance_reason
+        or daily.get("balance_basis") != "account_balance"
+        or not daily.get("days")
+    ):
         # honest-null: אין תנועות בנק בחלון, או שיש תנועות אבל אין יתרת
-        # חשבון חיה לעגן אליה את הריצה — לא מדווחים "ok" בביטחון-שווא.
+        # חשבון חיה ושלמה לעגן אליה את הריצה — לא מדווחים "ok"
+        # בביטחון-שווא. balance_reason גובר על ההסבר הכללי כדי לשמר את
+        # פירוט החשבונות שנפסלו בשער הטריות.
         return {
             "status": "unknown",
-            "reason": "אין נתוני יתרת מזומנים חיים (תנועות בנק/יתרת חשבון) לבדיקת מסגרת האשראי",
+            "reason": balance_reason or (
+                "אין נתוני יתרת מזומנים חיים (תנועות בנק/יתרת חשבון) "
+                "לבדיקת מסגרת האשראי"
+            ),
             "accounts": accounts_payload,
             "breach_date": None,
             "warning_date": None,

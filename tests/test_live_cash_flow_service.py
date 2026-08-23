@@ -371,10 +371,63 @@ def test_burn_rate_missing_balance_timestamp_not_counted_as_cash(fresh_org):
     assert result["current_balance_available"] is False
 
 
-def test_burn_rate_partial_fresh_balance_discloses_excluded_accounts(fresh_org):
-    """שני חשבונות OF/BANK: אחד טרי (₪1,000), אחד ישן (₪500,000). הסכום
-    המוצג משקף רק את הטרי (לא מוסתר, לא מומצא) — אבל reason מגלה שחשבון
-    אחד הודר, כדי שמספר-חלקי לא ייראה כמו מספר-שלם-ומהימן."""
+def test_burn_rate_accepts_fresh_sync_when_balance_as_of_is_missing(fresh_org):
+    """כש-referenceDate חסר אך החשבון עודכן בסנכרון טרי, synced_at מעיד
+    שהיתרה עצמה הגיעה באותה פעימת sync ולכן מותר להשתמש בה. observed_at
+    אינו fallback לטריות יתרה."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Account(
+            organization_id=org_id,
+            name="בנק ללא referenceDate",
+            account_type=AccountType.BANK,
+            balance=Decimal("20000"),
+            source="open_finance",
+            balance_as_of=None,
+            synced_at=datetime.utcnow(),
+        ))
+        db.commit()
+
+        result = LiveCashFlowService(db, org_id).burn_rate(months=3, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    assert result["current_balance"] == 20000.0
+    assert result["current_balance_available"] is True
+    assert result["current_balance_reason"] is None
+
+
+def test_burn_rate_observed_at_alone_does_not_make_balance_fresh(fresh_org):
+    """observed_at מתאר תצפית כללית ברשומה ולא מוכיח שהיתרה סונכרנה."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Account(
+            organization_id=org_id,
+            name="בנק עם observed_at בלבד",
+            account_type=AccountType.BANK,
+            balance=Decimal("20000"),
+            source="open_finance",
+            balance_as_of=None,
+            synced_at=None,
+            observed_at=datetime.utcnow(),
+        ))
+        db.commit()
+
+        result = LiveCashFlowService(db, org_id).burn_rate(months=3, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    assert result["current_balance"] is None
+    assert result["current_balance_available"] is False
+    assert "observed_at בלבד" in result["current_balance_reason"]
+
+
+def test_burn_rate_mixed_fresh_and_stale_balances_fails_closed(fresh_org):
+    """שני חשבונות OF/BANK: אחד טרי ואחד ישן. ברמת הארגון אסור להציג
+    את החשבון הטרי כסכום מלא; כל היתרה נסגרת ל-null וה-reason מזהה את
+    החשבון שנפסל."""
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
@@ -390,10 +443,10 @@ def test_burn_rate_partial_fresh_balance_discloses_excluded_accounts(fresh_org):
     finally:
         db.close()
 
-    assert result["current_balance"] == 1000.0
-    assert result["current_balance_available"] is True
+    assert result["current_balance"] is None
+    assert result["current_balance_available"] is False
     assert result["current_balance_reason"]
-    assert "1" in result["current_balance_reason"]
+    assert "בנק ישן" in result["current_balance_reason"]
 
 
 def test_burn_rate_not_positive_runway_when_burning_with_nonpositive_balance(fresh_org):
@@ -418,6 +471,39 @@ def test_burn_rate_not_positive_runway_when_burning_with_nonpositive_balance(fre
     assert result["runway_months"] is None
     assert result["runway_status"] == "not_positive"
     assert result["runway_reason"]
+
+
+def test_burn_rate_negative_balance_is_not_infinite_when_net_burn_is_nonpositive(fresh_org):
+    """יתרה שלילית לעולם אינה runway אינסופי, גם כשההכנסות בתקופה עולות
+    על ההוצאות וה-net burn אינו חיובי."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Account(
+            organization_id=org_id,
+            name="בנק במינוס",
+            account_type=AccountType.BANK,
+            balance=Decimal("-100"),
+            source="open_finance",
+            balance_as_of=datetime.utcnow(),
+        ))
+        db.add(BankTransaction(
+            organization_id=org_id,
+            transaction_date=TODAY - timedelta(days=5),
+            description="הכנסה",
+            amount=Decimal("3000"),
+        ))
+        db.commit()
+
+        result = LiveCashFlowService(db, org_id).burn_rate(months=3, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    assert result["net_monthly_burn"] <= 0
+    assert result["current_balance"] == -100.0
+    assert result["runway_months"] is None
+    assert result["runway_status"] == "not_positive"
+    assert "אינה חיובית" in result["runway_reason"]
 
 
 def test_burn_rate_computed_runway_when_burning_with_positive_balance(fresh_org):

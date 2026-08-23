@@ -106,6 +106,35 @@ def test_unknown_when_credit_limit_known_but_no_bank_data(fresh_org):
         db.close()
 
 
+def test_unknown_when_cash_balance_has_reason(fresh_org, monkeypatch):
+    """balance_reason מציין שיתרת הארגון נפסלה/חלקית, ולכן אסור לסווג
+    מסגרת על בסיס סדרת closing_balance שנראית מספרית ושלמה."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _mk_account(db, org_id, credit_limit=10000, balance=5000)
+        db.commit()
+
+        reason = "היתרה אינה שלמה: החשבון בנק ישן נפסל בגלל חוסר טריות."
+        monkeypatch.setattr(
+            svc.LiveCashFlowService,
+            "daily_cash_position",
+            lambda self, days: {
+                "balance_basis": "account_balance",
+                "balance_reason": reason,
+                "days": [{"date": date.today().isoformat(), "closing_balance": 5000.0}],
+            },
+        )
+
+        status = svc.get_credit_line_status(db, org_id)
+        assert status["status"] == "unknown"
+        assert status["reason"] == reason
+        assert status["breach_date"] is None
+        assert status["min_headroom"] is None
+    finally:
+        db.close()
+
+
 def test_breach_when_projected_balance_crosses_floor(fresh_org):
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
