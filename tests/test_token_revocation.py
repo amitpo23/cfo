@@ -23,6 +23,7 @@ def test_new_tokens_carry_jti_claim(client, owner):
     payload = decode_access_token(data["access_token"])
     assert payload is not None
     assert payload.get("jti"), "טוקן חדש חייב לשאת jti"
+    assert payload.get("token_version") == 0
 
 
 def test_logout_revokes_token(client, owner):
@@ -55,8 +56,8 @@ def test_logout_does_not_revoke_other_tokens_of_same_user(client, owner):
     assert client.get("/api/admin/auth/me", headers=headers_b).status_code == 200
 
 
-def test_legacy_token_without_jti_still_works(client, owner):
-    """טוקן ישן (בלי jti) חייב להמשיך לעבוד — תאימות לאחור."""
+def test_legacy_token_without_jti_or_version_works_only_at_version_zero(client, owner):
+    """Legacy version-less tokens work only while the DB version remains zero."""
     data = _register(client, "legacy-token@example.com")
 
     from jose import jwt as jose_jwt
@@ -78,6 +79,19 @@ def test_legacy_token_without_jti_still_works(client, owner):
 
     # והטוקן עדיין עובד (אין דרך לבטל אותו — הוא יפוג מעצמו)
     assert client.get("/api/admin/auth/me", headers=headers).status_code == 200
+
+    from cfo.database import SessionLocal
+    from cfo.models import User
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == data["user"]["id"]).one()
+        user.token_version += 1
+        db.commit()
+    finally:
+        db.close()
+
+    assert client.get("/api/admin/auth/me", headers=headers).status_code == 401
 
 
 def test_logout_purges_expired_denylist_rows(client, owner):

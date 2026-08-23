@@ -178,6 +178,8 @@ class Settings(BaseSettings):
     # Per-org/day cap on chat-initiated receipt intakes (mirrors
     # ocr_daily_document_limit's role for the background pipeline).
     chat_receipt_daily_limit: int = 20
+    # תקרת ניסיונות אימות לדקה פר-מקור (IP) — הגנת סריקה משלימה לנעילת חשבון
+    auth_source_attempts_per_minute: int = 60
     # AI chat assistant (Wave 2 Step 9) — same anthropic_api_key as OCR above.
     # Haiku 4.5 — המודל הזול ביותר. הכרעת בעלים 17/08/2026, כשיתרת
     # החשבון עמדה על $1.92. זה אינו רק חיסכון: חשבון שנגמר באמצע יום
@@ -243,6 +245,14 @@ class Settings(BaseSettings):
     # cadence. This is an internal cost budget, not a claimed provider quota;
     # operators may lower it (including 0 to disable), never raise above 25.
     sumit_enrichment_daily_action_limit: int = 25
+    # Collection cron cap counts outbound channel deliveries, not contacts: an
+    # SMS and an email to the same contact consume two slots. Operators may
+    # lower this (including 0 to disable), never raise it above 20.
+    collection_reminder_batch_limit: int = 20
+    # Shared durable daily ceiling for proactive Telegram/WhatsApp push calls
+    # from cron routes, per organization. Both channel-alerts and roster-health
+    # consume this same budget.
+    channel_push_daily_limit: int = 50
     # Minimum time between manually-triggered (POST /sync/run) syncs for the
     # same org/source, to stop a user/UI from hammering the provider.
     manual_refresh_cooldown_minutes: int = 15
@@ -336,6 +346,14 @@ class Settings(BaseSettings):
         self.chat_receipt_daily_limit = min(
             50,
             max(0, self.chat_receipt_daily_limit),
+        )
+        self.collection_reminder_batch_limit = min(
+            20,
+            max(0, self.collection_reminder_batch_limit),
+        )
+        self.channel_push_daily_limit = min(
+            50,
+            max(0, self.channel_push_daily_limit),
         )
         if self.manual_refresh_cooldown_minutes < 15:
             self.manual_refresh_cooldown_minutes = 15

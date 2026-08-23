@@ -8,6 +8,8 @@
 """
 from datetime import datetime, timedelta
 
+from sqlalchemy import select
+
 
 def _register(client, email, password="secret123"):
     return client.post("/api/admin/auth/register", json={
@@ -93,3 +95,91 @@ def test_lock_expires_after_window(client, owner):
         db.close()
 
     assert _login(client, email, "secret123").status_code == 200
+
+
+def test_failed_login_counter_is_atomic_across_stale_sessions(client, owner):
+    """Five workers that all observed zero must still produce count=5 + lock.
+
+    Loading the same row in every session before the first write forces the
+    stale-read ordering that defeated the former ORM read/modify/write code.
+    """
+    email = "atomic-lock-counter@example.com"
+    assert _register(client, email).status_code == 201
+
+    from cfo.api.routes.admin import _record_failed_login
+    from cfo.database import SessionLocal
+    from cfo.models import User
+
+    sessions = [SessionLocal() for _ in range(5)]
+    try:
+        stale_users = [
+            db.execute(select(User).where(User.email == email)).scalar_one()
+            for db in sessions
+        ]
+        assert [user.failed_login_attempts for user in stale_users] == [0] * 5
+
+        observed = []
+        now = datetime.utcnow()
+        for db, stale_user in zip(sessions, stale_users):
+            observed.append(_record_failed_login(db, stale_user.id, now=now)[0])
+            db.commit()
+
+        assert observed == [1, 2, 3, 4, 5]
+    finally:
+        for db in sessions:
+            db.close()
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).one()
+        assert user.failed_login_attempts == 5
+        assert user.locked_until == now + timedelta(minutes=15)
+    finally:
+        db.close()
+
+
+def test_login_is_rate_limited_by_source_before_account_lockout(
+    client, owner, monkeypatch,
+):
+    """Unknown-account traffic is throttled by source, not account state."""
+    from cfo.api.routes import admin as admin_routes
+
+    monkeypatch.setattr(admin_routes, "LOGIN_SOURCE_ATTEMPTS_PER_MINUTE", 2)
+    headers = {"x-forwarded-for": "203.0.113.177"}
+
+    first = client.post("/api/admin/auth/login", headers=headers, json={
+        "email": "source-rate-limit-1@example.com", "password": "wrong-pass",
+    })
+    second = client.post("/api/admin/auth/login", headers=headers, json={
+        "email": "source-rate-limit-2@example.com", "password": "wrong-pass",
+    })
+    blocked = client.post("/api/admin/auth/login", headers=headers, json={
+        "email": "source-rate-limit-3@example.com", "password": "wrong-pass",
+    })
+    other_source = client.post(
+        "/api/admin/auth/login",
+        headers={"x-forwarded-for": "203.0.113.178"},
+        json={
+            "email": "source-rate-limit-4@example.com",
+            "password": "wrong-pass",
+        },
+    )
+
+    assert first.status_code == 401
+    assert second.status_code == 401
+    assert blocked.status_code == 429
+    assert other_source.status_code == 401
+
+    from cfo.database import SessionLocal
+    from cfo.models import ProviderRequestBudget
+
+    db = SessionLocal()
+    try:
+        rows = db.query(ProviderRequestBudget).filter(
+            ProviderRequestBudget.provider == "auth",
+            ProviderRequestBudget.limit_value == 2,
+        ).all()
+        assert sorted(row.used for row in rows) == [1, 2]
+        assert all(row.scope_key.startswith("source:") for row in rows)
+    finally:
+        db.close()

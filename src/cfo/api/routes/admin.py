@@ -5,10 +5,11 @@ Admin API routes
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import case, func, or_
+from sqlalchemy import case, func, or_, update
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 import hashlib
+import logging
 import secrets
 from urllib.parse import urlencode
 from datetime import date, datetime, timedelta, timezone
@@ -51,6 +52,7 @@ from ...integrations.sumit_models import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _require_selected_organization(ctx: OrganizationAccessContext, supplied: Optional[int]) -> None:
@@ -490,7 +492,11 @@ def _create_self_registered_user(
 
 
 def _token_for_user(user: User) -> Token:
-    access_token = create_access_token(data={"sub": user.id, "role": user.role.value})
+    access_token = create_access_token(data={
+        "sub": user.id,
+        "role": user.role.value,
+        "token_version": user.token_version or 0,
+    })
     return Token(
         access_token=access_token,
         user=UserResponse.model_validate(user)
@@ -586,6 +592,11 @@ async def google_login(
 # לאפשר enumeration של חשבונות.
 LOGIN_LOCKOUT_THRESHOLD = 5
 LOGIN_LOCKOUT_MINUTES = 15
+# שכבת מקור משלימה את נעילת החשבון: תוקף מאותו מקור אינו יכול לסרוק
+# חשבונות ללא גבול. המונה עמיד ומשותף בין instances דרך מסד הנתונים.
+# ‏config ולא קבוע: סוויטת הטסטים כולה מגיעה ממקור אחד ("testserver")
+# וחוצה 60/דקה בלגיטימיות — בסביבת טסט התקרה מוגבהת דרך env.
+LOGIN_SOURCE_ATTEMPTS_PER_MINUTE = settings.auth_source_attempts_per_minute
 LOGIN_FAILED_DETAIL = "אימייל או סיסמה שגויים"
 LOGIN_LOCKED_DETAIL = (
     "החשבון נעול זמנית עקב ניסיונות התחברות כושלים חוזרים. "
@@ -593,34 +604,133 @@ LOGIN_LOCKED_DETAIL = (
 )
 
 
+def _login_source_scope(request: Request) -> str:
+    """Return a privacy-preserving, stable login source key.
+
+    Vercel/proxy deployments supply the original client in forwarding headers;
+    direct ASGI deployments fall back to ``request.client.host``. Only a hash
+    is persisted in provider_request_budgets, not the raw IP address.
+    """
+    source = ""
+    for header in ("x-vercel-forwarded-for", "x-forwarded-for", "x-real-ip"):
+        value = request.headers.get(header, "")
+        if value:
+            source = value.split(",", 1)[0].strip()
+            if source:
+                break
+    if not source and request.client is not None:
+        source = request.client.host or ""
+    if not source:
+        # Fail into one shared bucket instead of producing a unique key that
+        # would silently disable throttling when client metadata is absent.
+        source = "unknown"
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:40]
+    return f"source:{digest}"
+
+
+def _claim_login_source(db: Session, request: Request, *, now: datetime) -> bool:
+    """Atomically claim one source login attempt in the current UTC minute."""
+    from ...services.sumit_request_budget import SumitRequestLimiter
+
+    window_start = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    return SumitRequestLimiter._claim_window(
+        db,
+        provider="auth",
+        scope_key=_login_source_scope(request),
+        organization_id=None,
+        window_kind="minute",
+        window_start=window_start,
+        limit_value=LOGIN_SOURCE_ATTEMPTS_PER_MINUTE,
+        now=now.replace(tzinfo=timezone.utc),
+    )
+
+
+def _record_failed_login(
+    db: Session,
+    user_id: int,
+    *,
+    now: datetime,
+) -> tuple[int, Optional[datetime]]:
+    """Increment failures and derive lock state in one atomic UPDATE.
+
+    The returned count is the database result of ``failed + 1``; it never
+    depends on an ORM object that another worker may have loaded earlier.
+    """
+    next_attempt = func.coalesce(User.failed_login_attempts, 0) + 1
+    lock_until = now + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+    statement = (
+        update(User)
+        .where(User.id == user_id)
+        .values(
+            failed_login_attempts=next_attempt,
+            locked_until=case(
+                (next_attempt >= LOGIN_LOCKOUT_THRESHOLD, lock_until),
+                else_=User.locked_until,
+            ),
+        )
+        .returning(User.failed_login_attempts, User.locked_until)
+        .execution_options(synchronize_session=False)
+    )
+    row = db.execute(statement).one()
+    return int(row.failed_login_attempts), row.locked_until
+
+
 @router.post("/auth/login", response_model=Token, tags=["Auth"])
 async def login(
     login_data: UserLogin,
+    request: Request,
     db: Session = Depends(get_db_session)
 ):
     """התחברות למערכת — עם נעילה זמנית אחרי כישלונות חוזרים"""
+    now = datetime.utcnow()
+    try:
+        source_claimed = _claim_login_source(db, request, now=now)
+        if source_claimed:
+            # Unknown-user failures also need a durable claim; commit this
+            # security counter independently of the authentication outcome.
+            db.commit()
+        else:
+            db.rollback()
+    except Exception:
+        db.rollback()
+        logger.exception("auth login source limiter unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="שירות ההתחברות אינו זמין זמנית. נסו שוב מאוחר יותר.",
+        )
+    if not source_claimed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="יותר מדי ניסיונות התחברות ממקור זה. נסו שוב בעוד דקה.",
+        )
+
     user = db.query(User).filter(User.email == login_data.email).first()
 
     # נעילה נבדקת לפני אימות הסיסמה: חשבון נעול נשאר נעול גם מול סיסמה
     # נכונה, אחרת התוקף פשוט ממשיך לנחש בזמן הנעילה.
     if user is not None and user.locked_until is not None:
-        if user.locked_until > datetime.utcnow():
+        if user.locked_until > now:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=LOGIN_LOCKED_DETAIL,
             )
         # הנעילה פגה — מתחילים חלון ספירה נקי
-        user.locked_until = None
-        user.failed_login_attempts = 0
+        db.execute(
+            update(User)
+            .where(
+                User.id == user.id,
+                User.locked_until.is_not(None),
+                User.locked_until <= now,
+            )
+            .values(locked_until=None, failed_login_attempts=0)
+            .execution_options(synchronize_session=False)
+        )
         db.commit()
+        db.refresh(user)
 
     if not user or not verify_password(login_data.password, user.password_hash):
         if user is not None:
-            user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
-            if user.failed_login_attempts >= LOGIN_LOCKOUT_THRESHOLD:
-                user.locked_until = datetime.utcnow() + timedelta(
-                    minutes=LOGIN_LOCKOUT_MINUTES,
-                )
+            _record_failed_login(db, user.id, now=now)
             db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -654,7 +764,8 @@ async def login(
         data={
             "sub": user.id,
             "role": user.role.value,
-            "org_id": user.organization_id
+            "org_id": user.organization_id,
+            "token_version": user.token_version or 0,
         }
     )
     
@@ -701,6 +812,36 @@ class PasswordResetConfirm(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+def _claim_password_reset_token(
+    db: Session,
+    token_hash: str,
+    *,
+    now: datetime,
+) -> Optional[int]:
+    """Atomically mark one valid reset token used and return its user id.
+
+    ``rowcount == 0`` is the only rejection signal: the token is unknown,
+    expired, or another transaction already claimed it. The follow-up query is
+    in the same transaction, while the successful UPDATE keeps the row claimed
+    until the password change commits.
+    """
+    claim = db.execute(
+        update(PasswordResetToken)
+        .where(
+            PasswordResetToken.token_hash == token_hash,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at >= now,
+        )
+        .values(used_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    if claim.rowcount != 1:
+        return None
+    return db.query(PasswordResetToken.user_id).filter(
+        PasswordResetToken.token_hash == token_hash,
+    ).scalar()
+
+
 @router.post("/auth/change-password", tags=["Auth"])
 async def change_password(
     body: ChangePasswordRequest,
@@ -714,7 +855,16 @@ async def change_password(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="הסיסמה הנוכחית שגויה",
         )
-    current_user.password_hash = get_password_hash(body.new_password)
+    new_password_hash = get_password_hash(body.new_password)
+    db.execute(
+        update(User)
+        .where(User.id == current_user.id)
+        .values(
+            password_hash=new_password_hash,
+            token_version=User.token_version + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
     db.add(AuditLog(
         user_id=current_user.id,
         organization_id=current_user.organization_id,
@@ -756,7 +906,16 @@ async def request_password_reset(
         ))
         db.commit()
 
-        base = str(request.base_url).rstrip("/")
+        # Canonical public URL prevents Host-header/proxy injection into reset
+        # mail. Empty legacy configuration falls back explicitly and loudly.
+        configured_base = (settings.app_url or "").strip()
+        if configured_base:
+            base = configured_base.rstrip("/")
+        else:
+            logger.warning(
+                "settings.app_url is empty; password reset URL falls back to request.base_url",
+            )
+            base = str(request.base_url).rstrip("/")
         reset_link = f"{base}/reset-password?token={raw_token}"
         await send_email_smtp(
             user.email,
@@ -791,23 +950,30 @@ async def reset_password(
         ),
     )
 
-    token_hash = hashlib.sha256(body.token.encode()).hexdigest()
-    row = db.query(PasswordResetToken).filter(
-        PasswordResetToken.token_hash == token_hash,
-    ).first()
     now = datetime.utcnow()
-    if row is None or row.used_at is not None or row.expires_at < now:
+    token_hash = hashlib.sha256(body.token.encode()).hexdigest()
+    user_id = _claim_password_reset_token(db, token_hash, now=now)
+    if user_id is None:
         raise invalid_token
 
-    user = db.query(User).filter(User.id == row.user_id).first()
+    user = db.query(User).filter(User.id == user_id).first()
     if user is None or not user.is_active:
+        db.rollback()
         raise invalid_token
 
-    user.password_hash = get_password_hash(body.new_password)
-    # איפוס מוצלח משחרר גם נעילת login — המשתמש הוכיח שליטה במייל
-    user.failed_login_attempts = 0
-    user.locked_until = None
-    row.used_at = now
+    new_password_hash = get_password_hash(body.new_password)
+    db.execute(
+        update(User)
+        .where(User.id == user.id)
+        .values(
+            password_hash=new_password_hash,
+            # איפוס מוצלח משחרר גם נעילת login — המשתמש הוכיח שליטה במייל.
+            failed_login_attempts=0,
+            locked_until=None,
+            token_version=User.token_version + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
     db.add(AuditLog(
         user_id=user.id,
         organization_id=user.organization_id,

@@ -13,6 +13,9 @@ os.environ.pop("REGISTRATION_SECRET", None)
 # ראו חומת הרשת מיד למטה, שהיא מה שהופך את הכוונה הזו לאכיפה.
 os.environ["SUMIT_API_KEY"] = "test-env-sumit-key"
 os.environ["CRON_SECRET"] = "test-cron-secret"
+# כל הסוויטה מגיעה ממקור אחד ("testserver") — תקרת 60/דקה בפרוד הייתה
+# מפילה טסטים לגיטימיים; טסט האכיפה הייעודי מוריד אותה נקודתית.
+os.environ["AUTH_SOURCE_ATTEMPTS_PER_MINUTE"] = "1000000"
 
 # --------------------------------------------------------------------- #
 # חומת רשת — אירוע 13/08/2026

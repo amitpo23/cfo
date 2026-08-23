@@ -191,6 +191,11 @@ class User(Base):
         Integer, nullable=False, default=0, server_default="0",
     )
     locked_until = Column(DateTime, nullable=True)
+    # כל שינוי סיסמה מעלה גרסה זו. JWT ישן אינו תקף כשה-claim שלו אינו
+    # תואם; טוקן legacy בלי claim מפורש מפורש כגרסה 0 בלבד.
+    token_version = Column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -49,6 +49,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     # jti — מזהה ייחודי לטוקן, המאפשר ביטול נקודתי דרך denylist ב-logout.
     # טוקנים ישנים בלי jti ממשיכים לעבוד (תאימות) אך אינם ניתנים לביטול.
     to_encode.setdefault("jti", uuid.uuid4().hex)
+    # כל טוקן חדש נושא גרסת session. קריאות legacy של helper זה שאינן
+    # מספקות גרסה מיועדות למשתמשים שטרם החליפו סיסמה (גרסה 0).
+    to_encode.setdefault("token_version", 0)
     
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt

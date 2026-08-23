@@ -104,6 +104,21 @@ async def get_current_user(
         if settings.auth_bypass_enabled:
             return _get_or_create_auth_bypass_user(db)
         raise invalid_credentials_exception
+
+    # תאימות לאחור מכוונת: JWT היסטורי בלי token_version מתקבל כאילו נשא
+    # גרסה 0, ורק כל עוד המשתמש עצמו עדיין בגרסה 0. אחרי שינוי/איפוס
+    # סיסמה אין לטוקן version-less דרך לעקוף את ההפקעה.
+    claimed_token_version = payload.get("token_version", 0)
+    if (
+        isinstance(claimed_token_version, bool)
+        or not isinstance(claimed_token_version, int)
+        or claimed_token_version != (user.token_version or 0)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="תוקף ההתחברות פג עקב שינוי סיסמה — יש להתחבר מחדש",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     if not user.is_active:
         raise HTTPException(
