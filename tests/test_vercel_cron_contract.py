@@ -42,10 +42,91 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # SUMIT** — מוכח בטסט test_morning_cycle_makes_zero_sumit_network_calls
 # (וה-SMS של הבריף כבוי כברירת מחדל + מגודר בשער הפעולות-בתשלום).
 # ראיית הצלחה: CfoInsight/DailySnapshot/MorningBrief מתרעננים יומית.
+#
+# 23/08/2026 — אישור בעלים מפורש (ציטוט): "אפשר שמאז האירוע, הסדר יחזור
+# להיות כמו שצריך ומחזור אוטומטי מלא, אבל כמובן עם ההגבלות של ה-API Calls
+# ל-SUMIT עם ההגדרה הקשיחה שלנו". החזרת המחזור האוטומטי המלא — 8 crons —
+# תחת אותם שערי-עלות מבניים שכבר קיימים בקוד (לא הוקלו/לא נוספו כאן; רק
+# אומתו לפני ההחזרה). פר-cron, מה רץ / תדירות / תקציב מדוד / ראיית הצלחה:
+#
+# 1. sync-sumit (01:30 UTC) — סנכרון SUMIT יומי לכל תיק. תקציב: שני שערים
+#    בלתי-תלויים לפני כל קריאת רשת — (א) `_daily_budget_gate` ב-cron.py
+#    (ריצה מוצלחת אחת פר (ארגון, מקור) פר 20h,
+#    `settings.sumit_sync_min_interval_hours`, עם רצפה קשיחה של 20 ב-
+#    `config.py.__post_init__`-style guard); (ב) `_per_key_daily_gate` →
+#    `claim_daily_sync_run` ב-`sumit_request_budget.py` (ריצה אחת ליום
+#    **פר-מפתח**, לא רק פר-ארגון — סוגר את המסלול שבו שני ארגונים חולקים
+#    מפתח משרד אחד). מתחת לשניהם: `_make_request`/`_post_binary` ב-
+#    `sumit_integration.py` מסרבים fail-closed (`SumitRequestBudgetRequired`)
+#    בלי `request_limiter` אמיתי, ופעולות בתשלום (getpdf/getdetails/…)
+#    עוברות גם את `assert_paid_action_within_quota`. ראיית הצלחה/הוכחה:
+#    `tests/test_sumit_daily_sync_per_key.py` (למשל
+#    `test_the_second_run_on_the_same_key_is_refused`,
+#    `test_a_second_organization_cannot_spend_the_same_key_again`),
+#    `tests/test_per_key_gate_uses_real_credentials.py`,
+#    `tests/test_sync_call_protection.py::test_sumit_budget_gate_skips_within_interval`,
+#    ושער-הרגרסיה הקבוע `tests/test_sumit_rate_limit_hard_rule.py`.
+#
+# 2. sync-open-finance (02:00 UTC) — סנכרון Open Finance יומי. תקציב: שני
+#    שערים לפני קריאת רשת — `_of_consent_gate` ב-cron.py (fail-closed אם
+#    מסע ה-consent המקומי אינו במצב בר-סנכרון) ואז `_daily_budget_gate`
+#    (ריצה מוצלחת אחת פר (ארגון, מקור) פר `of_sync_min_interval_hours`,
+#    רצפה קשיחה 20h) — נשמר תחת מכסת ~500/חודש (RSF-025/021). ראיית
+#    הצלחה: `tests/test_sync_call_protection.py::test_of_daily_budget_gate_skips_within_interval_and_allows_after`,
+#    `::test_of_daily_budget_gate_allows_when_no_prior_success`,
+#    `::test_of_consent_gate_stops_pending_journey_before_daily_budget`.
+#
+# 3. bank-gap-scan (03:15 UTC) — כפי שהיה: local-only, אפס קריאות ספק.
+#    `services/bank_expense_gap.py` אינו מייבא `SumitIntegration`/httpx —
+#    קורא רק `BankTransaction`/מסמכי הנה"ח מה-DB המקומי. אין טסט "אפס
+#    רשת" ייעודי (בניגוד ל-bookkeeper-morning); הראיה כאן היא היעדר ייבוא
+#    ספק בקוד עצמו (נבדק ב-grep על imports) בשילוב עם
+#    `tests/test_bank_expense_gap.py` שמריץ את `scan_and_alert` על נתוני
+#    fixture בלבד.
+#
+# 4. refresh-sumit-quota (03:30 UTC) — כפי שהיה: `listquotas` חינמית, פעם
+#    ביום פר-ארגון (בלוק 20/08 למעלה — ללא שינוי).
+#
+# 5. bookkeeper-morning (03:45 UTC) — כפי שהיה: אפס קריאות SUMIT, מוכח
+#    ב-`tests/test_sumit_call_discipline_w6.py::test_morning_cycle_makes_zero_sumit_network_calls`
+#    (patches `SumitIntegration._make_request`/`_post_binary` ל-assert
+#    שנכשל אם המחזור מגיע לרשת).
+#
+# 6. collection-reminders (04:00 UTC) — תזכורות גבייה SMS/מייל. תקציב:
+#    שער רגולטורי ראשון — `Organization.collection_reminders_enabled`
+#    (ברירת מחדל `False`, `models.py`); רק ארגונים ש-opted-in נכנסים
+#    ללולאה כלל (`run_collection_reminders` ב-cron.py). שער שני: כל שליחת
+#    SMS עוברת `sumit.send_sms` → `/sms/sms/send/`, שהוא חבר ב-
+#    `PAID_ACTION_ENDPOINTS` ב-`sumit_integration.py` ולכן חוסה תחת אותו
+#    שער פעולות-בתשלום (`_enforce_paid_action_budget` →
+#    `assert_paid_action_within_quota`) ואותו `request_limiter` fail-closed
+#    כמו כל קריאת SUMIT אחרת — אין נתיב עוקף. ראיית הצלחה:
+#    `tests/test_collection_reminders.py::test_org_collection_defaults`
+#    (ברירת מחדל False), `::test_collection_run_blocked_when_org_disabled`,
+#    `::test_dispatch_sends_sms_and_records`.
+#
+# 7. roster-health (05:30 UTC) — local-only: `services/roster_coverage.py`
+#    אינו מייבא ספק (רק models/SQLAlchemy) — קורא DB בלבד ומדווח. הדחיפה
+#    היחידה היא `channel_notifier.push_to_organization` ל-Telegram/
+#    WhatsApp (לא SUMIT/OF — מחוץ למשמעת-העלות של CLAUDE.md, וללא עלות
+#    ספק מוכרת ל-Telegram). כשל בדחיפה אינו מפיל את הבקרה. אין טסט
+#    "אפס רשת" ייעודי; הראיה היא היעדר ייבוא ספק (grep) +
+#    `tests/test_roster_coverage.py`.
+#
+# 8. channel-alerts (06:00 UTC) — דוחף CfoInsight חדשים בסיכון high/
+#    critical לערוצי שיחה מקושרים. אותו מנגנון push כמו roster-health —
+#    `channel_notifier.push_to_organization`, לא קריאת SUMIT/OF כלל (רק
+#    קורא `CfoInsight` מה-DB המקומי ושולח ל-Telegram/WhatsApp). ראיית
+#    הצלחה: `tests/test_channel_notifier.py`.
 EXPECTED_DAILY_SCHEDULES: dict[str, str] = {
+    "/api/cron/sync-sumit": "30 1 * * *",
+    "/api/cron/sync-open-finance": "0 2 * * *",
     "/api/cron/bank-gap-scan": "15 3 * * *",
     "/api/cron/refresh-sumit-quota": "30 3 * * *",
     "/api/cron/bookkeeper-morning": "45 3 * * *",
+    "/api/cron/collection-reminders": "0 4 * * *",
+    "/api/cron/roster-health": "30 5 * * *",
+    "/api/cron/channel-alerts": "0 6 * * *",
 }
 
 
@@ -78,8 +159,9 @@ def test_vercel_crons_use_one_daily_utc_schedule_in_dependency_order():
 
 
 def test_morning_cycle_finishes_before_0800_israel_in_winter_and_summer():
-    # כל עוד אין crons בכלל (הנחיית 19/08), אין מחזור בוקר לתזמן. אם/כאשר
-    # bookkeeper-morning יוחזר, האילוץ המקורי חוזר לתוקף אוטומטית.
+    # 23/08/2026: bookkeeper-morning הוחזר (החזרת המחזור האוטומטי המלא).
+    # התנאי נשמר להגנה עתידית — אם הוא יוסר שוב, האילוץ מדלג בלי להיכשל
+    # במקום להניח שהוא תמיד נוכח.
     schedules = _cron_config()
     if "/api/cron/bookkeeper-morning" not in schedules:
         assert schedules == EXPECTED_DAILY_SCHEDULES
