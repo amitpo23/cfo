@@ -72,6 +72,10 @@ MAX_FUTURE_SKEW = timedelta(minutes=5)
 # סף התרעה — כדי שהבעלים יידע **לפני** שנחסם, לא אחרי.
 NEAR_LIMIT_RATIO = 0.8
 
+# שורת תיאום יציבה לארגון. היא אינה תקציב (used=limit=0); תפקידה היחיד
+# לסדר claim ורענון-דור באותה נעילת DB עד commit.
+_GENERATION_LOCK_START = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
 
 class SumitQuotaError(RuntimeError):
     """בסיס לכשלי מכסה. הבקשה לעולם לא נשלחה."""
@@ -221,13 +225,11 @@ def assert_paid_action_within_quota(
             organization_id=snapshot.organization_id,
             endpoint=endpoint,
             snapshot=snapshot,
-            now=now,
         )
 
 
 def _claim_monthly_paid_action(
     *, organization_id: int, endpoint: str, snapshot: QuotaSnapshot,
-    now: Optional[datetime] = None,
 ) -> None:
     """ליבת ה-ledger המאוחד: שלוש תביעות עמידות, אטומיות יחד.
 
@@ -248,8 +250,8 @@ def _claim_monthly_paid_action(
        גדולה לא תישרף ביום אחד, וגם כדי שיתרת-ספק זעירה תיחסם כמעט
        מיד ולא תיפרס על פני "יום גדול" לפי התקרה הפנימית בלבד.
 
-    `now` — P0-A תיקון 2: זמן קנוני. אם `None` (קורא שלא סיפק), נשאב
-    מה-DB (`_db_now`) בתוך אותה טרנזקציה — לא משעון-התהליך.
+    זמן החלונות נשאב תמיד מה-DB בתוך אותה טרנזקציה. גם זמן שסופק לבדיקה
+    המוקדמת של snapshot אינו רשאי לעקוף כשל DB במסלול ה-claim.
     """
     if settings.sumit_environment == "test":
         limit_value = settings.sumit_test_monthly_paid_action_limit
@@ -259,7 +261,26 @@ def _claim_monthly_paid_action(
     db = SessionLocal()
     try:
         with db.begin():
-            canonical_now = now if now is not None else _db_now(db)
+            canonical_now = _db_now(db)
+            _lock_paid_generation(
+                db, organization_id=organization_id, now=canonical_now,
+            )
+            # claim עשוי היה לטעון snapshot רגע לפני שרענון מקביל פרסם
+            # דור חדש. הנעילה למעלה מסדרת את שני הצדדים; הבדיקה אחרי
+            # קבלתה מונעת מ-claim ישן להירשם בדור שכבר הותאם ונחתם.
+            latest = load_latest_snapshot(db, organization_id)
+            if latest is not None:
+                latest_at = latest.measured_at
+                snapshot_at = snapshot.measured_at
+                if latest_at.tzinfo is None:
+                    latest_at = latest_at.replace(tzinfo=timezone.utc)
+                if snapshot_at.tzinfo is None:
+                    snapshot_at = snapshot_at.replace(tzinfo=timezone.utc)
+                if latest_at > snapshot_at:
+                    raise SumitQuotaUnknown(
+                        f"SUMIT paid action refused ({endpoint}): a newer quota "
+                        "measurement was published while this claim was starting",
+                    )
             _, day_start, month_start = _utc_windows(canonical_now)
             snapshot_claimed = SumitRequestLimiter._claim_window(
                 db,
@@ -335,6 +356,18 @@ def _claim_monthly_paid_action(
 _claim_test_monthly_paid_action = _claim_monthly_paid_action
 
 
+def _lock_paid_generation(db, *, organization_id: int, now: datetime) -> None:
+    """Serialize paid claims and quota refresh for one organization."""
+    SumitRequestLimiter._lock_window(
+        db,
+        scope_key=f"paid:org:{organization_id}",
+        organization_id=organization_id,
+        window_kind="generation_lock",
+        window_start=_GENERATION_LOCK_START,
+        now=now,
+    )
+
+
 # ==================================================================== #
 # W2.1 — persistence של המדידה (הרענון היומי כותב, השער קורא)
 # ==================================================================== #
@@ -393,8 +426,13 @@ async def refresh_quota_measurement(db, organization_id: int, integration):
     snapshot = parse_quota_response(payload, organization_id=organization_id)
     if snapshot is None:
         return None
-    # P0-A תיקונים 1+3 (סקירת קודקס 23/08): חייב להיטען **לפני**
-    # store_measurement — אחרת "הקודם" הוא כבר "החדש".
+    # אותה שורת coordination ננעלת גם ב-claim. לכן claim שקדם לנעילה
+    # ייכלל ב-prior_claimed, ו-claim שהמתין אחריה יראה את הדור החדש
+    # וייחסם כ-stale — אין חלון בין הקריאה ל-commit שבו תביעה יכולה להישמט.
+    canonical_now = _db_now(db)
+    _lock_paid_generation(
+        db, organization_id=organization_id, now=canonical_now,
+    )
     previous = load_latest_snapshot(db, organization_id)
     store_measurement(db, snapshot)
     _reconcile_generation(db, previous=previous, new=snapshot)

@@ -185,35 +185,41 @@ class _FakeQuotaIntegration:
         }
 
 
-def test_snapshot_generation_race_is_closed_by_carrying_forward_claims(fresh_org):
-    """הממצא של הסקירה: תביעה שהוענקה תחת דור ישן, ואז רענון חדש מגלה
-    שהספק *עדיין* מראה את אותה מדידה (49/50 — Usage לא התעדכן, עיכוב
-    טבעי אצל SUMIT) — לא אמור לפתוח עוד משבצת. בלי התיקון: הדור החדש
-    (measured_at אחר) פותח since_snapshot טרי עם remaining=1 מחדש,
-    ופעולה שנייה הייתה עוברת ⇒ 51/50 אפשרי בפועל אצל הספק."""
+def test_snapshot_generation_race_rejects_claim_loaded_before_refresh(fresh_org):
+    """שזירה אמיתית: claim קורא דור ישן ב-session א', refresh ב-session
+    ב' מפרסם דור חדש, ורק אז ה-claim הישן מנסה לתבוע. הוא חייב להיחסם
+    כ-stale; אחרת הוא נרשם בדור הישן אחרי שה-refresh כבר קרא prior_claimed,
+    והדור החדש עדיין מאפשר claim נוסף — שתי פעולות מול remaining=1."""
     org_id = fresh_org()["org_id"]
-    db = SessionLocal()
+    claim_reader = SessionLocal()
+    refresher = SessionLocal()
     try:
         asyncio.run(sumit_quota.refresh_quota_measurement(
-            db, org_id, _FakeQuotaIntegration(used=49, limit=50),
+            claim_reader, org_id, _FakeQuotaIntegration(used=49, limit=50),
         ))
+        stale_snapshot = sumit_quota.load_latest_snapshot(claim_reader, org_id)
+        assert stale_snapshot is not None
+        # שלב הקריאה של claim א' הסתיים; משחררים את read transaction כדי
+        # ש-session ב' יוכל לפרסם את הדור החדש ב-SQLite של הסוויטה.
+        claim_reader.rollback()
+
+        asyncio.run(sumit_quota.refresh_quota_measurement(
+            refresher, org_id, _FakeQuotaIntegration(used=49, limit=50),
+        ))
+
+        with pytest.raises(sumit_quota.SumitQuotaUnknown, match="newer quota"):
+            sumit_quota._claim_monthly_paid_action(
+                organization_id=org_id, endpoint="/stale/",
+                snapshot=stale_snapshot,
+            )
     finally:
-        db.close()
+        claim_reader.close()
+        refresher.close()
 
     integration = _integration(org_id)
-    integration._enforce_paid_action_budget("/x/")  # תופס את היחיד שיש
-
-    db = SessionLocal()
-    try:
-        # רענון שני: הספק עדיין מראה 49/50 — לא עדכן בזמן.
-        asyncio.run(sumit_quota.refresh_quota_measurement(
-            db, org_id, _FakeQuotaIntegration(used=49, limit=50),
-        ))
-    finally:
-        db.close()
-
+    integration._enforce_paid_action_budget("/current/")
     with pytest.raises(sumit_quota.SumitQuotaExhausted):
-        integration._enforce_paid_action_budget("/x/")
+        integration._enforce_paid_action_budget("/current/")
 
 
 def test_confirmed_claims_are_not_carried_forward_once_usage_catches_up(
@@ -286,6 +292,44 @@ def test_a_measurement_within_the_future_tolerance_still_passes():
     )
 
 
+def test_paid_claim_refuses_process_time_when_db_time_is_unavailable(
+    fresh_org, monkeypatch,
+):
+    """גם `now` תקין שסופק לבדיקה המוקדמת אינו תחליף לזמן DB ב-claim."""
+    org_id = fresh_org()["org_id"]
+    snapshot = sumit_quota.QuotaSnapshot(
+        organization_id=org_id, used=0, limit=50,
+        measured_at=datetime.now(timezone.utc),
+    )
+
+    def unavailable(_db):
+        raise sumit_quota.SumitRequestBudgetUnavailable("db time unavailable")
+
+    monkeypatch.setattr(sumit_quota, "_db_now", unavailable)
+    with pytest.raises(sumit_quota.SumitQuotaUnknown):
+        sumit_quota.assert_paid_action_within_quota(
+            snapshot, endpoint="/x/", now=datetime.now(timezone.utc),
+        )
+
+
+def test_integration_paid_gate_blocks_when_canonical_db_time_fails(
+    fresh_org, monkeypatch,
+):
+    from cfo.services import sumit_request_budget
+
+    org_id = fresh_org()["org_id"]
+    _store(org_id, used=0, limit=50)
+
+    def unavailable(_db):
+        raise sumit_request_budget.SumitRequestBudgetUnavailable(
+            "db time unavailable",
+        )
+
+    monkeypatch.setattr(sumit_request_budget, "_db_now", unavailable)
+    with pytest.raises(sumit_quota.SumitQuotaUnknown):
+        _integration(org_id)._enforce_paid_action_budget("/x/")
+
+
 # ==================================================================== #
 # תיקון 5 (סקירת קודקס 23/08) — קצב יומי נגזר מהיתרה האפקטיבית
 # ==================================================================== #
@@ -310,3 +354,18 @@ def test_paced_daily_limit_is_bounded_by_provider_remaining():
         configured_daily=90, monthly_limit=90, month_used=0, day_used=0,
         days_left=10, provider_remaining=25,
     ) == 3  # ceil(25/10)=3, קטן מ-ceil(90/10)=9
+
+
+def test_provider_pace_does_not_loosen_after_an_intraday_claim():
+    from cfo.services.sumit_request_budget import paced_daily_limit
+
+    # יתרת ספק קבועה של 2 לשני ימים נותנת תקרה יומית 1. אחרי claim אחד
+    # day_used גדל, אבל יתרת הספק שנמדדה לא הפכה ל-3 ולכן התקרה נשארת 1.
+    assert paced_daily_limit(
+        configured_daily=90, monthly_limit=90, month_used=0, day_used=0,
+        days_left=2, provider_remaining=2,
+    ) == 1
+    assert paced_daily_limit(
+        configured_daily=90, monthly_limit=90, month_used=1, day_used=1,
+        days_left=2, provider_remaining=2,
+    ) == 1

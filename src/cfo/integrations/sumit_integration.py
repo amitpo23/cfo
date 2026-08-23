@@ -580,13 +580,11 @@ class SumitIntegration(BaseIntegration):
         except Exception:
             return None
 
-    def _canonical_now(self):
+    def _canonical_now(self, *, allow_process_fallback: bool = False):
         """P0-A תיקון 2 (סקירת קודקס 23/08/2026) — זמן קנוני מה-DB לבדיקת
         טריות/עתידיות של מדידת המכסה, לא משעון-התהליך של ה-instance
-        הזה. נכשל בעדינות לשעון-תהליך רק אם השאילתה עצמה לא זמינה —
-        זה עדיין fail-closed בפועל, כי `_claim_monthly_paid_action`
-        (שקוראת ל-`_db_now` בתוך הטרנזקציה עצמה, בלי רשת-ביטחון) היא
-        הגנה שנייה בלתי-תלויה: אם ה-DB באמת לא זמין, הבקשה נחסמת שם."""
+        הזה. fallback לשעון-התהליך מותר רק לקורא תצוגה מפורש שאינו claim;
+        שערי paid-action משתמשים בברירת המחדל ונחסמים אם זמן DB אינו ידוע."""
         from ..database import SessionLocal
         from ..services.sumit_request_budget import _db_now
 
@@ -596,10 +594,16 @@ class SumitIntegration(BaseIntegration):
                 return _db_now(db)
             finally:
                 db.close()
-        except Exception:
-            from datetime import datetime, timezone
+        except Exception as exc:
+            if allow_process_fallback:
+                from datetime import datetime, timezone
 
-            return datetime.now(timezone.utc)
+                return datetime.now(timezone.utc)
+            from ..services.sumit_quota import SumitQuotaUnknown
+
+            raise SumitQuotaUnknown(
+                "SUMIT paid action refused: canonical database time is unknown",
+            ) from exc
 
     def _inferred_tier_is_quarantined(self) -> bool:
         """P0-A תיקון 3 — `True` = שכבת ה-'inferred free' בהסגר, כל

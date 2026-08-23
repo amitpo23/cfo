@@ -151,17 +151,21 @@ def paced_daily_limit(
     וסדרת תביעות לגיטימית נחסמת באמצע למרות שההקצבה של הבוקר טרם נוצלה.
 
     `provider_remaining` — P0-A תיקון 5 (סקירת קודקס 23/08): כשניתן,
-    היתרה החודשית מוגבלת גם ע"י המדידה מהספק לפני חלוקת-הקצב, כדי
-    שהקצב האפקטיבי ייגזר מה-**יתרה האמיתית** (min(ספק, פנימי)) — לא
-    מהתקרה הפנימית בלבד. בלי זה, יתרת-ספק זעירה (למשל remaining=1)
-    עדיין הייתה מפוזרת "ליום אחד גדול" לפי התקרה הפנימית בלבד, במקום
-    להיחסם כמעט מיד.
+    נגזרת ממנו תקרת-ספק יומית נפרדת. בניגוד ליתרה הפנימית, אין מוסיפים
+    לה `day_used`: המדידה מהספק קבועה עד הרענון הבא, והוספת claims של
+    היום הייתה מגדילה את התקרה תוך-יום (2 לשני ימים: 1 בבוקר, 2 אחרי
+    claim אחד). לכן ה-provider pace נשאר קבוע/מצטמצם עד מדידה חדשה.
     """
-    remaining = max(0, monthly_limit - month_used)
-    if provider_remaining is not None:
-        remaining = min(remaining, max(0, provider_remaining))
     days = max(1, days_left)
-    return min(configured_daily, -(-(remaining + max(0, day_used)) // days))
+    internal_remaining = max(0, monthly_limit - month_used)
+    internal_daily = -(
+        -(internal_remaining + max(0, day_used)) // days
+    )
+    limits = [configured_daily, internal_daily]
+    if provider_remaining is not None:
+        provider_daily = -(-max(0, provider_remaining) // days)
+        limits.append(provider_daily)
+    return min(limits)
 
 
 class SumitRequestLimiter:
@@ -239,6 +243,64 @@ class SumitRequestLimiter:
             where=table.c.used < limit_value,
         ).returning(table.c.used)
         return db.execute(statement).scalar_one_or_none() is not None
+
+    @staticmethod
+    def _lock_window(
+        db,
+        *,
+        scope_key: str,
+        organization_id: int | None,
+        window_kind: str,
+        window_start: datetime,
+        now: datetime,
+        provider: str = "sumit",
+    ) -> None:
+        """Ensure a durable coordination row exists and lock it to commit.
+
+        The insert closes the absent-row race; ``SELECT ... FOR UPDATE`` then
+        serializes every transaction using the same logical window. SQLite
+        ignores the row-lock clause but still exercises the ordering/guards in
+        offline tests; PostgreSQL/Neon provides the production lock semantics.
+        """
+        table = ProviderRequestBudget.__table__
+        values = {
+            "provider": provider,
+            "scope_key": scope_key,
+            "organization_id": organization_id,
+            "window_kind": window_kind,
+            "window_start": window_start,
+            "used": 0,
+            "limit_value": 0,
+            "updated_at": now,
+        }
+        dialect = db.get_bind().dialect.name
+        if dialect == "postgresql":
+            statement = pg_insert(table).values(**values)
+        elif dialect == "sqlite":
+            statement = sqlite_insert(table).values(**values)
+        else:  # pragma: no cover - production/test dialects are explicit
+            raise SumitRequestBudgetUnavailable(
+                f"unsupported request-budget dialect: {dialect}",
+            )
+        db.execute(statement.on_conflict_do_nothing(
+            index_elements=[
+                table.c.provider,
+                table.c.scope_key,
+                table.c.window_kind,
+                table.c.window_start,
+            ],
+        ))
+        (
+            db.query(ProviderRequestBudget.id)
+            .filter(
+                ProviderRequestBudget.provider == provider,
+                ProviderRequestBudget.scope_key == scope_key,
+                ProviderRequestBudget.window_kind == window_kind,
+                ProviderRequestBudget.window_start == window_start,
+            )
+            .with_for_update()
+            .one()
+        )
 
     @staticmethod
     def _window_used(
