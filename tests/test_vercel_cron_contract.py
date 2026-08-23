@@ -67,11 +67,13 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 #    `tests/test_sync_call_protection.py::test_sumit_budget_gate_skips_within_interval`,
 #    ושער-הרגרסיה הקבוע `tests/test_sumit_rate_limit_hard_rule.py`.
 #
-# 2. sync-open-finance (02:00 UTC) — סנכרון Open Finance יומי. תקציב: שני
+# 2. sync-open-finance (02:00 UTC) — סנכרון Open Finance יומי. תקציב: שלושה
 #    שערים לפני קריאת רשת — `_of_consent_gate` ב-cron.py (fail-closed אם
-#    מסע ה-consent המקומי אינו במצב בר-סנכרון) ואז `_daily_budget_gate`
+#    מסע ה-consent המקומי אינו במצב בר-סנכרון), `_daily_budget_gate`
 #    (ריצה מוצלחת אחת פר (ארגון, מקור) פר `of_sync_min_interval_hours`,
-#    רצפה קשיחה 20h) — נשמר תחת מכסת ~500/חודש (RSF-025/021). ראיית
+#    רצפה קשיחה 20h), ואז claim עמיד של ניסיון בטבלת המונים: עד שני ניסיונות
+#    ביום פר-ארגון ו-cooldown עמיד אחרי כשל. כך retry אינו מפרש כשל כהיתר
+#    לקריאת ספק נוספת. נשמר תחת מכסת ~500/חודש (RSF-025/021). ראיית
 #    הצלחה: `tests/test_sync_call_protection.py::test_of_daily_budget_gate_skips_within_interval_and_allows_after`,
 #    `::test_of_daily_budget_gate_allows_when_no_prior_success`,
 #    `::test_of_consent_gate_stops_pending_journey_before_daily_budget`.
@@ -100,7 +102,9 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 #    `PAID_ACTION_ENDPOINTS` ב-`sumit_integration.py` ולכן חוסה תחת אותו
 #    שער פעולות-בתשלום (`_enforce_paid_action_budget` →
 #    `assert_paid_action_within_quota`) ואותו `request_limiter` fail-closed
-#    כמו כל קריאת SUMIT אחרת — אין נתיב עוקף. ראיית הצלחה:
+#    כמו כל קריאת SUMIT אחרת — אין נתיב עוקף. בנוסף כל מסירת ערוץ (גם מייל)
+#    תובעת slot יומי עמיד פר-ארגון; ברירת המחדל והתקרה הקשיחה הן 20 למסירות
+#    בריצה/יום. ראיית הצלחה:
 #    `tests/test_collection_reminders.py::test_org_collection_defaults`
 #    (ברירת מחדל False), `::test_collection_run_blocked_when_org_disabled`,
 #    `::test_dispatch_sends_sms_and_records`.
@@ -108,15 +112,17 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # 7. roster-health (05:30 UTC) — local-only: `services/roster_coverage.py`
 #    אינו מייבא ספק (רק models/SQLAlchemy) — קורא DB בלבד ומדווח. הדחיפה
 #    היחידה היא `channel_notifier.push_to_organization` ל-Telegram/
-#    WhatsApp (לא SUMIT/OF — מחוץ למשמעת-העלות של CLAUDE.md, וללא עלות
-#    ספק מוכרת ל-Telegram). כשל בדחיפה אינו מפיל את הבקרה. אין טסט
+#    WhatsApp. לפני הדחיפה נתבע תקציב עמיד משותף פר-ארגון (50/יום) עם
+#    channel-alerts; חריגה מדווחת ומדלגת. כשל בדחיפה אינו מפיל את הבקרה. אין טסט
 #    "אפס רשת" ייעודי; הראיה היא היעדר ייבוא ספק (grep) +
 #    `tests/test_roster_coverage.py`.
 #
 # 8. channel-alerts (06:00 UTC) — דוחף CfoInsight חדשים בסיכון high/
 #    critical לערוצי שיחה מקושרים. אותו מנגנון push כמו roster-health —
+#    claim עמיד באותו scope יומי פר-ארגון ואז
 #    `channel_notifier.push_to_organization`, לא קריאת SUMIT/OF כלל (רק
-#    קורא `CfoInsight` מה-DB המקומי ושולח ל-Telegram/WhatsApp). ראיית
+#    קורא `CfoInsight` מה-DB המקומי ושולח ל-Telegram/WhatsApp). חריגה מופיעה
+#    ב-`budget_skipped` וב-`results`, ולא נבלעת. ראיית
 #    הצלחה: `tests/test_channel_notifier.py`.
 EXPECTED_DAILY_SCHEDULES: dict[str, str] = {
     "/api/cron/sync-sumit": "30 1 * * *",

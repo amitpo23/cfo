@@ -6,6 +6,7 @@ Not behind user auth — protected by CRON_SECRET instead (Vercel sends
 """
 import logging
 import zlib
+from dataclasses import replace
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -47,6 +48,11 @@ router = APIRouter()
 
 EXPENSE_ENRICHMENT_CHECKPOINT = "expense_supplier_enrichment"
 EXPENSE_OCR_CHECKPOINT = "expense_ocr_pipeline"
+OPEN_FINANCE_SYNC_ATTEMPT_CHECKPOINT = "scheduled_sync_attempt"
+OPEN_FINANCE_DAILY_ATTEMPT_LIMIT = 2
+CHANNEL_PUSH_BUDGET_PROVIDER = "notifications"
+CHANNEL_PUSH_BUDGET_SCOPE = "channel-push"
+COLLECTION_BUDGET_SCOPE = "collection-reminders"
 _OF_SYNCABLE_CONNECTION_STATUSES = frozenset({
     "ACTIVE",
     "CONNECTED",
@@ -266,6 +272,200 @@ def _daily_budget_gate(db: Session, org_id: int, source: str) -> Optional[dict]:
             "next_eligible_at": next_eligible.isoformat(),
         }
     return None
+
+
+def _claim_daily_counter_slots(
+    *,
+    provider: str,
+    scope_key: str,
+    organization_id: int,
+    limit_value: int,
+    requested: int = 1,
+) -> dict:
+    """Atomically reserve up to ``requested`` slots in the existing counter.
+
+    A separate short-lived session makes the claim durable before any outbound
+    work starts. Any inability to prove the claim fails closed and reserves no
+    slots in the caller's view.
+    """
+    from ...database import SessionLocal
+    from ...services.sumit_request_budget import (
+        SumitRequestLimiter,
+        _db_now,
+        _utc_windows,
+    )
+
+    requested = max(0, requested)
+    allowed = min(requested, max(0, limit_value))
+    if allowed == 0:
+        return {
+            "claimed": 0,
+            "requested": requested,
+            "skipped": "daily_budget",
+        }
+
+    budget_db = SessionLocal()
+    try:
+        claimed = 0
+        with budget_db.begin():
+            now = _db_now(budget_db)
+            _, day_start, _ = _utc_windows(now)
+            for _ in range(allowed):
+                if not SumitRequestLimiter._claim_window(
+                    budget_db,
+                    provider=provider,
+                    scope_key=scope_key,
+                    organization_id=organization_id,
+                    window_kind="day",
+                    window_start=day_start,
+                    limit_value=limit_value,
+                    now=now,
+                ):
+                    break
+                claimed += 1
+        return {
+            "claimed": claimed,
+            "requested": requested,
+            "skipped": None if claimed == requested else "daily_budget",
+        }
+    except Exception as exc:  # fail closed: no durable proof means no outbound call
+        budget_db.rollback()
+        logger.error(
+            "Durable daily counter unavailable for %s org %s: %s",
+            scope_key,
+            organization_id,
+            exc,
+        )
+        return {
+            "claimed": 0,
+            "requested": requested,
+            "skipped": "budget_unavailable",
+        }
+    finally:
+        budget_db.close()
+
+
+def _claim_open_finance_sync_attempt(db: Session, org_id: int) -> Optional[dict]:
+    """Claim a durable OF attempt before connector construction/provider I/O."""
+    now = datetime.utcnow()
+    checkpoint = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == org_id,
+        SyncCheckpoint.source == "open_finance",
+        SyncCheckpoint.entity_type == OPEN_FINANCE_SYNC_ATTEMPT_CHECKPOINT,
+    ).first()
+    if checkpoint and checkpoint.cooldown_until and checkpoint.cooldown_until > now:
+        return {
+            "organization_id": org_id,
+            "source": "open_finance",
+            "skipped": "failure_cooldown",
+            "retry_at": checkpoint.cooldown_until.isoformat(),
+        }
+
+    budget = _claim_daily_counter_slots(
+        provider="open_finance",
+        scope_key=f"sync-attempt:org:{org_id}",
+        organization_id=org_id,
+        limit_value=OPEN_FINANCE_DAILY_ATTEMPT_LIMIT,
+        requested=1,
+    )
+    if budget.get("claimed") == 1:
+        return None
+    reason = budget.get("skipped")
+    return {
+        "organization_id": org_id,
+        "source": "open_finance",
+        "skipped": (
+            "budget_unavailable"
+            if reason == "budget_unavailable"
+            else "daily_attempt_budget"
+        ),
+        "attempt_limit": OPEN_FINANCE_DAILY_ATTEMPT_LIMIT,
+    }
+
+
+def _record_open_finance_sync_attempt(db: Session, result: dict) -> None:
+    """Persist a failure cooldown; a successful run clears prior failures."""
+    if result.get("skipped"):
+        return
+    status = str(result.get("status") or "").lower()
+    failed = bool(result.get("error")) or status != "completed"
+    org_id = result["organization_id"]
+    checkpoint = db.query(SyncCheckpoint).filter(
+        SyncCheckpoint.organization_id == org_id,
+        SyncCheckpoint.source == "open_finance",
+        SyncCheckpoint.entity_type == OPEN_FINANCE_SYNC_ATTEMPT_CHECKPOINT,
+    ).first()
+    if checkpoint is None:
+        checkpoint = SyncCheckpoint(
+            organization_id=org_id,
+            source="open_finance",
+            entity_type=OPEN_FINANCE_SYNC_ATTEMPT_CHECKPOINT,
+        )
+        db.add(checkpoint)
+    now = datetime.utcnow()
+    if failed:
+        checkpoint.consecutive_failures = (
+            checkpoint.consecutive_failures or 0
+        ) + 1
+        checkpoint.cooldown_until = now + timedelta(
+            hours=settings.sync_circuit_open_hours,
+        )
+    else:
+        checkpoint.consecutive_failures = 0
+        checkpoint.cooldown_until = None
+        checkpoint.last_success_at = now
+    try:
+        db.commit()
+    except IntegrityError:
+        # Concurrent first attempts can race on the checkpoint's unique key.
+        # The durable attempt counter is already consumed; preserve fail-closed
+        # behavior and let the winning transaction own the cooldown row.
+        db.rollback()
+        logger.warning(
+            "Concurrent Open Finance attempt checkpoint for org %s",
+            org_id,
+        )
+
+
+def _limit_reminder_deliveries(planned: list, claimed_slots: int) -> list:
+    """Return reminder copies containing at most ``claimed_slots`` channels."""
+    limited = []
+    remaining = max(0, claimed_slots)
+    for reminder in planned:
+        phone = None
+        email = None
+        if reminder.phone and remaining:
+            phone = reminder.phone
+            remaining -= 1
+        if reminder.email and remaining:
+            email = reminder.email
+            remaining -= 1
+        if phone or email:
+            limited.append(replace(reminder, phone=phone, email=email))
+        if remaining == 0:
+            break
+    return limited
+
+
+def _claim_channel_push_budget(org_id: int) -> Optional[dict]:
+    budget = _claim_daily_counter_slots(
+        provider=CHANNEL_PUSH_BUDGET_PROVIDER,
+        scope_key=f"{CHANNEL_PUSH_BUDGET_SCOPE}:org:{org_id}",
+        organization_id=org_id,
+        limit_value=settings.channel_push_daily_limit,
+        requested=1,
+    )
+    if budget.get("claimed") == 1:
+        return None
+    return {
+        "organization_id": org_id,
+        "skipped": (
+            "budget_unavailable"
+            if budget.get("skipped") == "budget_unavailable"
+            else "daily_push_budget"
+        ),
+        "daily_limit": settings.channel_push_daily_limit,
+    }
 
 
 def _claim_periodic_provider_budget(
@@ -527,10 +727,17 @@ async def scheduled_sync_open_finance(db: Session = Depends(get_db_session)):
         gated = _of_budget_gate(db, org_id, source)
         if gated:
             results.append(gated)
-        else:
-            to_run.add((org_id, source))
+            continue
+        attempt_gated = _claim_open_finance_sync_attempt(db, org_id)
+        if attempt_gated:
+            results.append(attempt_gated)
+            continue
+        to_run.add((org_id, source))
 
-    results.extend(await _run_sync_targets(db, to_run))
+    attempt_results = await _run_sync_targets(db, to_run)
+    for result in attempt_results:
+        _record_open_finance_sync_attempt(db, result)
+    results.extend(attempt_results)
     return {"synced": len(results), "results": results}
 
 
@@ -702,13 +909,54 @@ async def run_collection_reminders(db: Session = Depends(get_db_session)):
         Organization.collection_reminders_enabled.is_(True)
     ).all()
 
-    totals = {"sms_sent": 0, "email_sent": 0, "failed": 0, "skipped_no_sumit": 0}
+    totals = {
+        "sms_sent": 0,
+        "email_sent": 0,
+        "failed": 0,
+        "skipped_no_sumit": 0,
+        "delivery_attempts": 0,
+        "budget_skipped": 0,
+    }
     errors = []
+    budgets = []
     for org in orgs:
         try:
             planned = CollectionService(db, org.id).plan_reminders(date.today())
             if not planned:
                 continue
+            delivery_count = sum(
+                int(bool(reminder.phone)) + int(bool(reminder.email))
+                for reminder in planned
+            )
+            requested = min(
+                delivery_count,
+                settings.collection_reminder_batch_limit,
+            )
+            budget = _claim_daily_counter_slots(
+                provider=CHANNEL_PUSH_BUDGET_PROVIDER,
+                scope_key=f"{COLLECTION_BUDGET_SCOPE}:org:{org.id}",
+                organization_id=org.id,
+                limit_value=settings.collection_reminder_batch_limit,
+                requested=requested,
+            )
+            claimed = int(budget.get("claimed") or 0)
+            totals["delivery_attempts"] += claimed
+            totals["budget_skipped"] += max(0, delivery_count - claimed)
+            budgets.append({
+                "organization_id": org.id,
+                "planned_deliveries": delivery_count,
+                "claimed": claimed,
+                "skipped": max(0, delivery_count - claimed),
+                "reason": budget.get("skipped"),
+            })
+            if claimed == 0:
+                if budget.get("skipped") == "budget_unavailable":
+                    logger.error(
+                        "Collection reminder budget unavailable for org %s",
+                        org.id,
+                    )
+                continue
+            planned = _limit_reminder_deliveries(planned, claimed)
             sumit = sumit_for_org(db, org.id)
 
             async def email_sender(to, subject, body):
@@ -734,7 +982,13 @@ async def run_collection_reminders(db: Session = Depends(get_db_session)):
             db.rollback()
             errors.append({"org": org.id, "error": str(exc)})
 
-    return {"status": "ok", "orgs": len(orgs), "summary": totals, "errors": errors}
+    return {
+        "status": "ok",
+        "orgs": len(orgs),
+        "summary": totals,
+        "budgets": budgets,
+        "errors": errors,
+    }
 
 
 @router.get("/cron/daily-close", dependencies=[Depends(_verify_cron_secret)])
@@ -870,6 +1124,8 @@ async def run_channel_alerts(db: Session = Depends(get_db_session)):
     orgs = db.query(Organization).filter(Organization.is_active.is_(True)).all()
     total_pushed = 0
     total_insights = 0
+    budget_skipped = 0
+    results = []
 
     for org in orgs:
         try:
@@ -902,14 +1158,36 @@ async def run_channel_alerts(db: Session = Depends(get_db_session)):
                 lines.append(f"ועוד {len(insights) - 5}")
             text = "\n".join(lines)
 
+            budget_gated = _claim_channel_push_budget(org.id)
+            if budget_gated:
+                budget_skipped += 1
+                results.append(budget_gated)
+                logger.warning(
+                    "Channel alert skipped for org %s: %s",
+                    org.id,
+                    budget_gated["skipped"],
+                )
+                continue
             result = await push_to_organization(db, org.id, text, severity=severity)
             if result.get("sent"):
                 total_pushed += 1
+            results.append({
+                "organization_id": org.id,
+                "status": result.get("status"),
+                "sent": result.get("sent", 0),
+            })
         except Exception as exc:
             logger.error("Channel alert push failed for org %s: %s", org.id, exc)
             db.rollback()
+            results.append({"organization_id": org.id, "error": str(exc)})
 
-    return {"organizations": len(orgs), "pushed": total_pushed, "insights": total_insights}
+    return {
+        "organizations": len(orgs),
+        "pushed": total_pushed,
+        "insights": total_insights,
+        "budget_skipped": budget_skipped,
+        "results": results,
+    }
 
 
 @router.get("/cron/roster-health", dependencies=[Depends(_verify_cron_secret)])
@@ -923,7 +1201,7 @@ async def scheduled_roster_health(db: Session = Depends(get_db_session)):
 
     השער הזה קורא בלבד ואינו מחייה חיבורים — החייאה היא החלטת בעלים.
     """
-    from ...services.channel_notifier import push_to_organization
+    from ...services.channel_notifier import push_to_organization, recipients_for
     from ...services.roster_coverage import (
         coverage_alert_lines,
         persist_coverage_findings,
@@ -949,15 +1227,37 @@ async def scheduled_roster_health(db: Session = Depends(get_db_session)):
         coverage = {"error": str(exc)}
 
     pushed = False
+    push_budget = {"status": "not_needed"}
     if lines:
-        try:
-            result = await push_to_organization(
-                db, office_org_id, "\n".join(lines), severity="high",
-            )
-            pushed = bool(result.get("sent"))
-        except Exception as exc:  # ההתרעה לא מפילה את הבקרה
-            logger.error("Roster health push failed: %s", exc)
-            db.rollback()
+        recipients = recipients_for(db, office_org_id)
+        if not recipients:
+            push_budget = {"skipped": "no_recipients"}
+        else:
+            budget_gated = _claim_channel_push_budget(office_org_id)
+            if budget_gated:
+                push_budget = budget_gated
+                logger.warning(
+                    "Roster health push skipped for org %s: %s",
+                    office_org_id,
+                    budget_gated["skipped"],
+                )
+            else:
+                push_budget = {
+                    "organization_id": office_org_id,
+                    "claimed": 1,
+                    "daily_limit": settings.channel_push_daily_limit,
+                }
+                try:
+                    result = await push_to_organization(
+                        db, office_org_id, "\n".join(lines), severity="high",
+                    )
+                    pushed = bool(result.get("sent"))
+                    push_budget["status"] = result.get("status")
+                except Exception as exc:  # ההתרעה לא מפילה את הבקרה
+                    logger.error("Roster health push failed: %s", exc)
+                    db.rollback()
+                    push_budget["status"] = "error"
+                    push_budget["error"] = str(exc)
 
     return {"report": report, "alerted": pushed, "alert_lines": lines,
-            "coverage": coverage}
+            "coverage": coverage, "push_budget": push_budget}

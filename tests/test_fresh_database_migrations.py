@@ -50,6 +50,13 @@ def test_alembic_upgrade_head_builds_a_complete_fresh_database(tmp_path):
     assert has_schema_drift(full_drift) is False
     assert set(full_drift["dialect_exemptions"]) == {"expenses", "moshko_memory"}
 
+    user_columns = {
+        column["name"]: column
+        for column in sa.inspect(engine).get_columns("users")
+    }
+    assert user_columns["token_version"]["nullable"] is False
+    assert "0" in str(user_columns["token_version"]["default"])
+
     with engine.connect() as connection:
         revision = connection.execute(
             sa.text("SELECT version_num FROM alembic_version")

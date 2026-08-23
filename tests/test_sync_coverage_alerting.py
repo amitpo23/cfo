@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from cfo.database import SessionLocal
+from cfo.config import settings
 from cfo.models import CfoInsight, IntegrationConnection, SyncCheckpoint
 from cfo.services import roster_coverage
 from cfo.services.sync_engine import SOURCE_CHECKPOINT_ENTITY
@@ -160,3 +161,90 @@ def test_the_cron_persists_and_does_not_depend_on_a_channel(client):
 
     src = inspect.getsource(cron.scheduled_roster_health)
     assert "persist_coverage_findings" in src
+
+
+def test_channel_alerts_reports_daily_push_budget_skip(
+    client, fresh_org, monkeypatch,
+):
+    from cfo.services import channel_notifier
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(CfoInsight(
+            organization_id=org_id,
+            fingerprint=f"budget-test-{org_id}",
+            insight_type="budget-test",
+            severity="high",
+            title="חדשה",
+            message="בדיקת תקציב",
+            status="active",
+            created_at=datetime.utcnow(),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    recipient = type("Recipient", (), {"last_push_at": None})()
+    monkeypatch.setattr(settings, "channel_push_daily_limit", 0, raising=False)
+    monkeypatch.setattr(
+        channel_notifier,
+        "recipients_for",
+        lambda _db, target_org_id: [recipient] if target_org_id == org_id else [],
+    )
+    pushes = []
+
+    async def must_not_push(*args, **kwargs):
+        pushes.append((args, kwargs))
+        raise AssertionError("daily push budget was bypassed")
+
+    monkeypatch.setattr(channel_notifier, "push_to_organization", must_not_push)
+
+    response = client.get(
+        "/api/cron/channel-alerts",
+        headers={"Authorization": "Bearer test-cron-secret"},
+    )
+
+    assert response.status_code == 200, response.text
+    target = next(
+        item for item in response.json()["results"]
+        if item["organization_id"] == org_id
+    )
+    assert target["skipped"] == "daily_push_budget"
+    assert response.json()["budget_skipped"] >= 1
+    assert pushes == []
+
+
+def test_roster_health_reports_daily_push_budget_skip(
+    client, owner, monkeypatch,
+):
+    from cfo.services import channel_notifier, roster_coverage
+
+    office_org_id = owner["user"]["organization_id"]
+    assert office_org_id == 1
+    monkeypatch.setattr(settings, "channel_push_daily_limit", 0, raising=False)
+    monkeypatch.setattr(roster_coverage, "roster_coverage_report", lambda *a, **k: {"ok": False})
+    monkeypatch.setattr(roster_coverage, "coverage_alert_lines", lambda _report: ["בעיה"])
+    monkeypatch.setattr(roster_coverage, "persist_coverage_findings", lambda _db: {"created": 1})
+    monkeypatch.setattr(
+        channel_notifier,
+        "recipients_for",
+        lambda _db, target_org_id: [object()] if target_org_id == office_org_id else [],
+    )
+    pushes = []
+
+    async def must_not_push(*args, **kwargs):
+        pushes.append((args, kwargs))
+        raise AssertionError("daily push budget was bypassed")
+
+    monkeypatch.setattr(channel_notifier, "push_to_organization", must_not_push)
+
+    response = client.get(
+        "/api/cron/roster-health",
+        headers={"Authorization": "Bearer test-cron-secret"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["push_budget"]["skipped"] == "daily_push_budget"
+    assert response.json()["alerted"] is False
+    assert pushes == []

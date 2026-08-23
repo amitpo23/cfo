@@ -11,6 +11,7 @@ No live external API calls anywhere -- every connector here is an in-memory
 fake implementing only the fetch_* method(s) the test actually exercises.
 """
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
@@ -414,6 +415,179 @@ def test_of_daily_budget_gate_allows_when_no_prior_success():
         db.close()
 
 
+def test_of_failed_cron_attempt_enters_cooldown_before_retry(
+    client, fresh_org, monkeypatch,
+):
+    """A failed Vercel retry must stop before the provider-sync loop."""
+    from cfo.api.routes import cron
+    from cfo.models import IntegrationConnection, ProviderRequestBudget
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(IntegrationConnection(
+            organization_id=org_id,
+            source="open_finance",
+            status="active",
+        ))
+        db.query(SyncCheckpoint).filter(
+            SyncCheckpoint.organization_id == org_id,
+            SyncCheckpoint.source == "open_finance",
+        ).delete(synchronize_session=False)
+        db.query(ProviderRequestBudget).filter(
+            ProviderRequestBudget.provider == "open_finance",
+            ProviderRequestBudget.organization_id == org_id,
+        ).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+    attempted_targets = []
+
+    async def fail_sync(_db, targets):
+        attempted_targets.append(set(targets))
+        return [
+            {
+                "organization_id": target_org_id,
+                "source": source,
+                "error": "provider unavailable",
+            }
+            for target_org_id, source in sorted(targets)
+        ]
+
+    monkeypatch.setattr(cron, "roster_sync_targets", lambda _db: [])
+    monkeypatch.setattr(cron, "_run_sync_targets", fail_sync)
+    headers = {"Authorization": "Bearer test-cron-secret"}
+
+    first = client.get("/api/cron/sync-open-finance", headers=headers)
+    second = client.get("/api/cron/sync-open-finance", headers=headers)
+
+    assert first.status_code == 200, first.text
+    assert sum(org_id in {item[0] for item in targets} for targets in attempted_targets) == 1
+    retry = next(
+        item for item in second.json()["results"]
+        if item["organization_id"] == org_id
+    )
+    assert retry["skipped"] == "failure_cooldown"
+    assert retry["retry_at"]
+
+    db = SessionLocal()
+    try:
+        checkpoint = _get_checkpoint(
+            db, org_id, "open_finance", "scheduled_sync_attempt",
+        )
+        assert checkpoint.consecutive_failures == 1
+        assert checkpoint.cooldown_until > datetime.utcnow()
+    finally:
+        db.close()
+
+
+def test_of_daily_attempt_cap_blocks_third_attempt_even_after_cooldown(
+    client, fresh_org, monkeypatch,
+):
+    from cfo.api.routes import cron
+    from cfo.models import IntegrationConnection, ProviderRequestBudget
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(IntegrationConnection(
+            organization_id=org_id,
+            source="open_finance",
+            status="active",
+        ))
+        db.query(ProviderRequestBudget).filter(
+            ProviderRequestBudget.provider == "open_finance",
+            ProviderRequestBudget.organization_id == org_id,
+        ).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+    provider_path_calls = 0
+
+    async def fail_sync(_db, targets):
+        nonlocal provider_path_calls
+        provider_path_calls += sum(target_org_id == org_id for target_org_id, _ in targets)
+        return [
+            {
+                "organization_id": target_org_id,
+                "source": source,
+                "error": "provider unavailable",
+            }
+            for target_org_id, source in sorted(targets)
+        ]
+
+    monkeypatch.setattr(cron, "roster_sync_targets", lambda _db: [])
+    monkeypatch.setattr(cron, "_run_sync_targets", fail_sync)
+    headers = {"Authorization": "Bearer test-cron-secret"}
+
+    for attempt in range(3):
+        response = client.get("/api/cron/sync-open-finance", headers=headers)
+        assert response.status_code == 200, response.text
+        if attempt < 2:
+            db = SessionLocal()
+            try:
+                checkpoint = _get_checkpoint(
+                    db, org_id, "open_finance", "scheduled_sync_attempt",
+                )
+                checkpoint.cooldown_until = datetime.utcnow() - timedelta(seconds=1)
+                db.commit()
+            finally:
+                db.close()
+
+    target = next(
+        item for item in response.json()["results"]
+        if item["organization_id"] == org_id
+    )
+    assert target["skipped"] == "daily_attempt_budget"
+    assert provider_path_calls == 2
+
+
+def test_of_attempt_counter_failure_is_fail_closed(
+    client, fresh_org, monkeypatch,
+):
+    from cfo.api.routes import cron
+    from cfo.models import IntegrationConnection
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(IntegrationConnection(
+            organization_id=org_id,
+            source="open_finance",
+            status="active",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    async def must_not_run(_db, targets):
+        assert org_id not in {target_org_id for target_org_id, _ in targets}
+        return []
+
+    monkeypatch.setattr(cron, "roster_sync_targets", lambda _db: [])
+    monkeypatch.setattr(cron, "_run_sync_targets", must_not_run)
+    monkeypatch.setattr(
+        cron,
+        "_claim_daily_counter_slots",
+        lambda **_kwargs: {"claimed": 0, "skipped": "budget_unavailable"},
+        raising=False,
+    )
+
+    response = client.get(
+        "/api/cron/sync-open-finance",
+        headers={"Authorization": "Bearer test-cron-secret"},
+    )
+
+    assert response.status_code == 200, response.text
+    target = next(
+        item for item in response.json()["results"]
+        if item["organization_id"] == org_id
+    )
+    assert target["skipped"] == "budget_unavailable"
+
+
 def test_of_consent_gate_stops_pending_journey_before_daily_budget():
     from cfo.api.routes.cron import _of_consent_gate
     from cfo.models import BankConnection
@@ -624,6 +798,8 @@ def test_cost_protection_settings_have_hard_floors():
         sumit_enrichment_daily_action_limit=999,
         ocr_daily_document_limit=999,
         chat_receipt_daily_limit=999,
+        collection_reminder_batch_limit=999,
+        channel_push_daily_limit=999,
         manual_refresh_cooldown_minutes=1,
     )
     assert s.of_sync_min_interval_hours >= 20
@@ -631,7 +807,76 @@ def test_cost_protection_settings_have_hard_floors():
     assert s.sumit_enrichment_daily_action_limit <= 25
     assert s.ocr_daily_document_limit <= 25
     assert s.chat_receipt_daily_limit <= 50
+    assert s.collection_reminder_batch_limit <= 20
+    assert s.channel_push_daily_limit <= 50
     assert s.manual_refresh_cooldown_minutes >= 15
+
+
+def test_collection_cron_caps_and_claims_channel_deliveries_including_email(
+    client, fresh_org, monkeypatch,
+):
+    from cfo.api.routes import cron
+    from cfo.config import settings
+    from cfo.models import Organization, ProviderRequestBudget
+    from cfo.services.collection_service import PlannedReminder
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        org = db.get(Organization, org_id)
+        org.collection_reminders_enabled = True
+        db.query(ProviderRequestBudget).filter(
+            ProviderRequestBudget.provider == "notifications",
+            ProviderRequestBudget.organization_id == org_id,
+        ).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+    template = PlannedReminder(
+        contact_id=1,
+        contact_name="לקוח",
+        email="customer@example.com",
+        phone="0500000000",
+        invoice_numbers=["INV-1"],
+        total_amount=100.0,
+        days_overdue=1,
+        reminder_type="overdue",
+        message="pay",
+    )
+    planned = [replace(template, contact_id=index) for index in range(1, 26)]
+    sent_emails = []
+
+    monkeypatch.setattr(settings, "collection_reminder_batch_limit", 20, raising=False)
+    monkeypatch.setattr(
+        cron.CollectionService,
+        "plan_reminders",
+        lambda self, _today: planned if self.org_id == org_id else [],
+    )
+    monkeypatch.setattr(cron, "sumit_for_org", lambda _db, _org_id: None)
+
+    async def fake_email(to, subject, body, _settings):
+        sent_emails.append((to, subject, body))
+        return True
+
+    monkeypatch.setattr(cron, "send_email_smtp", fake_email)
+    headers = {"Authorization": "Bearer test-cron-secret"}
+
+    first = client.get("/api/cron/collection-reminders", headers=headers)
+    second = client.get("/api/cron/collection-reminders", headers=headers)
+
+    assert first.status_code == 200, first.text
+    first_summary = first.json()["summary"]
+    assert first_summary["delivery_attempts"] == 20
+    assert first_summary["email_sent"] == 10
+    assert first_summary["failed"] == 10
+    assert first_summary["budget_skipped"] == 30
+    assert len(sent_emails) == 10
+
+    assert second.status_code == 200, second.text
+    assert second.json()["summary"]["delivery_attempts"] == 0
+    assert second.json()["summary"]["budget_skipped"] == 50
+    assert len(sent_emails) == 10
 
 
 def test_expense_enrichment_is_hard_gated_to_one_provider_attempt_per_day(
