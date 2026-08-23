@@ -32,6 +32,7 @@
 """
 from __future__ import annotations
 
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -43,6 +44,7 @@ from ..database import SessionLocal
 from .sumit_request_budget import (
     SumitRequestBudgetUnavailable,
     SumitRequestLimiter,
+    paced_daily_limit,
     _utc_windows,
 )
 
@@ -180,48 +182,106 @@ def assert_paid_action_within_quota(
             "חברת הלקוח."
         )
 
-    # W2.2 (20/08/2026): המונה החודשי העמיד נתבע בשתי הסביבות — ב-live
-    # הוא ההגנה השנייה לצד המדידה מהספק, לא רק במסלול הבדיקות.
+    # P0-A (23/08/2026, ביקורת קודקס): המונה החודשי העמיד לבדו לא הספיק —
+    # הוא לא אותחל מ-snapshot.used ולא נחסם ע"י snapshot.remaining, כך
+    # שמדידה כמעט-מוצתה מהספק (49/50) עדיין נתנה לו לאשר עד לתקרתו
+    # הפנימית (90). כאן נתבע גם מונה "מאז-המדידה" שתקרתו snapshot.remaining
+    # — מדידה טרייה **מצמצמת** את מה שהמונה הפנימי ירשה, לעולם לא מגדילה
+    # אותו מעבר לתקרה הפנימית.
     if claim_budget:
         _claim_monthly_paid_action(
             organization_id=snapshot.organization_id,
             endpoint=endpoint,
+            snapshot=snapshot,
         )
 
 
 def _claim_monthly_paid_action(
-    *, organization_id: int, endpoint: str,
+    *, organization_id: int, endpoint: str, snapshot: QuotaSnapshot,
 ) -> None:
-    """Conservatively reserve one paid-action slot for the UTC month.
+    """ליבת ה-ledger המאוחד: שלוש תביעות עמידות, אטומיות יחד.
 
-    The provider snapshot remains authoritative and is checked first.  This
-    additional durable counter keeps paid operations below the internal
-    budget even when the provider does not identify the quota period.
-    A reserved slot is not refunded after a later provider failure: counting
-    an uncertain attempt is the fail-closed cost boundary.
+    כישלון באחת מבטל את כולן (raise בתוך `with db.begin()`, כמו
+    ב-`SumitRequestLimiter.claim`) — לא נשאר מונה חלקית-תפוס.
+
+    1. **since_snapshot** — מפתחה `snapshot.measured_at`, תקרתה
+       `snapshot.remaining`. זו סגירת הפער בין מדידת הספק למונה הפנימי:
+       מדידה טרייה **מצמצמת** את מה שהמונה ירשה, לעולם לא מגדילה מעבר
+       לתקרה הפנימית. כשמתפרסמת מדידה חדשה (`measured_at` אחר) — נפתח
+       חלון תביעה טרי אוטומטית.
+    2. **month** — התקרה הפנימית העמידה (90 ב-test, לפי קונפיג ב-live).
+       קיימת עוד לפני P0-A; כאן היא רק אחת משלוש, לא היחידה.
+    3. **day** — קצב יומי הנגזר מהיתרה החודשית (`paced_daily_limit`,
+       אותה נוסחה כמו ב-`SumitRequestLimiter.claim`), כדי שיתרה גדולה
+       בתחילת החודש לא תישרף ביום אחד ותשאיר את שאר החודש חסום.
     """
     if settings.sumit_environment == "test":
         limit_value = settings.sumit_test_monthly_paid_action_limit
     else:
         limit_value = settings.sumit_live_monthly_paid_action_limit
     now = datetime.now(timezone.utc)
-    _, _, month_start = _utc_windows(now)
+    _, day_start, month_start = _utc_windows(now)
+    scope_key = f"paid:org:{organization_id}"
     db = SessionLocal()
     try:
         with db.begin():
-            claimed = SumitRequestLimiter._claim_window(
+            snapshot_claimed = SumitRequestLimiter._claim_window(
                 db,
-                scope_key=f"paid:org:{organization_id}",
+                scope_key=scope_key,
+                organization_id=organization_id,
+                window_kind="snapshot",
+                window_start=snapshot.measured_at,
+                limit_value=snapshot.remaining,
+                now=now,
+            )
+            if not snapshot_claimed:
+                raise SumitQuotaExhausted(
+                    f"פעולה בתשלום נחסמה ({endpoint}): המדידה האחרונה "
+                    f"מהספק ({snapshot.used}/{snapshot.limit}) כבר מוצתה "
+                    "ע\"י פעולות שנתבעו מאז. מדידה טרייה תפתח יתרה חדשה."
+                )
+            month_used = SumitRequestLimiter._window_used(
+                db, scope_key=scope_key, window_kind="month",
+                window_start=month_start,
+            )
+            day_used = SumitRequestLimiter._window_used(
+                db, scope_key=scope_key, window_kind="day",
+                window_start=day_start,
+            )
+            days_in_month = monthrange(now.year, now.month)[1]
+            effective_daily = paced_daily_limit(
+                configured_daily=limit_value,
+                monthly_limit=limit_value,
+                month_used=month_used,
+                day_used=day_used,
+                days_left=days_in_month - now.day + 1,
+            )
+            month_claimed = SumitRequestLimiter._claim_window(
+                db,
+                scope_key=scope_key,
                 organization_id=organization_id,
                 window_kind="month",
                 window_start=month_start,
                 limit_value=limit_value,
                 now=now,
             )
-        if not claimed:
-            raise SumitQuotaExhausted(
-                f"SUMIT monthly paid-action budget exceeded ({endpoint})",
+            if not month_claimed:
+                raise SumitQuotaExhausted(
+                    f"SUMIT monthly paid-action budget exceeded ({endpoint})",
+                )
+            day_claimed = SumitRequestLimiter._claim_window(
+                db,
+                scope_key=scope_key,
+                organization_id=organization_id,
+                window_kind="day",
+                window_start=day_start,
+                limit_value=effective_daily,
+                now=now,
             )
+            if not day_claimed:
+                raise SumitQuotaExhausted(
+                    f"SUMIT daily paid-action pace exceeded ({endpoint})",
+                )
     except SumitQuotaError:
         raise
     except (SQLAlchemyError, SumitRequestBudgetUnavailable) as exc:

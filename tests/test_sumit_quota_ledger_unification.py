@@ -1,0 +1,153 @@
+"""P0-A (23/08/2026) — איחוד ledger המכסה: סגירת שני הממצאים של ביקורת קודקס.
+
+**ממצא 1 (זה הקובץ).** `assert_paid_action_within_quota` בדק את מדידת
+הספק (`used/limit`) ואז תבע משבצת מ-מונה חודשי **נפרד** — שלא אותחל
+מ-`snapshot.used` ולא נחסם ע"י `snapshot.remaining`. תוצאה: מדידה של
+49/50 מהספק (remaining=1) עדיין נתנה לגייט לאשר עד לתקרה הפנימית (90),
+כי המונה הפנימי מתחיל אפס בלי קשר למדידה. כאן מוכח שהחור נסגר: מדידה
+כמעט-מוצתה חוסמת אחרי פעולה אחת בלבד, בלי קשר לכמה נותר במונה הפנימי.
+
+הבדיקות טוענות מדידה ל-DB ואז קוראות ל-`_enforce_paid_action_budget`
+בשתי קריאות **נפרדות** (לא אותו אובייקט Python מוזרק) — כל קריאה טוענת
+את המדידה מחדש מה-DB דרך `_current_quota_snapshot`, בדיוק כפי שקורה
+בייצור.
+"""
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from cfo.config import settings
+from cfo.database import SessionLocal
+from cfo.integrations.sumit_integration import SumitIntegration
+from cfo.models import ProviderRequestBudget, SumitQuotaMeasurement
+from cfo.services import sumit_quota
+from cfo.services.sumit_request_budget import SumitRequestLimiter
+
+
+REALISTIC_KEY = "9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23"
+
+
+@pytest.fixture(autouse=True)
+def _clean(client):
+    db = SessionLocal()
+    try:
+        db.query(SumitQuotaMeasurement).delete()
+        db.query(ProviderRequestBudget).delete()
+        db.commit()
+        yield
+    finally:
+        db.query(SumitQuotaMeasurement).delete()
+        db.query(ProviderRequestBudget).delete()
+        db.commit()
+        db.close()
+
+
+def _store(org_id: int, *, used: int, limit: int,
+           measured_at: datetime | None = None) -> None:
+    db = SessionLocal()
+    try:
+        sumit_quota.store_measurement(db, sumit_quota.QuotaSnapshot(
+            organization_id=org_id, used=used, limit=limit,
+            measured_at=measured_at or datetime.now(timezone.utc),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _integration(org_id: int) -> SumitIntegration:
+    return SumitIntegration(
+        api_key=REALISTIC_KEY, company_id="1",
+        request_limiter=SumitRequestLimiter(org_id),
+    )
+
+
+def test_near_exhausted_provider_snapshot_blocks_after_one_action(fresh_org):
+    """הממצא עצמו: 49/50 (remaining=1) חוסם אחרי פעולה אחת — לא אחרי 90."""
+    org_id = fresh_org()["org_id"]
+    _store(org_id, used=49, limit=50)
+
+    integration = _integration(org_id)
+    integration._enforce_paid_action_budget("/accounting/documents/getpdf/")
+    with pytest.raises(sumit_quota.SumitQuotaExhausted):
+        integration._enforce_paid_action_budget("/accounting/documents/getpdf/")
+
+
+def test_a_fully_exhausted_snapshot_blocks_the_very_first_action(fresh_org):
+    """נשען על הבדיקה הישנה יותר (remaining<=0 → SumitQuotaExhausted מוקדם),
+    אך כאן מוודאים שהיא עדיין נכונה גם אחרי השינוי למונה המאוחד."""
+    org_id = fresh_org()["org_id"]
+    _store(org_id, used=50, limit=50)
+
+    integration = _integration(org_id)
+    with pytest.raises(sumit_quota.SumitQuotaExhausted):
+        integration._enforce_paid_action_budget("/accounting/documents/getpdf/")
+
+
+def test_generous_provider_snapshot_still_bounded_by_internal_monthly_cap(
+    fresh_org, monkeypatch,
+):
+    """כיוון הפוך: מדידה נדיבה מהספק (1000 remaining) לא מבטלת את התקרה
+    הפנימית העמידה — 'לעולם לא מגדילה מעבר לתקרה הפנימית'.
+
+    הקצב היומי (`paced_daily_limit`) מנוטרל כאן במכוון: המטרה של הבדיקה
+    הזו היא בידוד הגבול החודשי בלבד, לא האינטראקציה בין קצב-יומי לחודשי
+    (זו נבדקת בנפרד עבור מגבלת הבקשות הכללית ב-test_sumit_hard_request_budget.py)."""
+    monkeypatch.setattr(settings, "sumit_test_monthly_paid_action_limit", 2)
+    monkeypatch.setattr(
+        sumit_quota, "paced_daily_limit",
+        lambda **kwargs: kwargs["monthly_limit"],
+    )
+    org_id = fresh_org()["org_id"]
+    _store(org_id, used=0, limit=1000)
+
+    integration = _integration(org_id)
+    integration._enforce_paid_action_budget("/x/")
+    integration._enforce_paid_action_budget("/x/")
+    with pytest.raises(sumit_quota.SumitQuotaExhausted, match="monthly"):
+        integration._enforce_paid_action_budget("/x/")
+
+
+def test_a_fresh_measurement_opens_a_new_since_snapshot_window(fresh_org):
+    """מדידה חדשה (measured_at אחר) פותחת חלון טרי — מכסה שנחסמה על
+    מדידה ישנה לא נשארת חסומה לצמיתות ברגע שיש מדידה עדכנית יותר."""
+    org_id = fresh_org()["org_id"]
+    old_measured_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    _store(org_id, used=49, limit=50, measured_at=old_measured_at)
+
+    integration = _integration(org_id)
+    integration._enforce_paid_action_budget("/x/")
+    with pytest.raises(sumit_quota.SumitQuotaExhausted):
+        integration._enforce_paid_action_budget("/x/")
+
+    # רענון: מדידה חדשה יותר, remaining גדול יותר.
+    _store(org_id, used=5, limit=50)
+    integration._enforce_paid_action_budget("/x/")
+
+
+def test_claim_failure_rolls_back_the_snapshot_window_atomically(fresh_org, monkeypatch):
+    """אם התביעה החודשית נכשלת, גם משבצת ה-since_snapshot לא נשארת
+    תפוסה — הכול-או-כלום, כמו ב-SumitRequestLimiter.claim."""
+    monkeypatch.setattr(settings, "sumit_test_monthly_paid_action_limit", 1)
+    org_id = fresh_org()["org_id"]
+    _store(org_id, used=0, limit=50)
+
+    integration = _integration(org_id)
+    integration._enforce_paid_action_budget("/x/")
+    with pytest.raises(sumit_quota.SumitQuotaExhausted, match="monthly"):
+        integration._enforce_paid_action_budget("/x/")
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(ProviderRequestBudget)
+            .filter(
+                ProviderRequestBudget.scope_key == f"paid:org:{org_id}",
+                ProviderRequestBudget.window_kind == "snapshot",
+            )
+            .one()
+        )
+        # רק התביעה הראשונה (שהצליחה) נספרה — לא השנייה, שנכשלה על "month".
+        assert row.used == 1
+    finally:
+        db.close()

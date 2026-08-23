@@ -6,7 +6,7 @@ SUMIT exposes no batch readback/close endpoint in that contract, so Rezef must
 return an explicit unverified boundary and never claim the books were closed.
 """
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import httpx
@@ -21,6 +21,19 @@ from cfo.integrations.sumit_models import (
     BooksBatchTransaction,
 )
 from cfo.models import IrreversibleActionRequest
+from cfo.services import sumit_quota
+
+
+def _with_paid_quota(sumit: SumitIntegration) -> SumitIntegration:
+    """P0-A (23/08/2026): `createbatch` הפכה ל-paid כברירת מחדל — היא
+    בדיוק אחת מהפעולות שביקורת קודקס סימנה כבורחת מהשער הישן. הזרקת
+    מדידה טרייה כאן משאירה את הטסטים ממוקדים בצורת החוזה/הודעת השגיאה,
+    לא בשער התשלום עצמו (שנבדק בנפרד ב-test_sumit_paid_gate_completeness.py)."""
+    sumit.quota_snapshot = sumit_quota.QuotaSnapshot(
+        organization_id=1, used=0, limit=50,
+        measured_at=datetime.now(timezone.utc),
+    )
+    return sumit
 
 
 class _UnlimitedTestBudget:
@@ -71,12 +84,12 @@ def test_books_batch_model_refuses_unbalanced_or_empty_sides():
         BooksBatchRequest(database_id=777, transactions=[])
 
 
-def test_create_books_batch_uses_the_versioned_swagger_contract_exactly():
-    sumit = SumitIntegration(
+def test_create_books_batch_uses_the_versioned_swagger_contract_exactly(client):
+    sumit = _with_paid_quota(SumitIntegration(
         api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23",
         company_id="123",
         request_limiter=_UnlimitedTestBudget(),
-    )
+    ))
     captured = {}
 
     async def _run():
@@ -117,12 +130,12 @@ def test_create_books_batch_uses_the_versioned_swagger_contract_exactly():
     }
 
 
-def test_create_books_batch_refuses_success_without_batch_url():
-    sumit = SumitIntegration(
+def test_create_books_batch_refuses_success_without_batch_url(client):
+    sumit = _with_paid_quota(SumitIntegration(
         api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23",
         company_id="123",
         request_limiter=_UnlimitedTestBudget(),
-    )
+    ))
 
     async def _run():
         async def _fake_post(method=None, url=None, json=None, **kwargs):

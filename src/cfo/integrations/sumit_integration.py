@@ -99,12 +99,54 @@ _SUMIT_ENVIRONMENT_VERIFY_ENDPOINT = "/website/companies/getdetails/"
 _SUMIT_ENVIRONMENT_CACHE_TTL = timedelta(hours=20)
 _SUMIT_ENVIRONMENT_CACHE: dict[tuple[str, str], datetime] = {}
 
-# שער עלות אחיד (תוכנית ההפעלה 19/08/2026, סעיף 4.6). הא-סימטריה
-# ההיסטורית — רק getdetails/getpdf היו מוגנים בשער תשלום בעוד
-# create/send/sms/charge עברו רק בתקרת הבקשות הכללית — נסגרת כאן:
-# כל endpoint שמייצר "פעולה" בחיוב SUMIT עובר את שער הפעולות-בתשלום
-# (במצב test: המונה החודשי 90; במצב live: מכסה נמדדת בלבד, ומדידה
-# לא-ידועה אינה מכסה פנויה).
+# P0-A (23/08/2026, ביקורת קודקס — ממצא 2). עד כאן PAID_ACTION_ENDPOINTS
+# הייתה רשימת-היתר ידנית: endpoint שלא נזכר בה עבר "חינם" דרך תקרת
+# הבקשות הכללית בלבד, בלי לגעת בשער הפעולות-בתשלום. כך ברחו create-customer,
+# createbatch, cancel-document, move-to-books ועוד — למרות שכלל 24 במרכז
+# הידע (`docs/SUMIT_KNOWLEDGE_BASE.md`) קובע "כל קריאת API = פעולה בתשלום".
+#
+# הסגר המבני: ברירת המחדל התהפכה. `FREE_ENDPOINTS` היא הרשימה הקטנה
+# והמפורשת; **כל** endpoint אחר עובר את שער הפעולות-בתשלום — גם endpoint
+# חדש שייכתב מחר ולא סווג בכוונה (בדיקת הכיסוי ב-AST,
+# `tests/test_sumit_paid_gate_completeness.py`, נכשלת עד שמישהו יסווג
+# אותו במפורש לאחת משתי הרשימות).
+#
+# FREE_ENDPOINTS — כל רשומה מתויגת בהערה בדרגת-הראיה שלה:
+#   - "verified free": מוכח בקריאה מאושרת בפרוד (17/08/2026).
+#   - "bootstrap": בלי זה השער נועל את עצמו לצמיתות — ראו התיעוד מתחת
+#     ל-`_ensure_environment_verified`.
+#   - "inferred (28א)": מרכז הידע מבחין בין ~100 "פעולות" בחיוב לבין
+#     ~400 "קריאות API" בחודש (שני מונים, לא אחד) — קריאת bulk-list /
+#     count / reference-config, שאינה שולפת רשומה כספית ספציפית, משויכת
+#     למונה השני. **לא מאומת ישירות** — רק היסק. הדרך לאמת: listquotas
+#     (חינמית) לפני/אחרי הפעלה בודדת של ה-endpoint ולהשוות Usage.
+FREE_ENDPOINTS = frozenset({
+    "/website/companies/listquotas/",       # verified free (17/08/2026)
+    "/website/companies/getdetails/",       # bootstrap — זיהוי סביבה, נדרש לפני כל קריאה אחרת
+    "/accounting/documents/list/",          # inferred (28א) — bulk list
+    "/accounting/incomeitems/list/",        # inferred (28א) — bulk list
+    "/crm/data/listentities/",              # inferred (28א) — bulk list
+    "/crm/data/countentityusage/",          # inferred (28א) — count
+    "/crm/schema/listfolders/",             # inferred (28א) — bulk list
+    "/crm/views/listviews/",                # inferred (28א) — bulk list
+    "/emailsubscriptions/mailinglists/list/",  # inferred (28א) — bulk list
+    "/sms/sms/listsenders/",                # inferred (28א) — bulk list
+    "/sms/mailinglists/list/",              # inferred (28א) — bulk list
+    "/billing/payments/list/",              # inferred (28א) — bulk list
+    "/billing/recurring/listforcustomer/",  # inferred (28א) — bulk list (customer-scoped)
+    "/stock/stock/list/",                   # inferred (28א) — bulk list
+    "/accounting/general/getvatrate/",      # inferred (28א) — reference/config value, לא רשומה ספציפית
+    "/accounting/general/getexchangerate/",  # inferred (28א) — reference/config value
+    "/accounting/general/getnextdocumentnumber/",  # inferred (28א) — קריאת מונה, לא מסמך
+    "/crm/schema/getfolder/",               # inferred (28א) — מטא-דאטה של סכמה, לא כספי
+    "/crm/data/getentity/",                 # inferred (28א) — שדות ישות CRM, לא כספי
+})
+
+# PAID_ACTION_ENDPOINTS — כל endpoint שאינו ב-FREE_ENDPOINTS, ממוין כאן
+# במפורש (רשימה ממצה, לא רק "ידועים חשובים") כדי ש-tests/test_sumit_paid_gate_completeness.py
+# יוכל לאמת כיסוי מלא. הסיווג בפועל בזמן ריצה **אינו** תלוי ברשימה הזו —
+# הוא `endpoint not in FREE_ENDPOINTS` (fail-closed גם על endpoint שנשכח
+# מכאן) — היא כאן לתיעוד ולבדיקת-כיסוי.
 PAID_ACTION_ENDPOINTS = frozenset({
     "/accounting/documents/create/",
     "/accounting/documents/send/",
@@ -113,17 +155,66 @@ PAID_ACTION_ENDPOINTS = frozenset({
     # מוגנות רק ברמת המתודה, ו-_post_binary לא בדק את הרשימה כלל.
     "/accounting/documents/getdetails/",
     "/accounting/documents/getpdf/",
+    # P0-A (23/08/2026) — פערי ביקורת קודקס שברחו מהרשימה הידנית:
+    "/accounting/documents/cancel/",
+    "/accounting/documents/movetobooks/",
+    "/accounting/customers/create/",
+    "/books/transactions/createbatch/",
+    # קריאות "get" ספציפיות-למסמך במשפחת accounting/documents — אותה
+    # משפחת URL כמו getdetails/getpdf שהוכחו בתשלום; זהירות עקבית.
+    "/accounting/documents/getdebt/",
+    "/accounting/documents/getdebtreport/",
     "/sms/sms/send/",
     "/sms/sms/sendmultiple/",
+    "/sms/mailinglists/add/",
     "/fax/fax/send/",
     "/billing/payments/charge/",
     "/billing/payments/multivendorcharge/",
+    "/billing/payments/get/",
+    "/billing/paymentmethods/getforcustomer/",
+    "/billing/paymentmethods/setforcustomer/",
+    "/billing/paymentmethods/remove/",
+    "/billing/generalbilling/setupaycredentials/",
+    "/billing/recurring/charge/",
+    "/billing/recurring/cancel/",
+    "/billing/recurring/update/",
+    "/billing/recurring/updatesettings/",
     # ביקורת 21/08 (הנחיית בעלים): יצירת דף תשלום — לא ידוע בוודאות אם
     # מחויבת אצל הספק ⇒ fail-closed: נספרת בשער הפעולות-בתשלום.
     "/billing/payments/beginredirect/",
     "/creditguy/gateway/beginredirect/",
-    "/billing/recurring/charge/",
     "/creditguy/gateway/transaction/",
+    "/creditguy/gateway/gettransaction/",
+    "/creditguy/gateway/getreferencenumbers/",
+    "/creditguy/billing/process/",
+    "/creditguy/billing/getstatus/",
+    "/creditguy/vault/tokenize/",
+    "/creditguy/vault/tokenizesingleusejson/",
+    "/crm/data/createentity/",
+    "/crm/data/updateentity/",
+    "/crm/data/archiveentity/",
+    "/crm/data/deleteentity/",
+    # מייצרת HTML מודפס של הישות — פלט מעובד, אותו סיכון כמו getpdf.
+    "/crm/data/getentityprinthtml/",
+    "/customerservice/tickets/create/",
+    "/emailsubscriptions/mailinglists/add/",
+    "/accounting/general/verifybankaccount/",
+    "/accounting/general/updatesettings/",
+    "/accounting/general/setnextdocumentnumber/",
+    "/accounting/incomeitems/create/",
+    "/scheduleddocuments/documents/createfromdocument/",
+    "/triggers/triggers/subscribe/",
+    "/triggers/triggers/unsubscribe/",
+    "/website/companies/create/",
+    "/website/companies/update/",
+    "/website/companies/installapplications/",
+    "/website/permissions/set/",
+    "/website/permissions/remove/",
+    "/website/users/create/",
+    "/website/users/loginredirect/",
+    "/accounting/customers/update/",
+    "/accounting/customers/getdetailsurl/",
+    "/accounting/customers/createremark/",
 })
 
 
@@ -305,11 +396,14 @@ class SumitIntegration(BaseIntegration):
         )
         if not is_environment_verification:
             await self._ensure_environment_verified()
-        # שער עלות אחיד (תוכנית ההפעלה 19/08, סעיף 4.6): כל endpoint
-        # שעולה כסף עובר שער פעולות-בתשלום — לפני תפיסת משבצת הבקשה,
-        # כדי שסירוב-תשלום לא יבזבז את תקציב הקריאות. (החסימה המוקדמת,
-        # לפני כל רשת, יושבת בשומרי המתודות — `_assert_within_provider_quota`.)
-        if endpoint in PAID_ACTION_ENDPOINTS:
+        # שער עלות אחיד (תוכנית ההפעלה 19/08, סעיף 4.6; ברירת-מחדל paid
+        # מ-P0-A, 23/08): כל endpoint עובר את שער הפעולות-בתשלום —
+        # **חוץ** מהיוצאים המפורשים והמאומתים ב-FREE_ENDPOINTS. זה
+        # fail-closed: endpoint חדש שנשכח מהסיווג נחסם, לא בורח (בניגוד
+        # לרשימת-ההיתר הידנית הקודמת). לפני תפיסת משבצת הבקשה, כדי
+        # שסירוב-תשלום לא יבזבז את תקציב הקריאות. (החסימה המוקדמת, לפני
+        # כל רשת, יושבת בשומרי המתודות — `_assert_within_provider_quota`.)
+        if endpoint not in FREE_ENDPOINTS:
             self._enforce_paid_action_budget(endpoint)
         # Synchronous DB claim is intentional: no network coroutine is created
         # until the durable cross-instance slot is committed.
@@ -579,9 +673,10 @@ class SumitIntegration(BaseIntegration):
                 "SUMIT request refused: shared request budget is not configured",
             )
         await self._ensure_environment_verified()
-        # W2.5: אותו שער פעולות-בתשלום כמו ב-`_make_request` — getpdf היא
-        # פעולה בתשלום פר-מסמך והמסלול הזה הוא היחיד שמוביל אליה.
-        if endpoint in PAID_ACTION_ENDPOINTS:
+        # W2.5 / P0-A: אותו שער פעולות-בתשלום, אותה ברירת-מחדל paid, כמו
+        # ב-`_make_request` — getpdf היא פעולה בתשלום פר-מסמך והמסלול
+        # הזה הוא היחיד שמוביל אליה.
+        if endpoint not in FREE_ENDPOINTS:
             self._enforce_paid_action_budget(endpoint)
         # תפיסה סינכרונית לפני יצירת ה-coroutine, זהה ל-`_make_request`:
         # אין בקשה עד שהמשבצת העמידה נרשמה.
