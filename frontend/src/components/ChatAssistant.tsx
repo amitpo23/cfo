@@ -136,11 +136,12 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
   const confirmMutation = useMutation({
     mutationFn: (messageId: number) =>
       apiService.post('/ai/chat/confirm', { message_id: messageId }),
-    onSuccess: () => {
-      setErrorMessage(null);
-      queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
-    },
+    onSuccess: () => setErrorMessage(null),
     onError: (err) => setErrorMessage(extractErrorMessage(err)),
+    // גם בכשל: השרת כבר עשוי היה לשמור action_status="unknown" (ניסיון
+    // ביצוע שתוצאתו לא ודאה) לפני שהשגיאה חזרה — בלי רענון כאן הכרטיס
+    // נשאר "ממתין לאישור" עם כפתור אשר חי, אף שהוא כבר לא רלוונטי.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] }),
   });
 
   const cancelMutation = useMutation({
