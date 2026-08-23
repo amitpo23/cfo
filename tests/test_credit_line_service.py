@@ -16,7 +16,7 @@ equal the account's balance *after* the modeled transactions).
 
 Written TDD-first: this file existed before src/cfo/services/credit_line_service.py.
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from cfo.database import SessionLocal
@@ -24,10 +24,18 @@ from cfo.models import Account, AccountType, BankTransaction, CfoInsight
 from cfo.services import credit_line_service as svc
 
 
-def _mk_account(db, org_id, *, credit_limit=None, balance=0, name="עו\"ש ראשי"):
+def _mk_account(db, org_id, *, credit_limit=None, balance=0, name="עו\"ש ראשי",
+                 source="open_finance", balance_as_of=None):
+    # P0-B (23/08/2026): _live_cash_balance דורש עכשיו גם source="open_finance"
+    # וגם חותמת-זמן טרייה (balance_as_of) — ברירת המחדל כאן "עכשיו", כדי
+    # שהפיקסצ'ורה תמשיך לייצג חשבון כשיר כברירת מחדל; טסטים שבודקים בפירוש
+    # את הסינון עוקפים את זה במפורש (source="manual" / balance_as_of=None).
+    if balance_as_of is None and source == "open_finance":
+        balance_as_of = datetime.utcnow()
     acc = Account(
         organization_id=org_id, name=name, account_type=AccountType.BANK,
-        balance=Decimal(str(balance)), currency="ILS", source="open_finance",
+        balance=Decimal(str(balance)), currency="ILS", source=source,
+        balance_as_of=balance_as_of,
         credit_limit=Decimal(str(credit_limit)) if credit_limit is not None else None,
     )
     db.add(acc)
@@ -129,6 +137,46 @@ def test_warning_when_projected_balance_within_10_percent_of_floor(fresh_org):
         assert status["status"] == "warning"
         assert status["breach_date"] is None
         assert status["warning_date"] is not None
+    finally:
+        db.close()
+
+
+def test_breach_not_masked_by_unrelated_asset_account_balance(fresh_org):
+    """תיקון-ביקורת 23/08/2026 (P0-B, ממצא 1+3): 'מזומן' = BANK+Open
+    Finance בלבד. חשבון ASSET לא-קשור (חסכון/נכס ידני) עם יתרה ענקית לא
+    אמור למסך חריגה אמיתית ממסגרת האשראי הבנקאית — לפני התיקון היה נספר
+    לתוך אותה סכימה ומעלים את ה-breach."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        # floor = -10000; יתרה חיה בפועל של -15000 חוצה אותה.
+        acc = _mk_account(db, org_id, credit_limit=10000, balance=-15000)
+        _mk_bank_txn(db, org_id, acc.id, amount=-15000, days_ago=5)
+        db.add(Account(
+            organization_id=org_id, name="נכס לא-קשור", account_type=AccountType.ASSET,
+            balance=Decimal("1000000"), currency="ILS", source="manual",
+        ))
+        db.commit()
+
+        status = svc.get_credit_line_status(db, org_id)
+        assert status["status"] == "breach"
+    finally:
+        db.close()
+
+
+def test_unknown_when_credit_limit_account_is_not_open_finance_sourced(fresh_org):
+    """חשבון BANK עם credit_limit אבל ממקור ידני/SUMIT (לא Open Finance) —
+    אין לו מה לספק כ'רצפה' כשהיתרה שמושווית אליה חייבת להיות OF-בלבד
+    (סימטריה עם fix 1/3 — ר' תיעוד credit_line_service.py)."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _mk_account(db, org_id, credit_limit=10000, balance=-15000, source="manual")
+        db.commit()
+
+        status = svc.get_credit_line_status(db, org_id)
+        assert status["status"] == "unknown"
+        assert status["accounts"] == []
     finally:
         db.close()
 

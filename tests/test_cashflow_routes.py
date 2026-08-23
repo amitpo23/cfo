@@ -29,10 +29,16 @@ def test_cashflow_core_routes_no_crash(client, acc):
 
 
 def test_burn_rate_no_nan(client, acc):
-    """burn-rate על ארגון ריק לא מחזיר Infinity (תקין ל-JSON)."""
+    """burn-rate על ארגון ריק לא מחזיר Infinity (תקין ל-JSON).
+
+    P0-B (23/08/2026): הוסר סנטינל 999.0 — honest-null אמיתי: runway_months
+    הוא None + runway_status="unavailable" + סיבה עברית, לא מספר-כאילו."""
     r = client.get("/api/cashflow/burn-rate", headers=acc["headers"])
     assert r.status_code == 200, r.text
-    assert r.json()["runway_months"] == 999.0  # היה float('inf')
+    body = r.json()
+    assert body["runway_months"] is None  # היה float('inf'), אח"כ 999.0
+    assert body["runway_status"] == "unavailable"
+    assert body["runway_reason"]
 
 
 def test_liquidity_no_nan(client, acc):

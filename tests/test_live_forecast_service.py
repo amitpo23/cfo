@@ -417,6 +417,116 @@ def test_bank_actual_context_surfaces_when_only_bank_data_present(fresh_org):
 
 
 # --------------------------------------------------------------------- #
+# assumptions — ממצא 4 בביקורת (23/08/2026, P0-B): הנחות-תחזית שהוצגו
+# עד כה כעובדה (100% overdue בחודש הנוכחי; הוצאות-חוזרות=ממוצע 90 יום
+# מוחל על כל חודש) חייבות להיות מגולות בפלט, לא רק בקוד.
+# --------------------------------------------------------------------- #
+def test_assumptions_empty_when_neither_overdue_nor_recurring_apply(fresh_org):
+    """AR פתוח רגיל (לא overdue), בלי הוצאות חוזרות בכלל — אין הנחה
+    שהופעלה בפועל בתשובה הזו, אז assumptions == []."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        customer = Contact(organization_id=org_id, name="לקוח", contact_type=ContactType.CUSTOMER)
+        db.add(customer); db.flush()
+        db.add(Invoice(
+            organization_id=org_id, contact_id=customer.id, invoice_number="INV-1",
+            subtotal=Decimal("1000"), tax=Decimal("0"), total=Decimal("1000"),
+            balance=Decimal("1000"), status=InvoiceStatus.SENT,
+            issue_date=TODAY, due_date=MONTH_START + timedelta(days=5),
+        ))
+        db.commit()
+
+        result = LiveForecastService(db, org_id).monthly_forecast(periods=1, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    assert result["assumptions"] == []
+
+
+def test_assumptions_discloses_overdue_bucketing_when_overdue_present(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        customer = Contact(organization_id=org_id, name="לקוח", contact_type=ContactType.CUSTOMER)
+        db.add(customer); db.flush()
+        db.add(Invoice(
+            organization_id=org_id, contact_id=customer.id, invoice_number="INV-OVERDUE",
+            subtotal=Decimal("2000"), tax=Decimal("0"), total=Decimal("2000"),
+            balance=Decimal("2000"), status=InvoiceStatus.OVERDUE,
+            issue_date=TODAY - timedelta(days=60), due_date=MONTH_START - timedelta(days=40),
+        ))
+        db.commit()
+
+        result = LiveForecastService(db, org_id).monthly_forecast(periods=1, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    assert len(result["assumptions"]) == 1
+    assert "100%" in result["assumptions"][0]
+    assert "overdue" in result["assumptions"][0] or "בפיגור" in result["assumptions"][0]
+
+
+def test_assumptions_discloses_recurring_flat_repetition_when_recurring_present(fresh_org):
+    """ההנחה החשובה ביותר לגילוי: אותו ממוצע-90-יום מוחל שטוח על *כל*
+    חודש בתחזית, כולל חודשים עתידיים ריקים לגמרי מנתונים."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Expense(
+            organization_id=org_id, supplier_name="ספק חוזר",
+            amount=Decimal("600"), total=Decimal("600"),
+            expense_date=TODAY - timedelta(days=10),
+        ))
+        db.commit()
+
+        result = LiveForecastService(db, org_id).monthly_forecast(periods=3, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    assert len(result["assumptions"]) == 1
+    assert "3" in result["assumptions"][0]  # periods מוזכר בהנחה
+
+
+def test_assumptions_both_disclosed_when_both_apply(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        customer = Contact(organization_id=org_id, name="לקוח", contact_type=ContactType.CUSTOMER)
+        db.add(customer); db.flush()
+        db.add(Invoice(
+            organization_id=org_id, contact_id=customer.id, invoice_number="INV-OVERDUE",
+            subtotal=Decimal("2000"), tax=Decimal("0"), total=Decimal("2000"),
+            balance=Decimal("2000"), status=InvoiceStatus.OVERDUE,
+            issue_date=TODAY - timedelta(days=60), due_date=MONTH_START - timedelta(days=40),
+        ))
+        db.add(Expense(
+            organization_id=org_id, supplier_name="ספק חוזר",
+            amount=Decimal("600"), total=Decimal("600"),
+            expense_date=TODAY - timedelta(days=10),
+        ))
+        db.commit()
+
+        result = LiveForecastService(db, org_id).monthly_forecast(periods=2, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    assert len(result["assumptions"]) == 2
+
+
+def test_assumptions_empty_list_in_honest_null_branch(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        result = LiveForecastService(db, org_id).monthly_forecast(periods=6, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    assert result["months"] == []
+    assert result["assumptions"] == []
+
+
+# --------------------------------------------------------------------- #
 # route: GET /api/cashflow/forecast/live-monthly
 # --------------------------------------------------------------------- #
 def test_live_monthly_forecast_route_requires_auth(client):
@@ -452,6 +562,9 @@ def test_live_monthly_forecast_route_returns_expected_shape(client, fresh_org):
     # מקבל את הנתון ולעולם לא מציג את ההודעה, בדיוק הכשל ה"נעלם בשקט"
     # שהפריט הזה נועד לתקן.
     assert body["excluded_no_due_date"] == {"invoices": 0, "bills": 0}
+    # assumptions חייב לשרוד את גבול ה-HTTP (אין response_model קשיח על
+    # הראוטר הזה — אבל בלי אסרשן מפורש כאן, שדה חדש שנשמט משם היה עובר בשקט).
+    assert body["assumptions"] == []
 
 
 def test_live_monthly_forecast_route_honest_null_for_empty_org(client, fresh_org):

@@ -841,8 +841,13 @@ def test_get_credit_line_status_tool_reports_breach_date(fresh_org):
     """org-scoped smoke test with a real credit_limit + a live bank balance
     that goes below it, to prove the tool wraps the real service (not a
     stub). Sourced from BankTransaction/Account.balance — the service moved
-    off the frozen Transaction table (follow-up, 21/08/2026 review)."""
-    from datetime import date, timedelta
+    off the frozen Transaction table (follow-up, 21/08/2026 review).
+
+    P0-B (23/08/2026): the balance this compares against now requires
+    source="open_finance" + a fresh balance_as_of (cash-truth fix) — the
+    account below is built to be a qualifying account, not to test the
+    filter itself (that's test_credit_line_service.py's job)."""
+    from datetime import date, datetime, timedelta
     from decimal import Decimal
     from cfo.models import BankTransaction
 
@@ -852,6 +857,7 @@ def test_get_credit_line_status_tool_reports_breach_date(fresh_org):
         acc = Account(
             organization_id=org_id, name="בנק ראשי", account_type=AccountType.BANK,
             balance=Decimal("-9000"), credit_limit=Decimal("5000"),
+            source="open_finance", balance_as_of=datetime.utcnow(),
         )
         db.add(acc)
         db.flush()

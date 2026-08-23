@@ -15,11 +15,11 @@ Basis limitation — read before trusting the numbers:
   real synced `Account.balance` as the running-balance anchor instead of a
   historical `Transaction` sum. It still walks the window `[now - days, now]`
   — i.e. the *recorded* daily balance, not a genuine forward cash-flow
-  forecast — and it is still ORG-LEVEL (all BANK/ASSET accounts summed), so
-  when multiple accounts carry a `credit_limit` the floor is computed
-  against the SUM of all known limits (`basis: "org_level"` in the result);
-  there is no way, with the current data model, to attribute the walked
-  balance to one specific account.
+  forecast — and it is still ORG-LEVEL (all qualifying BANK accounts
+  summed), so when multiple accounts carry a `credit_limit` the floor is
+  computed against the SUM of all known limits (`basis: "org_level"` in the
+  result); there is no way, with the current data model, to attribute the
+  walked balance to one specific account.
 
   honest-null: `LiveCashFlowService.daily_cash_position` refuses to invent a
   ₪0 balance. When there is no bank-transaction data in the window, or bank
@@ -28,15 +28,24 @@ Basis limitation — read before trusting the numbers:
   `status: "unknown"` instead of silently defaulting to "ok" — an org with
   an unknown balance is not a confirmed-safe org.
 
-  Residual gap NOT covered by the honest-null above: `_live_cash_balance()`
-  sums `Account.balance` for every BANK/ASSET account that EXISTS, and an
-  account row with a real credit_limit but a never-synced `balance` column
-  (still at its column default, `Decimal("0")`) looks identical, at this
-  layer, to one that's genuinely at ₪0 — `balance_basis` reports
-  "account_balance" (confidently) either way. There is currently no
-  "was this balance actually synced" signal in the data model to
-  distinguish the two, so a breach/ok verdict computed off an unsynced
-  0-balance account is a real trust gap this detector cannot see or flag.
+  Cash-truth fix (P0-B, 23/08/2026 — codex-audit-2026-08-23.md finding 3):
+  the running balance this detector walks now comes from
+  `LiveCashFlowService._live_cash_balance()`, which was tightened to sum
+  ONLY `AccountType.BANK` accounts sourced from Open Finance
+  (`source == "open_finance"`) with a freshness timestamp inside 48h — the
+  same fix as `DashboardService._get_of_cash_summary`'s definition of cash,
+  plus a freshness gate. This closes the two prior gaps in one place
+  (reused, not copied — see fix 1 in the same audit):
+    - ASSET accounts (savings/manual assets) no longer inflate the balance
+      this floor is compared against.
+    - an account row with a real `credit_limit` but a never-synced/stale
+      `balance` (previously indistinguishable from a genuine ₪0) is now
+      excluded from the sum entirely — `balance_basis` only reports
+      "account_balance" when at least one qualifying account is fresh.
+  For symmetry, the credit-limit floor query below also requires
+  `source == "open_finance"` on the BANK account supplying the limit: a
+  manual-source account can no longer set a floor while contributing
+  nothing to the (now OF-only) balance it is compared against.
 """
 from __future__ import annotations
 
@@ -62,6 +71,7 @@ def get_credit_line_status(db: Session, organization_id: int, days: int = 30) ->
         .filter(
             Account.organization_id == organization_id,
             Account.account_type == AccountType.BANK,
+            Account.source == "open_finance",
             Account.credit_limit.isnot(None),
         )
         .all()

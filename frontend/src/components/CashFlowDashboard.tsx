@@ -75,18 +75,26 @@ interface LiveDailyResponse {
   data_sources: string[];
   days: DailyCashPosition[];
   balance_basis: 'account_balance' | 'unavailable' | 'no_bank_data';
+  balance_reason?: string | null;
   message: string | null;
 }
 
+// P0-B (23/08/2026, חוזה המזומן): הוסר סנטינל runway_months=999 — honest-null
+// אמיתי. runway_status הוא הקוד-למכונה (לא מנחשים ממספר-קסם), runway_reason
+// הוא ההסבר האנושי. current_balance עצמו יכול להיות null (אין יתרה חיה
+// זמינה: BANK+Open Finance+טרי בלבד — ר' live_cash_flow_service.py).
 interface BurnRate {
   as_of?: string;
   data_sources?: string[];
   monthly_burn_rate: number;
   monthly_income: number;
   net_monthly_burn: number;
-  current_balance: number;
+  current_balance: number | null;
   current_balance_available?: boolean;
-  runway_months: number;
+  current_balance_reason?: string | null;
+  runway_months: number | null;
+  runway_status?: 'computed' | 'infinite' | 'unavailable' | 'not_positive';
+  runway_reason?: string | null;
   analysis_period_months: number;
   expected_receivables_30d?: number;
   expected_receivables_30d_count?: number;
@@ -162,43 +170,32 @@ const CashFlowDashboard: React.FC = () => {
     }).format(value);
   };
 
-  // live_cash_flow_service.burn_rate מחזיר runway_months=999.0 כ"סנטינל"
-  // בשלושה מקרים שונים (ר' burn_rate() בקוד): (1) net_burn<=0 וגם יתרה
-  // חיובית ממש — runway **אמיתי** אינסופי; (2) net_burn>0 אבל
-  // current_balance<=0 — runway אפסי, לא אינסופי; (3)
-  // current_balance_available=false — היתרה עצמה לא ידועה
-  // (current_balance המספרי הוא 0.0 מלאכותי במקרה הזה, לא יתרה אמיתית).
-  // `=== Infinity` המת לא תפס אף אחד מהם (ה-API אף פעם לא שולח Infinity
-  // אמיתי — JSON לא תומך בו), אבל מיפוי גורף של runway_months>=999 ל-'∞'
-  // באותה מידה שקרי: הוא הופך "אין יתרה חיה + שורפים כסף" ל"runway
-  // אינסופי" — honest-null אסור להתחלף בבדיה אופטימית. '∞' מוצג רק
-  // כשהתנאי לאינסוף-אמיתי מתקיים בפועל; אחרת — '—' (לא-ידוע-בכנות).
+  // P0-B (23/08/2026, חוזה המזומן): live_cash_flow_service.burn_rate כבר
+  // לא מחזיר סנטינל runway_months=999 — הבחנה בין "אינסופי אמיתי" ל"לא
+  // ידוע" מגיעה עכשיו כקוד-מכונה מפורש מה-API (runway_status), לא ניחוש
+  // frontend-י ממספר-קסם. runway_months עצמו null בכל מצב שאינו "computed".
   const formatRunway = (br: BurnRate | undefined | null) => {
-    if (!br || br.runway_months == null) return '—';
-    const genuinelyInfinite =
-      br.current_balance_available === true &&
-      br.current_balance > 0 &&
-      br.net_monthly_burn <= 0;
-    if (br.runway_months >= 999) {
-      return genuinelyInfinite ? '∞' : '—';
+    if (!br) return '—';
+    if (br.runway_status === 'computed' && br.runway_months != null) {
+      return `${br.runway_months.toFixed(1)} חודשים`;
     }
-    return `${br.runway_months.toFixed(1)} חודשים`;
+    if (br.runway_status === 'infinite') return '∞';
+    return '—';
   };
 
-  // אותה סיווג בדיוק כמו formatRunway, כדי שהצבע (tone) לא יסתור את
-  // הערך המוצג: לפני התיקון tone חושב ישירות מ-runway_months הגולמי
-  // (כולל סנטינל 999), אז מצב לא-ידוע/שריפה-בלי-יתרה — שהערך שלו כבר
-  // תוקן ל-'—' — עדיין צבע ירוק "בריא", בדיוק ההפך מהמשמעות.
-  const runwayTone = (br: BurnRate | undefined | null): 'emerald' | 'amber' | 'slate' => {
-    if (!br || br.runway_months == null) return 'slate';
-    const genuinelyInfinite =
-      br.current_balance_available === true &&
-      br.current_balance > 0 &&
-      br.net_monthly_burn <= 0;
-    if (br.runway_months >= 999) {
-      return genuinelyInfinite ? 'emerald' : 'slate';
+  // אותה סיווג בדיוק כמו formatRunway, כדי שהצבע (tone) לא יסתור את הערך.
+  // 'not_positive' (שורפים מזומן נטו + יתרה ידועה שאינה חיובית) הוא
+  // המצב הידוע החמור ביותר שהמסך יכול לייצג — לא 'slate' (שמור ל"לא
+  // ידוע בכלל"), אלא 'rose' (אותו טון סכנה כמו netCashFlow שלילי במקום
+  // אחר במסך הזה).
+  const runwayTone = (br: BurnRate | undefined | null): 'emerald' | 'amber' | 'rose' | 'slate' => {
+    if (!br) return 'slate';
+    if (br.runway_status === 'computed' && br.runway_months != null) {
+      return br.runway_months > 6 ? 'emerald' : 'amber';
     }
-    return br.runway_months > 6 ? 'emerald' : 'amber';
+    if (br.runway_status === 'infinite') return 'emerald';
+    if (br.runway_status === 'not_positive') return 'rose';
+    return 'slate';
   };
 
   // Calculate summary stats
@@ -425,10 +422,13 @@ const CashFlowDashboard: React.FC = () => {
                   />
                 </LineChart>
               </ResponsiveContainer>
-              {dailyResp?.balance_basis === 'unavailable' && (
-                <p className="text-xs text-amber-600 mt-2">
-                  אין חשבון בנק/נכס עם יתרה חיה בארגון — יתרת הסגירה אינה זמינה (מוצגות רק כניסות/יציאות בפועל).
-                </p>
+              {/* P0-B: הטקסט הקשיח הקודם ("אין חשבון בנק/נכס...") הפך לשקרי
+                  ברגע שההגדרה הוחמרה ל-BANK+Open Finance+טרי בלבד — הסיבה
+                  האמיתית (אין חשבון כשיר / יתרה לא טרייה / חלקית) מגיעה
+                  עכשיו מה-API עצמו. מוצג גם כשהיתרה זמינה-חלקית (reason
+                  יכול להיות מוגדר גם ל-balance_basis="account_balance"). */}
+              {dailyResp?.balance_reason && (
+                <p className="text-xs text-amber-600 mt-2">{dailyResp.balance_reason}</p>
               )}
             </>
           )}
@@ -538,9 +538,13 @@ const CashFlowDashboard: React.FC = () => {
             </div>
             <div className="text-center p-4 bg-gray-50 rounded-lg">
               <p className="text-sm text-gray-600 mb-2">יתרה נוכחית</p>
-              <p className="text-xl font-bold text-blue-600">{formatCurrency(burnRate.current_balance)}</p>
-              {burnRate.current_balance_available === false && (
-                <p className="text-xs text-amber-600 mt-1">אין חשבון בנק/נכס עם יתרה חיה</p>
+              <p className="text-xl font-bold text-blue-600">
+                {burnRate.current_balance != null ? formatCurrency(burnRate.current_balance) : '—'}
+              </p>
+              {/* P0-B: reason מגיע מה-API — יכול להסביר גם "לא זמין
+                  בכלל" וגם "זמין-חלקית" (כמה חשבונות הודרו כי אינם טריים). */}
+              {burnRate.current_balance_reason && (
+                <p className="text-xs text-amber-600 mt-1">{burnRate.current_balance_reason}</p>
               )}
             </div>
           </div>
@@ -569,9 +573,9 @@ const CashFlowDashboard: React.FC = () => {
               <div>
                 <p className="font-medium text-yellow-800">שים לב לקצב השריפה</p>
                 <p className="text-sm text-yellow-700 mt-1">
-                  {burnRate.current_balance_available && burnRate.current_balance > 0
+                  {burnRate.runway_status === 'computed'
                     ? `בקצב הנוכחי, המזומנים יספיקו ל-${formatRunway(burnRate)}.`
-                    : 'אין יתרת מזומנים חיובית ידועה — לא ניתן לחשב כמה זמן הכסף יספיק.'}
+                    : burnRate.runway_reason || 'לא ניתן לחשב כמה זמן הכסף יספיק.'}
                   {' '}מומלץ לבחון דרכים להגדלת הכנסות או צמצום הוצאות.
                 </p>
               </div>

@@ -22,7 +22,7 @@ LiveCashFlowService — נתוני מסך "תזרים — מפורט" (`/cashflo
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -35,6 +35,20 @@ from ..models import (
 )
 
 EXPECTED_HORIZON_DAYS = 30
+
+# חוזה המזומן (P0-B, 23/08/2026): "מזומן" = יתרה בנקאית טרייה, לא "כל
+# נכס בטבלת Account". סף הטריות (48h) הוא אותו סף בדיוק כמו
+# data_quality._STALE_AFTER — שני המקומות בודקים את אותה שאלה
+# ("מתי סונכרנה היתרה הזו לאחרונה"), ואין סיבה לשני סֵפים שונים.
+MAX_BALANCE_AGE = timedelta(hours=48)
+
+
+def _naive(ts: Optional[datetime]) -> Optional[datetime]:
+    """מנרמל DateTime(timezone=True) (aware בפרוד/Postgres, naive ב-SQLite
+    של הטסטים) להשוואה אחידה מול datetime.utcnow() הנאיבי."""
+    if ts is None:
+        return None
+    return ts.replace(tzinfo=None) if ts.tzinfo else ts
 
 
 def _add_months(d: date, months: int) -> date:
@@ -135,7 +149,7 @@ class LiveCashFlowService:
         daily_flows = [self._sum_flows(rows, dd, dd) for dd in day_dates]
         total_net = sum(inflow - outflow for inflow, outflow in daily_flows)
 
-        live_balance = self._live_cash_balance()
+        live_balance, balance_reason = self._live_cash_balance()
         balance_available = live_balance is not None
         running = float(live_balance) - total_net if live_balance is not None else 0.0
 
@@ -156,6 +170,7 @@ class LiveCashFlowService:
             "data_sources": ["bank_transactions_actual"],
             "days": days_out,
             "balance_basis": "account_balance" if balance_available else "unavailable",
+            "balance_reason": balance_reason,
             "message": None,
         }
 
@@ -172,19 +187,42 @@ class LiveCashFlowService:
         has_bank_data = bool(rows)
         total_inflow, total_outflow = self._sum_flows(rows, window_start, as_of)
 
-        live_balance = self._live_cash_balance()
-        current_balance = float(live_balance) if live_balance is not None else 0.0
+        live_balance, balance_reason = self._live_cash_balance()
+        current_balance = float(live_balance) if live_balance is not None else None
 
         monthly_burn = round(total_outflow / months, 2) if months > 0 else 0.0
         monthly_income = round(total_inflow / months, 2) if months > 0 else 0.0
         net_burn = round(monthly_burn - monthly_income, 2)
 
-        # runway שלילי הוא חסר-משמעות — רק כש-net_burn חיובי ממש ויש יתרה
-        # חיובית ממש מחשבים runway אמיתי (אותה לוגיקה כמו CashFlowService).
-        if net_burn > 0 and current_balance > 0:
-            runway_months = round(current_balance / net_burn, 2)
+        # honest-null (תיקון-ביקורת 23/08/2026, P0-B): אין יותר סנטינל
+        # 999.0 — הוא הוצג ב-frontend/API כמספר-אמת בכל שלושת המצבים למטה,
+        # שאין ביניהם שום קשר מספרי. runway_months הוא None בכל מצב שאינו
+        # "computed" בפועל; runway_status מבחין בין המצבים בקוד-מכונה
+        # (לא בטקסט עברי חופשי שה-frontend היה צריך לפרש), ו-runway_reason
+        # נותן את ההסבר האנושי.
+        if live_balance is None:
+            runway_status = "unavailable"
+            runway_months: Optional[float] = None
+            runway_reason: Optional[str] = balance_reason or (
+                "אין יתרת מזומנים חיה זמינה — לא ניתן לחשב כמה זמן הכסף יספיק."
+            )
+        elif net_burn <= 0:
+            # לא בשריפה נטו (הכנסות מכסות/עולות על ההוצאות) עם יתרה ידועה —
+            # runway "אינסופי" הוא עובדה אמיתית כאן, לא סנטינל מומצא.
+            runway_status = "infinite"
+            runway_months = None
+            runway_reason = (
+                "אין שריפת מזומנים נטו בתקופה הנבדקת (ההכנסות מכסות את "
+                "ההוצאות) — מושג ה-runway אינו רלוונטי."
+            )
+        elif current_balance <= 0:
+            runway_status = "not_positive"
+            runway_months = None
+            runway_reason = "יתרת המזומנים הידועה אינה חיובית — אין runway לחשב."
         else:
-            runway_months = 999.0
+            runway_status = "computed"
+            runway_months = round(current_balance / net_burn, 2)
+            runway_reason = None
 
         ar_amount, ar_count = self._expected_open_amount(
             Invoice, [InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED], as_of
@@ -214,9 +252,12 @@ class LiveCashFlowService:
             "monthly_burn_rate": monthly_burn,
             "monthly_income": monthly_income,
             "net_monthly_burn": net_burn,
-            "current_balance": round(current_balance, 2),
+            "current_balance": round(current_balance, 2) if current_balance is not None else None,
             "current_balance_available": live_balance is not None,
+            "current_balance_reason": balance_reason,
             "runway_months": runway_months,
+            "runway_status": runway_status,
+            "runway_reason": runway_reason,
             "analysis_period_months": months,
             "expected_receivables_30d": ar_amount,
             "expected_receivables_30d_count": ar_count,
@@ -338,15 +379,68 @@ class LiveCashFlowService:
                 outflow += abs(amt)
         return round(inflow, 2), round(outflow, 2)
 
-    def _live_cash_balance(self) -> Optional[Decimal]:
-        """יתרת מזומנים חיה מ-Account.balance (BANK/ASSET) — בלי נפילה חזרה
-        לסכימת Transaction (זו בדיוק הטבלה הקפואה שהמסך הזה מפסיק להסתמך
-        עליה). היעדר חשבונות = None, לא 0 שקרי."""
-        total = self.db.query(func.sum(Account.balance)).filter(
+    def _live_cash_balance(self) -> tuple[Optional[Decimal], Optional[str]]:
+        """יתרת מזומנים חיה = Σ Account.balance לחשבונות BANK ממקור Open
+        Finance בלבד, עם דרישת טריות. אותה הגדרה בדיוק כמו
+        ``DashboardService._get_of_cash_summary`` (dashboard_service.py:109),
+        עם חיזוק אחד: כאן גם נדרשת חותמת-זמן טרייה (48h — ר' MAX_BALANCE_AGE
+        למעלה). לכן שני המסכים עלולים להציג "מזומן" שונה באופן לגיטימי —
+        /dashboard/overview לא בודק טריות, /cashflow* כן; זה לא באג, וההבדל
+        לא אמור להיסגר ע"י מחיקת בדיקת הטריות כאן.
+
+        **מה לא נספר כ"מזומן" (ותיקון-ביקורת 23/08/2026, P0-B):**
+          - ASSET (חסכונות/נכסים ידניים) — נכס אינו מזומן זמין למחזור.
+          - חשבון שאינו ``source == "open_finance"`` (SUMIT-מסונתז/ידני) —
+            אין מקור-אמת חיצוני שמאמת את היתרה.
+          - חשבון בלי חותמת-זמן טרייה (``balance_as_of`` / ``synced_at`` /
+            ``observed_at``, הראשון הזמין מביניהם) בתוך MAX_BALANCE_AGE —
+            יתרה מיושנת/לא-ידועה-מתי-נמדדה אינה "עכשיו".
+
+        גילוי-חלקי (לא רק honest-null בינארי): כשחלק מהחשבונות כשירים וחלק
+        לא, הסכום המוחזר משקף רק את הכשירים (לא מוחבא, לא מומצא) — אבל
+        ``reason`` מגלה כמה חשבונות הודרו, כדי שמספר-חלקי לא ייראה כמו
+        מספר-שלם-ומהימן (אותו עיקרון כמו ``coverage`` ב-``by_category``).
+
+        מחזיר (balance, reason): balance=None רק כשאין ולו חשבון כשיר אחד;
+        reason מוגדר בכל מקרה שיש משהו לגלות (None כשהכול טרי ומלא)."""
+        accounts = self.db.query(Account).filter(
             Account.organization_id == self.organization_id,
-            Account.account_type.in_([AccountType.BANK, AccountType.ASSET]),
-        ).scalar()
-        return Decimal(total) if total is not None else None
+            Account.account_type == AccountType.BANK,
+            Account.source == "open_finance",
+        ).all()
+        if not accounts:
+            return None, (
+                "אין חשבון בנק ממקור Open Finance מחובר לארגון זה — "
+                "לא ניתן לחשב יתרת מזומנים חיה."
+            )
+
+        now = datetime.utcnow()
+        fresh: list[Account] = []
+        stale_count = 0
+        for a in accounts:
+            ts = _naive(a.balance_as_of) or _naive(a.synced_at) or _naive(a.observed_at)
+            if ts is not None and (now - ts) <= MAX_BALANCE_AGE:
+                fresh.append(a)
+            else:
+                stale_count += 1
+
+        if not fresh:
+            max_age_hours = int(MAX_BALANCE_AGE.total_seconds() // 3600)
+            return None, (
+                f"יתרת {stale_count} חשבונות הבנק (Open Finance) של הארגון קיימת, "
+                f"אך אינה טרייה (מעבר ל-{max_age_hours} שעות) או חסרה חותמת זמן — "
+                "לא ניתן להציג יתרת מזומנים חיה בביטחון."
+            )
+
+        total = sum((a.balance or Decimal("0")) for a in fresh)
+        reason = None
+        if stale_count:
+            reason = (
+                f"היתרה מבוססת על {len(fresh)} מתוך {len(accounts)} חשבונות בנק "
+                f"(Open Finance) — {stale_count} הודרו כי יתרתם אינה טרייה או חסרה "
+                "חותמת זמן."
+            )
+        return Decimal(total), reason
 
     def _expected_open_amount(
         self, model, skip_statuses: list, as_of: date

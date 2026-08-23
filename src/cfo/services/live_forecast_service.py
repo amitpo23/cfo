@@ -36,6 +36,13 @@ honest-null: ארגון בלי חשבוניות/חשבונות-ספק פתוחי
 בביטחון. אם יש בכל זאת היסטוריית תנועות בנק — היא כן מוחזרת
 (``historical_context``), כדי לא להסתיר נתונים אמיתיים שקיימים רק כי אין
 עליהם תחזית-קדימה אחראית.
+
+assumptions (P0-B, 23/08/2026 — תיקון-ביקורת, ממצא 4): שני מרכיבים
+בתחזית הם הנחות-חישוב מפורשות, לא נתונים ידועים — (א) 100% מיתרת
+overdue AR/AP משובצת לחודש הנוכחי; (ב) הוצאות חוזרות = אותו ממוצע-90-יום
+מוחל שטוח על כל חודש בתחזית, כולל חודשים ריקים מנתונים. ``assumptions``
+מגלה בעברית כל הנחה שאכן הופעלה בתשובה הזו — אין שינוי בחישוב עצמו,
+רק גילוי.
 """
 from __future__ import annotations
 
@@ -166,6 +173,8 @@ class LiveForecastService:
                 "months": [],
                 "historical_context": bank_context,
                 "excluded_no_due_date": excluded_no_due_date,
+                # אין תחזית-קדימה בכלל (months=[]) — שום הנחה לא הופעלה בפועל.
+                "assumptions": [],
                 "message": message,
             }
 
@@ -252,12 +261,33 @@ class LiveForecastService:
                 ],
             })
 
+        # תחזית=עובדה מוצגת בביטחון-שווא (ביקורת 23/08/2026, P0-B, ממצא 4):
+        # שני מרכיבי-חישוב בתחזית הם הנחות מפורשות, לא נתונים ידועים —
+        # מגלים אותן בגלוי במקום להציג אותן כאילו הן עובדה מדודה. אין כאן
+        # שינוי בחישוב עצמו, רק גילוי; כל שורה מופיעה רק כשההנחה שהיא
+        # מתארת אכן הופעלה בתשובה הזו (לא רשימה גנרית קבועה).
+        assumptions: list[str] = []
+        if overdue_invoices or overdue_bills:
+            assumptions.append(
+                "100% מיתרת החשבוניות/חשבונות-הספק שבפיגור (overdue) משובצת "
+                "במלואה לחודש הנוכחי — הנחת-שיבוץ לצורך התחזית, לא תאריך "
+                "גבייה/תשלום ידוע בפועל."
+            )
+        if recurring_rows:
+            assumptions.append(
+                f"הוצאות חוזרות: אותו ממוצע חודשי (מבוסס {recurring_months_count} "
+                f"חודשים אחרונים עם נתונים, מתוך {self.RECURRING_LOOKBACK_DAYS} "
+                f"הימים האחרונים) מוחל על כל אחד מ-{periods} חודשי התחזית — כולל "
+                "חודשים עתידיים שאין עליהם עדיין שום נתון אמיתי."
+            )
+
         return {
             "as_of": as_of_date.isoformat(),
             "data_sources": data_sources,
             "months": months,
             "historical_context": bank_context,
             "excluded_no_due_date": excluded_no_due_date,
+            "assumptions": assumptions,
             "message": None,
         }
 

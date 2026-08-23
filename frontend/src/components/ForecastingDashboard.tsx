@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { AlertCircle, Calendar, Database, RefreshCw } from 'lucide-react';
+import { AlertCircle, Calendar, ChevronDown, Database, RefreshCw } from 'lucide-react';
 import api from '../services/api';
 
 interface ForecastComponent {
@@ -51,6 +51,10 @@ interface LiveForecastResponse {
   months: ForecastMonth[];
   historical_context: HistoricalBankContext;
   excluded_no_due_date?: ExcludedNoDueDate;
+  // P0-B (23/08/2026, חוזה המזומן, ממצא 4): הנחות-חישוב שהוצגו עד כה
+  // כעובדה (100% overdue בחודש הנוכחי; הוצאות-חוזרות מוחלות שטוח על כל
+  // חודש) — שורה אחת לכל הנחה שאכן הופעלה בתשובה הזו, לא רשימה גנרית.
+  assumptions?: string[];
   message: string | null;
 }
 
@@ -139,6 +143,24 @@ const ForecastingDashboard: React.FC = () => {
             (אין לפי-מה לשבץ אותם לחודש).
           </span>
         </div>
+      )}
+
+      {/* הנחות התחזית (P0-B, ממצא 4): התחזית מציגה כמה מרכיבים כעובדה
+          כשבפועל הם הנחות-חישוב מפורשות (שיבוץ 100% של overdue לחודש
+          הנוכחי; הוצאות-חוזרות מוחלות שטוח על כל חודש). גילוי חד-שורתי
+          קומפקטי לכל הנחה שאכן הופעלה בתשובה הזו — לא רשימה גנרית קבועה. */}
+      {(forecast?.assumptions?.length ?? 0) > 0 && (
+        <details className="mb-6 -mt-3 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+          <summary className="cursor-pointer font-medium text-gray-700 flex items-center gap-1 select-none">
+            <ChevronDown size={14} className="flex-shrink-0" />
+            הנחות התחזית ({forecast!.assumptions!.length})
+          </summary>
+          <ul className="mt-2 space-y-1 pr-5 list-disc">
+            {forecast!.assumptions!.map((assumption) => (
+              <li key={assumption}>{assumption}</li>
+            ))}
+          </ul>
+        </details>
       )}
 
       {isLoading ? (
