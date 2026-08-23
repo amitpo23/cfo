@@ -185,6 +185,22 @@ const CashFlowDashboard: React.FC = () => {
     return `${br.runway_months.toFixed(1)} חודשים`;
   };
 
+  // אותה סיווג בדיוק כמו formatRunway, כדי שהצבע (tone) לא יסתור את
+  // הערך המוצג: לפני התיקון tone חושב ישירות מ-runway_months הגולמי
+  // (כולל סנטינל 999), אז מצב לא-ידוע/שריפה-בלי-יתרה — שהערך שלו כבר
+  // תוקן ל-'—' — עדיין צבע ירוק "בריא", בדיוק ההפך מהמשמעות.
+  const runwayTone = (br: BurnRate | undefined | null): 'emerald' | 'amber' | 'slate' => {
+    if (!br || br.runway_months == null) return 'slate';
+    const genuinelyInfinite =
+      br.current_balance_available === true &&
+      br.current_balance > 0 &&
+      br.net_monthly_burn <= 0;
+    if (br.runway_months >= 999) {
+      return genuinelyInfinite ? 'emerald' : 'slate';
+    }
+    return br.runway_months > 6 ? 'emerald' : 'amber';
+  };
+
   // Calculate summary stats
   const totalInflows = monthlyCashFlow.reduce((sum, m) => sum + m.inflows, 0);
   const totalOutflows = monthlyCashFlow.reduce((sum, m) => sum + m.outflows, 0);
@@ -259,7 +275,7 @@ const CashFlowDashboard: React.FC = () => {
         { label: 'כניסות', value: formatCurrency(totalInflows), tone: 'emerald' },
         { label: 'יציאות', value: formatCurrency(totalOutflows), tone: 'rose' },
         { label: 'תזרים נקי', value: formatCurrency(netCashFlow), tone: netCashFlow >= 0 ? 'emerald' : 'rose' },
-        { label: 'Runway', value: formatRunway(burnRate), tone: (burnRate?.runway_months || 0) > 6 ? 'emerald' : 'amber' },
+        { label: 'Runway', value: formatRunway(burnRate), tone: runwayTone(burnRate) },
       ]}
       actions={
         <>
@@ -310,7 +326,7 @@ const CashFlowDashboard: React.FC = () => {
           label="Runway"
           value={formatRunway(burnRate)}
           detail={burnRate?.net_monthly_burn && burnRate.net_monthly_burn > 0 ? `שריפה: ${formatCurrency(burnRate.net_monthly_burn)}/חודש` : 'ללא שריפת מזומנים'}
-          tone={(burnRate?.runway_months || 0) > 6 ? 'emerald' : 'amber'}
+          tone={runwayTone(burnRate)}
         />
       </div>
 
