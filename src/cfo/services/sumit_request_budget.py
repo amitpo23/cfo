@@ -10,6 +10,7 @@ import hashlib
 from calendar import monthrange
 from datetime import datetime, timezone
 
+from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -17,6 +18,34 @@ from sqlalchemy.exc import SQLAlchemyError
 from ..config import settings
 from ..database import SessionLocal
 from ..models import ProviderRequestBudget
+
+
+def _db_now(db) -> datetime:
+    """P0-A תיקון 2 (סקירת קודקס 23/08/2026) — זמן קנוני מה-DB, לא
+    משעון-התהליך. שני instances של Vercel עם שעוני-מערכת שונים
+    (לדוגמה סביב תפנית חודש) שהיו נגזרים כל אחד משעון-התהליך שלו יכלו
+    לתבוע `window_start` שונה לאותו רגע אמיתי — כל אחד מקבל תקציב
+    חודשי נפרד משלו. ה-DB (Postgres/Neon אחד משותף לכל ה-instances)
+    הוא מקור-זמן יחיד; שאילתה עליו סוגרת את הפער.
+
+    **לא** בולעת שגיאה: אם השאילתה נכשלת, `SQLAlchemyError` עולה
+    למעלה כרגיל ונתפסת ע"י ה-`except SQLAlchemyError` הקיים בכל קורא —
+    fail-closed, לא נפילה חזרה לשעון-תהליך בשקט.
+    """
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        value = db.execute(text("SELECT now()")).scalar()
+    elif dialect == "sqlite":
+        value = db.execute(text("SELECT CURRENT_TIMESTAMP")).scalar()
+    else:  # pragma: no cover - production/test dialects are explicit
+        raise SumitRequestBudgetUnavailable(
+            f"unsupported dialect for canonical time: {dialect}",
+        )
+    if isinstance(value, str):
+        value = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value
 
 
 class SumitRequestBudgetError(RuntimeError):
@@ -69,11 +98,12 @@ def claim_daily_sync_run(api_key: str | None, *, organization_id: int) -> None:
     מלאה על אותו מפתח — והמכסה בתשלום היא 50.
     """
     scope_key = key_fingerprint(api_key)
-    now = datetime.now(timezone.utc)
-    _, day_start, _ = _utc_windows(now)
     db = SessionLocal()
     try:
         with db.begin():
+            # P0-A תיקון 2: זמן קנוני מה-DB, לא משעון-התהליך — ראו _db_now.
+            now = _db_now(db)
+            _, day_start, _ = _utc_windows(now)
             claimed = SumitRequestLimiter._claim_window(
                 db,
                 scope_key=scope_key,
@@ -108,7 +138,7 @@ def _utc_windows(now: datetime) -> tuple[datetime, datetime, datetime]:
 
 def paced_daily_limit(
     *, configured_daily: int, monthly_limit: int, month_used: int,
-    day_used: int = 0, days_left: int,
+    day_used: int = 0, days_left: int, provider_remaining: int | None = None,
 ) -> int:
     """W2.3 — התקרה היומית האפקטיבית נגזרת מהיתרה החודשית.
 
@@ -119,8 +149,17 @@ def paced_daily_limit(
     שימוש-היום מוחזר לחישוב כדי שההקצבה תישאר יציבה לאורך היום: בלעדיו
     כל תביעה מקטינה את היתרה החודשית ולכן מכווצת את ההקצבה תוך-כדי-יום,
     וסדרת תביעות לגיטימית נחסמת באמצע למרות שההקצבה של הבוקר טרם נוצלה.
+
+    `provider_remaining` — P0-A תיקון 5 (סקירת קודקס 23/08): כשניתן,
+    היתרה החודשית מוגבלת גם ע"י המדידה מהספק לפני חלוקת-הקצב, כדי
+    שהקצב האפקטיבי ייגזר מה-**יתרה האמיתית** (min(ספק, פנימי)) — לא
+    מהתקרה הפנימית בלבד. בלי זה, יתרת-ספק זעירה (למשל remaining=1)
+    עדיין הייתה מפוזרת "ליום אחד גדול" לפי התקרה הפנימית בלבד, במקום
+    להיחסם כמעט מיד.
     """
     remaining = max(0, monthly_limit - month_used)
+    if provider_remaining is not None:
+        remaining = min(remaining, max(0, provider_remaining))
     days = max(1, days_left)
     return min(configured_daily, -(-(remaining + max(0, day_used)) // days))
 
@@ -218,6 +257,54 @@ class SumitRequestLimiter:
         )
         return int(row[0]) if row else 0
 
+    @staticmethod
+    def _seed_window_floor(
+        db, *, scope_key: str, organization_id: int | None, window_kind: str,
+        window_start: datetime, used: int, limit_value: int, now: datetime,
+        provider: str = "sumit",
+    ) -> None:
+        """P0-A תיקון 1 — קובע רצפת-`used` ראשונית לחלון (לא +1 כמו
+        `_claim_window`). משמש למרוץ-הדורות של `since_snapshot`: 'שריון'
+        תביעות מהדור הקודם שעדיין לא הוכח שנספגו במדידת הספק, לתוך חלון
+        הדור החדש — לפני שהוא נפתח לתביעות אמיתיות.
+
+        `GREATEST`/`MAX` בעדכון: לעולם לא **מוריד** used קיים (אם חלון
+        כבר נתבע בפועל בינתיים), רק מבטיח רצפה.
+        """
+        if used <= 0:
+            return
+        table = ProviderRequestBudget.__table__
+        seeded = min(used, max(0, limit_value))
+        values = {
+            "provider": provider, "scope_key": scope_key,
+            "organization_id": organization_id, "window_kind": window_kind,
+            "window_start": window_start, "used": seeded,
+            "limit_value": max(0, limit_value), "updated_at": now,
+        }
+        dialect = db.get_bind().dialect.name
+        if dialect == "postgresql":
+            statement = pg_insert(table).values(**values)
+            greatest = func.greatest(table.c.used, statement.excluded.used)
+        elif dialect == "sqlite":
+            statement = sqlite_insert(table).values(**values)
+            greatest = func.max(table.c.used, statement.excluded.used)
+        else:  # pragma: no cover - production/test dialects are explicit
+            raise SumitRequestBudgetUnavailable(
+                f"unsupported request-budget dialect: {dialect}",
+            )
+        statement = statement.on_conflict_do_update(
+            index_elements=[
+                table.c.provider, table.c.scope_key,
+                table.c.window_kind, table.c.window_start,
+            ],
+            set_={
+                "used": greatest,
+                "limit_value": max(0, limit_value),
+                "updated_at": now,
+            },
+        )
+        db.execute(statement)
+
     def claim(self, endpoint: str) -> None:
         """Consume both slots before the HTTP client is allowed to run.
 
@@ -225,8 +312,6 @@ class SumitRequestLimiter:
         persisted; request bodies and credentials never enter this table.
         """
         del endpoint
-        now = datetime.now(timezone.utc)
-        minute_start, day_start, month_start = _utc_windows(now)
         # פר-ארגון (הכרעת בעלים 19/08): מכסת מסלול הבדיקות של SUMIT היא
         # ~400 לכל עסק, ולכן 200 לכל ארגון הם שולי ביטחון של 50% — לא
         # תקציב משותף שגוזל ארגון מארגון. W2.2 (20/08): גם ל-live יש
@@ -238,6 +323,9 @@ class SumitRequestLimiter:
         db = SessionLocal()
         try:
             with db.begin():
+                # P0-A תיקון 2: זמן קנוני מה-DB, לא משעון-התהליך.
+                now = _db_now(db)
+                minute_start, day_start, month_start = _utc_windows(now)
                 minute_ok = self._claim_window(
                     db,
                     scope_key="global",

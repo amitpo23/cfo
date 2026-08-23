@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     # לתקרה קשיחה בקוד (ראה enforce_cost_protection_floors).
     sumit_live_monthly_request_limit: int = 2000
     sumit_live_monthly_paid_action_limit: int = 90
+    # P0-A תיקון 3 (סקירת קודקס 23/08/2026): endpoints "inferred free"
+    # אינם מאומתים ישירות — ההגנה היחידה הייתה התרעת 80%. בכל רענון
+    # מכסה, delta-השימוש האמיתי מושווה מול מה שהמערכת תבעה. פער העולה
+    # על הסף הזה = מישהו/משהו צורך מכסה בלי לעבור בשער — הסגר אוטומטי
+    # מיידי לכל שכבת ה-inferred, לא רק התרעה. קטן בכוונה: false positive
+    # (הסגר מיותר) עולה חיכוך; false negative (לא מבחינים בדליפה) עולה כסף.
+    sumit_unexplained_quota_delta_threshold: int = 2
     # מחיר פעולה לפי המסלול (מאמר 5507895) — נמצא בדף המחירון החיצוני,
     # לא בתיעוד. None = הקאונטר מציג חריגות בכמויות בלבד (honest-null).
     sumit_plan_action_price_ils: Optional[float] = None
@@ -297,6 +304,11 @@ class Settings(BaseSettings):
         )
         self.sumit_test_monthly_paid_action_limit = min(
             90, max(0, self.sumit_test_monthly_paid_action_limit),
+        )
+        # תקרה עליונה קשיחה — ערך גבוה מדי היה מרוקן את הגנת ההסגר
+        # מתוכן (false negative עולה כסף, לא רק חיכוך).
+        self.sumit_unexplained_quota_delta_threshold = min(
+            10, max(0, self.sumit_unexplained_quota_delta_threshold),
         )
         self.sumit_test_org_daily_request_limit = min(
             20, max(0, self.sumit_test_org_daily_request_limit),

@@ -12,6 +12,7 @@
 את המדידה מחדש מה-DB דרך `_current_quota_snapshot`, בדיוק כפי שקורה
 בייצור.
 """
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -110,7 +111,14 @@ def test_generous_provider_snapshot_still_bounded_by_internal_monthly_cap(
 
 def test_a_fresh_measurement_opens_a_new_since_snapshot_window(fresh_org):
     """מדידה חדשה (measured_at אחר) פותחת חלון טרי — מכסה שנחסמה על
-    מדידה ישנה לא נשארת חסומה לצמיתות ברגע שיש מדידה עדכנית יותר."""
+    מדידה ישנה לא נשארת חסומה לצמיתות ברגע שיש מדידה עדכנית יותר.
+
+    **הערה (סקירת קודקס 23/08, תיקון 1):** הבדיקה הזו כותבת ל-DB דרך
+    `store_measurement` ישירות (לא `refresh_quota_measurement`), ולכן
+    **אינה** עוברת את `_reconcile_generation` (carry-forward) — היא
+    מוכיחה רק שמפתח-החלון משתנה עם `measured_at`, לא את סגירת מרוץ-
+    הדורות. את המרוץ עצמו, דרך הזרימה האמיתית (`refresh_quota_measurement`),
+    מוכיחות הבדיקות תחת 'מרוץ-דורות' למטה."""
     org_id = fresh_org()["org_id"]
     old_measured_at = datetime.now(timezone.utc) - timedelta(hours=2)
     _store(org_id, used=49, limit=50, measured_at=old_measured_at)
@@ -151,3 +159,154 @@ def test_claim_failure_rolls_back_the_snapshot_window_atomically(fresh_org, monk
         assert row.used == 1
     finally:
         db.close()
+
+
+# ==================================================================== #
+# תיקון 1 (סקירת קודקס 23/08) — מרוץ-דורות: carry-forward דרך הזרימה
+# האמיתית (refresh_quota_measurement, לא store_measurement ישיר)
+# ==================================================================== #
+
+class _FakeQuotaIntegration:
+    """מדמה SumitIntegration לצורך refresh_quota_measurement בלבד —
+    מחזיר תמיד את אותה שורת ActionsBilling/Operations."""
+
+    def __init__(self, *, used: int, limit: int = 50):
+        self.used = used
+        self.limit = limit
+        self.calls: list[str] = []
+
+    async def _make_request(self, endpoint, data=None, **_kwargs):
+        self.calls.append(endpoint)
+        return {
+            "Data": [
+                {"ApplicationName": "ActionsBilling", "StatisticName": "Operations",
+                 "Usage": self.used, "Quota": self.limit},
+            ],
+        }
+
+
+def test_snapshot_generation_race_is_closed_by_carrying_forward_claims(fresh_org):
+    """הממצא של הסקירה: תביעה שהוענקה תחת דור ישן, ואז רענון חדש מגלה
+    שהספק *עדיין* מראה את אותה מדידה (49/50 — Usage לא התעדכן, עיכוב
+    טבעי אצל SUMIT) — לא אמור לפתוח עוד משבצת. בלי התיקון: הדור החדש
+    (measured_at אחר) פותח since_snapshot טרי עם remaining=1 מחדש,
+    ופעולה שנייה הייתה עוברת ⇒ 51/50 אפשרי בפועל אצל הספק."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        asyncio.run(sumit_quota.refresh_quota_measurement(
+            db, org_id, _FakeQuotaIntegration(used=49, limit=50),
+        ))
+    finally:
+        db.close()
+
+    integration = _integration(org_id)
+    integration._enforce_paid_action_budget("/x/")  # תופס את היחיד שיש
+
+    db = SessionLocal()
+    try:
+        # רענון שני: הספק עדיין מראה 49/50 — לא עדכן בזמן.
+        asyncio.run(sumit_quota.refresh_quota_measurement(
+            db, org_id, _FakeQuotaIntegration(used=49, limit=50),
+        ))
+    finally:
+        db.close()
+
+    with pytest.raises(sumit_quota.SumitQuotaExhausted):
+        integration._enforce_paid_action_budget("/x/")
+
+
+def test_confirmed_claims_are_not_carried_forward_once_usage_catches_up(
+    fresh_org, monkeypatch,
+):
+    """כיוון הפוך: כשה-Usage בפועל עולה מספיק כדי להסביר את התביעות
+    הישנות (delta==prior_claimed), אין carry — הדור החדש נפתח נקי.
+
+    הקצב היומי מנוטרל כאן במכוון (כמו ב-
+    test_generous_provider_snapshot_still_bounded_by_internal_monthly_cap
+    למעלה) — המטרה כאן היא בידוד ה-carry-forward, לא האינטראקציה עם
+    פיזור-הקצב היומי; זו נבדקת בנפרד ב-test_paced_daily_limit_is_bounded_by_provider_remaining."""
+    monkeypatch.setattr(
+        sumit_quota, "paced_daily_limit",
+        lambda **kwargs: kwargs["monthly_limit"],
+    )
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        asyncio.run(sumit_quota.refresh_quota_measurement(
+            db, org_id, _FakeQuotaIntegration(used=40, limit=50),
+        ))
+    finally:
+        db.close()
+
+    integration = _integration(org_id)
+    integration._enforce_paid_action_budget("/x/")
+    integration._enforce_paid_action_budget("/x/")  # 2 תביעות תחת הדור הזה
+
+    db = SessionLocal()
+    try:
+        # Usage עלה ב-2 בדיוק — מסביר את שתי התביעות. אין carry.
+        asyncio.run(sumit_quota.refresh_quota_measurement(
+            db, org_id, _FakeQuotaIntegration(used=42, limit=50),
+        ))
+    finally:
+        db.close()
+
+    # הדור החדש: remaining=8 (50-42), בלי carry — לא נחסם.
+    integration._enforce_paid_action_budget("/x/")
+
+
+# ==================================================================== #
+# תיקון 2 (סקירת קודקס 23/08) — מדידה עתידית לא עוברת כ"טרייה"
+# ==================================================================== #
+
+def test_a_future_dated_measurement_is_rejected_as_unknown():
+    """age שלילי (measured_at עתידי, פער-שעון) לא אמור להיחשב 'טרי' —
+    בלי הבדיקה המפורשת, `age > MAX_MEASUREMENT_AGE` הוא False תמיד
+    כש-age שלילי, בלי קשר לכמה רחוק בעתיד המדידה."""
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    snapshot = sumit_quota.QuotaSnapshot(
+        organization_id=1, used=0, limit=50, measured_at=future,
+    )
+    with pytest.raises(sumit_quota.SumitQuotaUnknown):
+        sumit_quota.assert_paid_action_within_quota(
+            snapshot, endpoint="/x/", claim_budget=False,
+        )
+
+
+def test_a_measurement_within_the_future_tolerance_still_passes():
+    """סבילות קטנה (jitter סביר בין instances) לא אמורה לחסום מדידה
+    אמיתית — רק חריגה משמעותית."""
+    almost_now = datetime.now(timezone.utc) + timedelta(seconds=30)
+    snapshot = sumit_quota.QuotaSnapshot(
+        organization_id=1, used=0, limit=50, measured_at=almost_now,
+    )
+    sumit_quota.assert_paid_action_within_quota(
+        snapshot, endpoint="/x/", claim_budget=False,
+    )
+
+
+# ==================================================================== #
+# תיקון 5 (סקירת קודקס 23/08) — קצב יומי נגזר מהיתרה האפקטיבית
+# ==================================================================== #
+
+def test_paced_daily_limit_is_bounded_by_provider_remaining():
+    from cfo.services.sumit_request_budget import paced_daily_limit
+
+    # תקרה פנימית גדולה (90), אבל הספק משאיר רק 2 — הקצב היומי חייב
+    # להיות מוגבל ע"י ה-2, לא ע"י ה-90 הפנימי בלבד (ceil(2/30)=1, לא
+    # ceil(90/30)=3).
+    assert paced_daily_limit(
+        configured_daily=90, monthly_limit=90, month_used=0, day_used=0,
+        days_left=30, provider_remaining=2,
+    ) == 1
+    # בלי provider_remaining — ההתנהגות הקודמת (מבוסס תקרה פנימית בלבד).
+    assert paced_daily_limit(
+        configured_daily=90, monthly_limit=90, month_used=0, day_used=0,
+        days_left=30,
+    ) == 3
+    # יתרת-ספק שעדיין מאפשרת יותר מיום אחד להתפזר על פניו כרגיל.
+    assert paced_daily_limit(
+        configured_daily=90, monthly_limit=90, month_used=0, day_used=0,
+        days_left=10, provider_remaining=25,
+    ) == 3  # ceil(25/10)=3, קטן מ-ceil(90/10)=9

@@ -359,7 +359,12 @@ def test_test_request_monthly_limit_blocks_and_resets_next_month(
         def now(cls, tz=None):
             return cls.current
 
-    monkeypatch.setattr(sumit_request_budget, "datetime", _Clock)
+    # P0-A תיקון 2 (סקירת קודקס 23/08/2026): `claim` שואב `now` מ-`_db_now`
+    # (זמן קנוני מה-DB), לא משעון-התהליך — בכוונה, כדי לסגור פער-שעון
+    # בין instances. לכן סימולציית "תפנית חודש" כאן חייבת לפצח את
+    # `_db_now` עצמה, לא את `datetime.now` הכללי (שכבר לא נקרא בנתיב
+    # הזה).
+    monkeypatch.setattr(sumit_request_budget, "_db_now", lambda db: _Clock.current)
     limiter = SumitRequestLimiter(org_id)
 
     limiter.claim("/one")
@@ -386,6 +391,11 @@ def test_test_paid_action_monthly_limit_blocks_and_resets_next_month(
             return cls.current
 
     monkeypatch.setattr(sumit_quota, "datetime", _Clock)
+    # P0-A תיקון 2: `_claim_monthly_paid_action` שואבת `now` מ-`_db_now`
+    # כשלא סופק `now=` מפורש (המקרה כאן — `assert_paid_action_within_quota`
+    # נקראת בלי `now=`) — לא משעון-התהליך. פיצוח `_db_now` נדרש כדי
+    # שסימולציית תפנית-החודש תשפיע על חלון-החודש בפועל.
+    monkeypatch.setattr(sumit_quota, "_db_now", lambda db: _Clock.current)
 
     def snapshot():
         return sumit_quota.QuotaSnapshot(

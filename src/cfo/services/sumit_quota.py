@@ -45,6 +45,7 @@ from .sumit_request_budget import (
     SumitRequestBudgetUnavailable,
     SumitRequestLimiter,
     paced_daily_limit,
+    _db_now,
     _utc_windows,
 )
 
@@ -59,6 +60,14 @@ _PAID_STATISTIC = "Operations"
 # מדידה ישנה מזו נחשבת לא-קיימת. הרענון יומי, ולכן חלון של 26 שעות
 # סובל עיכוב cron בלי לפתוח חלון שבו פועלים על נתון בן יומיים.
 MAX_MEASUREMENT_AGE = timedelta(hours=26)
+
+# P0-A תיקון 2 (סקירת קודקס 23/08): מדידה עם measured_at עתידי (שעון
+# instance שגוי, או frozen future מבחינה) מחשבת age שלילי — שלילי הוא
+# תמיד קטן מ-MAX_MEASUREMENT_AGE, כלומר הייתה עוברת כ"טרייה" בלי קשר
+# לכמה רחוק בעתיד. סובלנות קטנה (jitter/ניקוד-שעון סביר בין instances),
+# לא אפס — כדי לא לחסום מדידה אמיתית שנרשמה מילישניות לפני שהזמן
+# הקנוני של הקורא "התקדם".
+MAX_FUTURE_SKEW = timedelta(minutes=5)
 
 # סף התרעה — כדי שהבעלים יידע **לפני** שנחסם, לא אחרי.
 NEAR_LIMIT_RATIO = 0.8
@@ -147,14 +156,20 @@ def parse_quota_response(
 
 def assert_paid_action_within_quota(
     snapshot: Optional[QuotaSnapshot], *, endpoint: str,
-    claim_budget: bool = True,
+    claim_budget: bool = True, now: Optional[datetime] = None,
 ) -> None:
     """**האיסור המוחלט.** נקרא לפני כל פעולה בתשלום.
 
-    שלושה מצבים חוסמים, וכולם fail-closed:
+    ארבעה מצבים חוסמים, וכולם fail-closed:
     - אין מדידה
+    - המדידה מתוארכת לעתיד (מעבר לסבילות קטנה — ראו MAX_FUTURE_SKEW)
     - המדידה ישנה מ-26 שעות
     - הניצול הגיע למכסה או עבר אותה
+
+    `now` — P0-A תיקון 2 (סקירת קודקס 23/08): זמן קנוני, רצוי מה-DB
+    (`_db_now`) ולא משעון-התהליך — קורא-הייצור (`sumit_integration.py`)
+    מעביר אותו במפורש. ברירת המחדל (`None` → שעון-התהליך) נשמרת
+    לתאימות לאחור עם טסטים טהורים שבונים snapshot בעצמם בלי DB.
 
     `claim_budget=False` — בדיקה טהורה בלבד (שומרי המתודות, שרצים לפני
     שער הרשת): חוסמת מוקדם בלי לתפוס משבצת מהמונה החודשי, כדי שפעולה
@@ -167,8 +182,21 @@ def assert_paid_action_within_quota(
             "בתשלום. מכסה לא-ידועה אינה מכסה פנויה."
         )
 
-    if snapshot.age > MAX_MEASUREMENT_AGE:
-        hours = int(snapshot.age.total_seconds() // 3600)
+    effective_now = now if now is not None else datetime.now(timezone.utc)
+    measured = snapshot.measured_at
+    if measured.tzinfo is None:
+        measured = measured.replace(tzinfo=timezone.utc)
+
+    if measured - effective_now > MAX_FUTURE_SKEW:
+        raise SumitQuotaUnknown(
+            f"פעולה בתשלום נחסמה ({endpoint}): מדידת המכסה מתוארכת לעתיד "
+            f"({measured.isoformat()} מול {effective_now.isoformat()}). "
+            "פער-שעון או מדידה לא-אמינה — לא ראיה למצב הנוכחי."
+        )
+
+    age = effective_now - measured
+    if age > MAX_MEASUREMENT_AGE:
+        hours = int(age.total_seconds() // 3600)
         raise SumitQuotaUnknown(
             f"פעולה בתשלום נחסמה ({endpoint}): מדידת המכסה בת {hours} שעות, "
             f"מעל התקרה של {int(MAX_MEASUREMENT_AGE.total_seconds() // 3600)}. "
@@ -193,11 +221,13 @@ def assert_paid_action_within_quota(
             organization_id=snapshot.organization_id,
             endpoint=endpoint,
             snapshot=snapshot,
+            now=now,
         )
 
 
 def _claim_monthly_paid_action(
     *, organization_id: int, endpoint: str, snapshot: QuotaSnapshot,
+    now: Optional[datetime] = None,
 ) -> None:
     """ליבת ה-ledger המאוחד: שלוש תביעות עמידות, אטומיות יחד.
 
@@ -208,23 +238,29 @@ def _claim_monthly_paid_action(
        `snapshot.remaining`. זו סגירת הפער בין מדידת הספק למונה הפנימי:
        מדידה טרייה **מצמצמת** את מה שהמונה ירשה, לעולם לא מגדילה מעבר
        לתקרה הפנימית. כשמתפרסמת מדידה חדשה (`measured_at` אחר) — נפתח
-       חלון תביעה טרי אוטומטית.
+       חלון תביעה טרי אוטומטית. (מרוץ-הדורות בין תביעה למדידה הבאה
+       נסגר בנפרד ב-`_reconcile_generation`, הנקראת מ-`refresh_quota_measurement`.)
     2. **month** — התקרה הפנימית העמידה (90 ב-test, לפי קונפיג ב-live).
        קיימת עוד לפני P0-A; כאן היא רק אחת משלוש, לא היחידה.
-    3. **day** — קצב יומי הנגזר מהיתרה החודשית (`paced_daily_limit`,
-       אותה נוסחה כמו ב-`SumitRequestLimiter.claim`), כדי שיתרה גדולה
-       בתחילת החודש לא תישרף ביום אחד ותשאיר את שאר החודש חסום.
+    3. **day** — קצב יומי הנגזר מהיתרה **האפקטיבית** — min(יתרת-הספק,
+       יתרה-פנימית), לא מהתקרה הפנימית בלבד (P0-A תיקון 5) —
+       `paced_daily_limit(provider_remaining=...)`, כדי שיתרה חודשית
+       גדולה לא תישרף ביום אחד, וגם כדי שיתרת-ספק זעירה תיחסם כמעט
+       מיד ולא תיפרס על פני "יום גדול" לפי התקרה הפנימית בלבד.
+
+    `now` — P0-A תיקון 2: זמן קנוני. אם `None` (קורא שלא סיפק), נשאב
+    מה-DB (`_db_now`) בתוך אותה טרנזקציה — לא משעון-התהליך.
     """
     if settings.sumit_environment == "test":
         limit_value = settings.sumit_test_monthly_paid_action_limit
     else:
         limit_value = settings.sumit_live_monthly_paid_action_limit
-    now = datetime.now(timezone.utc)
-    _, day_start, month_start = _utc_windows(now)
     scope_key = f"paid:org:{organization_id}"
     db = SessionLocal()
     try:
         with db.begin():
+            canonical_now = now if now is not None else _db_now(db)
+            _, day_start, month_start = _utc_windows(canonical_now)
             snapshot_claimed = SumitRequestLimiter._claim_window(
                 db,
                 scope_key=scope_key,
@@ -232,7 +268,7 @@ def _claim_monthly_paid_action(
                 window_kind="snapshot",
                 window_start=snapshot.measured_at,
                 limit_value=snapshot.remaining,
-                now=now,
+                now=canonical_now,
             )
             if not snapshot_claimed:
                 raise SumitQuotaExhausted(
@@ -248,13 +284,14 @@ def _claim_monthly_paid_action(
                 db, scope_key=scope_key, window_kind="day",
                 window_start=day_start,
             )
-            days_in_month = monthrange(now.year, now.month)[1]
+            days_in_month = monthrange(canonical_now.year, canonical_now.month)[1]
             effective_daily = paced_daily_limit(
                 configured_daily=limit_value,
                 monthly_limit=limit_value,
                 month_used=month_used,
                 day_used=day_used,
-                days_left=days_in_month - now.day + 1,
+                days_left=days_in_month - canonical_now.day + 1,
+                provider_remaining=snapshot.remaining,
             )
             month_claimed = SumitRequestLimiter._claim_window(
                 db,
@@ -263,7 +300,7 @@ def _claim_monthly_paid_action(
                 window_kind="month",
                 window_start=month_start,
                 limit_value=limit_value,
-                now=now,
+                now=canonical_now,
             )
             if not month_claimed:
                 raise SumitQuotaExhausted(
@@ -276,7 +313,7 @@ def _claim_monthly_paid_action(
                 window_kind="day",
                 window_start=day_start,
                 limit_value=effective_daily,
-                now=now,
+                now=canonical_now,
             )
             if not day_claimed:
                 raise SumitQuotaExhausted(
@@ -356,11 +393,165 @@ async def refresh_quota_measurement(db, organization_id: int, integration):
     snapshot = parse_quota_response(payload, organization_id=organization_id)
     if snapshot is None:
         return None
+    # P0-A תיקונים 1+3 (סקירת קודקס 23/08): חייב להיטען **לפני**
+    # store_measurement — אחרת "הקודם" הוא כבר "החדש".
+    previous = load_latest_snapshot(db, organization_id)
     store_measurement(db, snapshot)
+    _reconcile_generation(db, previous=previous, new=snapshot)
     if snapshot.is_near_limit:
         _record_near_limit_insight(db, snapshot)
     db.commit()
     return snapshot
+
+
+# ==================================================================== #
+# P0-A תיקונים 1+3 (סקירת קודקס 23/08/2026) — התאמה בין דורות מדידה
+# ==================================================================== #
+
+def _reconcile_generation(
+    db, *, previous: Optional[QuotaSnapshot], new: QuotaSnapshot,
+) -> None:
+    """נקרא פעם אחת בכל רענון מכסה, אחרי ש-`new` נשמר. שני תיקונים
+    בלתי-תלויים, מאותם שני מספרים:
+
+    **תיקון 1 — מרוץ-דורות.** כל `measured_at` פותח חלון `since_snapshot`
+    טרי משלו (תקרתו `remaining` של המדידה ההיא). בלי זה: תביעה שהוענקה
+    תחת הדור הישן (`previous`) ועדיין לא באה לידי ביטוי ב-`Usage` של
+    המדידה החדשה (עדיין אותו 49/50 — הספק פשוט עוד לא עדכן) הייתה
+    יכולה להיספר שוב תחת הדור החדש (עוד +1 remaining) — 51/50 אפשרי.
+    שמרני: כל תביעה מהדור הקודם שלא **הוכחה** נספגת (עלייה מקבילה
+    ב-Usage האמיתי) נזרעת כרצפת-`used` בחלון של הדור החדש, לפני
+    שהוא נפתח לתביעות חדשות.
+
+    **תיקון 3 — הסגר inferred.** אם ה-delta האמיתי ב-Usage גדול ממה
+    שהתביעות שלנו מסבירות — משהו צורך מכסה בלי לעבור בשער-התשלום.
+    ההסבר הסביר ביותר: אחד מ-endpoints ה-'inferred' ב-FREE_ENDPOINTS
+    הוא בעצם paid. תגובה: הסגר מיידי (לא רק התרעת 80%) לכל שכבת
+    ה-inferred, עד שחרור ידני של הבעלים.
+    """
+    if previous is None:
+        return
+    scope_key = f"paid:org:{new.organization_id}"
+    prior_claimed = SumitRequestLimiter._window_used(
+        db, scope_key=scope_key, window_kind="snapshot",
+        window_start=previous.measured_at,
+    )
+    # ירידת Usage (איפוס תקופה אצל הספק) אינה הוכחה שהתביעות "נספגו" —
+    # honest-null: 0 מוכח-נספג, לא הכול-מאופס.
+    provider_delta = max(0, new.used - previous.used)
+
+    # **לא** "return מוקדם אם prior_claimed<=0": דווקא התרחיש הכי מסוכן
+    # של תיקון 3 הוא prior_claimed==0 — אפס תביעות שלנו, ובכל זאת
+    # ה-Usage אצל הספק עלה. return מוקדם כאן היה מדלג בדיוק על ההסגר
+    # שאמור לתפוס את זה.
+    if prior_claimed > 0:
+        confirmed = min(prior_claimed, provider_delta)
+        carry = prior_claimed - confirmed
+        if carry > 0:
+            now = _db_now(db)
+            seeded = min(carry, max(0, new.remaining))
+            SumitRequestLimiter._seed_window_floor(
+                db,
+                scope_key=scope_key,
+                organization_id=new.organization_id,
+                window_kind="snapshot",
+                window_start=new.measured_at,
+                used=seeded,
+                limit_value=max(0, new.remaining),
+                now=now,
+            )
+
+    unexplained = provider_delta - prior_claimed
+    if unexplained > settings.sumit_unexplained_quota_delta_threshold:
+        _trigger_inferred_endpoint_quarantine(
+            db,
+            organization_id=new.organization_id,
+            environment=settings.sumit_environment,
+            unexplained_delta=unexplained,
+            evidence={
+                "previous_measured_at": previous.measured_at.isoformat(),
+                "previous_used": previous.used,
+                "new_measured_at": new.measured_at.isoformat(),
+                "new_used": new.used,
+                "provider_delta": provider_delta,
+                "claimed_by_us_since_previous": prior_claimed,
+                "unexplained_delta": unexplained,
+                "threshold": settings.sumit_unexplained_quota_delta_threshold,
+            },
+        )
+
+
+def _quarantine_fingerprint(organization_id: int, environment: str) -> str:
+    # בלי חותמת-זמן/חודש בכוונה: ההסגר לא "מתאפס" מדי חודש כמו התרעת
+    # near-limit — הוא נשאר עד ניקוי ידני, ולכן אותו fingerprint לצמיתות.
+    return f"sumit_inferred_endpoint_quarantine:{organization_id}:{environment}"
+
+
+def _trigger_inferred_endpoint_quarantine(
+    db, *, organization_id: int, environment: str,
+    unexplained_delta: int, evidence: dict,
+) -> None:
+    """יוצר/מעדכן CfoInsight שהוא **גם** דגל ההסגר עצמו (נבדק חי ע"י
+    `is_inferred_endpoint_quarantined`) — לא רק התרעה. status != 'resolved'
+    ⇒ הסגר פעיל. שחרור רק דרך עדכון סטטוס ידני (מסלולי ה-insights
+    הקיימים, `PATCH /brain/insights/{id}` או `/insights/{id}/status`)."""
+    from ..models import CfoInsight
+
+    fingerprint = _quarantine_fingerprint(organization_id, environment)
+    existing = db.query(CfoInsight).filter(
+        CfoInsight.organization_id == organization_id,
+        CfoInsight.fingerprint == fingerprint,
+    ).first()
+    title = f"הסגר אוטומטי: פער בלתי-מוסבר במכסת SUMIT ({unexplained_delta} פעולות)"
+    message = (
+        "מדידת המכסה הראתה עלייה בשימוש שלא הוסברה ע\"י פעולות שהמערכת "
+        "עצמה תבעה דרך שער-התשלום. כל endpoint ב-FREE_ENDPOINTS מהדרגה "
+        "'inferred' (לא 'verified free'/'bootstrap') עבר לשער הפעולות-"
+        "בתשלום עד שחרור ידני — אחרי שאותרה סיבת הפער."
+    )
+    recommended_action = (
+        "לבדוק את הראיות (evidence) — אילו endpoints נקראו בחלון הזמן "
+        "שבין שתי המדידות; לאשש שאף inferred endpoint אינו בעצם paid "
+        "לפני שחרור ההסגר."
+    )
+    if existing is not None:
+        # 'resolved' → הבעלים שחרר בעבר; פער בלתי-מוסבר **חדש** פותח
+        # הסגר מחדש (fail-closed: לא משאירים 'קלירד לצמיתות' מול איתות
+        # אמיתי חדש) — activated_at מתעדכן, לא רק evidence.
+        existing.status = "active"
+        existing.severity = "critical"
+        existing.title = title
+        existing.message = message
+        existing.evidence = evidence
+        existing.recommended_action = recommended_action
+        existing.resolved_at = None
+    else:
+        db.add(CfoInsight(
+            organization_id=organization_id,
+            fingerprint=fingerprint,
+            insight_type="sumit_inferred_endpoint_quarantine",
+            severity="critical",
+            title=title,
+            message=message,
+            evidence=evidence,
+            recommended_action=recommended_action,
+        ))
+
+
+def is_inferred_endpoint_quarantined(
+    db, *, organization_id: int, environment: str,
+) -> bool:
+    """נקרא משער הרשת (`sumit_integration.py`) לפני שנותנים ל-endpoint
+    'inferred free' לעבור בלי שער-תשלום. `True` = הסגר פעיל."""
+    from ..models import CfoInsight
+
+    fingerprint = _quarantine_fingerprint(organization_id, environment)
+    row = db.query(CfoInsight).filter(
+        CfoInsight.organization_id == organization_id,
+        CfoInsight.fingerprint == fingerprint,
+        CfoInsight.status != "resolved",
+    ).first()
+    return row is not None
 
 
 def _record_near_limit_insight(db, snapshot: QuotaSnapshot) -> None:

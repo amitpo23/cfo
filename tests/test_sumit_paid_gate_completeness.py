@@ -239,3 +239,42 @@ def test_a_verified_free_endpoint_never_touches_the_paid_budget(monkeypatch, fre
     assert result["Status"] == 0
     asyncio.run(integration.client.aclose())
     mod._SUMIT_ENVIRONMENT_CACHE.clear()
+
+
+def test_only_the_two_gated_methods_touch_the_httpx_client():
+    """P0-A תיקון 4 (מומלץ, סקירת קודקס 23/08) — ה-sinks המדברים בפועל
+    עם הרשת (`self.client.request`/`.post`/וכו') מותרים אך ורק בתוך
+    `_make_request`/`_post_binary` — כל endpoint עובר בהם דרך שער
+    ברירת-המחדל-paid. נתיב רשת שלישי עתידי היה עוקף את השער כולו, בלי
+    קשר לסיווג FREE/PAID; זה חוסם זאת מבנית, לא בביקורת-קוד. `aclose`
+    מוחרג — ניקוי חיבור, לא שליחת בקשה."""
+    _NETWORK_SENDING_ATTRS = {
+        "request", "post", "get", "put", "delete", "patch",
+        "send", "stream", "options", "head",
+    }
+    _ALLOWED_METHODS = {"_make_request", "_post_binary"}
+
+    source = _SUMIT_INTEGRATION_FILE.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(_SUMIT_INTEGRATION_FILE))
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name in _ALLOWED_METHODS:
+            continue
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            fn = call.func
+            if not isinstance(fn, ast.Attribute) or fn.attr not in _NETWORK_SENDING_ATTRS:
+                continue
+            value = fn.value
+            if (
+                isinstance(value, ast.Attribute) and value.attr == "client"
+                and isinstance(value.value, ast.Name) and value.value.id == "self"
+            ):
+                offenders.append(f"{node.name}: self.client.{fn.attr}(...)")
+
+    assert not offenders, (
+        f"self.client נגיש מחוץ ל-_make_request/_post_binary: {offenders}"
+    )

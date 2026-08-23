@@ -111,18 +111,27 @@ _SUMIT_ENVIRONMENT_CACHE: dict[tuple[str, str], datetime] = {}
 # `tests/test_sumit_paid_gate_completeness.py`, נכשלת עד שמישהו יסווג
 # אותו במפורש לאחת משתי הרשימות).
 #
-# FREE_ENDPOINTS — כל רשומה מתויגת בהערה בדרגת-הראיה שלה:
-#   - "verified free": מוכח בקריאה מאושרת בפרוד (17/08/2026).
-#   - "bootstrap": בלי זה השער נועל את עצמו לצמיתות — ראו התיעוד מתחת
-#     ל-`_ensure_environment_verified`.
+# FREE_ENDPOINTS — כל רשומה מתויגת בהערה בדרגת-הראיה שלה, ומחולקת
+# לשתי שכבות נפרדות (P0-A תיקון 3, סקירת קודקס 23/08/2026):
+#   - "verified free" / "bootstrap": מוכחות/הכרחיות מבנית — **פטורות
+#     מהסגר**. בלי listquotas אין דרך לרענן מכסה בכלל; בלי getdetails
+#     (זיהוי-סביבה) אין דרך לאמת שום קריאה אחרת. הסגר עליהן = נעילה
+#     עצמית לצמיתות.
 #   - "inferred (28א)": מרכז הידע מבחין בין ~100 "פעולות" בחיוב לבין
 #     ~400 "קריאות API" בחודש (שני מונים, לא אחד) — קריאת bulk-list /
 #     count / reference-config, שאינה שולפת רשומה כספית ספציפית, משויכת
 #     למונה השני. **לא מאומת ישירות** — רק היסק. הדרך לאמת: listquotas
 #     (חינמית) לפני/אחרי הפעלה בודדת של ה-endpoint ולהשוות Usage.
-FREE_ENDPOINTS = frozenset({
+#     בגלל אי-הוודאות הזו הן **כפופות להסגר אוטומטי**: אם רענון מכסה
+#     מגלה עלייה ב-Usage שהתביעות שלנו לא מסבירות (`sumit_quota.
+#     _reconcile_generation`), כל השכבה הזו הופכת ל-paid-gated עד
+#     שחרור ידני — לא רק התרעת 80% (ראו `_inferred_tier_is_quarantined`).
+VERIFIED_FREE_ENDPOINTS = frozenset({
     "/website/companies/listquotas/",       # verified free (17/08/2026)
     "/website/companies/getdetails/",       # bootstrap — זיהוי סביבה, נדרש לפני כל קריאה אחרת
+})
+
+INFERRED_FREE_ENDPOINTS = frozenset({
     "/accounting/documents/list/",          # inferred (28א) — bulk list
     "/accounting/incomeitems/list/",        # inferred (28א) — bulk list
     "/crm/data/listentities/",              # inferred (28א) — bulk list
@@ -141,6 +150,12 @@ FREE_ENDPOINTS = frozenset({
     "/crm/schema/getfolder/",               # inferred (28א) — מטא-דאטה של סכמה, לא כספי
     "/crm/data/getentity/",                 # inferred (28א) — שדות ישות CRM, לא כספי
 })
+
+# איחוד לתאימות-לאחור: קוד/טסטים קיימים בודקים חברות ב-FREE_ENDPOINTS
+# בלי להתעניין בשכבה. ההחלטה בזמן ריצה (quarantine-aware) משתמשת
+# ב-VERIFIED_FREE_ENDPOINTS/INFERRED_FREE_ENDPOINTS בנפרד — ראו
+# `_make_request`/`_post_binary`.
+FREE_ENDPOINTS = VERIFIED_FREE_ENDPOINTS | INFERRED_FREE_ENDPOINTS
 
 # PAID_ACTION_ENDPOINTS — כל endpoint שאינו ב-FREE_ENDPOINTS, ממוין כאן
 # במפורש (רשימה ממצה, לא רק "ידועים חשובים") כדי ש-tests/test_sumit_paid_gate_completeness.py
@@ -398,13 +413,17 @@ class SumitIntegration(BaseIntegration):
             await self._ensure_environment_verified()
         # שער עלות אחיד (תוכנית ההפעלה 19/08, סעיף 4.6; ברירת-מחדל paid
         # מ-P0-A, 23/08): כל endpoint עובר את שער הפעולות-בתשלום —
-        # **חוץ** מהיוצאים המפורשים והמאומתים ב-FREE_ENDPOINTS. זה
-        # fail-closed: endpoint חדש שנשכח מהסיווג נחסם, לא בורח (בניגוד
-        # לרשימת-ההיתר הידנית הקודמת). לפני תפיסת משבצת הבקשה, כדי
-        # שסירוב-תשלום לא יבזבז את תקציב הקריאות. (החסימה המוקדמת, לפני
-        # כל רשת, יושבת בשומרי המתודות — `_assert_within_provider_quota`.)
-        if endpoint not in FREE_ENDPOINTS:
-            self._enforce_paid_action_budget(endpoint)
+        # **חוץ** מהיוצאים המפורשים והמאומתים ב-VERIFIED_FREE_ENDPOINTS,
+        # ומ-INFERRED_FREE_ENDPOINTS **כל עוד השכבה הזו לא בהסגר**
+        # (תיקון 3: פער בלתי-מוסבר במדידה מסגיר את כל שכבת ה-inferred
+        # אוטומטית). fail-closed: endpoint חדש שנשכח מהסיווג נחסם, לא
+        # בורח (בניגוד לרשימת-ההיתר הידנית הקודמת). לפני תפיסת משבצת
+        # הבקשה, כדי שסירוב-תשלום לא יבזבז את תקציב הקריאות. (החסימה
+        # המוקדמת, לפני כל רשת, יושבת בשומרי המתודות —
+        # `_assert_within_provider_quota`.)
+        if endpoint not in VERIFIED_FREE_ENDPOINTS:
+            if endpoint not in INFERRED_FREE_ENDPOINTS or self._inferred_tier_is_quarantined():
+                self._enforce_paid_action_budget(endpoint)
         # Synchronous DB claim is intentional: no network coroutine is created
         # until the durable cross-instance slot is committed.
         self.request_limiter.claim(endpoint)
@@ -561,6 +580,51 @@ class SumitIntegration(BaseIntegration):
         except Exception:
             return None
 
+    def _canonical_now(self):
+        """P0-A תיקון 2 (סקירת קודקס 23/08/2026) — זמן קנוני מה-DB לבדיקת
+        טריות/עתידיות של מדידת המכסה, לא משעון-התהליך של ה-instance
+        הזה. נכשל בעדינות לשעון-תהליך רק אם השאילתה עצמה לא זמינה —
+        זה עדיין fail-closed בפועל, כי `_claim_monthly_paid_action`
+        (שקוראת ל-`_db_now` בתוך הטרנזקציה עצמה, בלי רשת-ביטחון) היא
+        הגנה שנייה בלתי-תלויה: אם ה-DB באמת לא זמין, הבקשה נחסמת שם."""
+        from ..database import SessionLocal
+        from ..services.sumit_request_budget import _db_now
+
+        try:
+            db = SessionLocal()
+            try:
+                return _db_now(db)
+            finally:
+                db.close()
+        except Exception:
+            from datetime import datetime, timezone
+
+            return datetime.now(timezone.utc)
+
+    def _inferred_tier_is_quarantined(self) -> bool:
+        """P0-A תיקון 3 — `True` = שכבת ה-'inferred free' בהסגר, כל
+        endpoint בה עובר לשער-התשלום הרגיל. בלי הקשר-ארגון (למשל מגביל
+        בדיקה חסר `organization_id`) אין הסגר פר-ארגון לבדוק — `False`.
+        כשל בדיקת ה-DB עצמה **כן** נכשל-סגור (fail-closed: `True`) —
+        להבדיל מהיעדר הקשר, שאינו כשל אלא פשוט 'אין מה לבדוק'."""
+        organization_id = getattr(self.request_limiter, "organization_id", None)
+        if not organization_id:
+            return False
+        try:
+            from ..database import SessionLocal
+            from ..services.sumit_quota import is_inferred_endpoint_quarantined
+
+            db = SessionLocal()
+            try:
+                return is_inferred_endpoint_quarantined(
+                    db, organization_id=organization_id,
+                    environment=self._configured_sumit_environment(),
+                )
+            finally:
+                db.close()
+        except Exception:
+            return True
+
     def _enforce_paid_action_budget(self, endpoint: str) -> None:
         """שער עלות אחיד לכל פעולה שעולה כסף (סעיף 4.6).
 
@@ -568,11 +632,13 @@ class SumitIntegration(BaseIntegration):
         מוזרק, או המדידה היומית האחרונה מה-DB) — מדידה לא-ידועה חוסמת
         (החוק הקשיח מ-CLAUDE.md). בנוסף נתבע המונה החודשי העמיד שלנו
         (90 ב-test, לפי הקונפיג ב-live) בתוך אותה בדיקה. fail-closed.
+        `now` — זמן קנוני מה-DB (P0-A תיקון 2), לא משעון-התהליך.
         """
         from ..services.sumit_quota import assert_paid_action_within_quota
 
         assert_paid_action_within_quota(
             self._current_quota_snapshot(), endpoint=endpoint,
+            now=self._canonical_now(),
         )
 
     def _assert_within_provider_quota(self, action: str) -> None:
@@ -593,7 +659,7 @@ class SumitIntegration(BaseIntegration):
         # (`_enforce_paid_action_budget`).
         assert_paid_action_within_quota(
             self._current_quota_snapshot(), endpoint=action,
-            claim_budget=False,
+            claim_budget=False, now=self._canonical_now(),
         )
 
     @staticmethod
@@ -673,11 +739,12 @@ class SumitIntegration(BaseIntegration):
                 "SUMIT request refused: shared request budget is not configured",
             )
         await self._ensure_environment_verified()
-        # W2.5 / P0-A: אותו שער פעולות-בתשלום, אותה ברירת-מחדל paid, כמו
-        # ב-`_make_request` — getpdf היא פעולה בתשלום פר-מסמך והמסלול
-        # הזה הוא היחיד שמוביל אליה.
-        if endpoint not in FREE_ENDPOINTS:
-            self._enforce_paid_action_budget(endpoint)
+        # W2.5 / P0-A: אותו שער פעולות-בתשלום, אותה ברירת-מחדל paid
+        # (כולל בדיקת הסגר-inferred), כמו ב-`_make_request` — getpdf
+        # היא פעולה בתשלום פר-מסמך והמסלול הזה הוא היחיד שמוביל אליה.
+        if endpoint not in VERIFIED_FREE_ENDPOINTS:
+            if endpoint not in INFERRED_FREE_ENDPOINTS or self._inferred_tier_is_quarantined():
+                self._enforce_paid_action_budget(endpoint)
         # תפיסה סינכרונית לפני יצירת ה-coroutine, זהה ל-`_make_request`:
         # אין בקשה עד שהמשבצת העמידה נרשמה.
         self.request_limiter.claim(endpoint)
