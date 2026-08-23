@@ -8,23 +8,35 @@ raises a CfoInsight when the balance breaches, or comes within 10%, of the
 framework.
 
 Basis limitation — read before trusting the numbers:
-  `CashFlowService.get_daily_cash_position` is ORG-LEVEL: it sums the legacy
-  `Transaction` table across every account of the org, not per bank account,
-  and it walks the window `[now - days, now]` — i.e. the *recorded* daily
-  balance, not a genuine forward cash-flow forecast (despite the "projected"
-  wording in the calling convention). It also inherits a known accuracy
-  limitation: its opening balance is derived by summing ALL historical
-  `Transaction` rows rather than the real synced `Account.balance`, which
-  `CashFlowService.get_cash_burn_rate` documents can produce an artificially
-  large negative starting balance (see that method's inline comment). This
-  detector is explicitly scoped to PR2 and does not attempt to fix
-  `cash_flow_service` — it uses the function as specified and flags the
-  limitation here instead of silently trusting the numbers.
+  Source moved (21/08/2026 follow-up) from `CashFlowService.get_daily_cash_position`
+  (which sums the frozen, org-level `Transaction` table — ~127 rows, frozen
+  since 19/08/2026) to `LiveCashFlowService.daily_cash_position`
+  (`live_cash_flow_service.py`): org-scoped, `BankTransaction`-based, with a
+  real synced `Account.balance` as the running-balance anchor instead of a
+  historical `Transaction` sum. It still walks the window `[now - days, now]`
+  — i.e. the *recorded* daily balance, not a genuine forward cash-flow
+  forecast — and it is still ORG-LEVEL (all BANK/ASSET accounts summed), so
+  when multiple accounts carry a `credit_limit` the floor is computed
+  against the SUM of all known limits (`basis: "org_level"` in the result);
+  there is no way, with the current data model, to attribute the walked
+  balance to one specific account.
 
-  Because of the org-level basis, when multiple accounts carry a
-  `credit_limit` the floor is computed against the SUM of all known limits
-  (`basis: "org_level"` in the result) — there is no way, with the current
-  data model, to attribute the walked balance to one specific account.
+  honest-null: `LiveCashFlowService.daily_cash_position` refuses to invent a
+  ₪0 balance. When there is no bank-transaction data in the window, or bank
+  data exists but no live `Account.balance` to anchor it to
+  (`balance_basis` != "account_balance"), this detector reports
+  `status: "unknown"` instead of silently defaulting to "ok" — an org with
+  an unknown balance is not a confirmed-safe org.
+
+  Residual gap NOT covered by the honest-null above: `_live_cash_balance()`
+  sums `Account.balance` for every BANK/ASSET account that EXISTS, and an
+  account row with a real credit_limit but a never-synced `balance` column
+  (still at its column default, `Decimal("0")`) looks identical, at this
+  layer, to one that's genuinely at ₪0 — `balance_basis` reports
+  "account_balance" (confidently) either way. There is currently no
+  "was this balance actually synced" signal in the data model to
+  distinguish the two, so a breach/ok verdict computed off an unsynced
+  0-balance account is a real trust gap this detector cannot see or flag.
 """
 from __future__ import annotations
 
@@ -35,7 +47,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from ..models import Account, AccountType, CfoInsight
-from .cash_flow_service import CashFlowService
+from .live_cash_flow_service import LiveCashFlowService
 
 INSIGHT_TYPE = "credit_line_breach"
 WARNING_BAND = Decimal("0.10")  # within 10% of the framework floor => warning
@@ -68,13 +80,32 @@ def get_credit_line_status(db: Session, organization_id: int, days: int = 30) ->
     floor = -total_credit_limit
     warning_threshold = floor + (WARNING_BAND * total_credit_limit)  # -0.9 * total
 
-    daily = CashFlowService(db).get_daily_cash_position(organization_id, days=days)
+    accounts_payload = [
+        {"account_id": a.id, "name": a.name, "credit_limit": float(a.credit_limit)}
+        for a in accounts
+    ]
+
+    daily = LiveCashFlowService(db, organization_id).daily_cash_position(days=days)
+
+    if daily.get("balance_basis") != "account_balance" or not daily.get("days"):
+        # honest-null: אין תנועות בנק בחלון, או שיש תנועות אבל אין יתרת
+        # חשבון חיה לעגן אליה את הריצה — לא מדווחים "ok" בביטחון-שווא.
+        return {
+            "status": "unknown",
+            "reason": "אין נתוני יתרת מזומנים חיים (תנועות בנק/יתרת חשבון) לבדיקת מסגרת האשראי",
+            "accounts": accounts_payload,
+            "breach_date": None,
+            "warning_date": None,
+            "min_headroom": None,
+        }
 
     breach_date: Optional[str] = None
     warning_date: Optional[str] = None
     min_headroom: Optional[Decimal] = None
 
-    for day in daily:
+    for day in daily["days"]:
+        if day["closing_balance"] is None:
+            continue
         balance = Decimal(str(day["closing_balance"]))
         headroom = balance - floor
         if min_headroom is None or headroom < min_headroom:
@@ -94,10 +125,7 @@ def get_credit_line_status(db: Session, organization_id: int, days: int = 30) ->
     return {
         "status": status,
         "basis": "org_level",
-        "accounts": [
-            {"account_id": a.id, "name": a.name, "credit_limit": float(a.credit_limit)}
-            for a in accounts
-        ],
+        "accounts": accounts_payload,
         "breach_date": breach_date,
         "warning_date": warning_date,
         "min_headroom": float(min_headroom) if min_headroom is not None else None,

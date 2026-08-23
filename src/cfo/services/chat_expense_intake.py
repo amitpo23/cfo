@@ -38,7 +38,16 @@ MIN_CONFIDENCE = 0.5
 
 
 def _today_bounds() -> tuple[datetime, datetime]:
-    today = date.today()
+    """גבולות "היום" עבור ספירת התקרה היומית.
+
+    ``Expense.created_at`` מקבל ברירת מחדל ``datetime.utcnow`` (naive UTC) —
+    ר' models.py. אם הגבולות כאן היו נגזרים מ-``date.today()`` (תאריך
+    לוקאלי, תלוי-TZ של תהליך השרת), אז בחלון 00:00–03:00 שעון ישראל (קיץ,
+    UTC+3) "היום" הלוקאלי כבר התחיל בעוד ה-UTC המתאים עדיין "אתמול" —
+    רשומה שנוצרה הרגע עם created_at ב-UTC של אתמול נופלת מחוץ לחלון
+    הלוקאלי של היום ונספרת כ-0, ומפיל את התקרה/הספירה בטעות. לכן הגבולות
+    כאן נגזרים מ-UTC, אותה מסגרת התייחסות בדיוק כמו ``created_at``."""
+    today = datetime.utcnow().date()
     return datetime.combine(today, datetime.min.time()), datetime.combine(today, datetime.max.time())
 
 

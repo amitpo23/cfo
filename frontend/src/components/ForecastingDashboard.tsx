@@ -40,11 +40,17 @@ interface HistoricalBankContext {
   label?: string;
 }
 
+interface ExcludedNoDueDate {
+  invoices: number;
+  bills: number;
+}
+
 interface LiveForecastResponse {
   as_of: string;
   data_sources: string[];
   months: ForecastMonth[];
   historical_context: HistoricalBankContext;
+  excluded_no_due_date?: ExcludedNoDueDate;
   message: string | null;
 }
 
@@ -117,6 +123,21 @@ const ForecastingDashboard: React.FC = () => {
               {SOURCE_LABELS[src] || src}
             </span>
           ))}
+        </div>
+      )}
+
+      {/* חשבוניות/חשבונות פתוחים בלי due_date לא נכללים בסכומים למעלה
+          (אין לפי-מה לשבץ אותם לחודש) — גילוי חד-שורתי במקום היעלמות
+          שקטה, רק כשיש בפועל משהו חסר. */}
+      {((forecast?.excluded_no_due_date?.invoices ?? 0) > 0 ||
+        (forecast?.excluded_no_due_date?.bills ?? 0) > 0) && (
+        <div className="flex items-center gap-2 mb-6 -mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          <AlertCircle size={14} className="flex-shrink-0" />
+          <span>
+            לא נכללות בתחזית: {forecast!.excluded_no_due_date!.invoices} חשבוניות ו-
+            {forecast!.excluded_no_due_date!.bills} חשבונות ספק פתוחים בלי תאריך פירעון
+            (אין לפי-מה לשבץ אותם לחודש).
+          </span>
         </div>
       )}
 

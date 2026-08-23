@@ -2232,6 +2232,14 @@ async def get_moshko_conversations(
         func.max(ChatMessage.created_at).label("last_message_at"),
         func.count(ChatMessage.id).label("message_count"),
     )
+    # moshko_regression.py runs training cases under session ids
+    # `regression-{gap_id}-{hex}` — synthetic traffic, not real
+    # conversations. Excluded ONLY from this listing (not from
+    # tool-calls/usage aggregates, and not from the single-session
+    # transcript lookup below) so the regression sessions stay queryable by
+    # anyone who already knows the session_id, but don't pollute the human
+    # conversations view.
+    query = query.filter(~ChatMessage.session_id.like("regression-%"))
     query = _apply_moshko_filters(
         query, ChatMessage, organization_id=organization_id, user_id=user_id,
         channel=channel, date_from=date_from, date_to=date_to,

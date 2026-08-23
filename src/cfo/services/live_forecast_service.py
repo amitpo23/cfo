@@ -12,6 +12,10 @@ LiveForecastService — תחזית תזרים חודשית מבוססת ספרי
     אמור היה להיכנס/לצאת ורלוונטית לתמונה המיידית.
   - ``bills_open_ap`` / ``bills_overdue_ap``: חשבונות ספק פתוחים, אותה
     לוגיקה.
+  - ``excluded_no_due_date``: חשבוניות/חשבונות פתוחים (אותם קריטריוני
+    סטטוס/יתרה) שה-``due_date`` שלהם NULL — לא ניתן לשבץ אותם לאף חודש,
+    ולכן הם לא נכללים בשום סכום למעלה. במקום להיעלם בשקט (follow-up,
+    21/08/2026 review), הם נספרים ומדווחים בגלוי בכל תשובה.
   - ``expenses_recurring_avg``: ממוצע היסטורי (לא ניחוש/ML) של הוצאות
     שנרשמו בחודשים האחרונים — בסיס חוזר קבוע לכל חודש עתידי, לא תחזית-מגמה.
   - ``bank_transactions_actual``: תזרים בנק *בפועל* (לא תחזית) ב-90 הימים
@@ -91,6 +95,38 @@ class LiveForecastService:
             .all()
         )
 
+        # חשבוניות/חשבונות פתוחים (אותם קריטריוני סטטוס/יתרה) שה-due_date
+        # שלהם NULL: לא ניתן לשבץ אותם לאף חודש בתחזית (אין לפי-מה), ועד
+        # כה הם נעלמו בשקט. במקום להסתיר, סופרים ומגלים בפלט
+        # (`excluded_no_due_date`) — honest-null גם על מה שלא נכלל, לא רק
+        # על מה שכן.
+        excluded_invoices_no_due_date = (
+            self.db.query(Invoice)
+            .filter(
+                Invoice.organization_id == self.organization_id,
+                Invoice.status.notin_(
+                    [InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED]
+                ),
+                Invoice.balance > 0,
+                Invoice.due_date.is_(None),
+            )
+            .count()
+        )
+        excluded_bills_no_due_date = (
+            self.db.query(Bill)
+            .filter(
+                Bill.organization_id == self.organization_id,
+                Bill.status.notin_([BillStatus.DRAFT, BillStatus.VOID]),
+                Bill.balance > 0,
+                Bill.due_date.is_(None),
+            )
+            .count()
+        )
+        excluded_no_due_date = {
+            "invoices": excluded_invoices_no_due_date,
+            "bills": excluded_bills_no_due_date,
+        }
+
         # חשבוניות/חשבונות שה-due_date שלהם כבר לפני תחילת החלון: לא
         # ייכנסו לאף בקצת-חודש רגיל (כולם נבדקים כ-m_start<=due<=m_end
         # מ-month_anchor והלאה) — בלי הטיפול הזה הם היו נעלמים בשקט.
@@ -129,6 +165,7 @@ class LiveForecastService:
                 "data_sources": data_sources,
                 "months": [],
                 "historical_context": bank_context,
+                "excluded_no_due_date": excluded_no_due_date,
                 "message": message,
             }
 
@@ -220,6 +257,7 @@ class LiveForecastService:
             "data_sources": data_sources,
             "months": months,
             "historical_context": bank_context,
+            "excluded_no_due_date": excluded_no_due_date,
             "message": None,
         }
 

@@ -162,6 +162,29 @@ const CashFlowDashboard: React.FC = () => {
     }).format(value);
   };
 
+  // live_cash_flow_service.burn_rate מחזיר runway_months=999.0 כ"סנטינל"
+  // בשלושה מקרים שונים (ר' burn_rate() בקוד): (1) net_burn<=0 וגם יתרה
+  // חיובית ממש — runway **אמיתי** אינסופי; (2) net_burn>0 אבל
+  // current_balance<=0 — runway אפסי, לא אינסופי; (3)
+  // current_balance_available=false — היתרה עצמה לא ידועה
+  // (current_balance המספרי הוא 0.0 מלאכותי במקרה הזה, לא יתרה אמיתית).
+  // `=== Infinity` המת לא תפס אף אחד מהם (ה-API אף פעם לא שולח Infinity
+  // אמיתי — JSON לא תומך בו), אבל מיפוי גורף של runway_months>=999 ל-'∞'
+  // באותה מידה שקרי: הוא הופך "אין יתרה חיה + שורפים כסף" ל"runway
+  // אינסופי" — honest-null אסור להתחלף בבדיה אופטימית. '∞' מוצג רק
+  // כשהתנאי לאינסוף-אמיתי מתקיים בפועל; אחרת — '—' (לא-ידוע-בכנות).
+  const formatRunway = (br: BurnRate | undefined | null) => {
+    if (!br || br.runway_months == null) return '—';
+    const genuinelyInfinite =
+      br.current_balance_available === true &&
+      br.current_balance > 0 &&
+      br.net_monthly_burn <= 0;
+    if (br.runway_months >= 999) {
+      return genuinelyInfinite ? '∞' : '—';
+    }
+    return `${br.runway_months.toFixed(1)} חודשים`;
+  };
+
   // Calculate summary stats
   const totalInflows = monthlyCashFlow.reduce((sum, m) => sum + m.inflows, 0);
   const totalOutflows = monthlyCashFlow.reduce((sum, m) => sum + m.outflows, 0);
@@ -236,7 +259,7 @@ const CashFlowDashboard: React.FC = () => {
         { label: 'כניסות', value: formatCurrency(totalInflows), tone: 'emerald' },
         { label: 'יציאות', value: formatCurrency(totalOutflows), tone: 'rose' },
         { label: 'תזרים נקי', value: formatCurrency(netCashFlow), tone: netCashFlow >= 0 ? 'emerald' : 'rose' },
-        { label: 'Runway', value: burnRate?.runway_months === Infinity ? '∞' : `${(burnRate?.runway_months || 0).toFixed(1)} חודשים`, tone: (burnRate?.runway_months || 0) > 6 ? 'emerald' : 'amber' },
+        { label: 'Runway', value: formatRunway(burnRate), tone: (burnRate?.runway_months || 0) > 6 ? 'emerald' : 'amber' },
       ]}
       actions={
         <>
@@ -285,7 +308,7 @@ const CashFlowDashboard: React.FC = () => {
         <MetricCard
           icon={Calendar}
           label="Runway"
-          value={burnRate?.runway_months === Infinity ? '∞' : `${(burnRate?.runway_months || 0).toFixed(1)} חודשים`}
+          value={formatRunway(burnRate)}
           detail={burnRate?.net_monthly_burn && burnRate.net_monthly_burn > 0 ? `שריפה: ${formatCurrency(burnRate.net_monthly_burn)}/חודש` : 'ללא שריפת מזומנים'}
           tone={(burnRate?.runway_months || 0) > 6 ? 'emerald' : 'amber'}
         />
@@ -530,8 +553,10 @@ const CashFlowDashboard: React.FC = () => {
               <div>
                 <p className="font-medium text-yellow-800">שים לב לקצב השריפה</p>
                 <p className="text-sm text-yellow-700 mt-1">
-                  בקצב הנוכחי, המזומנים יספיקו ל-{burnRate.runway_months.toFixed(1)} חודשים.
-                  מומלץ לבחון דרכים להגדלת הכנסות או צמצום הוצאות.
+                  {burnRate.current_balance_available && burnRate.current_balance > 0
+                    ? `בקצב הנוכחי, המזומנים יספיקו ל-${formatRunway(burnRate)}.`
+                    : 'אין יתרת מזומנים חיובית ידועה — לא ניתן לחשב כמה זמן הכסף יספיק.'}
+                  {' '}מומלץ לבחון דרכים להגדלת הכנסות או צמצום הוצאות.
                 </p>
               </div>
             </div>

@@ -838,11 +838,13 @@ def test_get_credit_line_status_tool_returns_unknown_without_credit_limit(fresh_
 
 
 def test_get_credit_line_status_tool_reports_breach_date(fresh_org):
-    """org-scoped smoke test with a real credit_limit + a bank balance that
-    goes below it, to prove the tool wraps the real service (not a stub)."""
-    from datetime import datetime
+    """org-scoped smoke test with a real credit_limit + a live bank balance
+    that goes below it, to prove the tool wraps the real service (not a
+    stub). Sourced from BankTransaction/Account.balance — the service moved
+    off the frozen Transaction table (follow-up, 21/08/2026 review)."""
+    from datetime import date, timedelta
     from decimal import Decimal
-    from cfo.models import Transaction, TransactionType
+    from cfo.models import BankTransaction
 
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
@@ -853,10 +855,10 @@ def test_get_credit_line_status_tool_reports_breach_date(fresh_org):
         )
         db.add(acc)
         db.flush()
-        db.add(Transaction(
+        db.add(BankTransaction(
             organization_id=org_id, account_id=acc.id,
-            transaction_type=TransactionType.EXPENSE, amount=Decimal("9000"),
-            transaction_date=datetime.utcnow(), category="other",
+            amount=Decimal("-9000"),
+            transaction_date=date.today() - timedelta(days=5),
         ))
         db.commit()
 

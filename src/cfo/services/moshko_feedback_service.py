@@ -112,10 +112,17 @@ def record_feedback(
         row = existing
         row.category = category
         row.comment = comment
-        row.status = "open"
-        row.correction = None
-        row.reviewed_by = None
-        row.reviewed_at = None
+        # A same-category resubmission (e.g. a Telegram user re-tapping the
+        # same inline-keyboard verdict) is idempotent on the review fields —
+        # it must NOT wipe an owner's already-completed review
+        # (status/correction/reviewed_by/reviewed_at). Only a genuine
+        # verdict CHANGE (different category) re-opens the row for review,
+        # per the existing replace semantics.
+        if previous_category != category:
+            row.status = "open"
+            row.correction = None
+            row.reviewed_by = None
+            row.reviewed_at = None
     db.flush()
 
     # W1.1 — "מושקו לא ידע" / "לא מדויק" הם פערים: שורה בתור הניתוח.

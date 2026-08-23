@@ -348,6 +348,53 @@ def test_admin_conversations_transcript_filters_and_org_isolation(
     assert [m["content"] for m in transcript.json()["messages"]] == ["שאלה", "תשובה"]
 
 
+def test_admin_conversations_listing_excludes_regression_sessions_but_transcript_still_works(
+    client, moshko_super_admin, fresh_org,
+):
+    """moshko_regression.py seeds ChatMessage rows under session ids
+    `regression-{gap_id}-{hex}` — synthetic training traffic, not a real
+    conversation. It must not pollute the human /moshko/conversations
+    listing, but the session must stay queryable directly (transcript
+    endpoint, tool-calls, usage) — the exclusion is scoped to the listing
+    only."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        user_id = db.query(User).filter(User.organization_id == org_id).first().id
+    finally:
+        db.close()
+    _seed_admin_data(org_id, user_id, "wa-real-session")
+    _seed_admin_data(org_id, user_id, "regression-42-a1b2c3d4")
+
+    response = client.get(
+        f"/api/admin/moshko/conversations?organization_id={org_id}",
+        headers=moshko_super_admin["headers"],
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    session_ids = [item["session_id"] for item in body["items"]]
+    assert "wa-real-session" in session_ids
+    assert "regression-42-a1b2c3d4" not in session_ids
+    assert body["total"] == 1
+
+    # ... but the regression session stays queryable directly.
+    transcript = client.get(
+        "/api/admin/moshko/conversations/regression-42-a1b2c3d4",
+        headers=moshko_super_admin["headers"],
+    )
+    assert transcript.status_code == 200, transcript.text
+    assert len(transcript.json()["messages"]) == 2
+
+    tool_calls = client.get(
+        f"/api/admin/moshko/tool-calls?organization_id={org_id}",
+        headers=moshko_super_admin["headers"],
+    )
+    assert tool_calls.status_code == 200
+    assert any(
+        item["session_id"] == "regression-42-a1b2c3d4" for item in tool_calls.json()["items"]
+    )
+
+
 def test_admin_tool_calls_and_usage_are_filterable_and_paginated(
     client, moshko_super_admin, fresh_org,
 ):

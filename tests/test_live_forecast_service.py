@@ -119,6 +119,7 @@ def test_monthly_forecast_honest_null_for_empty_org(fresh_org):
     assert result["months"] == []
     assert result["message"]
     assert "אין נתונים" in result["message"]
+    assert result["excluded_no_due_date"] == {"invoices": 0, "bills": 0}
 
 
 def test_monthly_forecast_org_isolation(fresh_org):
@@ -256,6 +257,91 @@ def test_monthly_forecast_overdue_ar_and_ap_are_not_dropped(fresh_org):
     assert m1["inflow_total"] == 0.0
 
 
+def test_monthly_forecast_discloses_excluded_no_due_date_invoices_and_bills(fresh_org):
+    """באג שנמצא בסקירה (follow-up #6): חשבונית/חשבון-ספק פתוחים עם
+    due_date=NULL לא ניתנים לשיבוץ לאף חודש (אין due_date להשוות), והם
+    הוצאו מהשאילתה בשקט — בלי שום גילוי בפלט. זה עדיין לא תיקון-שיבוץ (אין
+    למה לשבץ בלי תאריך), אבל הם חייבים להיספר ולהיחשף ב-
+    ``excluded_no_due_date``, לא סתם להיעלם."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        customer = Contact(organization_id=org_id, name="לקוח", contact_type=ContactType.CUSTOMER)
+        vendor = Contact(organization_id=org_id, name="ספק", contact_type=ContactType.VENDOR)
+        db.add_all([customer, vendor]); db.flush()
+
+        # חשבונית פתוחה רגילה (עם due_date) — כלולה בתחזית כרגיל.
+        db.add(Invoice(
+            organization_id=org_id, contact_id=customer.id, invoice_number="INV-OK",
+            subtotal=Decimal("1000"), tax=Decimal("0"), total=Decimal("1000"),
+            balance=Decimal("1000"), status=InvoiceStatus.SENT,
+            issue_date=TODAY, due_date=MONTH_START + timedelta(days=5),
+        ))
+        # שתי חשבוניות פתוחות בלי due_date — לא ניתנות לשיבוץ, אבל חייבות
+        # להיספר.
+        db.add(Invoice(
+            organization_id=org_id, contact_id=customer.id, invoice_number="INV-NO-DUE-1",
+            subtotal=Decimal("300"), tax=Decimal("0"), total=Decimal("300"),
+            balance=Decimal("300"), status=InvoiceStatus.SENT,
+            issue_date=TODAY, due_date=None,
+        ))
+        db.add(Invoice(
+            organization_id=org_id, contact_id=customer.id, invoice_number="INV-NO-DUE-2",
+            subtotal=Decimal("150"), tax=Decimal("0"), total=Decimal("150"),
+            balance=Decimal("150"), status=InvoiceStatus.SENT,
+            issue_date=TODAY, due_date=None,
+        ))
+        # חשבון ספק פתוח בלי due_date.
+        db.add(Bill(
+            organization_id=org_id, vendor_id=vendor.id, bill_number="BILL-NO-DUE",
+            subtotal=Decimal("400"), tax=Decimal("0"), total=Decimal("400"),
+            balance=Decimal("400"), status=BillStatus.RECEIVED,
+            issue_date=TODAY, due_date=None,
+        ))
+        # חשבונית סגורה בלי due_date (balance=0) — לא אמורה להיספר בכלל
+        # (לא "פתוחה", אז לא רלוונטית לתחזית).
+        db.add(Invoice(
+            organization_id=org_id, contact_id=customer.id, invoice_number="INV-PAID-NO-DUE",
+            subtotal=Decimal("999"), tax=Decimal("0"), total=Decimal("999"),
+            balance=Decimal("0"), status=InvoiceStatus.PAID,
+            issue_date=TODAY, due_date=None,
+        ))
+        db.commit()
+
+        result = LiveForecastService(db, org_id).monthly_forecast(periods=2, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    assert result["excluded_no_due_date"] == {"invoices": 2, "bills": 1}
+    # הכלולה (עם due_date) עדיין מוצגת כרגיל — הגילוי לא מסתיר את מה שכן ניתן לשבץ.
+    assert result["months"][0]["inflow_total"] == 1000.0
+
+
+def test_monthly_forecast_honest_null_still_discloses_excluded_no_due_date(fresh_org):
+    """גם כשאין שום 'תחזית-קדימה' בת-שיבוץ (honest-null, months=[]), אם יש
+    חשבונית/חשבון-ספק פתוחים בלי due_date — הם עדיין נספרים ומדווחים, לא
+    נבלעים בתוך ה-honest-null הכללי."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        customer = Contact(organization_id=org_id, name="לקוח", contact_type=ContactType.CUSTOMER)
+        db.add(customer); db.flush()
+        db.add(Invoice(
+            organization_id=org_id, contact_id=customer.id, invoice_number="INV-NO-DUE-ONLY",
+            subtotal=Decimal("500"), tax=Decimal("0"), total=Decimal("500"),
+            balance=Decimal("500"), status=InvoiceStatus.SENT,
+            issue_date=TODAY, due_date=None,
+        ))
+        db.commit()
+
+        result = LiveForecastService(db, org_id).monthly_forecast(periods=2, as_of_date=TODAY)
+    finally:
+        db.close()
+
+    assert result["months"] == []
+    assert result["excluded_no_due_date"] == {"invoices": 1, "bills": 0}
+
+
 def test_monthly_forecast_ar_invariant_across_months_including_overdue(fresh_org):
     """שער-נגד-רגרסיה: סכום כל רכיבי ה-AR (open + overdue) על פני כל
     החודשים המוחזרים = סך יתרת ה-AR הפתוחה עם due_date בתוך החלון (כולל
@@ -362,6 +448,10 @@ def test_live_monthly_forecast_route_returns_expected_shape(client, fresh_org):
     assert len(body["months"]) == 2
     assert body["months"][0]["inflow_total"] == 750.0
     assert body["message"] is None
+    # excluded_no_due_date חייב לשרוד את גבול ה-HTTP — אחרת ה-frontend לא
+    # מקבל את הנתון ולעולם לא מציג את ההודעה, בדיוק הכשל ה"נעלם בשקט"
+    # שהפריט הזה נועד לתקן.
+    assert body["excluded_no_due_date"] == {"invoices": 0, "bills": 0}
 
 
 def test_live_monthly_forecast_route_honest_null_for_empty_org(client, fresh_org):

@@ -500,6 +500,16 @@ class FinancialReportsService:
         return BalanceSheetReport(
             as_of_date=as_of_date.isoformat(),
             current_assets=current_assets,
+            # total_current_assets == total_assets is not a coincidence or
+            # a bug: fixed_assets/other_assets are hard-empty above (the
+            # ledger's minimal chart of accounts has no
+            # cash/bank/inventory/equipment/vehicles breakdown to split
+            # current-vs-fixed-vs-other from — see the comment on
+            # current_assets/current_liabilities above), so every ledger
+            # asset account is, by construction, reported as "current"
+            # here. Don't mistake this field for a real current/fixed
+            # split; it is the ledger's full total_assets under a
+            # current-assets label.
             total_current_assets=ledger_bs["total_assets"],
             fixed_assets=[],
             total_fixed_assets=0.0,

@@ -488,6 +488,62 @@ def test_callback_feedback_double_tap_does_not_duplicate_rows(
         db.close()
 
 
+def test_callback_feedback_double_tap_after_review_does_not_wipe_review_fields(
+    client, telegram_configured, fake_gateway, fresh_org,
+):
+    """Follow-up (21/08/2026 review): a same-category re-tap (e.g. Telegram
+    retries the callback, or the user taps the same button twice) must be a
+    no-op on the review fields — it must NOT reset an owner-completed
+    review (status/correction/reviewed_by/reviewed_at) back to "open"."""
+    from datetime import datetime
+
+    iso = fresh_org()
+    org_id = iso["org_id"]
+    external_id = "chat-fb-reviewed"
+    _link(org_id, external_id)
+    user_id = _user_id_for_org(org_id)
+    message_id = _seed_telegram_assistant_message(org_id, user_id, external_id)
+
+    r1 = _post(client, _feedback_callback_payload(
+        960, external_id, "inaccurate", message_id, callback_id="cbq-rev-1",
+    ))
+    assert r1.status_code == 200
+
+    db = SessionLocal()
+    try:
+        feedback = db.query(MoshkoFeedback).filter(
+            MoshkoFeedback.organization_id == org_id,
+            MoshkoFeedback.message_id == message_id,
+        ).one()
+        feedback.status = "resolved"
+        feedback.correction = "התיקון של הבעלים"
+        feedback.reviewed_by = user_id
+        reviewed_at = datetime(2026, 8, 1, 10, 0, 0)
+        feedback.reviewed_at = reviewed_at
+        db.commit()
+    finally:
+        db.close()
+
+    # Same-category re-tap.
+    r2 = _post(client, _feedback_callback_payload(
+        961, external_id, "inaccurate", message_id, callback_id="cbq-rev-2",
+    ))
+    assert r2.status_code == 200
+
+    db = SessionLocal()
+    try:
+        feedback = db.query(MoshkoFeedback).filter(
+            MoshkoFeedback.organization_id == org_id,
+            MoshkoFeedback.message_id == message_id,
+        ).one()
+        assert feedback.status == "resolved"
+        assert feedback.correction == "התיקון של הבעלים"
+        assert feedback.reviewed_by == user_id
+        assert feedback.reviewed_at == reviewed_at
+    finally:
+        db.close()
+
+
 def test_callback_feedback_switch_from_down_to_up_keeps_existing_gap(
     client, telegram_configured, fake_gateway, fresh_org,
 ):
