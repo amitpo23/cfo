@@ -279,6 +279,51 @@ def test_whatsapp_push_uses_provider_specific_configuration_and_gateway(fresh_or
         db.close()
 
 
+def test_whatsapp_real_http_failure_counts_as_failed_not_sent(fresh_org, monkeypatch):
+    """End-to-end (no gateway-method mock, only the httpx transport layer):
+    before whatsapp_gateway._post_messages checked the response status, a
+    rejected send (expired token, blocked number, ...) still returned
+    normally, so this counted as `sent` and stamped `last_push_at` even
+    though nothing reached the recipient. Uses a REAL WhatsAppGateway
+    (no `gateway=` override) so the fix in _post_messages is what's under
+    test, not a fake that already behaves correctly."""
+    import asyncio
+
+    import httpx
+
+    monkeypatch.setattr(settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_access_token", "wa-token", raising=False)
+    monkeypatch.setattr(notifier, "is_quiet_hours", lambda *a, **kw: False)
+    now = datetime(2026, 7, 20, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+    async def fake_post(self, url, json=None, headers=None, **kwargs):
+        request = httpx.Request("POST", url)
+        return httpx.Response(
+            401, request=request, json={"error": {"message": "Error validating access token"}},
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        identity = _make_identity(
+            db, org_id, external_id="972500000777", provider="whatsapp",
+            last_inbound_at=now - timedelta(hours=1),
+        )
+        result = asyncio.run(notifier.push_to_organization(
+            db, org_id, "בדיקת כשל אמיתי", provider="whatsapp", now=now,
+        ))
+        assert result["sent"] == 0
+        assert result["failed"] == 1
+        assert result["status"] == "failed"
+
+        db.refresh(identity)
+        assert identity.last_push_at is None
+    finally:
+        db.close()
+
+
 def test_whatsapp_outside_service_window_without_template_is_explicit(fresh_org, monkeypatch):
     import asyncio
 

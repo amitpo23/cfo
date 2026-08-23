@@ -27,6 +27,12 @@ interface IntegrationStatus {
   configured: Record<string, boolean>;
 }
 
+// whatsapp_phone_number_id (src/cfo/config.py) is Meta's internal routing
+// ID for the Graph API — never a dialable phone number, so it is
+// deliberately never rendered here as "the bot's number". Only its
+// presence/absence (via /integration/status.configured.whatsapp) drives
+// which of the two honest states below is shown.
+
 interface OrganizationInfo {
   id: number;
   name: string;
@@ -265,6 +271,23 @@ const SettingsPage: React.FC<Props> = ({ darkMode }) => {
               </button>
             </div>
           )}
+
+          {/* WhatsApp — no code to redeem: linking goes through the
+              email-verification flow (whatsapp_webhook.py handle_message),
+              triggered by messaging the bot, not by anything issued here. */}
+          <div className={`mt-6 pt-6 border-t ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+            <h3 className="text-lg font-semibold mb-2">וואטסאפ</h3>
+            {integrationStatus?.configured?.whatsapp ? (
+              <p className={`text-sm ${mutedClass}`}>
+                הערוץ פעיל. כדי לקשר את הוואטסאפ שלך, שלח הודעה למספר הבוט העסקי של רצף
+                (לקבלת המספר יש לפנות למנהל המערכת אצלכם) עם כתובת המייל הרשומה שלך ברצף.
+                תקבל בחזרה למייל קוד בן 6 ספרות — שלח אותו כהודעה חוזרת באותה שיחה כדי להשלים
+                את הקישור, בדיוק כמו בטלגרם.
+              </p>
+            ) : (
+              <p className={`text-sm ${mutedClass}`}>הערוץ טרם הופעל על ידי המשרד.</p>
+            )}
+          </div>
         </div>
 
         {/* System Information — real data only */}

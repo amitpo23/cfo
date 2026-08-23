@@ -157,3 +157,26 @@ def test_integration_status_omits_last_sync_error_when_none_recorded(client, fre
     resp = client.get("/api/integration/status", headers=org["headers"])
     assert resp.status_code == 200, resp.text
     assert resp.json()["last_sync_errors"] == {}
+
+
+def test_integration_status_reports_whatsapp_configured_flag(client, fresh_org, monkeypatch):
+    """SettingsPage's WhatsApp linking section (task 2, 2026-08-23
+    moshko-usability plan) needs an honest signal for whether the channel
+    was ever turned on by the office, to choose between "not activated" and
+    the email-verification explanation — same env-only config check
+    channel_notifier._provider_configured already uses for whatsapp."""
+    import cfo.config as config_module
+
+    org = fresh_org()
+
+    monkeypatch.setattr(config_module.settings, "whatsapp_phone_number_id", None, raising=False)
+    monkeypatch.setattr(config_module.settings, "whatsapp_access_token", None, raising=False)
+    resp = client.get("/api/integration/status", headers=org["headers"])
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["configured"]["whatsapp"] is False
+
+    monkeypatch.setattr(config_module.settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(config_module.settings, "whatsapp_access_token", "wa-token", raising=False)
+    resp2 = client.get("/api/integration/status", headers=org["headers"])
+    assert resp2.status_code == 200, resp2.text
+    assert resp2.json()["configured"]["whatsapp"] is True

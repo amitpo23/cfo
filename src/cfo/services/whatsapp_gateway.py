@@ -47,6 +47,19 @@ class WhatsAppMediaError(Exception):
     url, oversized file, or an HTTP error at either step)."""
 
 
+class WhatsAppSendError(Exception):
+    """Raised when Meta's Graph API rejects an outbound send (expired
+    token, blocked/opted-out recipient, unapproved template, or any other
+    4xx/5xx). Before this existed, `_post_messages` awaited the POST and
+    threw the response away unread — every rejected send looked exactly
+    like success to send_text/send_confirm_prompt/send_template and to
+    every caller above them (channel_notifier counted it as `sent`, the
+    webhook reply path reported nothing was wrong). Callers that must stay
+    best-effort (webhook per-message handling, channel_notifier's
+    per-recipient loop) already catch broadly around these sends — this
+    exception makes the failure visible to them instead of invisible."""
+
+
 def _truncate(text: str, limit: int) -> str:
     """Cut text down to `limit` characters, safely — used for the button
     title (20 chars) and confirm-prompt body (1024 chars) hard caps Meta
@@ -94,7 +107,22 @@ class WhatsAppGateway:
     async def _post_messages(self, payload: dict) -> None:
         self._require_configured()
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            await client.post(self._messages_url(), json=payload, headers=self._headers())
+            response = await client.post(
+                self._messages_url(), json=payload, headers=self._headers(),
+            )
+        if response.status_code >= 400:
+            # Explicit status+body check (not a bare raise_for_status()) so
+            # the exception carries Meta's own error detail — the whole
+            # reason this existed to catch is a 4xx that quietly meant
+            # "unapproved template" or "recipient blocked", not just "some
+            # request failed".
+            try:
+                detail = response.json()
+            except ValueError:
+                detail = response.text
+            raise WhatsAppSendError(
+                f"שליחת הודעת WhatsApp נכשלה (סטטוס {response.status_code}): {detail}"
+            )
 
     async def send_text(self, chat_id: str, text: str) -> None:
         for chunk in _split_message(text, WHATSAPP_MAX_MESSAGE_LENGTH):

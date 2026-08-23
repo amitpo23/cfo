@@ -89,12 +89,18 @@ async def integration_status(
         settings.open_finance_client_secret,
         settings.open_finance_user_id,
     ]))
+    # WhatsApp is a global (env-level) config, same as Telegram — never
+    # per-organization credentials — so this mirrors
+    # channel_notifier._provider_configured("whatsapp") exactly rather than
+    # re-deriving a second definition of "is the channel on".
+    whatsapp_configured = bool(settings.whatsapp_phone_number_id and settings.whatsapp_access_token)
     configured = {
         "production_database": not settings.database_url.startswith("sqlite:"),
         "security": settings.jwt_secret_key != "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING",
         "sumit": sumit_configured,
         "open_finance": open_finance_configured,
         "ai": bool(settings.openai_api_key),
+        "whatsapp": whatsapp_configured,
     }
     missing = {
         "production_database": [] if configured["production_database"] else ["DATABASE_URL"],
@@ -102,6 +108,7 @@ async def integration_status(
         "sumit": [] if sumit_configured else ["SUMIT_API_KEY"],
         "open_finance": [],
         "ai": [] if configured["ai"] else ["OPENAI_API_KEY"],
+        "whatsapp": [] if whatsapp_configured else ["WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_ACCESS_TOKEN"],
     }
     if not open_finance_configured:
         if connections.get("open_finance") == "active":
