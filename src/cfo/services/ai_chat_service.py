@@ -559,6 +559,33 @@ class AIChatService:
             except Exception:
                 pass
 
+            # פערי-בנק (הוצאה בבנק בלי מסמך מתאים) — severity='medium' תמיד
+            # (bank_expense_gap.scan_and_alert), ולכן בלתי-נראים לחלוטין
+            # לשאילתת ה-high/critical שלמעלה. הממצא (24/08/2026, org2
+            # בפרוד): 148 תנועות כאלה, ₪124,598 מצטבר, אף פעם לא הוצפו
+            # למשתמש כי אף אחת בפני עצמה אינה "high". סיכום אחד, לא שורה
+            # פר-תנועה — 148 שורות היו מציפות את הפתיחה.
+            try:
+                gap_rows = self.db.query(CfoInsight.evidence).filter(
+                    CfoInsight.organization_id == self.organization_id,
+                    CfoInsight.insight_type == "missing_document",
+                    CfoInsight.status == "active",
+                ).all()
+                # סכימה ב-Python, לא ב-SQL: evidence הוא JSON גנרי (לא
+                # JSONB), ואופרטורי חילוץ-מספר הם ספציפיים-דיאלקט —
+                # הבדל שהיה עובד ב-Postgres ונשבר בשקט בטסטים ב-SQLite.
+                if gap_rows:
+                    total = sum(
+                        float((row[0] or {}).get("amount") or 0)
+                        for row in gap_rows
+                    )
+                    lines.append(
+                        f"- [medium] {len(gap_rows)} תנועות בנק בסך "
+                        f"{total:,.0f} ש\"ח בלי חשבונית/מסמך תואם"
+                    )
+            except Exception:
+                pass
+
             if not lines:
                 return ""
             return (

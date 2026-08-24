@@ -99,3 +99,39 @@ def test_manual_morning_cycle_route_refreshes_insights(client, fresh_org):
     assert r.status_code == 200, r.text
     body = r.json()
     assert "steps" in body and "revenue_watch" in body["steps"]
+
+
+def test_flags_block_surfaces_missing_document_aggregate(fresh_org):
+    """הממצא (24/08/2026, org2 בפרוד): 148 תנועות בנק בסך ₪124,598 בלי
+    חשבונית מתאימה — כולן severity='medium', כלומר בלתי-נראות לחלוטין
+    לבלוק הדגלים (שמסנן high/critical בלבד). זה בדיוק סוג הדבר שהבעלים
+    ביקש: "לא רק התאמות — הוצאות שאין להן חשבוניות", מוצף בפתיחת שיחה
+    בלי שצריך לשאול."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        for i in range(3):
+            db.add(CfoInsight(
+                organization_id=org_id, fingerprint=f"missing_document:banktxn:{i}",
+                insight_type="missing_document", severity="medium",
+                title=f"הוצאה בבנק ללא חשבונית — ₪{1000 + i}",
+                message="תנועת בנק ללא מסמך", status="active",
+                evidence={"amount": 1000 + i},
+            ))
+        db.commit()
+
+        block = _svc(db, org_id)._build_proactive_flags()
+        assert "3 תנועות בנק" in block
+        assert "3,003" in block  # 1000 + 1001 + 1002
+    finally:
+        db.close()
+
+
+def test_flags_block_omits_missing_document_line_when_none(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        block = _svc(db, org_id)._build_proactive_flags()
+        assert "תנועות בנק" not in block or block == ""
+    finally:
+        db.close()
