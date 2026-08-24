@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import calendar
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 
@@ -490,7 +490,13 @@ def suppliers_missing_invoices(db, org_id: int, date_from: date, date_to: date) 
 def scan_and_alert(db, org_id: int, lookback_days: int = 14) -> dict[str, int]:
     """סורק תנועות expense_candidate ללא מסמך מתוך lookback_days האחרונים,
     ויוצר CfoInsight (insight_type="missing_document") פר תנועה — עם dedup
-    לפי fingerprint ייחודי לתנועה (לא יוצר פעמיים לאותה תנועה)."""
+    לפי fingerprint ייחודי לתנועה (לא יוצר פעמיים לאותה תנועה).
+
+    **גם פותר תובנות מיושנות** (24/08/2026, נמדד בפרוד — org2: 10 מ-148
+    תובנות פעילות כבר היו מותאמות בפועל, ₪30,633 מנופחים, כי הפונקציה
+    יצרה ממצא ולעולם לא בדקה מחדש אם הוא נפתר). אותו דפוס resolve-on-
+    recheck שכבר קיים ב-parity_service/roster_coverage: לכל תובנה
+    active קיימת, בדיקת-התאמה טרייה; אם עכשיו יש מסמך — resolved."""
     from ..models import BankTransaction, CfoInsight
 
     since = date.today() - timedelta(days=lookback_days)
@@ -504,8 +510,24 @@ def scan_and_alert(db, org_id: int, lookback_days: int = 14) -> dict[str, int]:
         .all()
     )
 
-    created = skipped_existing = scanned = 0
+    created = skipped_existing = scanned = resolved = 0
     docs = _load_docs(db, org_id)
+
+    existing_active = db.query(CfoInsight).filter(
+        CfoInsight.organization_id == org_id,
+        CfoInsight.insight_type == "missing_document",
+        CfoInsight.status == "active",
+    ).all()
+    for ins in existing_active:
+        txn_id = (ins.evidence or {}).get("bank_txn_id")
+        txn = db.get(BankTransaction, txn_id) if txn_id else None
+        if txn is None:
+            continue
+        if _find_document_match(db, org_id, txn, docs=docs) is not None:
+            ins.status = "resolved"
+            ins.resolved_at = datetime.utcnow()
+            resolved += 1
+
     for t in rows:
         scanned += 1
         if classify_transaction(t) != "expense_candidate":
@@ -547,7 +569,10 @@ def scan_and_alert(db, org_id: int, lookback_days: int = 14) -> dict[str, int]:
         created += 1
 
     db.commit()
-    return {"created": created, "skipped_existing": skipped_existing, "scanned": scanned}
+    return {
+        "created": created, "skipped_existing": skipped_existing,
+        "scanned": scanned, "resolved": resolved,
+    }
 
 
 # --------------------------------------------------------------------- #

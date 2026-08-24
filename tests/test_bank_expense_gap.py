@@ -562,3 +562,54 @@ def test_unidentified_transfer_carries_purpose(fresh_org):
         assert txn["amount"] == 7000.0
     finally:
         db.close()
+
+
+def test_scan_and_alert_resolves_a_stale_finding_once_a_document_appears(fresh_org):
+    """הממצא (24/08/2026, org2 בפרוד): 10 מ-148 תובנות missing_document
+    פעילות כבר היו מותאמות בפועל — ₪30,633 מנופחים כי scan_and_alert
+    יוצר ממצא ולעולם לא בודק מחדש אם הוא נפתר. אותו דפוס שכבר קיים
+    ב-parity_service/roster_coverage (status='ok' → resolve הפעילים)."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _mk_txn(db, org_id, amount=-777, description="ספק ה ללא חשבונית", days_ago=1)
+        db.commit()
+
+        first = svc.scan_and_alert(db, org_id, lookback_days=14)
+        assert first["created"] == 1
+        insight = db.query(CfoInsight).filter(
+            CfoInsight.organization_id == org_id, CfoInsight.insight_type == "missing_document",
+        ).one()
+        assert insight.status == "active"
+
+        # מסמך תואם מגיע אחרי-כן — בדיוק התרחיש שקרה בפרוד.
+        _mk_bill(db, org_id, total=777, days_ago=1, bill_number="B-LATE")
+        db.commit()
+
+        second = svc.scan_and_alert(db, org_id, lookback_days=14)
+        db.refresh(insight)
+        assert insight.status == "resolved"
+        assert insight.resolved_at is not None
+        assert second.get("resolved", 0) == 1
+    finally:
+        db.close()
+
+
+def test_scan_and_alert_leaves_still_undocumented_findings_active(fresh_org):
+    """שער נגדי: לא לפתור בטעות תובנה שעדיין באמת בלי מסמך."""
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        _mk_txn(db, org_id, amount=-888, description="ספק ו עדיין בלי מסמך", days_ago=1)
+        db.commit()
+
+        svc.scan_and_alert(db, org_id, lookback_days=14)
+        second = svc.scan_and_alert(db, org_id, lookback_days=14)
+
+        insight = db.query(CfoInsight).filter(
+            CfoInsight.organization_id == org_id, CfoInsight.insight_type == "missing_document",
+        ).one()
+        assert insight.status == "active"
+        assert second.get("resolved", 0) == 0
+    finally:
+        db.close()
