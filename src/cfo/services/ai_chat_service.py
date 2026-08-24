@@ -865,7 +865,8 @@ class AIChatService:
         clear_claim: bool = False,
     ) -> None:
         """Persist a post-claim terminal/retry state after rolling back any
-        partial tool transaction.  This update is always tenant+user scoped."""
+        partial tool transaction.  This update is tenant+claim-state scoped;
+        the confirmer may differ from the user who owns the proposal."""
         values: dict[Any, Any] = {
             ChatMessage.action_status: status,
             ChatMessage.action_error: redact_sensitive_text(error)[:1000] if error else None,
@@ -876,7 +877,6 @@ class AIChatService:
         self.db.query(ChatMessage).filter(
             ChatMessage.id == message_id,
             ChatMessage.organization_id == self.organization_id,
-            ChatMessage.user_id == self.user_id,
             ChatMessage.action_status == _ACTION_EXECUTING,
         ).update(values, synchronize_session=False)
         self.db.commit()

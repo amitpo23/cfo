@@ -99,3 +99,4 @@ neondb-pre-migrate-*.sql
 .env.prod
 .env.*.local
 docker-compose.override.yml
+tmp/

@@ -250,6 +250,61 @@ def test_distinct_signer_can_confirm_irreversible_action(monkeypatch, fresh_org)
         db.close()
 
 
+def test_distinct_signer_tool_failure_after_claim_restores_pending_state(
+    monkeypatch, fresh_org,
+):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        proposer_id = _org_user_id(db, org_id)
+        signer = _add_org_user(
+            db,
+            org_id,
+            email=f"chat-failing-signer-{org_id}@example.com",
+            signing_scope="document_issue",
+        )
+        pending = ai_chat_service._pending_action_envelope(
+            TOOLS["issue_document"],
+            {
+                "document_type": "invoice",
+                "customer_id": "123",
+                "customer_name": "לקוח",
+                "items": [{"description": "שירות", "unit_price": 100}],
+            },
+        )
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=proposer_id,
+            session_id="distinct-signer-failure",
+            role="assistant",
+            content="לאשר?",
+            pending_action=pending,
+            action_status="pending",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+
+        async def fail_after_claim(*_args, **_kwargs):
+            raise ValueError("provider precondition failed")
+
+        monkeypatch.setattr(
+            AIChatService, "_execute_tool_observed", fail_after_claim,
+        )
+
+        with pytest.raises(ChatConfirmationError, match="provider precondition failed"):
+            asyncio.run(AIChatService(db, org_id, signer.id).confirm_action(msg.id))
+
+        db.expire_all()
+        stored = db.get(ChatMessage, msg.id)
+        assert stored.user_id == proposer_id
+        assert stored.action_status == "pending"
+        assert stored.action_claimed_at is None
+        assert stored.executed is False
+    finally:
+        db.close()
+
+
 def test_non_signer_gets_honest_irreversible_approval_message(monkeypatch, fresh_org):
     org_id = fresh_org()["org_id"]
     db = SessionLocal()

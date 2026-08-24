@@ -388,13 +388,22 @@ class IrreversibleActionService:
                 and authority.organization_id == self.organization_id
                 and approver is not None
                 and self._actor_in_scope(approver)
+                and (
+                    not decision.separation_of_duties
+                    or approval.approved_by_user_id != row.proposed_by_user_id
+                )
                 and ("*" in (authority.action_types or [])
                      or row.action_type in (authority.action_types or []))
             ):
                 valid_approvers.add(approval.approved_by_user_id)
         if len(valid_approvers) < decision.required_approvals:
+            approval_requirement = (
+                "active distinct signing approvals"
+                if decision.separation_of_duties
+                else "active signing approvals"
+            )
             raise ActionAuthorizationError(
-                "active signing approvals no longer satisfy organization policy",
+                f"{approval_requirement} no longer satisfy organization policy",
             )
 
         evidence = self._decision_evidence(decision)

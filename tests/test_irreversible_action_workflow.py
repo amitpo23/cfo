@@ -2,7 +2,12 @@
 import pytest
 
 from cfo.database import SessionLocal
-from cfo.models import User, UserRole
+from cfo.models import (
+    IrreversibleActionApproval,
+    OrganizationSigningAuthority,
+    User,
+    UserRole,
+)
 from cfo.services import membership_service
 from cfo.services.irreversible_action_service import (
     ActionAuthorizationError,
@@ -71,6 +76,46 @@ def test_action_lifecycle_is_persistent_idempotent_and_execute_once(owner):
         )
         assert verified.status == "verified"
         assert verified.verified_at is not None
+    finally:
+        db.close()
+
+
+def test_claim_blocks_legacy_self_approval_for_separated_action(owner):
+    db = SessionLocal()
+    try:
+        owner_row = db.get(User, owner["user"]["id"])
+        service = IrreversibleActionService(db, owner_row.organization_id)
+        proposed = service.propose(
+            proposed_by=owner_row,
+            action_type="document_issue",
+            payload={"document_type": "invoice", "customer_id": "legacy"},
+            idempotency_key="legacy-self-approved-document",
+        )
+        authority = db.query(OrganizationSigningAuthority).filter(
+            OrganizationSigningAuthority.organization_id == owner_row.organization_id,
+            OrganizationSigningAuthority.user_id == owner_row.id,
+            OrganizationSigningAuthority.is_active.is_(True),
+        ).one()
+        db.add(IrreversibleActionApproval(
+            organization_id=owner_row.organization_id,
+            request_id=proposed.id,
+            approved_by_user_id=owner_row.id,
+            authority_id=authority.id,
+            authority_type=authority.authority_type,
+            policy_decision={"allowed": True, "legacy": True},
+        ))
+        proposed.status = "approved"
+        proposed.approved_by_user_id = owner_row.id
+        proposed.approved_by_authority_id = authority.id
+        db.commit()
+
+        with pytest.raises(ActionAuthorizationError, match="distinct signing approvals"):
+            service.claim_for_execution(proposed.id)
+
+        db.expire_all()
+        stored = service.get(proposed.id)
+        assert stored.status == "approved"
+        assert stored.execution_started_at is None
     finally:
         db.close()
 
