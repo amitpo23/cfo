@@ -13,8 +13,11 @@ import pytest
 from cfo.auth import create_access_token
 from cfo.config import settings
 from cfo.database import SessionLocal
-from cfo.models import ChatMessage, LLMUsage, MoshkoToolCall, User, UserRole
-from cfo.services import ai_chat_service, vision_extractor
+from cfo.models import (
+    ChatMessage, LLMUsage, MoshkoToolCall, OrganizationSigningAuthority,
+    User, UserRole,
+)
+from cfo.services import ai_chat_service, membership_service, vision_extractor
 from cfo.services.ai_chat_service import AIChatService
 from cfo.services.ai_chat_tools import TOOLS, tool_target_system
 from cfo.services.moshko_observability import redact_tool_arguments
@@ -219,13 +222,38 @@ def test_confirmed_write_tool_is_logged_against_implemented_target(monkeypatch, 
 
     try:
         user_id = db.query(User).filter(User.organization_id == iso["org_id"]).first().id
+        # P0-E (24/08/2026): issue_document → invoices.issue הפכה IRREVERSIBLE
+        # — המציע אינו יכול לאשר את עצמו; נדרש מורשה-חתימה שני עם scope
+        # document_issue (policy_engine.IRREVERSIBLE_AUTHORITY_SCOPES).
+        approver = User(
+            organization_id=iso["org_id"], email="approver@example.com",
+            password_hash="unused", full_name="Approver", role=UserRole.ADMIN,
+            is_active=True,
+        )
+        db.add(approver)
+        db.flush()
+        membership_service.grant(
+            db, organization_id=iso["org_id"], user_id=approver.id,
+            role=UserRole.ADMIN, granted_by_user_id=user_id,
+            status=membership_service.ACTIVE,
+        )
+        db.add(OrganizationSigningAuthority(
+            organization_id=iso["org_id"], user_id=approver.id,
+            authority_type="authorized_signer",
+            action_types=["document_issue"], is_active=True,
+            granted_by_user_id=user_id,
+        ))
+        db.commit()
+        db.refresh(approver)
         TOOLS["issue_document"] = replace(original, fn=fake_write)
         args = {"document_type": "invoice", "customer_id": "1", "customer_name": "א", "items": []}
         _patch_client(monkeypatch, [_response(_tool_block("issue_document", args), stop_reason="tool_use")])
         pending = asyncio.run(AIChatService(db, iso["org_id"], user_id).send_message("s-write", "הפק"))
         assert db.query(MoshkoToolCall).filter(MoshkoToolCall.session_id == "s-write").count() == 0
 
-        asyncio.run(AIChatService(db, iso["org_id"], user_id).confirm_action(pending["message_id"]))
+        asyncio.run(
+            AIChatService(db, iso["org_id"], approver.id).confirm_action(pending["message_id"]),
+        )
         row = db.query(MoshkoToolCall).filter(MoshkoToolCall.session_id == "s-write").one()
         assert row.tool_name == "issue_document"
         assert row.target_system == "sumit"

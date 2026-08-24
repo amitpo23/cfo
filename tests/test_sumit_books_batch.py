@@ -13,6 +13,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from cfo.auth import create_access_token, get_password_hash
 from cfo.database import SessionLocal
 from cfo.integrations.sumit_integration import SumitAPIError, SumitIntegration
 from cfo.integrations.sumit_models import (
@@ -20,8 +21,10 @@ from cfo.integrations.sumit_models import (
     BooksBatchResponse,
     BooksBatchTransaction,
 )
-from cfo.models import IrreversibleActionRequest
-from cfo.services import sumit_quota
+from cfo.models import (
+    IrreversibleActionRequest, OrganizationSigningAuthority, User, UserRole,
+)
+from cfo.services import membership_service, sumit_quota
 
 
 def _with_paid_quota(sumit: SumitIntegration) -> SumitIntegration:
@@ -154,6 +157,44 @@ def test_create_books_batch_refuses_success_without_batch_url(client):
         asyncio.run(_run())
 
 
+def _signing_approver_headers(owner, *, email):
+    """P0-E (24/08/2026): `sumit_writeback` הפכה IRREVERSIBLE — המציע אינו
+    יכול לאשר את עצמו יותר, והמאשר חייב מורשה-חתימה מפורש (action_types
+    כולל 'sumit_writeback'). משתמש שני עם סמכות זו, לא owner החוזר."""
+    db = SessionLocal()
+    try:
+        org_id = owner["user"]["organization_id"]
+        row = User(
+            organization_id=org_id,
+            email=email,
+            password_hash=get_password_hash("not-used"),
+            full_name="Signing Approver",
+            role=UserRole.ADMIN,
+            is_active=True,
+        )
+        db.add(row)
+        db.flush()
+        membership_service.grant(
+            db, organization_id=org_id, user_id=row.id, role=UserRole.ADMIN,
+            granted_by_user_id=owner["user"]["id"],
+            status=membership_service.ACTIVE,
+        )
+        db.add(OrganizationSigningAuthority(
+            organization_id=org_id,
+            user_id=row.id,
+            authority_type="authorized_signer",
+            action_types=["sumit_writeback"],
+            is_active=True,
+            granted_by_user_id=owner["user"]["id"],
+        ))
+        db.commit()
+        db.refresh(row)
+        token = create_access_token({"sub": row.id})
+        return {"headers": {"Authorization": f"Bearer {token}"}}
+    finally:
+        db.close()
+
+
 def _approved_batch(client, owner, *, key: str) -> tuple[int, dict]:
     payload = _request().model_dump(mode="json", exclude_none=True)
     proposal = client.post(
@@ -168,9 +209,10 @@ def _approved_batch(client, owner, *, key: str) -> tuple[int, dict]:
     )
     assert proposal.status_code == 201, proposal.text
     action_id = proposal.json()["id"]
+    approver = _signing_approver_headers(owner, email=f"books-approver-{key}@example.com")
     approval = client.post(
         f"/api/approvals/{action_id}/approve",
-        headers=owner["headers"],
+        headers=approver["headers"],
     )
     assert approval.status_code == 200, approval.text
     return action_id, payload

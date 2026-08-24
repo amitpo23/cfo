@@ -1316,11 +1316,14 @@ class ChatMessage(Base):
     session_id = Column(String(64), nullable=False)
     role = Column(String(20), nullable=False)  # user | assistant
     content = Column(Text, nullable=False)
-    pending_action = Column(JSON, nullable=True)  # {"tool": str, "input": dict, "description": str}
+    # Immutable proposal envelope: tool/input plus schema-version and envelope
+    # SHA-256 digests. Kept in the existing JSON column, so no schema migration
+    # or nullable legacy column is needed.
+    pending_action = Column(JSON, nullable=True)
     executed = Column(Boolean, default=False)
-    # Durable confirmation state.  NULL remains a supported legacy value:
-    # pending_action + executed=False + action_status=NULL is interpreted as
-    # "pending" so an additive migration never strands existing proposals.
+    # Durable confirmation state. NULL remains structurally readable as
+    # pending, but an old pending_action without the immutable hashes is
+    # deliberately refused with an honest "propose again" response.
     action_status = Column(String(20), nullable=True)  # pending | executing | executed | cancelled | unknown
     action_claimed_at = Column(DateTime(timezone=True), nullable=True)
     action_completed_at = Column(DateTime(timezone=True), nullable=True)

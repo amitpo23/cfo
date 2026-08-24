@@ -20,6 +20,7 @@ from cfo.services.irreversible_action_service import (
 )
 from cfo.services.policy_service import PolicyService
 from cfo.services.ai_chat_service import AIChatService, ChatConfirmationError
+from cfo.services import ai_chat_service
 from cfo.services.ai_chat_tools import TOOLS
 from cfo.services import policy_engine
 
@@ -361,9 +362,10 @@ def test_chat_rechecks_policy_before_atomic_execution_claim(
             role="assistant",
             content="לאשר?",
             pending_action={
-                "tool": "create_expense_category",
-                "input": {"key": "blocked", "name_he": "חסום"},
-                "policy_action": "expenses.manage_categories",
+                **ai_chat_service._pending_action_envelope(
+                    TOOLS["create_expense_category"],
+                    {"key": "blocked", "name_he": "חסום"},
+                ),
                 "policy_amount": None,
             },
             action_status="pending",

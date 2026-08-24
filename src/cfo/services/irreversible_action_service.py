@@ -126,6 +126,45 @@ class IrreversibleActionService:
             query = query.filter(IrreversibleActionRequest.status == status)
         return query.order_by(IrreversibleActionRequest.id.desc()).all()
 
+    def require_signing_approver(
+        self,
+        *,
+        proposed_by_user_id: int,
+        approved_by: User,
+        action_type: str,
+        require_distinct: bool,
+    ) -> OrganizationSigningAuthority:
+        """Resolve current organization signing authority for an approval.
+
+        Moshko's IRREVERSIBLE policy class always passes require_distinct=True.
+        The durable request workflow also reuses this method and may demand
+        separation through a persisted organization policy grant. Keeping the
+        lookup here prevents chat from growing a parallel authority model.
+        """
+        self._require_actor_scope(approved_by)
+        if require_distinct and approved_by.id == proposed_by_user_id:
+            raise ActionAuthorizationError(
+                "an irreversible action requires a distinct signing approver",
+            )
+        authorities = self.db.query(OrganizationSigningAuthority).filter(
+            OrganizationSigningAuthority.organization_id == self.organization_id,
+            OrganizationSigningAuthority.user_id == approved_by.id,
+            OrganizationSigningAuthority.is_active.is_(True),
+        ).all()
+        authority = next(
+            (
+                candidate for candidate in authorities
+                if "*" in (candidate.action_types or [])
+                or action_type in (candidate.action_types or [])
+            ),
+            None,
+        )
+        if authority is None:
+            raise ActionAuthorizationError(
+                "active signing authority for this action is required",
+            )
+        return authority
+
     def propose(
         self,
         *,
@@ -219,29 +258,12 @@ class IrreversibleActionService:
             raise ActionAuthorizationError(
                 "organization policy requires step-up authentication",
             )
-        if decision.separation_of_duties and approved_by.id == row.proposed_by_user_id:
-            raise ActionAuthorizationError(
-                "organization policy forbids self approval",
-            )
-
-        authorities = self.db.query(OrganizationSigningAuthority).filter(
-            OrganizationSigningAuthority.organization_id
-            == self.organization_id,
-            OrganizationSigningAuthority.user_id == approved_by.id,
-            OrganizationSigningAuthority.is_active.is_(True),
-        ).all()
-        authority = next(
-            (
-                candidate for candidate in authorities
-                if "*" in (candidate.action_types or [])
-                or row.action_type in (candidate.action_types or [])
-            ),
-            None,
+        authority = self.require_signing_approver(
+            proposed_by_user_id=row.proposed_by_user_id,
+            approved_by=approved_by,
+            action_type=row.action_type,
+            require_distinct=decision.separation_of_duties,
         )
-        if authority is None:
-            raise ActionAuthorizationError(
-                "active signing authority for this action is required",
-            )
 
         approval = self.db.query(IrreversibleActionApproval).filter(
             IrreversibleActionApproval.request_id == row.id,

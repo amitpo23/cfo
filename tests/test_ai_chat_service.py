@@ -12,9 +12,14 @@ from types import SimpleNamespace
 import pytest
 
 from cfo.database import SessionLocal
-from cfo.models import ChatMessage, Contact, ContactType, Invoice, InvoiceStatus, User
+from cfo.models import (
+    ChatMessage, Contact, ContactType, Invoice, InvoiceStatus,
+    OrganizationSigningAuthority, User, UserRole,
+)
+from cfo.services import membership_service, policy_engine
 from cfo.services import ai_chat_service, document_issuance_service
 from cfo.services.ai_chat_service import AIChatService, ChatConfirmationError
+from cfo.services.ai_chat_tools import ChatTool, TOOLS
 
 
 def _text_block(text):
@@ -66,6 +71,39 @@ def _org_user_id(db, org_id):
 
 def _chat_for_org(db, org_id, **kwargs):
     return AIChatService(db, org_id, user_id=_org_user_id(db, org_id), **kwargs)
+
+
+def _add_org_user(db, org_id, *, email, role=UserRole.USER, signing_scope=None):
+    proposer_id = _org_user_id(db, org_id)
+    user = User(
+        organization_id=org_id,
+        email=email,
+        password_hash="unused",
+        full_name=email,
+        role=role,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+    membership_service.grant(
+        db,
+        organization_id=org_id,
+        user_id=user.id,
+        role=role,
+        granted_by_user_id=proposer_id,
+    )
+    if signing_scope is not None:
+        db.add(OrganizationSigningAuthority(
+            organization_id=org_id,
+            user_id=user.id,
+            authority_type="authorized_signer",
+            action_types=[signing_scope],
+            is_active=True,
+            granted_by_user_id=proposer_id,
+        ))
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 def test_read_tool_executes_automatically_and_feeds_result_back(monkeypatch, fresh_org):
@@ -124,8 +162,214 @@ def test_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
 
         msg = db.query(ChatMessage).filter(ChatMessage.id == result["message_id"]).first()
         assert msg.pending_action is not None
+        assert len(msg.pending_action["tool_schema_sha256"]) == 64
+        assert len(msg.pending_action["action_envelope_sha256"]) == 64
         assert msg.executed is False
         assert msg.action_status == "pending"
+    finally:
+        db.close()
+
+
+def test_irreversible_action_waits_for_a_distinct_signing_authority(
+    monkeypatch, fresh_org,
+):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        proposer_id = _org_user_id(db, org_id)
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "issue_document", {
+                    "document_type": "invoice",
+                    "customer_id": "123",
+                    "customer_name": "לקוח",
+                    "items": [{"description": "שירות", "unit_price": 100}],
+                })],
+            ),
+        ])
+        service = AIChatService(db, org_id, proposer_id)
+        proposed = asyncio.run(service.send_message("irreversible", "הפק חשבונית"))
+
+        with pytest.raises(ChatConfirmationError, match="מורשה חתימה נוסף"):
+            asyncio.run(service.confirm_action(proposed["message_id"]))
+
+        db.expire_all()
+        stored = db.get(ChatMessage, proposed["message_id"])
+        assert stored.action_status == "pending"
+        assert stored.executed is False
+    finally:
+        db.close()
+
+
+def test_distinct_signer_can_confirm_irreversible_action(monkeypatch, fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        proposer_id = _org_user_id(db, org_id)
+        signer = _add_org_user(
+            db,
+            org_id,
+            email=f"chat-signer-{org_id}@example.com",
+            signing_scope="document_issue",
+        )
+        _patch_client(monkeypatch, responses=[
+            SimpleNamespace(
+                stop_reason="tool_use",
+                content=[_tool_use_block("t1", "issue_document", {
+                    "document_type": "invoice",
+                    "customer_id": "123",
+                    "customer_name": "לקוח",
+                    "items": [{"description": "שירות", "unit_price": 100}],
+                })],
+            ),
+        ])
+        proposed = asyncio.run(
+            AIChatService(db, org_id, proposer_id).send_message(
+                "distinct-signer", "הפק חשבונית",
+            )
+        )
+        calls = {"count": 0}
+
+        async def execute_once(*_args, **_kwargs):
+            calls["count"] += 1
+            return {"ok": True}
+
+        monkeypatch.setattr(AIChatService, "_execute_tool_observed", execute_once)
+        confirmed = asyncio.run(
+            AIChatService(db, org_id, signer.id).confirm_action(proposed["message_id"])
+        )
+
+        assert confirmed["result"] == {"ok": True}
+        assert calls["count"] == 1
+        db.expire_all()
+        stored = db.get(ChatMessage, proposed["message_id"])
+        assert stored.pending_action["approved_by_user_id"] == signer.id
+        assert stored.pending_action["approved_by_authority_id"]
+    finally:
+        db.close()
+
+
+def test_non_signer_gets_honest_irreversible_approval_message(monkeypatch, fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        proposer_id = _org_user_id(db, org_id)
+        non_signer = _add_org_user(
+            db, org_id, email=f"chat-non-signer-{org_id}@example.com",
+        )
+        pending = ai_chat_service._pending_action_envelope(
+            TOOLS["charge_customer"], {"customer_id": "c1", "amount": 10},
+        )
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=proposer_id,
+            session_id="non-signer",
+            role="assistant",
+            content="לאשר?",
+            pending_action=pending,
+            action_status="pending",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+
+        with pytest.raises(ChatConfirmationError, match="מורשה חתימה"):
+            asyncio.run(AIChatService(db, org_id, non_signer.id).confirm_action(msg.id))
+    finally:
+        db.close()
+
+
+def test_changed_tool_schema_rejects_stale_proposal(monkeypatch, fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    original = TOOLS["create_expense_category"]
+    try:
+        pending = ai_chat_service._pending_action_envelope(
+            original, {"key": "office", "name_he": "משרד"},
+        )
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=_org_user_id(db, org_id),
+            session_id="changed-tool",
+            role="assistant",
+            content="לאשר?",
+            pending_action=pending,
+            action_status="pending",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+        TOOLS[original.name] = ChatTool(
+            name=original.name,
+            description=original.description,
+            input_schema={**original.input_schema, "catalog_revision": 2},
+            category=original.category,
+            fn=original.fn,
+            office=original.office,
+            needs_user=original.needs_user,
+            policy_action=original.policy_action,
+        )
+
+        with pytest.raises(
+            ChatConfirmationError,
+            match="הכלי השתנה מאז ההצעה, יש להציע מחדש",
+        ):
+            asyncio.run(_chat_for_org(db, org_id).confirm_action(msg.id))
+    finally:
+        TOOLS[original.name] = original
+        db.close()
+
+
+def test_policy_is_rechecked_after_cas_before_side_effect(monkeypatch, fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        pending = ai_chat_service._pending_action_envelope(
+            TOOLS["create_expense_category"], {"key": "office", "name_he": "משרד"},
+        )
+        msg = ChatMessage(
+            organization_id=org_id,
+            user_id=_org_user_id(db, org_id),
+            session_id="execution-policy",
+            role="assistant",
+            content="לאשר?",
+            pending_action=pending,
+            action_status="pending",
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+        decisions = iter([
+            policy_engine.Decision(
+                action="expenses.manage_categories", allowed=True, reason="allowed",
+            ),
+            policy_engine.Decision(
+                action="expenses.manage_categories", allowed=False, reason="revoked",
+            ),
+        ])
+        seen_statuses = []
+
+        def changing_policy(self, *_args, **_kwargs):
+            db.expire_all()
+            seen_statuses.append(db.get(ChatMessage, msg.id).action_status)
+            return next(decisions)
+
+        called = {"count": 0}
+
+        async def forbidden(*_args, **_kwargs):
+            called["count"] += 1
+
+        monkeypatch.setattr(AIChatService, "_tool_policy_decision", changing_policy)
+        monkeypatch.setattr(AIChatService, "_execute_tool_observed", forbidden)
+
+        with pytest.raises(ChatConfirmationError, match="revoked"):
+            asyncio.run(_chat_for_org(db, org_id).confirm_action(msg.id))
+
+        assert seen_statuses == ["pending", "executing"]
+        assert called["count"] == 0
+        db.expire_all()
+        assert db.get(ChatMessage, msg.id).action_status == "pending"
     finally:
         db.close()
 
@@ -187,11 +431,9 @@ def test_atomic_claim_blocks_a_second_session_before_tool_execution(
             session_id="real-race",
             role="assistant",
             content="לאשר?",
-            pending_action={
-                "tool": "create_expense_category",
-                "input": {"name": "פעם אחת"},
-                "description": "יצירת קטגוריה",
-            },
+            pending_action=ai_chat_service._pending_action_envelope(
+                TOOLS["create_expense_category"], {"name": "פעם אחת"},
+            ),
             action_status="pending",
         )
         db_a.add(msg)
@@ -287,11 +529,9 @@ def test_ambiguous_execution_failure_is_locked_unknown_and_not_replayed(
             session_id="unknown-result",
             role="assistant",
             content="לאשר?",
-            pending_action={
-                "tool": "create_expense_category",
-                "input": {"name": "תוצאה לא ידועה"},
-                "description": "יצירת קטגוריה",
-            },
+            pending_action=ai_chat_service._pending_action_envelope(
+                TOOLS["create_expense_category"], {"name": "תוצאה לא ידועה"},
+            ),
             action_status="pending",
         )
         db.add(msg)
@@ -474,17 +714,25 @@ def test_confirm_action_executes_exactly_once(monkeypatch, fresh_org):
                 })],
             ),
         ])
-        service = _chat_for_org(db, org_id)
+        proposer_id = _org_user_id(db, org_id)
+        signer = _add_org_user(
+            db,
+            org_id,
+            email=f"document-executor-{org_id}@example.com",
+            signing_scope="document_issue",
+        )
+        service = AIChatService(db, org_id, proposer_id)
         first = asyncio.run(service.send_message("s1", "תפיק חשבונית"))
         pending_id = first["message_id"]
 
         _patch_sumit_connector(monkeypatch)
-        confirmed = asyncio.run(service.confirm_action(pending_id))
+        approving_service = AIChatService(db, org_id, signer.id)
+        confirmed = asyncio.run(approving_service.confirm_action(pending_id))
         assert confirmed["result"]["external_id"] == "SUMIT-1"
         assert db.query(Invoice).filter(Invoice.organization_id == org_id).count() == 1
 
         try:
-            asyncio.run(service.confirm_action(pending_id))
+            asyncio.run(approving_service.confirm_action(pending_id))
             raised = None
         except ChatConfirmationError as exc:
             raised = exc
@@ -1177,7 +1425,14 @@ def test_confirm_action_executes_file_expense_successfully(monkeypatch, fresh_or
                 content=[_tool_use_block("t1", "file_expense", {"expense_id": exp["id"]})],
             ),
         ])
-        service = _chat_for_org(db, org_id)
+        proposer_id = _org_user_id(db, org_id)
+        signer = _add_org_user(
+            db,
+            org_id,
+            email=f"expense-filing-signer-{org_id}@example.com",
+            signing_scope="sumit_writeback",
+        )
+        service = AIChatService(db, org_id, proposer_id)
         proposed = asyncio.run(service.send_message("s1", f"תייק את הוצאה {exp['id']}"))
         pending_id = proposed["message_id"]
 
@@ -1188,7 +1443,9 @@ def test_confirm_action_executes_file_expense_successfully(monkeypatch, fresh_or
 
         monkeypatch.setattr(ExpenseFilingService, "file_to_sumit", fake_file_to_sumit)
 
-        confirmed = asyncio.run(service.confirm_action(pending_id))
+        confirmed = asyncio.run(
+            AIChatService(db, org_id, signer.id).confirm_action(pending_id)
+        )
         assert confirmed["result"]["status"] == "filed"
     finally:
         db.close()

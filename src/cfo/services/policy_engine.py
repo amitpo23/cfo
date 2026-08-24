@@ -30,31 +30,87 @@ READ_ACTIONS = frozenset({
     "collections.read", "mandate.read",
 })
 
+IRREVERSIBLE_ACTIONS = frozenset({
+    # Official documents: issuing, crediting, or cancelling changes the
+    # externally authoritative document trail. Creating a recurring charge
+    # instruction is included because it creates a future monetary commitment;
+    # updating/cancelling it changes that commitment at the provider.
+    "invoices.issue", "invoices.credit", "documents.cancel",
+    "recurring.create", "recurring.update", "recurring_cancel.propose",
+    # Money movement: this action charges a stored payment method immediately.
+    "billing.charge",
+    # Official books: filing an expense or any SUMIT books writeback changes
+    # the accounting system of record. accounting.writeback.propose is kept as
+    # the catalog name for compatibility, although several mapped tools perform
+    # the writeback directly; the conservative class follows actual semantics.
+    "expenses.file", "accounting.writeback.propose",
+})
+
 WRITE_ACTIONS = frozenset({
-    "invoices.draft", "invoices.issue", "invoices.credit",
-    "expenses.review", "expenses.file",
+    # Drafts and local/reversible bookkeeping metadata do not create an
+    # official document and do not write to the authoritative books.
+    "invoices.draft", "expenses.review",
     "reconciliation.propose", "reconciliation.approve",
     "collections.contact", "collections.escalate",
     "payment_link.create", "bank_payment.propose",
     "bank_connection.create",
-    "mandate.propose", "recurring_cancel.propose",
-    # W3 גל 1 (20/08/2026): הוראות קבע ככלי מושקו — יצירה/עדכון הן
-    # פעולות write (מוצעות בצ'אט, מבוצעות רק ב-confirm מפורש); ביטול
-    # מסמך הוא שינוי ספרים ולכן write אף הוא.
-    "recurring.create", "recurring.update", "documents.cancel",
-    # W3 גל 2 (20/08/2026): כיסוי מלא של מתודות SUMIT ככלי מושקו —
+    # These are proposals/drafts only; their later provider-side execution is
+    # covered by SIGNING_ACTIONS or the durable irreversible-action workflow.
+    "mandate.propose",
+    # W3 גל 2 (20/08/2026): כיסוי מתודות SUMIT ככלי מושקו —
     # crm.manage: ניהול ישויות CRM ואמצעי תשלום שמורים (ללא פרטי כרטיס);
-    # billing.charge: חיוב לקוח באמצעי שמור בלבד (פעולה בתשלום אצל הספק);
+    # billing.charge סווג מחדש כ-IRREVERSIBLE לעיל;
     # comms.send: פקס/טיקט/רשימות תפוצה — פנייה יוצאת שאינה גבייה;
     # integrations.manage: הרשמה/ביטול טריגרים (webhooks) אצל הספק.
-    "crm.manage", "billing.charge", "comms.send", "integrations.manage",
+    # CRM changes, outbound communications and webhook subscriptions are
+    # writes, but do not by themselves issue/cancel an official document,
+    # charge money, or post to books. Permanent CRM deletion remains inside
+    # this coarse action and should be split if broader destructive controls
+    # are introduced; it must not silently redefine financial irreversibility.
+    "crm.manage", "comms.send", "integrations.manage",
     "refund.propose", "filing.prepare", "period_close.propose",
-    "accounting.writeback.propose", "expenses.manage_categories", "expenses.manage_vehicle_profile",
+    "expenses.manage_categories", "expenses.manage_vehicle_profile",
     "expenses.classify", "reports.email", "moshko.memory.write",
     "tasks.write", "users.manage", "policies.manage",
 })
 
-KNOWN_ACTIONS = READ_ACTIONS | WRITE_ACTIONS | SIGNING_ACTIONS
+KNOWN_ACTIONS = READ_ACTIONS | WRITE_ACTIONS | IRREVERSIBLE_ACTIONS | SIGNING_ACTIONS
+
+# Signing-authority scopes reuse the durable IrreversibleActionService catalog.
+# This keeps Moshko approvals on organization_signing_authorities rather than
+# inventing a second authority model. Broad legacy scopes intentionally cover
+# related operations (for example document_issue covers issue/credit/cancel).
+IRREVERSIBLE_AUTHORITY_SCOPES: dict[str, str] = {
+    "invoices.issue": "document_issue",
+    "invoices.credit": "document_issue",
+    "documents.cancel": "document_issue",
+    "expenses.file": "sumit_writeback",
+    "accounting.writeback.propose": "sumit_writeback",
+    "billing.charge": "payment",
+    "recurring.create": "mandate",
+    "recurring.update": "mandate",
+    "recurring_cancel.propose": "recurring_cancel",
+}
+
+# Every catalog decision is inspectable and test-enforced. The per-action keys
+# make additions fail closed until their classification is explicitly recorded.
+ACTION_CLASSIFICATION_RATIONALE: dict[str, str] = {
+    **{action: "read-only observation; no persisted or external side effect"
+       for action in READ_ACTIONS},
+    **{action: "ordinary write/proposal; no direct money charge, official-document mutation, or books posting"
+       for action in WRITE_ACTIONS},
+    "invoices.issue": "issues an official accounting document",
+    "invoices.credit": "issues an official credit document",
+    "documents.cancel": "cancels an official accounting document",
+    "expenses.file": "files an expense into the official books",
+    "accounting.writeback.propose": "catalog family includes direct writeback to official books",
+    "billing.charge": "charges real money using a stored payment method",
+    "recurring.create": "creates a future recurring monetary commitment",
+    "recurring.update": "changes a future recurring monetary commitment",
+    "recurring_cancel.propose": "cancels a provider-side recurring monetary commitment",
+    **{action: "signing-only transition; organization policy cannot grant signing authority"
+       for action in SIGNING_ACTIONS},
+}
 
 ROLE_PRESETS: dict[UserRole, frozenset[str]] = {
     UserRole.ADMIN: frozenset({
@@ -71,7 +127,8 @@ ROLE_PRESETS: dict[UserRole, frozenset[str]] = {
         "accounting.writeback.propose", "expenses.manage_categories", "expenses.manage_vehicle_profile",
         "expenses.classify", "reports.email", "moshko.memory.write",
         "tasks.write", "users.manage", "policies.manage",
-        # W3 גל 2 — ADMIN מקבל את כל ארבע הפעולות החדשות.
+        # W3 גל 2 — ADMIN רשאי להציע את כל ארבע הפעולות החדשות;
+        # billing.charge עדיין דורש מאשר-חותם נפרד לפני ביצוע.
         "crm.manage", "billing.charge", "comms.send", "integrations.manage",
     }),
     UserRole.ACCOUNTANT: frozenset({
@@ -85,7 +142,7 @@ ROLE_PRESETS: dict[UserRole, frozenset[str]] = {
         "accounting.writeback.propose",
         "expenses.manage_categories", "expenses.manage_vehicle_profile", "expenses.classify", "reports.email",
         "moshko.memory.write", "tasks.write",
-        # W3 גל 2 — מנהל/ת חשבונות: CRM, חיוב באמצעי שמור ותקשורת;
+        # W3 גל 2 — מנהל/ת חשבונות רשאי/ת להציע CRM, חיוב באמצעי שמור ותקשורת;
         # integrations.manage (טריגרים) נשאר ל-ADMIN בלבד — תשתית.
         "crm.manage", "billing.charge", "comms.send",
     }),
@@ -271,13 +328,15 @@ def evaluate(
         needs_reason = needs_reason or grant.requires_reason
         approvals = max(approvals, grant.required_approvals)
 
+    irreversible = action in IRREVERSIBLE_ACTIONS
     return Decision(
         action=action,
         allowed=True,
         reason="granted_by_policy" if allows else "granted_by_role_preset",
+        requires_signing_authority=irreversible,
         requires_step_up=step_up,
         requires_reason=needs_reason,
         required_approvals=approvals,
-        separation_of_duties=separation,
+        separation_of_duties=separation or irreversible,
         matched=("grant",) if allows else ("preset",),
     )

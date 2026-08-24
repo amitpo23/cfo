@@ -77,6 +77,8 @@ async def _run_one_case(db: Session, gap: MoshkoGap) -> dict[str, Any]:
     # אז השורה האוטומטית הכפולה מוסרת במקום להכפיל את התור.
     db.query(MoshkoGap).filter(
         MoshkoGap.session_id == session_id,
+        MoshkoGap.organization_id == gap.organization_id,
+        MoshkoGap.user_id == gap.user_id,
         MoshkoGap.id != gap.id,
     ).delete(synchronize_session=False)
 

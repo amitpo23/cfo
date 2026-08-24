@@ -12,6 +12,7 @@ supplied data), scoped to the caller's organization, and only once
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -37,6 +38,11 @@ from .ai_chat_personas import (
     resolve_persona,
 )
 from .policy_service import PolicyService
+from . import policy_engine
+from .irreversible_action_service import (
+    ActionAuthorizationError,
+    IrreversibleActionService,
+)
 
 # Backward-compatible alias — the persona layer (ai_chat_personas.py) now
 # owns the prompt strings; re-exported here under the original name because
@@ -85,6 +91,8 @@ _ACTION_EXECUTED = "executed"
 _ACTION_CANCELLED = "cancelled"
 _ACTION_UNKNOWN = "unknown"
 
+_CHANGED_TOOL_MESSAGE = "הכלי השתנה מאז ההצעה, יש להציע מחדש"
+
 # W1.1 — דפוסי ויתור. שמרני בכוונה: עדיף לפספס ניסוח נדיר מאשר להציף
 # את התור בתשובות תקינות שמכילות "לא" כלשהו. מודול-level (לא class attr)
 # כדי ש-W1.5 (moshko_regression.py) ישתמש באותו גלאי בדיוק דרך
@@ -106,6 +114,59 @@ def is_giveup_answer(text: str | None) -> bool:
     return any(marker in text for marker in _GIVEUP_MARKERS)
 
 
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _sha256_json(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _pending_action_envelope(tool, tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Freeze tool meaning with canonical arguments and its current schema.
+
+    The schema digest is the stable catalog-version identifier. The outer
+    digest binds name + canonical arguments + that version into one envelope.
+    """
+    canonical_input = json.loads(_canonical_json(tool_input))
+    schema_sha256 = _sha256_json(tool.input_schema)
+    envelope_sha256 = _sha256_json({
+        "tool": tool.name,
+        "input": canonical_input,
+        "tool_schema_sha256": schema_sha256,
+    })
+    return {
+        "tool": tool.name,
+        "input": canonical_input,
+        "description": tool.description,
+        "policy_action": tool.policy_action,
+        "tool_schema_sha256": schema_sha256,
+        "action_envelope_sha256": envelope_sha256,
+    }
+
+
+def _assert_current_action_envelope(pending_action: dict[str, Any], tool) -> None:
+    try:
+        current = _pending_action_envelope(
+            tool, dict(pending_action.get("input") or {}),
+        )
+    except (TypeError, ValueError):
+        raise ChatConfirmationError(_CHANGED_TOOL_MESSAGE) from None
+    if (
+        pending_action.get("tool_schema_sha256")
+        != current["tool_schema_sha256"]
+        or pending_action.get("action_envelope_sha256")
+        != current["action_envelope_sha256"]
+        or pending_action.get("policy_action") != tool.policy_action
+    ):
+        raise ChatConfirmationError(_CHANGED_TOOL_MESSAGE)
+
+
 class AIChatService:
     def __init__(
         self, db: Session, organization_id: int, user_id: int,
@@ -122,7 +183,9 @@ class AIChatService:
         self.channel = channel
 
     def _tool_policy_decision(
-        self, tool, tool_input: dict[str, Any], *, exclude_message_id: int | None = None,
+        self, tool, tool_input: dict[str, Any], *,
+        exclude_message_id: int | None = None,
+        user_id: int | None = None,
     ):
         if tool.office:
             return None
@@ -130,7 +193,7 @@ class AIChatService:
             raise ChatConfirmationError(
                 "פעולת הכתיבה חסרה מיפוי הרשאה ולכן נחסמה בבטחה",
             )
-        user = self.db.get(User, self.user_id)
+        user = self.db.get(User, user_id if user_id is not None else self.user_id)
         if user is None:
             raise ChatConfirmationError("לא ניתן לאמת את המשתמש המבקש")
         return PolicyService(
@@ -159,10 +222,40 @@ class AIChatService:
             raise ChatConfirmationError(
                 "הפעולה דורשת יותר ממאשר אחד ויש להעבירה למרכז האישורים",
             )
-        if decision.separation_of_duties:
+        if decision.separation_of_duties and not decision.requires_signing_authority:
             raise ChatConfirmationError(
                 "מדיניות הפרדת התפקידים אינה מאפשרת אישור עצמי בשיחה",
             )
+
+    def _assert_irreversible_approver(self, *, msg: ChatMessage, tool) -> Any:
+        policy_action = tool.policy_action
+        if policy_action not in policy_engine.IRREVERSIBLE_ACTIONS:
+            return None
+        approver = self.db.get(User, self.user_id)
+        scope = policy_engine.IRREVERSIBLE_AUTHORITY_SCOPES[policy_action]
+        if approver is None:
+            raise ChatConfirmationError("לא ניתן לאמת את המשתמש המאשר")
+        try:
+            authority = IrreversibleActionService(
+                self.db, self.organization_id,
+            ).require_signing_approver(
+                proposed_by_user_id=msg.user_id,
+                approved_by=approver,
+                action_type=scope,
+                require_distinct=True,
+            )
+        except ActionAuthorizationError:
+            if msg.user_id == self.user_id:
+                raise ChatConfirmationError(
+                    "פעולה בלתי-הפיכה אינה ניתנת לאישור עצמי. "
+                    "הפעולה ממתינה למורשה חתימה נוסף בארגון; "
+                    "המציע והמאשר חייבים להיות אנשים שונים."
+                ) from None
+            raise ChatConfirmationError(
+                "הפעולה ממתינה לאישור: נדרש מורשה חתימה פעיל נוסף בארגון "
+                f"עם סמכות לפעולה מסוג {scope}."
+            ) from None
+        return authority
 
     def _history(self, session_id: str) -> list[ChatMessage]:
         # Scoped to (org, user) — a chat session is a private conversation,
@@ -490,10 +583,7 @@ class AIChatService:
                     ) if decision is not None else {}
                 )
                 pending_action = {
-                    "tool": write_call.name,
-                    "input": write_call.input,
-                    "description": tool.description,
-                    "policy_action": tool.policy_action,
+                    **_pending_action_envelope(tool, dict(write_call.input)),
                     "policy_amount": (
                         str(policy_context.get("amount"))
                         if policy_context.get("amount") is not None else None
@@ -576,14 +666,12 @@ class AIChatService:
         }
 
     async def confirm_action(self, message_id: int) -> dict[str, Any]:
-        # Scoped to (org, user) — message_id is a small sequential integer,
-        # trivially guessable, so org-scoping alone isn't enough: without
-        # the user_id check here, any other user in the same org could
-        # confirm (and execute) a write that someone else's chat proposed.
+        # Resolve inside the organization first. Ordinary writes remain private
+        # to their proposer; irreversible actions deliberately allow only a
+        # distinct current organization signer to approve the stored envelope.
         msg = self.db.query(ChatMessage).filter(
             ChatMessage.id == message_id,
             ChatMessage.organization_id == self.organization_id,
-            ChatMessage.user_id == self.user_id,
         ).first()
         if msg is None:
             raise ChatConfirmationError(f"הודעה {message_id} לא נמצאה")
@@ -607,6 +695,11 @@ class AIChatService:
         tool = TOOLS.get(tool_name)
         if tool is None:
             raise ChatConfirmationError("הפעולה הממתינה אינה מוכרת עוד למערכת")
+        stored_policy_action = msg.pending_action.get("policy_action")
+        stored_irreversible = stored_policy_action in policy_engine.IRREVERSIBLE_ACTIONS
+        if msg.user_id != self.user_id and not stored_irreversible:
+            raise ChatConfirmationError(f"הודעה {message_id} לא נמצאה")
+        _assert_current_action_envelope(msg.pending_action, tool)
         if tool.office and not self.is_super_admin:
             # Defense in depth: role is re-derived on THIS request, not
             # trusted from whatever it was when the action was proposed. A
@@ -617,8 +710,10 @@ class AIChatService:
             tool,
             dict(msg.pending_action.get("input") or {}),
             exclude_message_id=msg.id,
+            user_id=msg.user_id,
         )
         self._assert_chat_policy(decision)
+        signing_authority = self._assert_irreversible_approver(msg=msg, tool=tool)
 
         # Compare-and-set claim committed BEFORE invoking the tool.  This is
         # the exactly-once boundary inside Rezef: only one worker can move a
@@ -626,12 +721,21 @@ class AIChatService:
         # ambiguous provider response leaves it executing/unknown, which is
         # deliberately not replayable without manual verification.
         claimed_at = datetime.now(timezone.utc)
+        claimed_pending_action = dict(msg.pending_action)
+        if signing_authority is not None:
+            # Persist who approved the immutable envelope in the same durable
+            # CAS that claims execution. The envelope hash deliberately covers
+            # tool/input/schema only; approval evidence is append-only metadata.
+            claimed_pending_action.update({
+                "approved_by_user_id": self.user_id,
+                "approved_by_authority_id": signing_authority.id,
+                "approved_at": claimed_at.isoformat(),
+            })
         claimed = (
             self.db.query(ChatMessage)
             .filter(
                 ChatMessage.id == message_id,
                 ChatMessage.organization_id == self.organization_id,
-                ChatMessage.user_id == self.user_id,
                 ChatMessage.pending_action.is_not(None),
                 or_(ChatMessage.executed.is_(False), ChatMessage.executed.is_(None)),
                 or_(
@@ -644,6 +748,7 @@ class AIChatService:
                     ChatMessage.action_status: _ACTION_EXECUTING,
                     ChatMessage.action_claimed_at: claimed_at,
                     ChatMessage.action_error: None,
+                    ChatMessage.pending_action: claimed_pending_action,
                 },
                 synchronize_session=False,
             )
@@ -656,10 +761,25 @@ class AIChatService:
         msg = self.db.query(ChatMessage).filter(
             ChatMessage.id == message_id,
             ChatMessage.organization_id == self.organization_id,
-            ChatMessage.user_id == self.user_id,
         ).one()
 
         try:
+            # Third policy check: the CAS is already durable, but no tool or
+            # provider side effect has occurred. Re-resolve the catalog entry,
+            # immutable envelope, proposer policy and signing authority so a
+            # deploy/revocation racing confirmation fails closed.
+            tool = TOOLS.get(msg.pending_action.get("tool"))
+            if tool is None:
+                raise ChatConfirmationError(_CHANGED_TOOL_MESSAGE)
+            _assert_current_action_envelope(msg.pending_action, tool)
+            execution_decision = self._tool_policy_decision(
+                tool,
+                dict(msg.pending_action.get("input") or {}),
+                exclude_message_id=msg.id,
+                user_id=msg.user_id,
+            )
+            self._assert_chat_policy(execution_decision)
+            self._assert_irreversible_approver(msg=msg, tool=tool)
             call_kwargs = dict(msg.pending_action["input"])
             if tool.needs_user:
                 call_kwargs["_user_id"] = self.user_id
@@ -710,7 +830,7 @@ class AIChatService:
         msg.action_error = None
 
         confirmation_msg = ChatMessage(
-            organization_id=self.organization_id, user_id=self.user_id,
+            organization_id=self.organization_id, user_id=msg.user_id,
             session_id=msg.session_id, role="assistant",
             content=f"בוצע: {tool.description}",
         )

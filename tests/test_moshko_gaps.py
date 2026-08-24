@@ -5,6 +5,7 @@
 והבעלים לא רואה שורה שאפשר לענות עליה ולהזין הקשר.
 """
 import asyncio
+from datetime import datetime
 
 import pytest
 
@@ -228,3 +229,98 @@ def test_gap_routes_require_super_admin(client, fresh_org):
     iso = fresh_org()
     r = client.get("/api/admin/moshko/gaps", headers=iso["headers"])
     assert r.status_code in (401, 403)
+
+
+def test_regression_duplicate_cleanup_is_scoped_to_org_and_user(
+    monkeypatch, fresh_org,
+):
+    from cfo.services import moshko_regression
+
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        user_a = db.query(User).filter(User.organization_id == org_a).first()
+        user_b = db.query(User).filter(User.organization_id == org_b).first()
+        other_a = User(
+            organization_id=org_a,
+            email=f"gap-other-{org_a}@example.com",
+            password_hash="unused",
+            full_name="Other",
+            role=UserRole.USER,
+            is_active=True,
+        )
+        db.add(other_a)
+        db.flush()
+        memory = MoshkoMemory(
+            organization_id=org_a,
+            user_id=None,
+            content="תשובה מאושרת",
+            category="correction",
+            source="admin",
+            approved_at=datetime.utcnow(),
+        )
+        db.add(memory)
+        db.flush()
+        original = MoshkoGap(
+            organization_id=org_a,
+            user_id=user_a.id,
+            session_id="original",
+            question="שאלה",
+            answer="לא הצלחתי",
+            gap_kind="model_gave_up",
+            status="answered",
+            promoted_memory_id=memory.id,
+        )
+        db.add(original)
+        db.commit()
+        db.refresh(original)
+        regression_session = f"regression-{original.id}-deadbeef"
+        colliders = [
+            MoshkoGap(
+                organization_id=org_b,
+                user_id=user_b.id,
+                session_id=regression_session,
+                gap_kind="model_gave_up",
+                status="open",
+            ),
+            MoshkoGap(
+                organization_id=org_a,
+                user_id=other_a.id,
+                session_id=regression_session,
+                gap_kind="model_gave_up",
+                status="open",
+            ),
+        ]
+        db.add_all(colliders)
+        db.commit()
+        collider_ids = [row.id for row in colliders]
+
+        class _FixedUuid:
+            hex = "deadbeef000000000000000000000000"
+
+        monkeypatch.setattr(moshko_regression.uuid, "uuid4", lambda: _FixedUuid())
+
+        async def fake_send(self, session_id, text, persona=None):
+            db.add(MoshkoGap(
+                organization_id=self.organization_id,
+                user_id=self.user_id,
+                session_id=session_id,
+                gap_kind="model_gave_up",
+                status="open",
+            ))
+            db.flush()
+            return {"reply": "לא הצלחתי"}
+
+        monkeypatch.setattr(moshko_regression.AIChatService, "send_message", fake_send)
+        asyncio.run(moshko_regression._run_one_case(db, original))
+        db.flush()
+
+        assert db.query(MoshkoGap).filter(
+            MoshkoGap.organization_id == org_a,
+            MoshkoGap.user_id == user_a.id,
+            MoshkoGap.session_id == regression_session,
+        ).count() == 0
+        assert db.query(MoshkoGap).filter(MoshkoGap.id.in_(collider_ids)).count() == 2
+    finally:
+        db.close()
