@@ -116,6 +116,7 @@ def _pending_message(
     proposer_id,
     session_id,
     tool_name="issue_document",
+    tool_input=None,
     action_status="pending",
     created_at=None,
 ):
@@ -126,7 +127,9 @@ def _pending_message(
         session_id=session_id,
         role="assistant",
         content="נדרש אישור",
-        pending_action=ai_chat_service._pending_action_envelope(tool, {}),
+        pending_action=ai_chat_service._pending_action_envelope(
+            tool, tool_input or {},
+        ),
         action_status=action_status,
         created_at=created_at or datetime.now(timezone.utc),
     )
@@ -154,6 +157,13 @@ def test_list_pending_chat_approvals_returns_only_matching_open_scope(fresh_org)
             org_id=org_id,
             proposer_id=proposer_id,
             session_id="approval-visible",
+            tool_input={
+                "customer_name": "לקוח בדיקה",
+                "amount": 1234.56,
+                "items": [
+                    {"description": "ייעוץ", "quantity": 2, "unit_price": 617.28},
+                ],
+            },
             created_at=proposed_at,
         )
         _pending_message(
@@ -186,6 +196,13 @@ def test_list_pending_chat_approvals_returns_only_matching_open_scope(fresh_org)
             "proposed_at": visible.created_at.isoformat(),
             "description": TOOLS["issue_document"].description,
             "tool": "issue_document",
+            "input": {
+                "customer_name": "לקוח בדיקה",
+                "amount": 1234.56,
+                "items": [
+                    {"description": "ייעוץ", "quantity": 2, "unit_price": 617.28},
+                ],
+            },
             "policy_action": "invoices.issue",
             "authority_scope": "document_issue",
         }]
@@ -193,7 +210,7 @@ def test_list_pending_chat_approvals_returns_only_matching_open_scope(fresh_org)
         db.close()
 
 
-def test_list_pending_chat_approvals_is_empty_for_non_signer_and_other_org(fresh_org):
+def test_pending_approval_payload_is_hidden_from_non_signer_and_other_org(fresh_org):
     org_a = fresh_org()["org_id"]
     org_b = fresh_org()["org_id"]
     db = SessionLocal()
@@ -213,11 +230,17 @@ def test_list_pending_chat_approvals_is_empty_for_non_signer_and_other_org(fresh
             role=UserRole.ADMIN,
             signing_scope="document_issue",
         )
+        private_payload = {
+            "customer_name": "לקוח סודי",
+            "amount": 9876.54,
+            "items": [{"description": "פריט חסוי", "quantity": 1}],
+        }
         _pending_message(
             db,
             org_id=org_a,
             proposer_id=proposer_a,
             session_id="org-a-private",
+            tool_input=private_payload,
         )
         _pending_message(
             db,

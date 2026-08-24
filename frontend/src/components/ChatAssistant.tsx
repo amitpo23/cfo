@@ -36,6 +36,7 @@ interface PendingApproval {
   proposed_at: string | null;
   description: string | null;
   tool: string | null;
+  input: Record<string, unknown>;
   policy_action: string | null;
   authority_scope: string;
 }
@@ -116,6 +117,14 @@ function formatApprovalDate(value: string | null): string {
     dateStyle: 'short',
     timeStyle: 'short',
   }).format(new Date(value));
+}
+
+function ActionInputDetails({ input }: { input: Record<string, unknown> }) {
+  return (
+    <pre className="mb-2 overflow-x-auto rounded bg-black/5 p-2 text-[11px] dir-ltr text-left">
+      {JSON.stringify(input, null, 2)}
+    </pre>
+  );
 }
 
 const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | null }> = ({ darkMode, currentUser }) => {
@@ -363,9 +372,7 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
                     {actionHeading(m)}
                   </div>
                   <p className="mb-2">{m.pending_action.description}</p>
-                  <pre className="mb-2 overflow-x-auto rounded bg-black/5 p-2 text-[11px] dir-ltr text-left">
-                    {JSON.stringify(m.pending_action.input, null, 2)}
-                  </pre>
+                  <ActionInputDetails input={m.pending_action.input} />
                   {m.executed || m.action_status === 'executed' ? (
                     <span className="text-green-600 font-medium">✓ בוצע</span>
                   ) : m.action_status === 'cancelled' ? (
@@ -507,6 +514,9 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
                   <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800">
                     {approval.authority_scope}
                   </span>
+                </div>
+                <div className="mt-3">
+                  <ActionInputDetails input={approval.input} />
                 </div>
                 <div className="mt-4 flex gap-2">
                   <button

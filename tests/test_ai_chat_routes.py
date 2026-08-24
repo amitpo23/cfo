@@ -74,7 +74,15 @@ def test_pending_approvals_route_uses_current_org_and_user(monkeypatch, client, 
     def fake_list(self):
         called["organization_id"] = self.organization_id
         called["user_id"] = self.user_id
-        return [{"message_id": 42, "description": "הפקת מסמך"}]
+        return [{
+            "message_id": 42,
+            "description": "הפקת מסמך",
+            "input": {
+                "customer_name": "לקוח בדיקה",
+                "amount": 2500,
+                "items": [{"description": "שירות", "quantity": 1}],
+            },
+        }]
 
     monkeypatch.setattr(AIChatService, "list_pending_approvals", fake_list, raising=False)
 
@@ -82,7 +90,15 @@ def test_pending_approvals_route_uses_current_org_and_user(monkeypatch, client, 
 
     assert response.status_code == 200, response.text
     assert response.json() == {
-        "items": [{"message_id": 42, "description": "הפקת מסמך"}],
+        "items": [{
+            "message_id": 42,
+            "description": "הפקת מסמך",
+            "input": {
+                "customer_name": "לקוח בדיקה",
+                "amount": 2500,
+                "items": [{"description": "שירות", "quantity": 1}],
+            },
+        }],
     }
     assert called["organization_id"] == iso["org_id"]
     assert isinstance(called["user_id"], int)

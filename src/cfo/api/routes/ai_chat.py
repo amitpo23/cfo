@@ -110,7 +110,7 @@ async def list_pending_chat_approvals(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db_session),
 ):
-    """Return the open Moshko actions this organization signer may approve."""
+    """Return approvable actions with their stored inputs for signer review."""
     return {"items": _service_for(db, org_id, user).list_pending_approvals()}
 
 

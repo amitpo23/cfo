@@ -295,6 +295,7 @@ class AIChatService:
                     else None
                 ),
                 "tool": row.pending_action.get("tool"),
+                "input": row.pending_action.get("input"),
                 "policy_action": row.pending_action.get("policy_action"),
                 "authority_scope": self._pending_authority_scope(row),
             }
