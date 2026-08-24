@@ -62,6 +62,7 @@ interface ChatMessageDto {
   content: string;
   pending_action: PendingAction | null;
   executed: boolean;
+  can_current_user_approve: boolean;
   action_status: 'pending' | 'executing' | 'executed' | 'cancelled' | 'unknown' | null;
   feedback: { category: FeedbackCategory; comment: string | null; status: string } | null;
   created_at: string | null;
@@ -109,6 +110,16 @@ function extractErrorMessage(err: unknown): string {
   const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
   const message = (err as { message?: string })?.message;
   return detail || message || 'הבקשה נכשלה ללא פירוט מהשרת.';
+}
+
+function actionHeading(message: ChatMessageDto): string {
+  if (message.executed || message.action_status === 'executed') return 'הפעולה בוצעה';
+  if (message.action_status === 'cancelled') return 'הפעולה בוטלה';
+  if (message.action_status === 'executing') return 'הפעולה בביצוע';
+  if (message.action_status === 'unknown') return 'תוצאת הפעולה דורשת אימות';
+  return message.can_current_user_approve
+    ? 'ממתין לאישור שלך'
+    : 'ממתין למורשה חתימה נוסף בארגון';
 }
 
 const MoshkoSystemChat: React.FC<Props> = ({ darkMode = false }) => {
@@ -326,7 +337,7 @@ const MoshkoSystemChat: React.FC<Props> = ({ darkMode = false }) => {
               >
                 <div className="mb-1 flex items-center gap-2 font-semibold text-yellow-600">
                   <ShieldAlert size={14} />
-                  ממתין לאישור שלך
+                  {actionHeading(m)}
                 </div>
                 <p className="mb-2">{m.pending_action.description}</p>
                 <pre dir="ltr" className="mb-2 overflow-x-auto rounded bg-black/5 p-2 text-left text-[11px]">
@@ -342,14 +353,16 @@ const MoshkoSystemChat: React.FC<Props> = ({ darkMode = false }) => {
                   <span className="font-medium text-red-600">תוצאה לא ידועה — נדרש אימות ידני</span>
                 ) : (
                   <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => confirmMutation.mutate(m.id)}
-                      disabled={confirmMutation.isPending || cancelMutation.isPending}
-                      className="rounded-lg bg-yellow-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-yellow-600 disabled:opacity-50"
-                    >
-                      {confirmMutation.isPending ? 'מבצע...' : 'אשר וביצוע'}
-                    </button>
+                    {m.can_current_user_approve && (
+                      <button
+                        type="button"
+                        onClick={() => confirmMutation.mutate(m.id)}
+                        disabled={confirmMutation.isPending || cancelMutation.isPending}
+                        className="rounded-lg bg-yellow-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-yellow-600 disabled:opacity-50"
+                      >
+                        {confirmMutation.isPending ? 'מבצע...' : 'אשר וביצוע'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => cancelMutation.mutate(m.id)}

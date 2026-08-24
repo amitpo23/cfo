@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-13",
+  "updated_at": "2026-08-24",
   "purpose": "Machine-readable contract connecting Rezef capabilities to knowledge, runtime evidence and safety gates.",
   "status_vocabulary": {
     "implemented": "Implemented and covered locally; production operation is a separate claim.",
@@ -404,6 +404,7 @@
         "tests/test_approved_open_finance_payment.py",
         "tests/test_irreversible_action_authorization.py",
         "tests/test_ai_chat_service.py",
+        "tests/test_ai_chat_routes.py",
         "tests/test_open_finance_payments.py",
         "tests/test_filing_verification.py",
         "tests/test_policy_persistence_and_enforcement.py"
@@ -416,7 +417,7 @@
         "post_action_verification",
         "policy_recheck_at_proposal_approval_execution"
       ],
-      "honest_boundary": "Owner/signatory authority is separate from RBAC, scoped per action and cannot be bypassed by super-admin. Organization policy is now persisted and audited with subject, amount/day/month ceilings, channels, step-up, reason, approval count and separation-of-duties; it is re-evaluated at proposal, approval and execution, so revocation or role changes stop an in-flight action. A super-admin may configure non-signing policy only inside an explicitly selected organization; that does not create owner/signatory authority. The Open Finance create-payment adapter consumes the persisted payload, claims once and stores readback in offline tests. The SUMIT createbatch adapter follows the same immutable-intent and execute-once control plane but stops honestly at executed_unverified because SUMIT exposes no batch readback/close API. No live provider behavior is claimed, and refund, cancellation, mandate, filing and close adapters are not yet wired.",
+      "honest_boundary": "Owner/signatory authority is separate from RBAC, scoped per action and cannot be bypassed by super-admin. Organization policy is now persisted and audited with subject, amount/day/month ceilings, channels, step-up, reason, approval count and separation-of-duties; it is re-evaluated at proposal, approval and execution, so revocation or role changes stop an in-flight action. A super-admin may configure non-signing policy only inside an explicitly selected organization; that does not create owner/signatory authority. Open Moshko ChatMessage proposals now have an organization-scoped discovery endpoint and web approval queue: only a distinct active signer whose action_types include the policy-mapped irreversible scope sees an item, while a non-signer receives an honest empty list; approval still reuses the existing confirm gate and a matching signer may reject through the existing cancel transition. The Open Finance create-payment adapter consumes the persisted payload, claims once and stores readback in offline tests. The SUMIT createbatch adapter follows the same immutable-intent and execute-once control plane but stops honestly at executed_unverified because SUMIT exposes no batch readback/close API. No live provider behavior is claimed, proactive Telegram/WhatsApp routing to additional signers is not wired, and refund, cancellation, mandate, filing and close adapters are not yet wired.",
       "next_gate": "Bootstrap an explicitly verified owner for each existing organization, then wire and prove the remaining irreversible action types one by one."
     },
     {
@@ -466,6 +467,7 @@
       "tests": [
         "tests/test_ai_chat_personas.py",
         "tests/test_ai_chat_service.py",
+        "tests/test_ai_chat_routes.py",
         "tests/test_chat_expense_intake.py",
         "tests/test_channel_notifier.py",
         "tests/test_moshko_observability.py",
@@ -494,7 +496,7 @@
         "live_membership_revalidation",
         "whatsapp_service_window"
       ],
-      "honest_boundary": "מושקו קולט קבלות מצילום, עונה מנתוני המערכת בלבד ופועל דרך ווב, Telegram ו-WhatsApp בקוד שנבדק אופליין. מסך הווב נגיש גם ב-/agent/{session_id}; ה-session מסונן תמיד לפי ארגון ומשתמש, וסופר-אדמין מנהל תמלולים רוחביים רק במסך הניטור הנפרד. כל קריאת LLM וכלי נרשמת best-effort עם tenant scope; עלות נשארת NULL כשאין מחיר מדויק בקונפיג, וארגומנטים רגישים מחוטאים. תמלולים וטלמטריה רוחבית זמינים רק ל-SUPER_ADMIN. משתמש יכול לסמן תשובה כמועילה, לא-מדויקת, לא-ידועה או לא-בטוחה; סופר-אדמין רואה תור איכות, מתקן ומקדם תשובה לידע ארגוני רק בפעולה מפורשת ומתועדת. זיכרון לומד ניתן לניהול אנושי עם אישור ו-AuditLog; מנהל ארגון רואה רק עובדות עסק משותפות ואת הזיכרון האישי שלו, בעוד SUPER_ADMIN יכול לבצע ביקורת רוחבית. זהות WhatsApp/Telegram מאומתת מחדש מול חברות פעילה בכל הודעה; אימות Google/אימייל מוכיח אדם בלבד ובמצב רב-ארגוני אינו מנחש ארגון. פעולת כתיבה נשמרת כ-pending_action ונבדקת מול מדיניות הארגון לפני ההצעה ושוב לפני הביצוע; אישור מבצע claim אטומי לפני הכלי, ביטול נשמר במסד בכל שלושת הערוצים, ותוצאה חיצונית עמומה ננעלת כ-unknown ולא מורצת שוב אוטומטית. שלושת כלי המשימות משתמשים בטבלת Task הקיימת ומבודדים לארגון. ה-KB המקצועי מוצג לקריאה בלבד ומחזיר unavailable מפורש כשמסמכי docs אינם ארוזים. דחיפה יזומה מכבדת opt-in, תצורה פר-provider וחלון שירות WhatsApp בן 24 שעות; מחוץ לחלון אין ניסיון free-form, ובהיעדר תבנית מאושרת מוחזר outside_service_window. פרסונה אינה הרשאה וכל כתיבה נעצרת לאישור מפורש. הגבול החד: **רצף אינו משדר לרשות המסים** — propose_vat_filing_approval מתעד אישור למספרים בלבד והשידור ידני ב-SUMIT. שום התנהגות ספק חיה, תבנית Meta מאושרת, אריזת docs או פריסת הקוד החדש בפרוד אינה מוכחת כאן; קול לא נבנה.",
+      "honest_boundary": "מושקו קולט קבלות מצילום, עונה מנתוני המערכת בלבד ופועל דרך ווב, Telegram ו-WhatsApp בקוד שנבדק אופליין. מסך הווב נגיש גם ב-/agent/{session_id}; ה-session מסונן תמיד לפי ארגון ומשתמש, וסופר-אדמין מנהל תמלולים רוחביים רק במסך הניטור הנפרד. כל קריאת LLM וכלי נרשמת best-effort עם tenant scope; עלות נשארת NULL כשאין מחיר מדויק בקונפיג, וארגומנטים רגישים מחוטאים. תמלולים וטלמטריה רוחבית זמינים רק ל-SUPER_ADMIN. משתמש יכול לסמן תשובה כמועילה, לא-מדויקת, לא-ידועה או לא-בטוחה; סופר-אדמין רואה תור איכות, מתקן ומקדם תשובה לידע ארגוני רק בפעולה מפורשת ומתועדת. זיכרון לומד ניתן לניהול אנושי עם אישור ו-AuditLog; מנהל ארגון רואה רק עובדות עסק משותפות ואת הזיכרון האישי שלו, בעוד SUPER_ADMIN יכול לבצע ביקורת רוחבית. זהות WhatsApp/Telegram מאומתת מחדש מול חברות פעילה בכל הודעה; אימות Google/אימייל מוכיח אדם בלבד ובמצב רב-ארגוני אינו מנחש ארגון. פעולת כתיבה נשמרת כ-pending_action ונבדקת מול מדיניות הארגון לפני ההצעה ושוב לפני הביצוע; אישור מבצע claim אטומי לפני הכלי, ביטול נשמר במסד בכל שלושת הערוצים, ותוצאה חיצונית עמומה ננעלת כ-unknown ולא מורצת שוב אוטומטית. בפעולה בלתי-הפיכה, מורשה חתימה נוסף עם scope תואם מגלה אותה כעת בתור ווב ארגוני ויכול לאשר דרך confirm הקיים או לדחות דרך cancel הקיים; המציע רואה נוסח כן בלי כפתור אישור עצמי. ניתוב יזום של הכרטיס לזהויות Telegram/WhatsApp של מורשים נוספים טרם נבנה. שלושת כלי המשימות משתמשים בטבלת Task הקיימת ומבודדים לארגון. ה-KB המקצועי מוצג לקריאה בלבד ומחזיר unavailable מפורש כשמסמכי docs אינם ארוזים. דחיפה יזומה מכבדת opt-in, תצורה פר-provider וחלון שירות WhatsApp בן 24 שעות; מחוץ לחלון אין ניסיון free-form, ובהיעדר תבנית מאושרת מוחזר outside_service_window. פרסונה אינה הרשאה וכל כתיבה נעצרת לאישור מפורש. הגבול החד: **רצף אינו משדר לרשות המסים** — propose_vat_filing_approval מתעד אישור למספרים בלבד והשידור ידני ב-SUMIT. שום התנהגות ספק חיה, תבנית Meta מאושרת, אריזת docs או פריסת הקוד החדש בפרוד אינה מוכחת כאן; קול לא נבנה.",
       "next_gate": "פעולת בעלים בשער 0: אישור deploy לפי runbook של Alembic head 3f8c2a1d9e70 מעל revision הפרוד 27f0f87c152f; הגדרת מחירי מודלים מדויקים ב-LLM_PRICING_JSON, סודות Telegram/WhatsApp, אימות אריזת docs ותבנית Meta מאושרת אופציונלית; לאחר מכן smoke חי מאושר שמוכיח בחירת ארגון, webhook, שיחה, policy/claim/confirm/cancel, feedback/review/promotion, usage, tool-call, זיכרון, משימה ודחיפה בכל ערוץ בלי לעקוף את חלון השירות."
     }
   ]

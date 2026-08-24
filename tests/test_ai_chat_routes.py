@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from cfo.database import SessionLocal
-from cfo.models import User, UserRole
+from cfo.models import ChatMessage, User, UserRole
 from cfo.services.ai_chat_service import AIChatService
 
 
@@ -63,7 +63,74 @@ def test_routes_require_auth(client):
     assert client.post("/api/ai/chat", json={"session_id": "s", "message": "hi"}).status_code == 403
     assert client.post("/api/ai/chat/confirm", json={"message_id": 1}).status_code == 403
     assert client.post("/api/ai/chat/cancel", json={"message_id": 1}).status_code == 403
+    assert client.get("/api/ai/chat/pending-approvals").status_code == 403
     assert client.get("/api/ai/chat/s").status_code == 403
+
+
+def test_pending_approvals_route_uses_current_org_and_user(monkeypatch, client, fresh_org):
+    iso = fresh_org()
+    called = {}
+
+    def fake_list(self):
+        called["organization_id"] = self.organization_id
+        called["user_id"] = self.user_id
+        return [{"message_id": 42, "description": "הפקת מסמך"}]
+
+    monkeypatch.setattr(AIChatService, "list_pending_approvals", fake_list, raising=False)
+
+    response = client.get("/api/ai/chat/pending-approvals", headers=iso["headers"])
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "items": [{"message_id": 42, "description": "הפקת מסמך"}],
+    }
+    assert called["organization_id"] == iso["org_id"]
+    assert isinstance(called["user_id"], int)
+
+
+def test_history_marks_only_the_actual_current_approver(client, fresh_org):
+    iso = fresh_org()
+    db = SessionLocal()
+    try:
+        proposer = db.query(User).filter(User.organization_id == iso["org_id"]).one()
+        db.add(ChatMessage(
+            organization_id=iso["org_id"],
+            user_id=proposer.id,
+            session_id="wording-check",
+            role="assistant",
+            content="נדרש אישור",
+            pending_action={
+                "tool": "issue_document",
+                "input": {},
+                "description": "הפקת מסמך",
+                "policy_action": "invoices.issue",
+            },
+            action_status="pending",
+        ))
+        db.add(ChatMessage(
+            organization_id=iso["org_id"],
+            user_id=proposer.id,
+            session_id="wording-check",
+            role="assistant",
+            content="נדרש אישור רגיל",
+            pending_action={
+                "tool": "create_task",
+                "input": {},
+                "description": "יצירת משימה",
+                "policy_action": "tasks.write",
+            },
+            action_status="pending",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/api/ai/chat/wording-check", headers=iso["headers"])
+
+    assert response.status_code == 200, response.text
+    messages = response.json()["messages"]
+    assert messages[0]["can_current_user_approve"] is False
+    assert messages[1]["can_current_user_approve"] is True
 
 
 @pytest.mark.parametrize("session_id", ["bad/session", "x" * 65, "רווח לא חוקי"])

@@ -5,7 +5,7 @@ alone, on ANY turn — only a separate, explicit confirm_action() call
 and only once.
 """
 import asyncio
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -73,8 +73,11 @@ def _chat_for_org(db, org_id, **kwargs):
     return AIChatService(db, org_id, user_id=_org_user_id(db, org_id), **kwargs)
 
 
-def _add_org_user(db, org_id, *, email, role=UserRole.USER, signing_scope=None):
-    proposer_id = _org_user_id(db, org_id)
+def _add_org_user(
+    db, org_id, *, email, role=UserRole.USER, signing_scope=None,
+    granted_by_user_id=None,
+):
+    proposer_id = granted_by_user_id or _org_user_id(db, org_id)
     user = User(
         organization_id=org_id,
         email=email,
@@ -104,6 +107,168 @@ def _add_org_user(db, org_id, *, email, role=UserRole.USER, signing_scope=None):
     db.commit()
     db.refresh(user)
     return user
+
+
+def _pending_message(
+    db,
+    *,
+    org_id,
+    proposer_id,
+    session_id,
+    tool_name="issue_document",
+    action_status="pending",
+    created_at=None,
+):
+    tool = TOOLS[tool_name]
+    message = ChatMessage(
+        organization_id=org_id,
+        user_id=proposer_id,
+        session_id=session_id,
+        role="assistant",
+        content="נדרש אישור",
+        pending_action=ai_chat_service._pending_action_envelope(tool, {}),
+        action_status=action_status,
+        created_at=created_at or datetime.now(timezone.utc),
+    )
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+    return message
+
+
+def test_list_pending_chat_approvals_returns_only_matching_open_scope(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        proposer_id = _org_user_id(db, org_id)
+        signer = _add_org_user(
+            db,
+            org_id,
+            email=f"document-signer-{org_id}@example.com",
+            role=UserRole.ADMIN,
+            signing_scope="document_issue",
+        )
+        proposed_at = datetime(2026, 8, 24, 8, 30, tzinfo=timezone.utc)
+        visible = _pending_message(
+            db,
+            org_id=org_id,
+            proposer_id=proposer_id,
+            session_id="approval-visible",
+            created_at=proposed_at,
+        )
+        _pending_message(
+            db,
+            org_id=org_id,
+            proposer_id=proposer_id,
+            session_id="approval-wrong-scope",
+            tool_name="charge_customer",
+        )
+        _pending_message(
+            db,
+            org_id=org_id,
+            proposer_id=proposer_id,
+            session_id="approval-cancelled",
+            action_status="cancelled",
+        )
+        _pending_message(
+            db,
+            org_id=org_id,
+            proposer_id=signer.id,
+            session_id="approval-self-proposed",
+        )
+
+        items = AIChatService(db, org_id, signer.id).list_pending_approvals()
+
+        assert items == [{
+            "message_id": visible.id,
+            "proposed_by_user_id": proposer_id,
+            "proposed_by_name": "Iso",
+            "proposed_at": visible.created_at.isoformat(),
+            "description": TOOLS["issue_document"].description,
+            "tool": "issue_document",
+            "policy_action": "invoices.issue",
+            "authority_scope": "document_issue",
+        }]
+    finally:
+        db.close()
+
+
+def test_list_pending_chat_approvals_is_empty_for_non_signer_and_other_org(fresh_org):
+    org_a = fresh_org()["org_id"]
+    org_b = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        proposer_a = _org_user_id(db, org_a)
+        proposer_b = _org_user_id(db, org_b)
+        non_signer = _add_org_user(
+            db,
+            org_a,
+            email=f"non-signer-{org_a}@example.com",
+            role=UserRole.ADMIN,
+        )
+        signer_b = _add_org_user(
+            db,
+            org_b,
+            email=f"signer-{org_b}@example.com",
+            role=UserRole.ADMIN,
+            signing_scope="document_issue",
+        )
+        _pending_message(
+            db,
+            org_id=org_a,
+            proposer_id=proposer_a,
+            session_id="org-a-private",
+        )
+        _pending_message(
+            db,
+            org_id=org_b,
+            proposer_id=proposer_b,
+            session_id="org-b-private",
+        )
+
+        assert AIChatService(db, org_a, non_signer.id).list_pending_approvals() == []
+        assert AIChatService(db, org_a, signer_b.id).list_pending_approvals() == []
+    finally:
+        db.close()
+
+
+def test_distinct_matching_signer_can_reject_pending_chat_action(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        proposer_id = _org_user_id(db, org_id)
+        signer = _add_org_user(
+            db,
+            org_id,
+            email=f"rejecting-signer-{org_id}@example.com",
+            role=UserRole.ADMIN,
+            signing_scope="document_issue",
+        )
+        wrong_scope_signer = _add_org_user(
+            db,
+            org_id,
+            email=f"wrong-rejecting-signer-{org_id}@example.com",
+            role=UserRole.ADMIN,
+            signing_scope="payment",
+            granted_by_user_id=proposer_id,
+        )
+        pending = _pending_message(
+            db,
+            org_id=org_id,
+            proposer_id=proposer_id,
+            session_id="approval-rejected",
+        )
+
+        with pytest.raises(ChatConfirmationError, match="לא נמצאה"):
+            AIChatService(db, org_id, wrong_scope_signer.id).cancel_action(pending.id)
+
+        result = AIChatService(db, org_id, signer.id).cancel_action(pending.id)
+
+        assert result == {"message_id": pending.id, "status": "cancelled"}
+        db.refresh(pending)
+        assert pending.action_status == "cancelled"
+    finally:
+        db.close()
 
 
 def test_read_tool_executes_automatically_and_feeds_result_back(monkeypatch, fresh_org):

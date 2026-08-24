@@ -182,6 +182,125 @@ class AIChatService:
         self.is_super_admin = is_super_admin
         self.channel = channel
 
+    @staticmethod
+    def _pending_authority_scope(msg: ChatMessage) -> str | None:
+        pending = msg.pending_action
+        if not isinstance(pending, dict):
+            return None
+        policy_action = pending.get("policy_action")
+        if policy_action not in policy_engine.IRREVERSIBLE_ACTIONS:
+            return None
+        return policy_engine.IRREVERSIBLE_AUTHORITY_SCOPES.get(policy_action)
+
+    @staticmethod
+    def _is_open_pending_action(msg: ChatMessage) -> bool:
+        return bool(
+            isinstance(msg.pending_action, dict)
+            and not msg.executed
+            and msg.action_status in (None, _ACTION_PENDING)
+        )
+
+    def can_current_user_approve(
+        self,
+        msg: ChatMessage,
+    ) -> bool:
+        """Tell presentation layers whether this caller may confirm ``msg``.
+
+        Ordinary writes remain private to their proposer. Irreversible writes
+        require a different active signer with the mapped authority scope.
+        Missing or unclassified policy metadata is never guessed.
+        """
+        if not self._is_open_pending_action(msg):
+            return False
+        pending = msg.pending_action or {}
+        policy_action = pending.get("policy_action")
+        if policy_action is None:
+            tool = TOOLS.get(pending.get("tool"))
+            return bool(
+                tool is not None
+                and tool.office
+                and self.is_super_admin
+                and msg.user_id == self.user_id
+            )
+        if (
+            not isinstance(policy_action, str)
+            or policy_action not in policy_engine.KNOWN_ACTIONS
+        ):
+            return False
+        if policy_action not in policy_engine.IRREVERSIBLE_ACTIONS:
+            return msg.user_id == self.user_id
+        if msg.user_id == self.user_id:
+            return False
+        scope = self._pending_authority_scope(msg)
+        if scope is None:
+            return False
+        approver = self.db.get(User, self.user_id)
+        if approver is None:
+            return False
+        try:
+            IrreversibleActionService(
+                self.db, self.organization_id,
+            ).require_signing_approver(
+                proposed_by_user_id=msg.user_id,
+                approved_by=approver,
+                action_type=scope,
+                require_distinct=True,
+            )
+        except ActionAuthorizationError:
+            return False
+        return True
+
+    def list_pending_approvals(self) -> list[dict[str, Any]]:
+        """List open Moshko actions this user can approve for this org.
+
+        This intentionally reads ``ChatMessage`` proposals, not the separate
+        ``IrreversibleActionRequest`` queue. JSON policy metadata is evaluated
+        in Python so SQLite tests and PostgreSQL production share one strict
+        interpretation instead of relying on dialect-specific JSON operators.
+        """
+        rows = (
+            self.db.query(ChatMessage)
+            .filter(
+                ChatMessage.organization_id == self.organization_id,
+                ChatMessage.pending_action.is_not(None),
+                or_(ChatMessage.executed.is_(False), ChatMessage.executed.is_(None)),
+                or_(
+                    ChatMessage.action_status.is_(None),
+                    ChatMessage.action_status == _ACTION_PENDING,
+                ),
+            )
+            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+            .all()
+        )
+        approvable = [
+            row for row in rows
+            if self.can_current_user_approve(row)
+        ]
+        proposer_ids = {row.user_id for row in approvable}
+        proposer_names = {
+            user_id: full_name
+            for user_id, full_name in self.db.query(User.id, User.full_name).filter(
+                User.id.in_(proposer_ids or {-1}),
+            ).all()
+        }
+        return [
+            {
+                "message_id": row.id,
+                "proposed_by_user_id": row.user_id,
+                "proposed_by_name": proposer_names.get(row.user_id),
+                "proposed_at": row.created_at.isoformat() if row.created_at else None,
+                "description": (
+                    row.pending_action.get("description")
+                    if isinstance(row.pending_action.get("description"), str)
+                    else None
+                ),
+                "tool": row.pending_action.get("tool"),
+                "policy_action": row.pending_action.get("policy_action"),
+                "authority_scope": self._pending_authority_scope(row),
+            }
+            for row in approvable
+        ]
+
     def _tool_policy_decision(
         self, tool, tool_input: dict[str, Any], *,
         exclude_message_id: int | None = None,
@@ -883,19 +1002,33 @@ class AIChatService:
         self.db.expire_all()
 
     def cancel_action(self, message_id: int) -> dict[str, Any]:
-        """Atomically cancel a proposal owned by the current user.
+        """Atomically cancel a proposal the caller owns or may approve.
 
         Only pending (including legacy NULL-status) actions can be cancelled;
         executing/unknown/executed actions remain locked to prevent a UI tap
-        from misrepresenting an external side effect as cancelled.
+        from misrepresenting an external side effect as cancelled. A distinct
+        signer may reject only the same irreversible scope they could confirm.
         """
+        visible = self.db.query(ChatMessage).filter(
+            ChatMessage.id == message_id,
+            ChatMessage.organization_id == self.organization_id,
+        ).first()
+        if visible is None:
+            raise ChatConfirmationError(f"הודעה {message_id} לא נמצאה")
+        may_cancel = visible.user_id == self.user_id
+        if not may_cancel:
+            may_cancel = self.can_current_user_approve(visible)
+        if not may_cancel:
+            # Do not reveal another user's private ordinary proposal or an
+            # irreversible proposal outside the caller's signing scope.
+            raise ChatConfirmationError(f"הודעה {message_id} לא נמצאה")
+
         completed_at = datetime.now(timezone.utc)
         cancelled = (
             self.db.query(ChatMessage)
             .filter(
                 ChatMessage.id == message_id,
                 ChatMessage.organization_id == self.organization_id,
-                ChatMessage.user_id == self.user_id,
                 ChatMessage.pending_action.is_not(None),
                 or_(ChatMessage.executed.is_(False), ChatMessage.executed.is_(None)),
                 or_(
@@ -917,7 +1050,6 @@ class AIChatService:
             msg = self.db.query(ChatMessage).filter(
                 ChatMessage.id == message_id,
                 ChatMessage.organization_id == self.organization_id,
-                ChatMessage.user_id == self.user_id,
             ).first()
             if msg is None:
                 raise ChatConfirmationError(f"הודעה {message_id} לא נמצאה")

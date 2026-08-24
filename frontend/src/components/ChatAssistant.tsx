@@ -23,9 +23,21 @@ interface ChatMessageDto {
   content: string;
   pending_action: PendingAction | null;
   executed: boolean;
+  can_current_user_approve: boolean;
   action_status: 'pending' | 'executing' | 'executed' | 'cancelled' | 'unknown' | null;
   feedback: { category: FeedbackCategory; comment: string | null; status: string } | null;
   created_at: string | null;
+}
+
+interface PendingApproval {
+  message_id: number;
+  proposed_by_user_id: number;
+  proposed_by_name: string | null;
+  proposed_at: string | null;
+  description: string | null;
+  tool: string | null;
+  policy_action: string | null;
+  authority_scope: string;
 }
 
 type FeedbackCategory = 'helpful' | 'inaccurate' | 'unknown' | 'unsafe';
@@ -88,6 +100,24 @@ function extractErrorMessage(err: unknown): string {
   return detail || 'משהו השתבש. נסה שוב.';
 }
 
+function actionHeading(message: ChatMessageDto): string {
+  if (message.executed || message.action_status === 'executed') return 'הפעולה בוצעה';
+  if (message.action_status === 'cancelled') return 'הפעולה בוטלה';
+  if (message.action_status === 'executing') return 'הפעולה בביצוע';
+  if (message.action_status === 'unknown') return 'תוצאת הפעולה דורשת אימות';
+  return message.can_current_user_approve
+    ? 'ממתין לאישור שלך'
+    : 'ממתין למורשה חתימה נוסף בארגון';
+}
+
+function formatApprovalDate(value: string | null): string {
+  if (!value) return 'מועד ההצעה לא זמין';
+  return new Intl.DateTimeFormat('he-IL', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(new Date(value));
+}
+
 const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | null }> = ({ darkMode, currentUser }) => {
   const isOfficeManager = currentUser?.role === 'super_admin';
   const { sessionId: routeSessionId } = useParams<{ sessionId: string }>();
@@ -96,6 +126,7 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
   const [input, setInput] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [persona, setPersona] = useState<PersonaKey>(getStoredPersona);
+  const [activeTab, setActiveTab] = useState<'chat' | 'approvals'>('chat');
   const [feedbackEditor, setFeedbackEditor] = useState<{ messageId: number; category: FeedbackCategory } | null>(null);
   const [feedbackComment, setFeedbackComment] = useState('');
   const queryClient = useQueryClient();
@@ -118,6 +149,15 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
     queryFn: () => apiService.get(`/ai/chat/${sessionId}`),
   });
   const messages = data?.messages || [];
+  const {
+    data: pendingApprovalsData,
+    isLoading: pendingApprovalsLoading,
+    error: pendingApprovalsError,
+  } = useQuery<{ items: PendingApproval[] }>({
+    queryKey: ['ai-chat-pending-approvals'],
+    queryFn: () => apiService.get('/ai/chat/pending-approvals'),
+  });
+  const pendingApprovals = pendingApprovalsData?.items || [];
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -141,17 +181,21 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
     // גם בכשל: השרת כבר עשוי היה לשמור action_status="unknown" (ניסיון
     // ביצוע שתוצאתו לא ודאה) לפני שהשגיאה חזרה — בלי רענון כאן הכרטיס
     // נשאר "ממתין לאישור" עם כפתור אשר חי, אף שהוא כבר לא רלוונטי.
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-pending-approvals'] });
+    },
   });
 
   const cancelMutation = useMutation({
     mutationFn: (messageId: number) =>
       apiService.post('/ai/chat/cancel', { message_id: messageId }),
-    onSuccess: () => {
-      setErrorMessage(null);
-      queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
-    },
+    onSuccess: () => setErrorMessage(null),
     onError: (err) => setErrorMessage(extractErrorMessage(err)),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-history', sessionId] });
+      queryClient.invalidateQueries({ queryKey: ['ai-chat-pending-approvals'] });
+    },
   });
 
   const feedbackMutation = useMutation({
@@ -226,7 +270,41 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 mb-1">
+      <div role="tablist" aria-label="מסכי מושקו" className="mb-4 flex gap-2 border-b border-gray-200">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'chat'}
+          onClick={() => setActiveTab('chat')}
+          className={`border-b-2 px-4 py-2 text-sm font-medium ${
+            activeTab === 'chat'
+              ? 'border-blue-600 text-blue-600'
+              : `border-transparent ${darkMode ? 'text-gray-400' : 'text-gray-500'}`
+          }`}
+        >
+          שיחה
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'approvals'}
+          onClick={() => setActiveTab('approvals')}
+          className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium ${
+            activeTab === 'approvals'
+              ? 'border-amber-500 text-amber-600'
+              : `border-transparent ${darkMode ? 'text-gray-400' : 'text-gray-500'}`
+          }`}
+        >
+          ממתין לאישורי
+          {pendingApprovals.length > 0 && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800">
+              {pendingApprovals.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {activeTab === 'chat' && <><div className="flex flex-wrap items-center gap-2 mb-1">
         {PERSONAS.map((p) => (
           <button
             key={p.key}
@@ -246,7 +324,7 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
       </div>
       <p className={`text-xs mb-4 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
         {PERSONAS.find((p) => p.key === persona)?.description}
-      </p>
+      </p></>}
 
       {errorMessage && (
         <div className={`mb-4 px-4 py-2 rounded-lg text-sm ${
@@ -256,7 +334,7 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
         </div>
       )}
 
-      <div className={`${cardClass} flex-1 min-h-0 overflow-y-auto p-4 space-y-4 mb-4`}>
+      {activeTab === 'chat' ? <><div className={`${cardClass} flex-1 min-h-0 overflow-y-auto p-4 space-y-4 mb-4`}>
         {messages.length === 0 && (
           <div className={`text-center py-12 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
             <Bot size={40} className="mx-auto mb-3 opacity-50" />
@@ -282,7 +360,7 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
                 }`}>
                   <div className="flex items-center gap-2 font-semibold text-yellow-600 mb-1">
                     <ShieldAlert size={14} />
-                    ממתין לאישור שלך
+                    {actionHeading(m)}
                   </div>
                   <p className="mb-2">{m.pending_action.description}</p>
                   <pre className="mb-2 overflow-x-auto rounded bg-black/5 p-2 text-[11px] dir-ltr text-left">
@@ -298,14 +376,16 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
                     <span className="text-red-600 font-medium">תוצאה לא ידועה — נדרש אימות ידני</span>
                   ) : (
                     <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => confirmMutation.mutate(m.id)}
-                        disabled={confirmMutation.isPending || cancelMutation.isPending}
-                        className="px-3 py-1.5 rounded-lg bg-yellow-500 text-white text-xs font-semibold hover:bg-yellow-600 disabled:opacity-50"
-                      >
-                        {confirmMutation.isPending ? 'מבצע...' : 'אשר וביצוע'}
-                      </button>
+                      {m.can_current_user_approve && (
+                        <button
+                          type="button"
+                          onClick={() => confirmMutation.mutate(m.id)}
+                          disabled={confirmMutation.isPending || cancelMutation.isPending}
+                          className="px-3 py-1.5 rounded-lg bg-yellow-500 text-white text-xs font-semibold hover:bg-yellow-600 disabled:opacity-50"
+                        >
+                          {confirmMutation.isPending ? 'מבצע...' : 'אשר וביצוע'}
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => cancelMutation.mutate(m.id)}
@@ -388,7 +468,69 @@ const ChatAssistant: React.FC<{ darkMode: boolean; currentUser?: CurrentUser | n
         >
           <Send size={18} />
         </button>
-      </div>
+      </div></> : (
+        <section className={`${cardClass} flex-1 min-h-0 overflow-y-auto p-4`}>
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold">פעולות שממתינות להחלטתך</h2>
+            <p className={`mt-1 text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              מוצגות רק פעולות בלתי־הפיכות בארגון שעבורן יש לך סמכות חתימה פעילה ומתאימה.
+            </p>
+          </div>
+          {pendingApprovalsLoading && (
+            <div className={`flex items-center gap-2 py-8 text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              <Loader2 size={16} className="animate-spin" /> טוען אישורים…
+            </div>
+          )}
+          {pendingApprovalsError && (
+            <div className={`rounded-lg p-3 text-sm ${darkMode ? 'bg-red-900/30 text-red-300' : 'bg-red-50 text-red-700'}`}>
+              {extractErrorMessage(pendingApprovalsError)}
+            </div>
+          )}
+          {!pendingApprovalsLoading && !pendingApprovalsError && pendingApprovals.length === 0 && (
+            <div className={`rounded-xl border border-dashed p-8 text-center text-sm ${darkMode ? 'border-gray-700 text-gray-400' : 'border-gray-300 text-gray-500'}`}>
+              אין פעולות שממתינות לאישורך בארגון זה.
+            </div>
+          )}
+          <div className="space-y-3">
+            {pendingApprovals.map((approval) => (
+              <article key={approval.message_id} className={`rounded-xl border p-4 ${darkMode ? 'border-gray-700 bg-gray-900/30' : 'border-gray-200 bg-gray-50'}`}>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h3 className="font-semibold">
+                      {approval.description || 'לא נשמר תיאור לפעולה זו'}
+                    </h3>
+                    <p className={`mt-1 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      הציע: {approval.proposed_by_name || `שם לא זמין (משתמש #${approval.proposed_by_user_id})`}
+                      {' · '}{formatApprovalDate(approval.proposed_at)}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800">
+                    {approval.authority_scope}
+                  </span>
+                </div>
+                <div className="mt-4 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => confirmMutation.mutate(approval.message_id)}
+                    disabled={confirmMutation.isPending || cancelMutation.isPending}
+                    className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
+                  >
+                    {confirmMutation.isPending ? 'מבצע…' : 'אישור וביצוע'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => cancelMutation.mutate(approval.message_id)}
+                    disabled={confirmMutation.isPending || cancelMutation.isPending}
+                    className="rounded-lg border border-red-300 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    {cancelMutation.isPending ? 'דוחה…' : 'דחייה'}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 };

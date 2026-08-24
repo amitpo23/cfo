@@ -104,6 +104,16 @@ async def cancel_chat_action(
         raise HTTPException(400, str(exc))
 
 
+@router.get("/chat/pending-approvals")
+async def list_pending_chat_approvals(
+    org_id: int = Depends(get_current_org_id),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db_session),
+):
+    """Return the open Moshko actions this organization signer may approve."""
+    return {"items": _service_for(db, org_id, user).list_pending_approvals()}
+
+
 @router.get("/chat/{session_id}")
 async def get_chat_history(
     session_id: str,
@@ -132,10 +142,12 @@ async def get_chat_history(
             MoshkoFeedback.message_id.in_([row.id for row in rows] or [-1]),
         ).all()
     }
+    service = _service_for(db, org_id, user)
     return {"messages": [
         {
             "id": m.id, "role": m.role, "content": m.content,
             "pending_action": m.pending_action, "executed": m.executed,
+            "can_current_user_approve": service.can_current_user_approve(m),
             "action_status": m.action_status or (
                 "executed" if m.executed else ("pending" if m.pending_action else None)
             ),
