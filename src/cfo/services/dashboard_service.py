@@ -495,7 +495,16 @@ class DashboardService:
         return total, overdue
 
     def get_ar_aging(self) -> dict:
-        """AR aging buckets: 0-30, 31-60, 61-90, 90+."""
+        """AR aging buckets: 0-30, 31-60, 61-90, 90+.
+
+        **הפער שסגר את זה (24/08/2026, אתגור ישיר של הבעלים: "בדקת
+        שנפדו בבנק?").** נמדד בפרוד: 10 מ-25 חשבוניות "פתוחות" של org2
+        כבר היו לתנועת בנק מותאמת — ₪479,260 מתוך ₪1,625,162 (כמעט 30%).
+        `bank_movement_seen` נגזר מ-`BankTransaction.matched_entity_type
+        == 'invoice'`, בדיוק כמו `get_ap_aging` (18/08) — קריאה בלבד,
+        אינו כותב Payment ואינו משנה balance. get_ap_aging קיבל את הדגל
+        הזה לפני שבוע; get_ar_aging — הכיוון ההפוך — לא, עד עכשיו.
+        """
         today = date.today()
 
         open_invoices = self.db.query(Invoice).filter(
@@ -505,6 +514,19 @@ class DashboardService:
             ]),
             Invoice.balance > 0,
         ).all()
+
+        invoice_ids = [i.id for i in open_invoices]
+        matched_invoice_ids = set()
+        if invoice_ids:
+            matched_invoice_ids = {
+                row[0] for row in self.db.query(BankTransaction.matched_entity_id)
+                .filter(
+                    BankTransaction.organization_id == self.org_id,
+                    BankTransaction.is_reconciled.is_(True),
+                    BankTransaction.matched_entity_type == "invoice",
+                    BankTransaction.matched_entity_id.in_(invoice_ids),
+                ).all()
+            }
 
         buckets = {
             "0_30": Decimal("0"),
@@ -550,7 +572,12 @@ class DashboardService:
                 "due_date": inv.due_date.isoformat() if inv.due_date else None,
                 "days_overdue": days_overdue,
                 "status": inv.status.value if inv.status else "unknown",
+                "bank_movement_seen": inv.id in matched_invoice_ids,
             })
+
+        bank_movement_seen_total = float(sum(
+            inv.balance for inv in open_invoices if inv.id in matched_invoice_ids
+        ))
 
         total = sum(buckets.values())
 
@@ -576,6 +603,7 @@ class DashboardService:
             "total": float(total),
             "unapplied_credits_total": unapplied_credits_total,
             "net_of_credits_total": float(total) - unapplied_credits_total,
+            "bank_movement_seen_total": bank_movement_seen_total,
             "count": len(invoice_list),
             "invoices": sorted(invoice_list, key=lambda x: x["days_overdue"], reverse=True),
         }
