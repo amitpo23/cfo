@@ -2629,6 +2629,25 @@ async def get_moshko_focus_metrics(
     )
 
 
+@router.get("/moshko/pilot-summary", tags=["Moshko"])
+async def get_moshko_pilot_summary(
+    channel: str = Query("whatsapp", pattern="^(whatsapp|telegram)$"),
+    organization_id: Optional[int] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """S4 (ספרינט זהות-מושקו, 25/08/2026) — לוח פיילוט read-only.
+    קריטריון ההצלחה: שאילתה אחת עונה 'כמה עלה השבוע ומה נשבר'."""
+    from ...services.moshko_pilot_summary import compute_pilot_summary
+
+    return compute_pilot_summary(
+        db, channel=channel, organization_id=organization_id,
+        since=date_from, until=date_to,
+    )
+
+
 def _feedback_admin_payload(row: MoshkoFeedback) -> dict[str, Any]:
     return {
         "id": row.id,
