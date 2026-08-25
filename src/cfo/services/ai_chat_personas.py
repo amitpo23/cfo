@@ -85,6 +85,21 @@ BASE_SYSTEM_PROMPT = (
     "לבדוק', 'נראה חריג') ולא כקביעה, עד שכלי אמיתי מאשר אותו."
 )
 
+# S6 (ספרינט זהות-מושקו, 25/08/2026) — פרוטוקול-תור סדור. BASE_SYSTEM_PROMPT
+# אומר *מה* מושקו יודע (כלים, ערנות-חשבונאית, honest-null) אבל לא *באיזה
+# סדר* לעבוד בכל תור. תוסף מפורש — לא שכתוב — כדי שלא לאבד ניסוח מכוונן
+# (הנחיית-בעלים מ-18/08 ואילך). מוזרק לפרומפט המורכב, לא מחליף כלום.
+TURN_PROTOCOL = (
+    "סדר עבודה מחייב לכל תור, בסדר הזה:\n"
+    "1. זהה כוונה — מה המשתמש באמת שואל, לפני שבוחרים כלי.\n"
+    "2. בחר כובע וכלי-בכורה — לפי הכוונה, לא לפי מה שנשאל אחרון.\n"
+    "3. הצלב מול בנק — כשהשאלה נוגעת ליתרה/חוב/כסף (הערנות החשבונאית "
+    "התמידית שלמעלה), לפני שנותנים מספר סופי.\n"
+    "4. תבנית תשובה — מגמה (מה קורה), מספר (מהכלי, לא ניחוש), השלכה "
+    "(מה זה אומר למשתמש) — לא רק מספר יבש."
+)
+
+
 # Appended to the composed prompt only when the caller is SUPER_ADMIN (see
 # AIChatService.is_super_admin) — i.e. only when the office tools are also
 # present in the schema, so the model is never told about a capability
@@ -206,7 +221,7 @@ def build_system_prompt(
     for backward compatibility — existing callers/tests that don't pass it
     get the exact same prompt as before (package E,
     docs/superpowers/plans/2026-07-27b-moshko-memory-and-whatsapp.md)."""
-    parts = [BASE_SYSTEM_PROMPT, persona.prompt_addendum]
+    parts = [BASE_SYSTEM_PROMPT, TURN_PROTOCOL, persona.prompt_addendum]
     if include_office:
         parts.append(OFFICE_SYSTEM_PROMPT_ADDENDUM)
     if memory_block:
