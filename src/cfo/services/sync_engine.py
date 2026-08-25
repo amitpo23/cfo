@@ -210,9 +210,17 @@ class SyncEngine:
             return SyncSkipped("locked")
 
         try:
+            # סדר-עדיפות (ממצא 25/08/2026, בדיקה חיה על אליהב כהן): המסמכים
+            # הפיננסיים קודמים ל-accounts/vendors. כשמכסת-הדקה נגמרת
+            # באמצע ריצה (מסלול-בדיקות, 10/דקה), מה שנופל מחוץ למכסה
+            # הוא accounts/vendors — מידע איטי-שינוי — ולא invoices/
+            # bills/payments/customers שכל שאר רצף תלוי בהם.
+            # _upsert_invoice/_upsert_bill סובלים contact_id=None בחן
+            # (contact_backfill למטה מתקן זאת בסוף בכל מקרה) — אין תלות
+            # אמיתית שדורשת customers/vendors קודם.
             all_types = [
-                "accounts", "customers", "vendors",
-                "invoices", "bills", "payments",
+                "invoices", "bills", "payments", "customers",
+                "vendors", "accounts",
                 "bank_transactions", "journal_entries",
             ]
             types_to_sync = entity_types or all_types
