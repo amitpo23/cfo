@@ -274,6 +274,24 @@ async def _get_pnl(db, org_id: int, months: int = 6, **_kwargs) -> dict:
     return result
 
 
+async def _get_annual_report_draft(
+    db, org_id: int, *, form: str, year: int, credit_points: float = 2.25, **_kwargs,
+) -> dict:
+    """טיוטת דוח שנתי (1301 ליחיד/עוסק, 1214 לחברה) — מבוסס
+    annual_report_service.py הקיים (form_1301/form_1214), שמעולם לא
+    היה חשוף ככלי-מושקו (ממצא מיפוי-ארכיטקטורה, 24-25/08/2026; הנחיית
+    בעלים 18/08: 'מושקו גם צריך לדעת לעשות דוח שנתי ולאמת'). שני הטפסים
+    כבר draft=True + disclaimer + notes — לא לוגיקה חדשה, רק חיבור.
+    form לא ידוע ⇒ שגיאה מפורשת, לא ניחוש איזה טופס מתאים לארגון."""
+    from . import annual_report_service as svc
+
+    if form == "1301":
+        return svc.form_1301(db, org_id, year, credit_points=credit_points)
+    if form == "1214":
+        return svc.form_1214(db, org_id, year)
+    return {"error": f"טופס לא מוכר: {form!r} — נתמכים רק 1301 (יחיד/עוסק) ו-1214 (חברה)"}
+
+
 async def _get_collection_cases(db, org_id: int, status: str | None = None, **_kwargs) -> dict:
     from . import collection_case_service as svc
     cases = svc.list_cases(db, org_id, status=status)
@@ -2241,6 +2259,31 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_get_pnl,
+    ),
+    "get_annual_report_draft": ChatTool(
+        name="get_annual_report_draft",
+        description=(
+            "טיוטת דוח שנתי: 1301 (יחיד/עוסק) או 1214 (חברה). קריאה בלבד, "
+            "אינו משודר לרשות המסים ואינו קובע דבר — draft=True תמיד, עם "
+            "disclaimer ו-notes על מה לא נכלל (הכנסות נוספות, התאמות-מס, "
+            "פחת). לפני שמבקשים טופס — לוודא מהו סוג ההתאגדות של הארגון "
+            "(kb_lookup/rezef_help), לא לנחש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "form": {"type": "string", "enum": ["1301", "1214"]},
+                "year": {"type": "integer", "description": "שנת המס"},
+                "credit_points": {
+                    "type": "number",
+                    "description": "נקודות זיכוי (רק לטופס 1301, ברירת מחדל 2.25)",
+                    "default": 2.25,
+                },
+            },
+            "required": ["form", "year"],
+        },
+        category="read",
+        fn=_get_annual_report_draft,
     ),
     "get_collection_cases": ChatTool(
         name="get_collection_cases",

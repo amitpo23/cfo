@@ -157,8 +157,14 @@ class ManualReconciliationService:
         ]
 
     def suggest_matches(self, bank_txn_id: int, limit: int = 5) -> list[dict[str, Any]]:
-        """Suggest potential matches for a transaction (top N candidates by score)."""
-        from .bank_reconciliation import BankTxnLite, DocLite, _score
+        """Suggest potential matches for a transaction (top N candidates by score).
+
+        **הממצא (24-25/08/2026).** גרסה קודמת השתמשה ב-`invoices`/`bills`/
+        `expenses` בלי לטעון אותם מעולם — NameError מובטח בכל קריאה, אפס
+        טסטים תפסו את זה. `load_docs_for_org` הוא אותו loader בדיוק
+        ש-`reconcile_organization` כבר משתמש בו — לא שכפול-לוגיקה חדש.
+        """
+        from .bank_reconciliation import BankTxnLite, load_docs_for_org, _score
 
         txn = self._load_transaction(bank_txn_id)
         if not txn or not txn.transaction_date:
@@ -172,15 +178,15 @@ class ManualReconciliationService:
             description=txn.description or "",
         )
 
-        pool = invoices + bills + expenses
+        invoices, bills, expenses = load_docs_for_org(self.db, self.organization_id)
         candidates = []
 
-        for doc_type, doc_list in [("invoice", invoices), ("bill", bills), ("expense", expenses)]:
+        for doc_list in (invoices, bills, expenses):
             for doc in doc_list:
                 score = _score(txn_lite, doc, amount_tol=0.02, date_window=7)
                 if score and score >= 0.3:  # Lower threshold for suggestions
                     candidates.append({
-                        "entity_type": doc_type,
+                        "entity_type": doc.entity_type,
                         "entity_id": doc.id,
                         "score": round(score, 3),
                         "amount": doc.amount,

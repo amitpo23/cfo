@@ -148,23 +148,12 @@ def _tokens(text: str) -> set[str]:
 # ---------------------------------------------------------------------- #
 # DB wrapper
 # ---------------------------------------------------------------------- #
-def reconcile_organization(db, organization_id: int, *, persist: bool = True) -> dict[str, Any]:
-    """Load org rows, reconcile, and (optionally) persist matches."""
-    from ..models import BankTransaction, Invoice, Bill, Expense
-
-    bank_rows = (
-        db.query(BankTransaction)
-        .filter(BankTransaction.organization_id == organization_id)
-        .all()
-    )
-    bank_txns = [
-        BankTxnLite(
-            id=r.id, amount=float(r.amount), date=r.transaction_date,
-            description=r.description or "", is_provisional=bool(r.is_provisional),
-        )
-        for r in bank_rows
-        if r.transaction_date is not None
-    ]
+def load_docs_for_org(db, organization_id: int) -> tuple[list[DocLite], list[DocLite], list[DocLite]]:
+    """טעינת Invoice/Bill/Expense של ארגון והמרתם ל-DocLite — צומת יחיד,
+    כדי ש-manual_reconciliation.suggest_matches לא ישכפל את ההמרה הזו
+    (הממצא של 24-25/08/2026: השכפול-שלא-קרה הוא בדיוק מה שהשאיר את
+    suggest_matches שבור — NameError על משתנים שלא היו קיימים בכלל)."""
+    from ..models import Invoice, Bill, Expense
 
     invoices = [
         DocLite(id=r.id, entity_type="invoice", amount=float(r.total or 0),
@@ -183,6 +172,28 @@ def reconcile_organization(db, organization_id: int, *, persist: bool = True) ->
                 name=getattr(r, "supplier_name", "") or getattr(r, "description", "") or "")
         for r in db.query(Expense).filter(Expense.organization_id == organization_id).all()
     ]
+    return invoices, bills, expenses
+
+
+def reconcile_organization(db, organization_id: int, *, persist: bool = True) -> dict[str, Any]:
+    """Load org rows, reconcile, and (optionally) persist matches."""
+    from ..models import BankTransaction
+
+    bank_rows = (
+        db.query(BankTransaction)
+        .filter(BankTransaction.organization_id == organization_id)
+        .all()
+    )
+    bank_txns = [
+        BankTxnLite(
+            id=r.id, amount=float(r.amount), date=r.transaction_date,
+            description=r.description or "", is_provisional=bool(r.is_provisional),
+        )
+        for r in bank_rows
+        if r.transaction_date is not None
+    ]
+
+    invoices, bills, expenses = load_docs_for_org(db, organization_id)
 
     result = reconcile(bank_txns, invoices, bills, expenses)
 
