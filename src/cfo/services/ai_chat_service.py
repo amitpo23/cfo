@@ -492,6 +492,12 @@ class AIChatService:
             duration_ms=elapsed,
             result=result,
         )
+        # Truth Model (בריף-זהות הבעלים, 25/08/2026) — אדיטיבי: מפתח
+        # "truth" נוסף לתוצאה, לא שובר שום צרכן קיים שקורא מפתחות
+        # ספציפיים. ראו infer_truth ב-ai_chat_tools.py.
+        if isinstance(result, dict):
+            from .ai_chat_tools import infer_truth
+            result["truth"] = infer_truth(tool, result)
         return result
 
     def _build_proactive_flags(self) -> str:

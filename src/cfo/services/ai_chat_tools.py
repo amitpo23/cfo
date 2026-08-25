@@ -40,6 +40,13 @@ class ChatTool:
     # and immediately before the atomic execution claim. Office-only tools
     # use the separate platform gate and deliberately leave this unset.
     policy_action: str | None = None
+    # Truth Model (בריף-זהות הבעלים, 25/08/2026): VERIFIED/CALCULATED/
+    # FORECAST/UNVERIFIED_NEEDS_REVIEW. סיווג-בסיס סטטי פר-כלי; יורד
+    # ל-unverified_needs_review דינמית ב-infer_truth() כשהתוצאה עצמה
+    # מכילה דגל-אי-ודאות (is_provisional/checks-כושל/unmatched/warning_he)
+    # — לעולם לא עולה מעל הסיווג הסטטי (forecast לא הופך verified).
+    # ברירת מחדל שמרנית: 'calculated' (מחושב מהספרים, לא אומת עצמאית).
+    truth_class: str = "calculated"
 
 
 async def _find_capability(db, org_id: int, task: str = "", reads_only: bool = False, **_kwargs) -> dict:
@@ -3129,6 +3136,7 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_get_cashflow,
+        truth_class="forecast",
     ),
     "list_invoices": ChatTool(
         name="list_invoices",
@@ -3385,6 +3393,7 @@ TOOLS: dict[str, ChatTool] = {
         # ואינו משנה שום שורה. שאלה בצ'אט לא מבצעת התאמות.
         category="read",
         fn=_get_bank_reconciliation,
+        truth_class="verified",
     ),
     "get_missing_documents": ChatTool(
         name="get_missing_documents",
@@ -3916,6 +3925,66 @@ def tool_target_system(
     # synthetic call as local. Every built-in tool is still covered by the
     # explicit sets above and by the mapping contract test.
     return "local"
+
+
+# מיפוי-הארכיטקטורה (Fable, 25/08/2026) על בריף-הזהות של הבעלים: נקודת-
+# החנק היחידה שכל תוצאת-כלי עוברת בה כבר קיימת (_execute_tool_observed
+# ב-ai_chat_service.py) — infer_truth נקרא משם, לא מקום חדש. דגלי-
+# האי-ודאות הנסרקים כבר קיימים בפועל בתוצאות (bank_reconciliation.py
+# is_provisional, financial_reports_service.py warning_he,
+# filing_verification.py checks, get_bank_reconciliation unmatched_txns)
+# — אין המצאת-מבנה חדש, רק חיבור.
+_UNCERTAINTY_SCAN_MAX_LIST_ITEMS = 20
+
+
+def _scan_for_uncertainty(obj: Any, caveats: list[str]) -> bool:
+    """סריקה רדודה-יחסית (dict/list מקוננים, לא רקורסיה בלתי-מוגבלת על
+    ערכים סקלריים) אחרי דגלי-אי-ודאות שכבר קיימים במבני-תוצאה אמיתיים.
+    מחזיר True אם נמצא דגל כלשהו; ה-caveats מצטברים (לא ממוינים)."""
+    found = False
+    if isinstance(obj, dict):
+        if obj.get("is_provisional") is True:
+            found = True
+            caveats.append("נתון עדיין provisional (לא סופי מהספק)")
+        warning = obj.get("warning_he")
+        if warning:
+            found = True
+            caveats.append(str(warning))
+        checks = obj.get("checks")
+        if isinstance(checks, list):
+            for c in checks:
+                if isinstance(c, dict) and c.get("status") in ("fail", "warn"):
+                    found = True
+                    caveats.append(
+                        c.get("message") or f"בדיקה '{c.get('name', '')}' לא עברה במלואה"
+                    )
+        for key in ("unmatched_txns", "unmatched"):
+            unmatched = obj.get(key)
+            if isinstance(unmatched, list) and unmatched:
+                found = True
+                caveats.append(f"{len(unmatched)} פריטים לא הותאמו")
+        for value in obj.values():
+            if _scan_for_uncertainty(value, caveats):
+                found = True
+    elif isinstance(obj, list):
+        for item in obj[:_UNCERTAINTY_SCAN_MAX_LIST_ITEMS]:
+            if _scan_for_uncertainty(item, caveats):
+                found = True
+    return found
+
+
+def infer_truth(tool: "ChatTool", result: Any) -> dict[str, Any]:
+    """מסווג תוצאת-כלי אחת ל-Truth Model: 'verified'/'calculated'/
+    'forecast' (סטטי, מ-tool.truth_class) — או 'unverified_needs_review'
+    אם התוצאה עצמה מכילה דגל-אי-ודאות. **לעולם לא משדרג**: forecast
+    נשאר forecast גם בלי דגלים (תחזית אינה הופכת עובדה-מאומתת)."""
+    if not isinstance(result, dict):
+        return {"class": "calculated", "caveats": []}
+
+    caveats: list[str] = []
+    downgraded = _scan_for_uncertainty(result, caveats)
+    final_class = "unverified_needs_review" if downgraded else tool.truth_class
+    return {"class": final_class, "caveats": caveats[:5]}
 
 
 def anthropic_tool_schemas(*, include_office: bool = False) -> list[dict[str, Any]]:
