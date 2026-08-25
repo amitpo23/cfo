@@ -77,7 +77,10 @@ class Settings(BaseSettings):
     # W2.2 (20/08/2026): ב-live לא היה בלם חודשי בכלל — 300/יום ≈ 9,000
     # בחודש. התקרות כאן הן תקציב עלות פנימי, לא מכסת ספק, ומוצמדות
     # לתקרה קשיחה בקוד (ראה enforce_cost_protection_floors).
-    sumit_live_monthly_request_limit: int = 2000
+    # 25/08/2026 (הנחיית בעלים): 200/חודש קשיח **גם ב-live**, לא רק
+    # test — אין סיבה לפער-פי-10 בין הסביבות; 3 ארגונים על מפתח משרד
+    # אחד לא צריכים יותר מזה גם בעולם אמיתי.
+    sumit_live_monthly_request_limit: int = 200
     sumit_live_monthly_paid_action_limit: int = 90
     # P0-A תיקון 3 (סקירת קודקס 23/08/2026): endpoints "inferred free"
     # אינם מאומתים ישירות — ההגנה היחידה הייתה התרעת 80%. בכל רענון
@@ -307,7 +310,7 @@ class Settings(BaseSettings):
             200, max(0, self.sumit_test_monthly_request_limit),
         )
         self.sumit_live_monthly_request_limit = min(
-            2000, max(0, self.sumit_live_monthly_request_limit),
+            200, max(0, self.sumit_live_monthly_request_limit),
         )
         self.sumit_live_monthly_paid_action_limit = min(
             90, max(0, self.sumit_live_monthly_paid_action_limit),

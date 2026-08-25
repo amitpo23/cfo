@@ -63,6 +63,13 @@ class SumitConnector(AccountingConnector):
         self.api_key = api_key
         self.company_id = company_id
         self.organization_id = organization_id
+        # ממצא 25/08/2026 (בדיקה חיה, org2): fetch_customers ו-fetch_invoices
+        # קוראים באופן עצמאי לאותם מסמכי סוג-0 — ריצת-sync אחת עושה 9 קריאות
+        # רשת אמיתיות מול תקציב גלובלי משותף של 10/דקה לכל הארגונים יחד.
+        # מטמון-מופע פר-updated_since: אם invoices כבר נמשך באותה ריצה עם
+        # אותו watermark, customers משתמש בו במקום קריאה נוספת. שמור רק
+        # לחיי ה-connector (מופע חדש לכל ריצת sync) — לא חוצה ריצות.
+        self._type0_docs_cache: dict = {}
 
     async def _get_client(self):
         # A fresh instance per call: every fetch method wraps the client in
@@ -200,27 +207,31 @@ class SumitConnector(AccountingConnector):
         contact_id when a matching Contact row already exists) whenever a real
         customer never happened to appear in the debt report.
         """
+        cached = self._type0_docs_cache.get(updated_since)
         try:
-            client = await self._get_client()
-            async with client:
-                documents = await self._list_documents_all(client, "0", updated_since)
+            if cached is not None:
+                documents = cached
+            else:
+                client = await self._get_client()
+                async with client:
+                    documents = await self._list_documents_all(client, "0", updated_since)
 
-                contacts = []
-                seen_ids = set()
-                for doc in documents:
-                    cust_id = str(doc.customer_id) if getattr(doc, "customer_id", None) else None
-                    if not cust_id or cust_id in seen_ids:
-                        continue
-                    seen_ids.add(cust_id)
+            contacts = []
+            seen_ids = set()
+            for doc in documents:
+                cust_id = str(doc.customer_id) if getattr(doc, "customer_id", None) else None
+                if not cust_id or cust_id in seen_ids:
+                    continue
+                seen_ids.add(cust_id)
 
-                    contacts.append(NormalizedContact(
-                        external_id=cust_id,
-                        contact_type="customer",
-                        name=getattr(doc, "customer_name", None) or "Unknown",
-                        raw_data=doc.__dict__ if hasattr(doc, "__dict__") else {},
-                    ))
+                contacts.append(NormalizedContact(
+                    external_id=cust_id,
+                    contact_type="customer",
+                    name=getattr(doc, "customer_name", None) or "Unknown",
+                    raw_data=doc.__dict__ if hasattr(doc, "__dict__") else {},
+                ))
 
-                return FetchResult(items=contacts, has_more=False)
+            return FetchResult(items=contacts, has_more=False)
         except Exception as e:
             logger.error("Failed to fetch customers from SUMIT: %s", e)
             return FetchResult(items=[], has_more=False, error=str(e))
@@ -299,6 +310,7 @@ class SumitConnector(AccountingConnector):
                 # כסוג 5 הסתכמו אצל org1 בדיוק ב-215,400 — ארבע החשבוניות שזוכו.
                 # (האמונה הישנה "5=קבלה" נבעה מהערת קוד לא-מאומתת מ-2026-06-23.)
                 docs_0 = await self._list_documents_all(client, "0", updated_since)
+                self._type0_docs_cache[updated_since] = docs_0
                 docs_1 = await self._list_documents_all(client, "1", updated_since)
                 docs_credit_5 = await self._list_documents_all(client, "5", updated_since)
                 docs_credit_6 = await self._list_documents_all(client, "6", updated_since)

@@ -4,6 +4,7 @@ Scheduled jobs endpoint, invoked by Vercel Cron.
 Not behind user auth — protected by CRON_SECRET instead (Vercel sends
 "Authorization: Bearer <CRON_SECRET>" automatically when the env var is set).
 """
+import asyncio
 import logging
 import zlib
 from dataclasses import replace
@@ -99,13 +100,28 @@ def _of_consent_gate(db: Session, org_id: int) -> Optional[dict]:
     }
 
 
+# 25/08/2026 (הנחיית בעלים, ממצא בדיקה חיה על אליהב כהן/org2): ריצת
+# sync מלאה אחת לארגון עושה עד 9 קריאות רשת אמיתיות מול תקציב **גלובלי**
+# (כל הארגונים יחד) של 10/דקה. כשכמה ארגוני-SUMIT רצים ברצף תוך שניות —
+# כל אחד תוך אותה דקת-UTC — הם מתחרים על אותו חלון ורוב הקריאות נחסמות
+# fail-closed. המתנה בין ארגוני-sumit עוקבים כך שכל אחד נופל בדקה
+# משלו ומקבל את מלוא ה-10/דקה. ~65 שניות (מעט מעל דקה) כדי לוודא בפועל
+# מעבר לחלון-דקה חדש, לא רק תיאורטית. לא חל על Open Finance (תקציב נפרד).
+SUMIT_INTER_ORG_STAGGER_SECONDS = 65
+
+
 async def _run_sync_targets(db: Session, targets: set) -> list:
     """Shared sync loop for a set of (org_id, source) targets. Used by both the
     SUMIT (hourly) and Open Finance (daily-budgeted) cron routes so each keeps
     its own call-frequency policy while sharing the run/automation/roster
     bookkeeping (RSF-020: split cron paths, one engine loop)."""
     results = []
+    sumit_targets_started = 0
     for org_id, source in sorted(targets):
+        if source == "sumit":
+            if sumit_targets_started > 0:
+                await asyncio.sleep(SUMIT_INTER_ORG_STAGGER_SECONDS)
+            sumit_targets_started += 1
         try:
             connector, conn_id, resolved = get_connector_for_org(db, org_id, source)
         except ValueError as exc:

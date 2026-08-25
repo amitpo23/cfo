@@ -53,10 +53,20 @@ def test_monthly_window_is_claimed_in_live_environment(monkeypatch, fresh_org):
 
 
 def test_live_monthly_limit_cannot_be_raised_above_code_ceiling():
-    """שדה הקונפיג של live מוצמד לתקרה קשיחה — env לא יכול להרים אותו."""
+    """שדה הקונפיג של live מוצמד לתקרה קשיחה — env לא יכול להרים אותו.
+
+    הנחיית בעלים (25/08/2026): 200/חודש הוא תקרה קשיחה **גם ב-live**,
+    לא רק ב-test — אין הבדל-פי-10 בין הסביבות."""
     from cfo.config import Settings
     loosened = Settings(sumit_live_monthly_request_limit=999_999)
-    assert loosened.sumit_live_monthly_request_limit <= 2000
+    assert loosened.sumit_live_monthly_request_limit <= 200
+
+
+def test_live_monthly_default_matches_test_track_ceiling():
+    """בלי override כלשהו, ברירת המחדל עצמה כבר 200 — לא רק התקרה."""
+    from cfo.config import Settings
+    s = Settings()
+    assert s.sumit_live_monthly_request_limit <= 200
 
 
 # ==================================================================== #
