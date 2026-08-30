@@ -3253,3 +3253,37 @@ async def resolve_ownership_review(
     db.commit()
 
     return ownership_status(db, organization_id)
+
+
+@router.get("/cost-protection-status", tags=["Admin"])
+async def cost_protection_status(
+    current_user: User = Depends(get_super_admin),
+):
+    """ערכי-האמת של הגנות-העלות כפי שה-runtime באמת רואה אותם (30/08/2026).
+
+    נולד מחקירת "minute budget exceeded" שרצה מ-24/08: ניתוח קוד+env
+    מרחוק לא הצליח להכריע מה ה-runtime של Vercel טוען בפועל. קריאה-בלבד,
+    אפס קריאות SUMIT — רק חשיפת settings + המגביל כפי שהיה נבנה עכשיו.
+    """
+    from ...config import settings as live_settings
+    from ...services.sumit_request_budget import SumitRequestLimiter
+
+    limiter = SumitRequestLimiter(current_user.organization_id or 1)
+    return {
+        "sumit": {
+            "environment": live_settings.sumit_environment,
+            "global_requests_per_minute": live_settings.sumit_global_requests_per_minute,
+            "org_daily_request_limit": live_settings.sumit_org_daily_request_limit,
+            "test_requests_per_minute": live_settings.sumit_test_requests_per_minute,
+            "test_org_daily_request_limit": live_settings.sumit_test_org_daily_request_limit,
+            "test_monthly_request_limit": live_settings.sumit_test_monthly_request_limit,
+            "live_monthly_request_limit": live_settings.sumit_live_monthly_request_limit,
+            "enrichment_daily_action_limit": live_settings.sumit_enrichment_daily_action_limit,
+            "sync_min_interval_hours": live_settings.sumit_sync_min_interval_hours,
+            "effective_per_minute_limit": limiter.per_minute_limit,
+            "effective_daily_limit": limiter.daily_limit,
+        },
+        "open_finance": {
+            "sync_min_interval_hours": live_settings.of_sync_min_interval_hours,
+        },
+    }
