@@ -1058,44 +1058,29 @@ async def _get_engine_status(db, org_id: int, **_kwargs) -> dict:
     return result
 
 
-async def _create_payment_link(db, org_id: int, *, invoice_id: int, **_kwargs) -> dict:
-    from .document_issuance_service import DocumentIssuanceService
-    service = DocumentIssuanceService(db, org_id)
-    return await service.create_payment_link(invoice_id)
+async def _create_payment_link(db, org_id: int, *, invoice_id: int, approval_id: int | None = None, **_kwargs) -> dict:
+    from .collection_settlement import CollectionSettlementService
+    if approval_id is None:
+        raise ValueError("Create and approve an invoice-linked collection request first")
+    service = CollectionSettlementService(db, org_id)
+    request = service._request(approval_id)
+    if request.payload['invoice_id'] != invoice_id or request.payload['payment_channel'] != 'sumit':
+        raise ValueError("Approval is for a different invoice or payment channel")
+    return await service.execute(approval_id)
 
 
 async def _create_bank_payment_request(
-    db,
-    org_id: int,
-    *,
-    amount: float,
-    description: str,
-    creditor_name: str,
-    creditor_account_number: str,
-    creditor_account_type: str = "bban",
-    **_kwargs,
+    db, org_id: int, *, invoice_id: int | None = None,
+    approval_id: int | None = None, **_kwargs,
 ) -> dict:
-    from ..api.routes.open_finance import get_open_finance_client
-
-    client = get_open_finance_client(db, org_id)
-    try:
-        payload = await client.create_payment({
-            "paymentInformation": {
-                "amount": amount,
-                "currency": "ILS",
-                "description": description,
-                "creditorName": creditor_name,
-                "creditorAccountNumber": creditor_account_number,
-                "creditorAccountType": creditor_account_type,
-            },
-        })
-    finally:
-        await client.close()
-    return {
-        "payment_id": payload.get("id") or payload.get("paymentId"),
-        "pay_url": payload.get("payUrl"),
-        "note": "קישור התשלום נוצר; המשלם מאשר את ההעברה מול הבנק שלו דרך הקישור.",
-    }
+    from .collection_settlement import CollectionSettlementService
+    if invoice_id is None or approval_id is None:
+        raise ValueError("Create and approve an invoice-linked collection request first")
+    service = CollectionSettlementService(db, org_id)
+    request = service._request(approval_id)
+    if request.payload['invoice_id'] != invoice_id or request.payload['payment_channel'] != 'open_finance':
+        raise ValueError("Approval is for a different invoice or payment channel")
+    return await service.execute(approval_id)
 
 
 async def _connect_bank_account(
@@ -3205,12 +3190,12 @@ TOOLS: dict[str, ChatTool] = {
         name="create_payment_link",
         description=(
             "יצירת קישור תשלום מאובטח (עמוד תשלום מאוחסן ב-SUMIT) עבור היתרה הפתוחה "
-            "בחשבונית. פעולת כתיבה אמיתית מול SUMIT — דורשת אישור מפורש של המשתמש לפני ביצוע."
+            "בחשבונית, באמצעות בקשת גבייה מקושרת שכבר אושרה. חובה למסור approval_id; קישור אינו תשלום שהושלם."
         ),
         input_schema={
             "type": "object",
-            "properties": {"invoice_id": {"type": "integer", "description": "מזהה החשבונית"}},
-            "required": ["invoice_id"],
+            "properties": {"invoice_id": {"type": "integer"}, "approval_id": {"type": "integer"}},
+            "required": ["invoice_id", "approval_id"],
         },
         category="write",
         policy_action="payment_link.create",
@@ -3218,33 +3203,11 @@ TOOLS: dict[str, ChatTool] = {
     ),
     "create_bank_payment_request": ChatTool(
         name="create_bank_payment_request",
-        description=(
-            "יצירת בקשת תשלום בהעברה בנקאית דרך Open Finance (בנקאות פתוחה): מחזירה "
-            "קישור תשלום (payUrl) שנשלח למשלם, והמשלם מאשר את ההעברה ישירות מול הבנק "
-            "שלו. פעולת כתיבה אמיתית מול Open Finance — דורשת אישור מפורש של המשתמש "
-            "לפני ביצוע. הכסף עובר רק לאחר אישור המשלם בבנק."
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "amount": {"type": "number", "description": "סכום בש\"ח (חיובי)"},
-                "description": {"type": "string", "description": "תיאור התשלום"},
-                "creditor_name": {"type": "string", "description": "שם המוטב"},
-                "creditor_account_number": {
-                    "type": "string",
-                    "description": "חשבון המוטב: bban בפורמט בנק-סניף-חשבון (למשל 12-345-67890) או IBAN",
-                },
-                "creditor_account_type": {
-                    "type": "string",
-                    "enum": ["bban", "iban"],
-                    "default": "bban",
-                },
-            },
-            "required": ["amount", "description", "creditor_name", "creditor_account_number"],
-        },
-        category="write",
-        policy_action="bank_payment.propose",
-        fn=_create_bank_payment_request,
+        description="Execute an already approved invoice-linked Open Finance collection request. The payer must still authorize in the bank; creation never means paid.",
+        input_schema={"type":"object", "properties":{
+            "invoice_id":{"type":"integer"}, "approval_id":{"type":"integer"}},
+            "required":["invoice_id","approval_id"]},
+        category="write", policy_action="bank_payment.propose", fn=_create_bank_payment_request,
     ),
     "connect_bank_account": ChatTool(
         name="connect_bank_account",

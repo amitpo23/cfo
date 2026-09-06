@@ -885,3 +885,59 @@ async def collection_run(
 
     summary = await dispatch_reminders(db, org_id, planned, sms_sender, email_sender)
     return {"status": "ok", "summary": summary}
+
+
+# Collection evidence slice. These are Rezef routes; no new provider API is assumed.
+class CollectionRequestBody(BaseModel):
+    invoice_id: int
+    amount: str
+    channel: str
+    idempotency_key: str = Field(min_length=1, max_length=160)
+    creditor: dict[str, str] | None = None
+
+
+class CollectionAllocationBody(BaseModel):
+    payment_id: int
+    bank_transaction_id: int
+    reason: str = Field(min_length=10, max_length=2000)
+
+
+@router.post('/collection/requests', status_code=201)
+def propose_collection(body: CollectionRequestBody, db: Session = Depends(get_db),
+                       org_id: int = Depends(get_current_org_id), actor=Depends(require_admin)):
+    from ...services.collection_settlement import CollectionSettlementService
+    service = CollectionSettlementService(db, org_id)
+    try:
+        request = service.propose(**body.model_dump(), proposed_by=actor)
+        return service.status(request.id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get('/collection/requests/{request_id}')
+def collection_request_status(request_id: int, db: Session = Depends(get_db), org_id: int = Depends(get_current_org_id)):
+    from ...services.collection_settlement import CollectionSettlementService
+    try:
+        return CollectionSettlementService(db, org_id).status(request_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.post('/collection/requests/{request_id}/execute')
+async def execute_collection_request(request_id: int, db: Session = Depends(get_db),
+                                     org_id: int = Depends(get_current_org_id), _actor=Depends(require_admin)):
+    from ...services.collection_settlement import CollectionSettlementService
+    try:
+        return await CollectionSettlementService(db, org_id).execute(request_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post('/collection/requests/{request_id}/allocate')
+def allocate_collection_receipt(request_id: int, body: CollectionAllocationBody, db: Session = Depends(get_db),
+                                 org_id: int = Depends(get_current_org_id), actor=Depends(require_admin)):
+    from ...services.collection_settlement import CollectionSettlementService
+    try:
+        return CollectionSettlementService(db, org_id).allocate(request_id, **body.model_dump(), decided_by=actor)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc

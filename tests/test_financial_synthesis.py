@@ -18,22 +18,23 @@ def test_unmatched_outflow_becomes_file_expense_action():
     bank = [BankTxnLite(1, -300.0, date(2026, 6, 5), "ספק לא ידוע")]
     report = build_synthesis(bank, [], [], [])
     by = _actions_by_type(report)
-    assert "file_expense" in by
-    assert by["file_expense"][0]["amount"] == 300.0
+    assert "review_bank_evidence" in by
+    assert by["review_bank_evidence"][0]["amount"] == 300.0
 
 
 def test_unmatched_inflow_becomes_record_income_action():
     bank = [BankTxnLite(1, 900.0, date(2026, 6, 5), "תקבול")]
     report = build_synthesis(bank, [], [], [])
     by = _actions_by_type(report)
-    assert "record_income" in by
+    assert "review_bank_evidence" in by
 
 
-def test_matched_bank_to_invoice_produces_no_action():
+def test_amount_candidate_requires_review_without_duplicate_collection():
     bank = [BankTxnLite(1, 1170.0, date(2026, 6, 6), "אקמה")]
     invoices = [DocLite("i1", "invoice", 1170.0, date(2026, 6, 6), "אקמה")]
     report = build_synthesis(bank, invoices, [], [])
-    assert report["reconciliation"]["matched"] == 1
+    assert report["reconciliation"]["matched"] == 0
+    assert report["reconciliation"]["candidates"] == 1
     # The matched invoice should not appear as uncollected.
     assert "collect_receivable" not in _actions_by_type(report)
 
@@ -65,9 +66,10 @@ def test_link_payment_to_invoice():
     invoices = [DocLite("i1", "invoice", 1170.0, date(2026, 6, 6), "אקמה"),
                 DocLite("i2", "invoice", 500.0, date(2026, 5, 1), "בטא")]
     res = link_payments(pays, invoices, [])
-    assert res["linked_count"] == 1
-    assert res["links"][0]["entity_type"] == "invoice"
-    assert res["links"][0]["entity_id"] == "i1"
+    assert res["linked_count"] == 0
+    assert res["candidate_count"] == 1
+    assert res["candidates"][0]["entity_type"] == "invoice"
+    assert res["candidates"][0]["entity_id"] == "i1"
 
 
 def test_payment_amount_mismatch_not_linked():

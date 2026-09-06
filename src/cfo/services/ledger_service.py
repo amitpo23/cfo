@@ -181,6 +181,9 @@ def post_expense(exp) -> Optional[Entry]:
 
 def post_payment(pay) -> Optional[Entry]:
     """Receipt (invoice): DR 1200 CR 1100. Supplier payment (bill): DR 2100 CR 1200."""
+    from .payment_evidence import is_accounting_payment
+    if not is_accounting_payment(pay):
+        return None
     amount = _f(pay.amount)
     if amount == 0:
         return None
@@ -668,7 +671,10 @@ def contact_card(db, organization_id: int, contact_id: int, *,
             Payment.bill_id.in_(bill_ids),
         )
     )
+    from .payment_evidence import is_accounting_payment
     for pay in payment_query.all():
+        if not is_accounting_payment(pay):
+            continue
         d = pay.payment_date
         if not _in_period(d, start, end):
             continue

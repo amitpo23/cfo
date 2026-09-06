@@ -1279,6 +1279,28 @@ class Payment(Base):
     )
 
 
+class CollectionPaymentAllocation(Base):
+    """One reviewed receipt allocation for the single-invoice collection slice.
+
+    Provider records stay in Payment/Invoice/BankTransaction; this is their
+    evidence-bearing business relationship, not another ledger or payment.
+    """
+    __tablename__ = "collection_payment_allocations"
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    request_id = Column(Integer, ForeignKey("irreversible_action_requests.id"), nullable=False, unique=True)
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False)
+    payment_id = Column(Integer, ForeignKey("payments.id"), nullable=False, unique=True)
+    bank_transaction_id = Column(Integer, ForeignKey("bank_transactions.id"), nullable=False, unique=True)
+    amount = Column(Numeric(12, 2), nullable=False)
+    currency = Column(String(10), nullable=False)
+    document_external_id = Column(String(255), nullable=False)
+    decided_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    evidence = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    __table_args__ = (Index("ix_collection_allocation_org_invoice", "organization_id", "invoice_id"),)
+
+
 class CollectionReminder(Base):
     """תיעוד תזכורת גבייה שנשלחה — מצב להסלמה ומניעת ספאם."""
     __tablename__ = "collection_reminders"

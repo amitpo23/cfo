@@ -279,7 +279,7 @@ def test_create_bank_payment_request_tool_is_write_category_with_required_fields
     tool = TOOLS["create_bank_payment_request"]
     assert tool.category == "write"
     assert set(tool.input_schema["required"]) == {
-        "amount", "description", "creditor_name", "creditor_account_number",
+        "invoice_id", "approval_id",
     }
 
 

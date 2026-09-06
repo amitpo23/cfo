@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -711,8 +711,20 @@ class SyncEngine:
         status = status_map.get(item.status, InvoiceStatus.DRAFT)
 
         if existing:
+            from ..models import CollectionPaymentAllocation
+            reviewed_paid = self.db.query(func.sum(CollectionPaymentAllocation.amount)).filter_by(
+                organization_id=self.org_id, invoice_id=existing.id).scalar() or Decimal(0)
+            if reviewed_paid and (item.currency != existing.currency or item.total != existing.total or
+                    item.paid_amount > item.total or status in {InvoiceStatus.CANCELLED, InvoiceStatus.VOID, InvoiceStatus.DRAFT} or
+                    (item.raw_data or {}).get('document_type') != 'invoice' or
+                    (item.contact_external_id and contact_id != existing.contact_id)):
+                raise ValueError('Source invoice conflicts with reviewed settlement; reversal review required')
             if payload_hash and existing.payload_hash == payload_hash:
                 return "skipped"
+            # A reviewed allocation may include receipts linked before this
+            # workflow existed. Preserve the whole reviewed paid total, not
+            # just the new allocation rows, until explicit reversal review.
+            prior_reviewed_paid = max(existing.paid_amount or Decimal(0), reviewed_paid)
             existing.contact_id = contact_id or existing.contact_id
             existing.invoice_number = item.invoice_number or existing.invoice_number
             existing.allocation_number = item.allocation_number or existing.allocation_number
@@ -725,6 +737,10 @@ class SyncEngine:
             existing.total = item.total
             existing.paid_amount = item.paid_amount
             existing.balance = item.balance
+            if reviewed_paid:
+                existing.paid_amount = max(item.paid_amount, prior_reviewed_paid)
+                existing.balance = item.total - existing.paid_amount
+                existing.status = InvoiceStatus.PAID if existing.balance == 0 else InvoiceStatus.PARTIALLY_PAID
             existing.line_items = item.line_items
             existing.raw_data = item.raw_data
             existing.payload_hash = payload_hash
@@ -836,18 +852,6 @@ class SyncEngine:
             Payment.source == self.source,
         ).first()
 
-        if existing:
-            if payload_hash and existing.payload_hash == payload_hash:
-                return "skipped"
-            existing.payment_date = item.payment_date or existing.payment_date
-            existing.amount = item.amount
-            existing.currency = item.currency
-            existing.method = item.method
-            existing.reference = item.reference
-            existing.raw_data = item.raw_data
-            existing.payload_hash = payload_hash
-            return "updated"
-
         # Resolve invoice/bill references
         invoice_id = None
         bill_id = None
@@ -870,6 +874,42 @@ class SyncEngine:
             ).first()
             if c:
                 contact_id = c.id
+
+        # Upgrade only an unambiguously typed legacy ID. Never merge billing
+        # and document namespaces merely because their numeric IDs coincide.
+        if existing is None and self.source == 'sumit' and ':' in item.external_id:
+            kind, legacy_id = item.external_id.split(':', 1)
+            legacy = self.db.query(Payment).filter_by(organization_id=self.org_id, source=self.source, external_id=legacy_id).first()
+            if legacy and ((kind == 'receipt' and legacy.method == 'receipt') or
+                           (kind == 'billing' and legacy.method != 'receipt' and (legacy.raw_data or {}).get('payment_id'))):
+                existing = legacy
+                existing.external_id = item.external_id
+        if existing:
+            from ..models import CollectionPaymentAllocation
+            allocation = self.db.query(CollectionPaymentAllocation).filter_by(
+                organization_id=self.org_id, payment_id=existing.id).first()
+            if allocation and (item.amount != allocation.amount or item.currency != allocation.currency or
+                               item.method != 'receipt' or str((item.raw_data or {}).get('document_id') or '') != allocation.document_external_id or
+                               (item.raw_data or {}).get('document_type') != 'receipt' or
+                               (item.raw_data or {}).get('status') not in {'open', 'closed', 'paid'} or
+                               (item.contact_external_id and contact_id != existing.contact_id)):
+                raise ValueError('Payment source changed after reviewed allocation; reversal review required')
+            if invoice_id and existing.invoice_id not in {None, invoice_id}:
+                raise ValueError('Provider invoice link conflicts with an existing allocation')
+            if invoice_id:
+                existing.invoice_id = invoice_id
+            if contact_id:
+                existing.contact_id = contact_id
+            if payload_hash and existing.payload_hash == payload_hash:
+                return "skipped"
+            existing.payment_date = item.payment_date or existing.payment_date
+            existing.amount = item.amount
+            existing.currency = item.currency
+            existing.method = item.method
+            existing.reference = item.reference
+            existing.raw_data = item.raw_data
+            existing.payload_hash = payload_hash
+            return "updated"
 
         payment = Payment(
             organization_id=self.org_id,
@@ -899,6 +939,12 @@ class SyncEngine:
         ).first()
 
         if existing:
+            from ..models import CollectionPaymentAllocation
+            allocation = self.db.query(CollectionPaymentAllocation).filter_by(
+                organization_id=self.org_id, bank_transaction_id=existing.id).first()
+            if allocation and (item.amount != allocation.amount or item.currency != allocation.currency or
+                               (item.raw_data or {}).get('status') != 'BOOKED'):
+                raise ValueError('Bank source changed after reviewed allocation; reversal review required')
             if payload_hash and existing.payload_hash == payload_hash:
                 return "skipped"
             existing.transaction_date = item.transaction_date or existing.transaction_date

@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "synthetic_only": true,
+  "checks": [
+    "screen open does not sync",
+    "candidate/confirmed distinction",
+    "provisional disclosure",
+    "no JavaScript errors"
+  ],
+  "provider_requests": 0
+}

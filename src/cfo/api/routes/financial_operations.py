@@ -5,11 +5,11 @@ Financial Operations Routes
 from datetime import date, datetime
 from typing import Optional, List
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, Header
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..dependencies import get_db, get_current_org_id
+from ..dependencies import get_db, get_current_org_id, require_admin
 from ...services.invoice_service import (
     InvoiceService, DocumentType, InvoiceStatus, ExpenseCategory
 )
@@ -366,16 +366,18 @@ async def cancel_existing_document(
 @router.post("/invoices/{invoice_id}/payment-link")
 async def create_invoice_payment_link(
     invoice_id: int,
+    approval_id: Optional[int] = Header(None, alias="X-Rezef-Approval-Id"),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
+    _actor=Depends(require_admin),
 ):
-    """קישור תשלום ללקוח ליתרת חשבונית (SUMIT beginredirect) — לשליחה
-    לצד תזכורת גבייה במקום הודעת-יתרה בלבד."""
-    service = DocumentIssuanceService(db, organization_id=org_id)
+    """Compatibility entry point to the same durable collection request."""
+    from ...services.ai_chat_tools import _create_payment_link
     try:
-        return {"status": "success", "data": await service.create_payment_link(invoice_id)}
+        return {"status":"success", "data":await _create_payment_link(
+            db, org_id, invoice_id=invoice_id, approval_id=approval_id)}
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/invoices/receive")

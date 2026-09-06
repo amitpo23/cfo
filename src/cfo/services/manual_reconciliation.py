@@ -34,6 +34,10 @@ class ManualReconciliationService:
         if not txn:
             raise ValueError(f"Bank transaction {bank_txn_id} not found")
 
+        self._assert_not_allocated(txn)
+        if txn.is_provisional:
+            raise ValueError("A provisional bank movement cannot be finally reconciled")
+
         # Validate entity exists
         entity = self._load_entity(entity_type, entity_id)
         if not entity:
@@ -67,6 +71,7 @@ class ManualReconciliationService:
         if not txn:
             raise ValueError(f"Bank transaction {bank_txn_id} not found")
 
+        self._assert_not_allocated(txn)
         txn.matched_entity_type = None
         txn.matched_entity_id = None
         txn.is_reconciled = False
@@ -198,6 +203,12 @@ class ManualReconciliationService:
         return candidates[:limit]
 
     # ---------- helpers ----------
+
+    def _assert_not_allocated(self, txn):
+        from ..models import CollectionPaymentAllocation
+        if self.db.query(CollectionPaymentAllocation).filter_by(
+            organization_id=self.organization_id, bank_transaction_id=txn.id).first():
+            raise ValueError("This bank movement has a reviewed receipt allocation; use a reversal review")
 
     def _load_transaction(self, txn_id: int) -> Optional[BankTransaction]:
         return (

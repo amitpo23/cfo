@@ -61,7 +61,8 @@
         "tests/test_expense_ocr_pipeline.py",
         "tests/test_vercel_cron_contract.py",
         "tests/test_roster_coverage.py",
-        "tests/test_w3_wave2_readonly_tools.py"
+        "tests/test_w3_wave2_readonly_tools.py",
+        "tests/test_payment_source_lineage.py"
       ],
       "gates": [
         "organization_scope",
@@ -71,7 +72,7 @@
         "verify_first",
         "owner_approval_for_write"
       ],
-      "honest_boundary": "Read synchronization and several document/payment actions exist. Every production SUMIT client now requires a durable database-backed request budget before network access: an atomic global-per-minute ceiling plus an organization-per-day ceiling shared across instances; an unavailable counter fails closed. This was verified offline and on local PostgreSQL, not against the paid provider. Scheduled detail enrichment still claims a separate 20-hour budget, caps paid getdetails calls at 25 per org/day and reuses CustomerName from the list response. OCR stops before SUMIT while disabled; when enabled it claims a separate 20-hour budget and defaults to 10 documents with a hard cap of 25. The official-books createbatch adapter consumes an immutable owner-approved payload, claims execution once, requires BatchURL and records executed_unverified. The versioned OpenAPI exposes neither batch readback nor close, so the adapter creates an open batch only and cannot prove posting/closure; portal verification and owner-only close remain external. Measured 2026-08-05: an organization silently drops out of the daily cron when its IntegrationConnection turns paused/inactive, because both scheduled_sync_sumit and roster_sync_targets select on status=='active' -- org2 was out for 467h and org3 for 762h with no error raised. roster_coverage reports this per source but deliberately does not reactivate anything: reconnecting a client file is an owner decision.",
+      "honest_boundary": "Read synchronization and several document/payment actions exist. Every production SUMIT client now requires a durable database-backed request budget before network access: an atomic global-per-minute ceiling plus an organization-per-day ceiling shared across instances; an unavailable counter fails closed. This was verified offline and on local PostgreSQL, not against the paid provider. Scheduled detail enrichment still claims a separate 20-hour budget, caps paid getdetails calls at 25 per org/day and reuses CustomerName from the list response. OCR stops before SUMIT while disabled; when enabled it claims a separate 20-hour budget and defaults to 10 documents with a hard cap of 25. The official-books createbatch adapter consumes an immutable owner-approved payload, claims execution once, requires BatchURL and records executed_unverified. The versioned OpenAPI exposes neither batch readback nor close, so the adapter creates an open batch only and cannot prove posting/closure; portal verification and owner-only close remain external. Measured 2026-08-05: an organization silently drops out of the daily cron when its IntegrationConnection turns paused/inactive, because both scheduled_sync_sumit and roster_sync_targets select on status=='active' -- org2 was out for 467h and org3 for 762h with no error raised. roster_coverage reports this per source but deliberately does not reactivate anything: reconnecting a client file is an owner decision. Billing/receipt source IDs are namespaced and missing invoice relationships stay explicit because the saved list schemas do not supply them; sync can resolve an explicit later normalized invoice link without payload changes.",
       "next_gate": "MASTER_EXECUTION_PLAN gate 3: operator-approved createbatch dry-run, portal readback evidence and owner-approved batch close."
     },
     {
@@ -232,12 +233,14 @@
       "runtime": [
         "src/cfo/services/bank_reconciliation.py",
         "src/cfo/services/manual_reconciliation.py",
-        "src/cfo/services/bank_expense_gap.py"
+        "src/cfo/services/bank_expense_gap.py",
+        "src/cfo/services/collection_settlement.py"
       ],
       "tests": [
         "tests/test_bank_reconciliation.py",
         "tests/test_manual_reconciliation.py",
-        "tests/test_bank_expense_gap.py"
+        "tests/test_bank_expense_gap.py",
+        "tests/test_collection_settlement.py"
       ],
       "gates": [
         "organization_scope",
@@ -246,7 +249,7 @@
         "human_decision_queue",
         "audit_trail"
       ],
-      "honest_boundary": "Matching and gap detection exist, but completeness depends on fresh bank and document sources; unsupported writeback must stay visible.",
+      "honest_boundary": "Matching and gap detection exist, but completeness depends on fresh bank and document sources; unsupported writeback must stay visible. Offline September slice: amount/date/name scores are review candidates, including Payment observations; provisional movements cannot be finalized. Reviewed invoice-receipt-bank allocations persist actor, source evidence and amounts. Local reconciliation is never SUMIT writeback; missing operations remain unsupported.",
       "next_gate": "MASTER_EXECUTION_PLAN gate 4: zero prior-day unexplained movements for seven consecutive pilot days."
     },
     {
@@ -262,12 +265,16 @@
       "runtime": [
         "src/cfo/services/ar_service.py",
         "src/cfo/services/ap_service.py",
-        "src/cfo/services/collection_service.py"
+        "src/cfo/services/collection_service.py",
+        "src/cfo/services/collection_settlement.py",
+        "src/cfo/services/financial_synthesis.py",
+        "src/cfo/services/payment_evidence.py"
       ],
       "tests": [
         "tests/test_ar_real_values.py",
         "tests/test_ap_service_honest_values.py",
-        "tests/test_collection_cases.py"
+        "tests/test_collection_cases.py",
+        "tests/test_collection_settlement.py"
       ],
       "gates": [
         "organization_scope",
@@ -276,7 +283,7 @@
         "owner_approval_for_escalation",
         "audit_trail"
       ],
-      "honest_boundary": "Aging and collection workflows exist; legal escalation, payment execution and any communication without verified opt-in are outside autonomous operation.",
+      "honest_boundary": "Aging and collection workflows exist; legal escalation, payment execution and any communication without verified opt-in are outside autonomous operation. An offline HTTP slice now links a final SUMIT tax invoice in ILS to an immutable approved collection request, an existing final receipt and a booked bank movement, preserving partial balances and idempotency. Missing provider relationships require explicit human evidence review. Missing receipts remain pending; many-to-many, FX/fees and reversals are not supported by this slice. Daily payment linking no longer persists similarity guesses; bank worklists request evidence review and billing observations, including identifiable legacy records, are not counted again as accounting receipts. Reviewed balances retain receipts linked before the new allocation workflow. Legacy SUMIT HTTP/chat payment links also require the linked durable approval.",
       "next_gate": "Prove invoice-to-payment matching, action ownership and collections outcomes on the pilot month."
     },
     {
@@ -402,7 +409,8 @@
         "src/cfo/services/filing_verification.py",
         "frontend/src/components/PolicyManagementDashboard.tsx",
         "alembic/versions/e3f4a5b6c7d8_add_policy_enforcement.py",
-        "src/cfo/api/approved_actions.py"
+        "src/cfo/api/approved_actions.py",
+        "src/cfo/services/collection_settlement.py"
       ],
       "tests": [
         "tests/test_irreversible_action_workflow.py",
@@ -415,7 +423,8 @@
         "tests/test_filing_verification.py",
         "tests/test_policy_persistence_and_enforcement.py",
         "tests/test_legacy_action_approvals.py",
-        "tests/test_registration_boundary.py"
+        "tests/test_registration_boundary.py",
+        "tests/test_collection_settlement.py"
       ],
       "gates": [
         "organization_scope",
@@ -425,7 +434,7 @@
         "post_action_verification",
         "policy_recheck_at_proposal_approval_execution"
       ],
-      "honest_boundary": "Owner/signatory authority is separate from RBAC, scoped per action and cannot be bypassed by super-admin. Organization policy is now persisted and audited with subject, amount/day/month ceilings, channels, step-up, reason, approval count and separation-of-duties; it is re-evaluated at proposal, approval and execution, so revocation or role changes stop an in-flight action. A super-admin may configure non-signing policy only inside an explicitly selected organization; that does not create owner/signatory authority. Open Moshko ChatMessage proposals now have an organization-scoped discovery endpoint and web approval queue: only a distinct active signer whose action_types include the policy-mapped irreversible scope sees an item, while a non-signer receives an honest empty list; approval still reuses the existing confirm gate and a matching signer may reject through the existing cancel transition. The Open Finance create-payment adapter consumes the persisted payload, claims once and stores readback in offline tests. The SUMIT createbatch adapter follows the same immutable-intent and execute-once control plane but stops honestly at executed_unverified because SUMIT exposes no batch readback/close API. No live provider behavior is claimed, proactive Telegram/WhatsApp routing to additional signers is not wired, and refund, cancellation, mandate, filing and close adapters are not yet wired.",
+      "honest_boundary": "Owner/signatory authority is separate from RBAC, scoped per action and cannot be bypassed by super-admin. Organization policy is now persisted and audited with subject, amount/day/month ceilings, channels, step-up, reason, approval count and separation-of-duties; it is re-evaluated at proposal, approval and execution, so revocation or role changes stop an in-flight action. A super-admin may configure non-signing policy only inside an explicitly selected organization; that does not create owner/signatory authority. Open Moshko ChatMessage proposals now have an organization-scoped discovery endpoint and web approval queue: only a distinct active signer whose action_types include the policy-mapped irreversible scope sees an item, while a non-signer receives an honest empty list; approval still reuses the existing confirm gate and a matching signer may reject through the existing cancel transition. The Open Finance create-payment adapter consumes the persisted payload, claims once and stores readback in offline tests. The SUMIT createbatch adapter follows the same immutable-intent and execute-once control plane but stops honestly at executed_unverified because SUMIT exposes no batch readback/close API. No live provider behavior is claimed, proactive Telegram/WhatsApp routing to additional signers is not wired, and refund, cancellation, mandate, filing and close adapters are not yet wired. For payment creation, verified explicitly means payment_request readback, not money received. Separate provider/money states preserve PENDING, failure and cancellation. The linked collection adapter changes AR only after reviewed receipt/bank evidence; no live behavior is claimed.",
       "next_gate": "Bootstrap an explicitly verified owner for each existing organization, then wire and prove the remaining irreversible action types one by one."
     },
     {

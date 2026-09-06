@@ -108,3 +108,15 @@ jobs:
         with:
           name: browser-evidence
           path: browser-evidence
+      - name: Offline collection candidate screen
+        env:
+          REZEF_BROWSER_OUTPUT: collection-browser-evidence
+        run: >-
+          python .agents/skills/webapp-testing/scripts/with_server.py
+          --server "cd frontend && npm run preview -- --host 127.0.0.1 --port 5199"
+          --port 5199 -- python tests/browser_offline/collection_candidates.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collection-browser-evidence
+          path: collection-browser-evidence

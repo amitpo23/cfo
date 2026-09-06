@@ -13,9 +13,9 @@ pilot or official-book gates.
 | Tenant registration and public authentication | Implemented locally | Regression tests passed; deployment/configuration verification pending |
 | Legacy action approvals and checkout | Implemented locally with explicit gated legacy prototypes | Durable intent/replay/failure tests and signed checkout/webhook tests passed; provider readback and live owner-approved verification remain gated |
 | P&L and cash-flow corrections | Implemented locally | Duplicate/credit/journal/payroll/partial-payment/null/export tests passed; official book reconciliation remains required |
-| Dependencies and QA | Implemented locally | 2,626 backend tests passed; build/lint, route audit and schema checks passed; Git-tracked evidence gate passed after staging |
+| Dependencies and QA | Implemented locally | 2,668 backend tests passed after the collection extension; all nine local QA checks have passing evidence; live Neon check skipped |
 | Organization picker and mobile journeys | Verified locally | Both admin roles passed offline browser journeys at desktop and 390 px |
-| Health and recovery tooling | Verified with synthetic PostgreSQL | 68-table encrypted restore, migration parity, hashes and constraints passed; actual production backup/key/PITR evidence remains required |
+| Health and recovery tooling | Verified with synthetic PostgreSQL | 69-table encrypted restore, migration parity, hashes and constraints passed; actual production backup/key/PITR evidence remains required |
 | Authorized provider pilot | Gated | Current consent/ownership/quota evidence, 20 documents, official posting evidence, seven morning cycles, triple-verified period package |
 | Calendar-month expansion decision | Gated by elapsed pilot evidence | At least 25 green days; no unexplained financial differences |
 
@@ -28,6 +28,25 @@ No live sync, payment, customer message, regulatory submission, production schem
 change or deployment was performed during this local stabilization work. Release
 through the existing PR and Gate 0 process; do not use a successful synthetic drill
 as production recovery or official-book evidence.
+
+## Invoice–payment–bank slice — 6 September 2026
+
+The existing stabilization branch now includes an offline, approval-bound collection
+slice for one final SUMIT tax invoice in ILS. It links the selected payment channel,
+request, existing receipt and booked bank movement with a reviewed allocation and
+residual balance. Request verification is explicitly separate from money received.
+Weak/provisional matches remain candidates; unsupported SUMIT writeback stays visible.
+
+[Implementation, API journey, evidence and limits](audits/2026-09-06-collection-settlement.md).
+Validation: **2,668 backend tests passed**, 55 final focused tests passed, all nine
+local QA checks have passing evidence, synthetic browser passed, and PostgreSQL
+69-table restore plus allocation uniqueness passed.
+Migration: `62b80d39f715` after `51a79c28e604`; local SQLite backed up and migrated;
+production owner gates unchanged.
+Capabilities remain partial/gated/blocked pending live source and official-book evidence.
+No live provider call or sync-budget bypass was performed. Next: owner-controlled
+release, source identity review and the existing pilot gates; not automatic document
+creation from an ambiguous bank amount.
 
 ## 1. הצפון
 

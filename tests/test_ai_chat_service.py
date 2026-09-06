@@ -840,10 +840,19 @@ def test_confirm_action_executes_create_payment_link_exactly_once(monkeypatch, f
     db = SessionLocal()
     try:
         inv = _seed_overdue_invoice(db, org_id, total="900")
+        from cfo.services.collection_settlement import CollectionSettlementService
+        from cfo.services.irreversible_action_service import IrreversibleActionService
+        inv.source = 'sumit'; inv.external_id = '123'; inv.raw_data = {'document_type':'invoice'}
+        inv.contact.source = 'sumit'; inv.contact.external_id = '7'
+        db.commit()
+        actor = db.get(User, _org_user_id(db, org_id))
+        action = CollectionSettlementService(db, org_id).propose(invoice_id=inv.id,amount=Decimal('900'),
+            channel='sumit',proposed_by=actor,idempotency_key='chat-link')
+        IrreversibleActionService(db, org_id).approve(action.id,approved_by=actor)
         _patch_client(monkeypatch, responses=[
             SimpleNamespace(
                 stop_reason="tool_use",
-                content=[_tool_use_block("t1", "create_payment_link", {"invoice_id": inv.id})],
+                content=[_tool_use_block("t1", "create_payment_link", {"invoice_id": inv.id, "approval_id": action.id})],
             ),
         ])
         service = _chat_for_org(db, org_id)
@@ -857,7 +866,7 @@ def test_confirm_action_executes_create_payment_link_exactly_once(monkeypatch, f
             async def __aexit__(self, *_a):
                 return False
 
-            async def create_payment_link(self, charge):
+            async def create_payment_link(self, charge, **kwargs):
                 return PaymentLinkResponse(payment_url="https://pay.sumit.co.il/x")
 
         class FakeConnector:

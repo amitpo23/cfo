@@ -27,6 +27,7 @@ interface Insight {
 
 interface ReconciliationResult {
   matched_count: number;
+  candidate_count?: number;
   txn_count: number;
   unmatched_txns?: number[];
   unmatched_txn_details?: Array<{ id: number; is_provisional: boolean }>;
@@ -189,11 +190,11 @@ export default function BankInsightsDashboard() {
     setError(null);
     setNotice(null);
     try {
-      const res = await api.post<{ matched_count: number; txn_count: number }>(
+      const res = await api.post<ReconciliationResult>(
         '/api/open-finance/reconcile'
       );
       setReconciliation(res);
-      setNotice(`הותאמו ${res.matched_count} מתוך ${res.txn_count} תנועות בנק.`);
+      setNotice(`${res.matched_count} התאמות מקומיות מאושרות; ${res.candidate_count ?? 0} מועמדויות לבדיקה. סכום ותאריך לבדם אינם התאמה.`);
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'שגיאה בהתאמת בנקים');
     } finally {
@@ -212,7 +213,7 @@ export default function BankInsightsDashboard() {
       setSumitDispatch(res);
       setReconciliation(res.local_reconciliation);
       if (dryRun) {
-        setNotice(`בדיקה בלבד: נמצאו ${res.local_reconciliation.matched_count} התאמות מוכנות לשליחה.`);
+        setNotice(`בדיקה בלבד: נמצאו ${res.local_reconciliation.matched_count} התאמות מקומיות; כתיבה רשמית דורשת תמיכה ואישור נפרדים.`);
       } else if (res.unsupported) {
         setNotice(`ההתאמות נשמרו אצלנו. ${res.unsupported} התאמות דורשות חיבור write-back רשמי ל-SUMIT.`);
       } else {
@@ -326,7 +327,8 @@ export default function BankInsightsDashboard() {
           </div>
           <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mt-4 text-sm">
             <StatusStat label="תנועות" value={reconciliation?.txn_count ?? 0} />
-            <StatusStat label="הותאמו" value={reconciliation?.matched_count ?? 0} tone="emerald" />
+            <StatusStat label="הותאמו מקומית" value={reconciliation?.matched_count ?? 0} tone="emerald" />
+            <StatusStat label="מועמדויות לבדיקה" value={reconciliation?.candidate_count ?? 0} tone="amber" />
             <StatusStat label="נשלחו" value={sumitDispatch?.dispatched ?? 0} tone="blue" />
             <StatusStat label="אושרו" value={sumitDispatch?.confirmed ?? 0} tone="emerald" />
             <StatusStat label="נכשלו" value={sumitDispatch?.failed ?? 0} tone="red" />

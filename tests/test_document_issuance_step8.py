@@ -366,7 +366,7 @@ def test_payment_link_rejects_invoice_with_no_balance(fresh_org):
         db.close()
 
 
-def test_route_payment_link_requires_sumit_configured(client, fresh_org):
+def test_route_payment_link_requires_durable_approval_before_sumit(client, fresh_org):
     iso = fresh_org()
     org_id, headers = iso["org_id"], iso["headers"]
     db = SessionLocal()
@@ -377,4 +377,4 @@ def test_route_payment_link_requires_sumit_configured(client, fresh_org):
         db.close()
 
     r = client.post(f"/api/financial/invoices/{invoice_id}/payment-link", headers=headers)
-    assert r.status_code == 400
+    assert r.status_code == 409

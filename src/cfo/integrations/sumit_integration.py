@@ -2536,6 +2536,8 @@ class SumitIntegration(BaseIntegration):
         redirect_url: Optional[str] = None,
         cancel_redirect_url: Optional[str] = None,
         expiration_hours: Optional[int] = None,
+        external_identifier: Optional[str] = None,
+        document_type: Optional[str] = None,
     ) -> PaymentLinkResponse:
         """
         Generate a hosted payment-page URL for a customer to pay via
@@ -2547,6 +2549,12 @@ class SumitIntegration(BaseIntegration):
             "Customer": self._customer_ref(charge.customer_id or "Customer"),
             "Items": self._charge_items(charge),
         }
+        if external_identifier is not None:
+            payload['ExternalIdentifier'] = external_identifier
+        if document_type is not None:
+            payload['DocumentType'] = self._map_document_type(document_type)
+            payload['VATIncluded'] = True
+            payload['DraftDocument'] = False
         if charge.description:
             payload["DocumentDescription"] = charge.description
         if redirect_url:

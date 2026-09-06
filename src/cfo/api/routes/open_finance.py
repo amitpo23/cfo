@@ -960,13 +960,16 @@ async def create_payment(
                     status_code=502,
                     detail="Open Finance payment readback reference mismatch",
                 )
+            from ...services.payment_evidence import payment_outcome
+            outcome = payment_outcome(readback)
             action_service.mark_verified(
                 approval_id,
-                verification_evidence=readback,
+                verification_evidence={**readback, **outcome},
             )
             return {
                 "approval_request_id": approval_id,
                 "approval_status": "verified",
+                **outcome,
                 "provider_reference": reference,
                 "payment": created,
                 "readback": readback,

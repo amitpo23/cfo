@@ -2,17 +2,16 @@
 
 The CFO app is the hub: Open Finance supplies bank/card movements, SUMIT remains
 the official accounting system. This service makes that boundary explicit by
-tracking whether a local match was actually sent to SUMIT, failed, or is not
-supported by the current connector.
+tracking unsupported writeback explicitly. A method discovered on a connector
+does not authorize official posting; that requires a reviewed approval adapter.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..models import BankTransaction, Bill, Expense, Invoice
+from ..models import BankTransaction, Bill, Expense, Invoice, Payment
 from . import bank_reconciliation
 from .sync_engine import get_connector_for_org
 
@@ -71,46 +70,11 @@ async def dispatch_reconciliation_to_sumit(
             source=source,
         )
 
-    items: list[dict[str, Any]] = []
-    for row in rows:
-        if row.reconciliation_dispatch_status in TERMINAL_DISPATCH_STATUSES:
-            items.append(_item(row, status=row.reconciliation_dispatch_status, skipped=True))
-            continue
-
-        payload = _build_payload(db, row)
-        if dry_run:
-            items.append({"bank_transaction_id": row.id, "status": "pending", "payload": payload})
-            continue
-
-        try:
-            result = await post(payload)
-            external_id = _external_id_from_result(result)
-            row.reconciliation_dispatch_status = "confirmed"
-            row.reconciliation_dispatched_at = datetime.now(timezone.utc)
-            row.external_reconciliation_id = external_id
-            row.reconciliation_error = None
-            items.append(_item(row, status="confirmed", result=result))
-        except NotImplementedError as exc:
-            row.reconciliation_dispatch_status = "unsupported"
-            row.reconciliation_error = str(exc) or "SUMIT reconciliation write-back is not implemented"
-            items.append(_item(row, status="unsupported", error=row.reconciliation_error))
-        except Exception as exc:  # noqa: BLE001
-            row.reconciliation_dispatch_status = "failed"
-            row.reconciliation_error = f"{type(exc).__name__}: {exc}"
-            items.append(_item(row, status="failed", error=row.reconciliation_error))
-
-    if not dry_run:
-        db.commit()
-
-    return {
-        "local_reconciliation": local,
-        "dry_run": dry_run,
-        "dispatched": sum(1 for i in items if i["status"] in {"confirmed", "pending"}),
-        "confirmed": sum(1 for i in items if i["status"] == "confirmed"),
-        "failed": sum(1 for i in items if i["status"] == "failed"),
-        "unsupported": sum(1 for i in items if i["status"] == "unsupported"),
-        "items": items,
-    }
+    # A dynamically present connector method does not grant authority to post.
+    # Wire a reviewed immutable-intent adapter before enabling this branch.
+    return _mark_all(db, rows, "approval_required",
+        "Official writeback requires an approved execution adapter and independent readback",
+        dry_run=dry_run, local=local, source=source)
 
 
 def _mark_all(
@@ -125,6 +89,9 @@ def _mark_all(
 ) -> dict[str, Any]:
     items = []
     for row in rows:
+        if row.reconciliation_dispatch_status in TERMINAL_DISPATCH_STATUSES:
+            items.append(_item(row, status=row.reconciliation_dispatch_status, skipped=True))
+            continue
         if not dry_run:
             row.reconciliation_dispatch_status = status
             row.reconciliation_error = error
@@ -136,8 +103,8 @@ def _mark_all(
         "dry_run": dry_run,
         "dispatched": 0,
         "confirmed": 0,
-        "failed": len(items) if status == "failed" else 0,
-        "unsupported": len(items) if status == "unsupported" else 0,
+        "failed": sum(i["status"] == "failed" for i in items),
+        "unsupported": sum(i["status"] == "unsupported" for i in items),
         "items": items,
     }
 
@@ -164,6 +131,7 @@ def _load_entity(db: Session, row: BankTransaction) -> dict[str, Any]:
         "invoice": Invoice,
         "bill": Bill,
         "expense": Expense,
+        "payment": Payment,
     }
     model = model_by_type.get(row.matched_entity_type or "")
     if not model or not row.matched_entity_id:
