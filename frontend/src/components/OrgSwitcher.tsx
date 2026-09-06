@@ -1,13 +1,4 @@
-/**
- * Super-admin organization switcher ("act as client").
- *
- * Renders ONLY for SUPER_ADMIN. Lists every organization (/admin/organizations)
- * and lets the operator pick the active one. The choice is persisted in
- * localStorage('active_org_id') and sent on every request as X-Active-Org-Id
- * (see services/api.ts), so the entire app — dashboards, AR/AP, cash flow, sync
- * — re-scopes to the chosen client. Switching clears the react-query cache and
- * reloads so no stale org data lingers.
- */
+/** Organization selection is explicit and persists across all tenant requests. */
 import { useEffect, useState } from 'react';
 import { Building2, ChevronDown, Check } from 'lucide-react';
 import api from '../services/api';
@@ -41,28 +32,20 @@ export default function OrgSwitcher({
     return raw ? Number(raw) : currentUser.organization_id;
   });
 
-  const isSuper = currentUser.role === 'super_admin';
-
   useEffect(() => {
-    if (!isSuper) return;
     (async () => {
       try {
-        setOrgs(await api.get<Org[]>('/admin/organizations'));
+        setOrgs(await api.get<Org[]>('/admin/auth/organizations'));
       } catch {
         /* non-fatal: switcher just stays empty */
       }
     })();
-  }, [isSuper]);
+  }, [currentUser.id]);
 
-  if (!isSuper) return null;
+  if (orgs.length === 0) return null;
 
   const select = (id: number) => {
-    if (id === currentUser.organization_id) {
-      // Back to the operator's home org → drop the override entirely.
-      localStorage.removeItem(ACTIVE_ORG_KEY);
-    } else {
-      localStorage.setItem(ACTIVE_ORG_KEY, String(id));
-    }
+    localStorage.setItem(ACTIVE_ORG_KEY, String(id));
     setActiveId(id);
     setOpen(false);
     // Hard reload so every dashboard refetches under the new org scope.
@@ -76,7 +59,8 @@ export default function OrgSwitcher({
     <div className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        title="החלפת לקוח (super admin)"
+        title="Switch organization"
+        aria-expanded={open}
         className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition ${
           darkMode
             ? 'border-purple-700 bg-purple-900/30 text-purple-200 hover:bg-purple-900/50'
@@ -84,7 +68,7 @@ export default function OrgSwitcher({
         }`}
       >
         <Building2 size={16} />
-        <span className="text-sm font-medium max-w-[160px] truncate">{activeName}</span>
+        <span className="text-sm font-medium max-w-[100px] md:max-w-[160px] truncate">{activeName}</span>
         <ChevronDown size={14} />
       </button>
 

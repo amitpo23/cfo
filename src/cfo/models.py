@@ -17,6 +17,26 @@ from sqlalchemy.orm import declarative_base, relationship
 Base = declarative_base()
 
 
+class BillingCheckout(Base):
+    """Single-use registration entitlement; consumed atomically with the tenant."""
+    __tablename__ = "billing_checkouts"
+    session_id = Column(String(255), primary_key=True)
+    email = Column(String(320), nullable=True)
+    selected_plan = Column(String(64), nullable=False)
+    payment_status = Column(String(32), nullable=False)
+    subscription_id = Column(String(255), nullable=True, unique=True)
+    webhook_created = Column(Integer, nullable=False, default=0, server_default="0")
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class BillingWebhookReceipt(Base):
+    __tablename__ = "billing_webhook_receipts"
+    event_id = Column(String(255), primary_key=True)
+    payload_sha256 = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class UserRole(str, Enum):
     """תפקידי משתמש"""
     SUPER_ADMIN = "super_admin"  # מנהל על

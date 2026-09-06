@@ -23,6 +23,8 @@ from ...services.agreement_cashflow_service import (
     AgreementCashFlowService, AgreementType, AgreementStatus, BillingCycle, CashFlowType
 )
 
+from ..approved_actions import approved_provider_action, require_durable_adapter
+
 router = APIRouter(prefix="/financial", tags=["Financial Operations"])
 
 
@@ -150,6 +152,7 @@ class ForecastRequest(BaseModel):
 # ==================== Invoice Endpoints ====================
 
 @router.post("/invoices")
+@approved_provider_action('document_issue', 'financial_operations.create_invoice', allow_local_draft=True)
 async def create_invoice(
     request: CreateInvoiceRequest,
     db: Session = Depends(get_db),
@@ -181,6 +184,7 @@ async def issue_invoice(
     db: Session = Depends(get_db)
 ):
     """הפקת חשבונית ב-SUMIT"""
+    require_durable_adapter()
     service = InvoiceService(db)
     return await service.issue_invoice_to_sumit(invoice_id, send_email)
 
@@ -277,6 +281,7 @@ async def list_documents(
 
 
 @router.post("/documents")
+@approved_provider_action('document_issue', 'financial_operations.create_document', allow_local_draft=True)
 async def create_document(
     request: CreateDocumentRequest,
     db: Session = Depends(get_db),
@@ -340,6 +345,7 @@ async def send_existing_document(
 
 
 @router.post("/documents/{document_id}/cancel")
+@approved_provider_action('document_issue', 'financial_operations.cancel_existing_document', target_key='document_id')
 async def cancel_existing_document(
     document_id: int,
     request: CancelDocumentRequest,
@@ -452,6 +458,7 @@ async def cancel_invoice(
     db: Session = Depends(get_db)
 ):
     """ביטול חשבונית"""
+    require_durable_adapter()
     service = InvoiceService(db)
     return await service.cancel_invoice(invoice_id, reason)
 
@@ -463,6 +470,7 @@ async def create_credit_note(
     db: Session = Depends(get_db)
 ):
     """יצירת חשבונית זיכוי"""
+    require_durable_adapter()
     service = InvoiceService(db)
     return await service.create_credit_note(invoice_id, reason)
 
@@ -555,6 +563,7 @@ async def process_payment(
     db: Session = Depends(get_db)
 ):
     """עיבוד תשלום"""
+    require_durable_adapter()
     service = PaymentRequestService(db)
     return await service.process_payment(
         request_id,
@@ -584,6 +593,7 @@ async def create_standing_order(
     db: Session = Depends(get_db)
 ):
     """יצירת הוראת קבע"""
+    require_durable_adapter()
     service = PaymentRequestService(db)
     
     start = date.fromisoformat(request.start_date) if request.start_date else None
@@ -607,6 +617,7 @@ async def charge_standing_order(
     db: Session = Depends(get_db)
 ):
     """חיוב הוראת קבע"""
+    require_durable_adapter()
     service = PaymentRequestService(db)
     return await service.charge_standing_order(order_id)
 
@@ -618,6 +629,7 @@ async def cancel_standing_order(
     db: Session = Depends(get_db)
 ):
     """ביטול הוראת קבע"""
+    require_durable_adapter()
     service = PaymentRequestService(db)
     return await service.cancel_standing_order(order_id, reason)
 
@@ -638,6 +650,7 @@ async def run_scheduled_charges(
     db: Session = Depends(get_db)
 ):
     """הרצת חיובים מתוזמנים"""
+    require_durable_adapter()
     service = PaymentRequestService(db)
     return await service.run_scheduled_charges()
 

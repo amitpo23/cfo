@@ -67,6 +67,7 @@ class ApiService {
       (error) => {
         if (error.response?.status === 401) {
           localStorage.removeItem('auth_token');
+          localStorage.removeItem('active_org_id');
           window.location.href = '/';
         }
         // 409 active_organization_required — סופר-אדמין בלי ארגון פעיל.

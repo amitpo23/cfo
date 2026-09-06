@@ -141,9 +141,8 @@ def test_all_financial_get_routes_no_crash(client, books):
     placeholders = {"metric": "revenue", "product_id": "P1", "customer_id": "1"}
     crashed = []
     seen = set()
-    for route in app.routes:
-        path = getattr(route, "path", "")
-        methods = getattr(route, "methods", set()) or set()
+    for path, operations in app.openapi()["paths"].items():
+        methods = {method.upper() for method in operations}
         if "/financial/" not in path or "GET" not in methods:
             continue
         url = path
@@ -158,4 +157,5 @@ def test_all_financial_get_routes_no_crash(client, books):
                 crashed.append((url, r.text[:120]))
         except Exception as exc:
             crashed.append((url, f"{type(exc).__name__}: {exc}"))
+    assert len(seen) >= 15, "Financial route inventory is unexpectedly empty"
     assert not crashed, crashed

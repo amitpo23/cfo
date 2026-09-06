@@ -33,6 +33,8 @@ from ..dependencies import (
     sumit_for_org,
 )
 
+from ..approved_actions import approved_provider_action, require_durable_adapter
+
 router = APIRouter()
 
 
@@ -190,6 +192,7 @@ async def get_customer_debt(
 # ==================== Documents ====================
 
 @router.post("/documents", response_model=DocumentResponse)
+@approved_provider_action('document_issue', 'accounting.create_document')
 async def create_document(
     document: DocumentRequest,
     sumit: SumitIntegration = Depends(get_sumit_integration),
@@ -267,6 +270,7 @@ async def get_document_pdf(
 
 
 @router.post("/documents/{document_id}/cancel")
+@approved_provider_action('document_issue', 'accounting.cancel_document', target_key='document_id')
 async def cancel_document(
     document_id: str,
     sumit: SumitIntegration = Depends(get_sumit_integration),
@@ -278,6 +282,7 @@ async def cancel_document(
 
 
 @router.post("/documents/{document_id}/move-to-books")
+@approved_provider_action('sumit_writeback', 'accounting.move_document_to_books', target_key='document_id')
 async def move_document_to_books(
     document_id: str,
     sumit: SumitIntegration = Depends(get_sumit_integration),
@@ -291,6 +296,7 @@ async def move_document_to_books(
 # ==================== Expenses ====================
 
 @router.post("/expenses")
+@approved_provider_action('sumit_writeback', 'accounting.add_expense')
 async def add_expense(
     expense: ExpenseRequest,
     sumit: SumitIntegration = Depends(get_sumit_integration),
@@ -380,6 +386,7 @@ async def update_settings(
     current_user: dict = Depends(get_current_user)
 ):
     """Update system settings"""
+    require_durable_adapter()
     async with sumit:
         return await sumit.update_settings(settings)
 
@@ -403,6 +410,7 @@ async def set_next_document_number(
     current_user: dict = Depends(get_current_user)
 ):
     """Set next document number"""
+    require_durable_adapter()
     async with sumit:
         return await sumit.set_next_document_number(request)
 

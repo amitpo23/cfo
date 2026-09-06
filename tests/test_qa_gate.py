@@ -57,7 +57,7 @@ def test_a_single_failure_fails_the_whole_gate():
     assert qa_gate.print_summary(results) is False
 
 
-def test_route_audit_uses_documented_baseline_not_raw_exit_code():
+def test_route_audit_nonzero_exit_is_a_failure_even_with_zero_reported_failures():
     """audit_routes.py יוצא 1 בכל פעם ש-route אינו 200 — כולל 36 ה-400
     מוגדרי-הסביבה (SUMIT/Open Finance ללא קרדנשלים) שהם התנהגות נכונה.
     qa_gate שופט לפי מספר הכשלים בשורת הסיכום, לא לפי קוד היציאה."""
@@ -67,8 +67,8 @@ def test_route_audit_uses_documented_baseline_not_raw_exit_code():
         return _ok(0)
 
     results = qa_gate.run_gate(run=fake_run)
-    assert results["2. Route audit"] is True
-    assert qa_gate.print_summary(results) is True
+    assert results["2. Route audit"] is False
+    assert qa_gate.print_summary(results) is False
 
 
 def test_route_audit_fails_when_failure_count_exceeds_baseline():
@@ -135,3 +135,7 @@ def test_frontend_build_failure_fails_the_gate():
     results = qa_gate.run_gate(run=fake_run)
     assert results["4c. Frontend build"] is False
     assert qa_gate.print_summary(results) is False
+
+
+def test_one_unknown_failure_is_never_hidden_by_a_numeric_allowance():
+    assert qa_gate.route_audit_within_baseline('כשל: 1') is False

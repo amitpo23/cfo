@@ -25,23 +25,25 @@ def _add_months(d: date, months: int) -> date:
 # monthly_cash_flow
 # --------------------------------------------------------------------- #
 def test_monthly_cash_flow_sums_bank_transactions_per_calendar_month(fresh_org):
+    as_of = date(2026, 5, 20)
+    anchor = as_of.replace(day=1)
     org_id = fresh_org()["org_id"]
-    prev_month = _add_months(MONTH_ANCHOR, -1)
+    prev_month = _add_months(anchor, -1)
     db = SessionLocal()
     try:
-        db.add(BankTransaction(organization_id=org_id, transaction_date=MONTH_ANCHOR + timedelta(days=9),
+        db.add(BankTransaction(organization_id=org_id, transaction_date=anchor + timedelta(days=9),
                                 description="הפקדה", amount=Decimal("5000")))
-        db.add(BankTransaction(organization_id=org_id, transaction_date=MONTH_ANCHOR + timedelta(days=10),
+        db.add(BankTransaction(organization_id=org_id, transaction_date=anchor + timedelta(days=10),
                                 description="חיוב", amount=Decimal("-1200")))
         db.add(BankTransaction(organization_id=org_id, transaction_date=prev_month + timedelta(days=5),
                                 description="הפקדה קודמת", amount=Decimal("2000")))
         db.commit()
 
-        result = LiveCashFlowService(db, org_id).monthly_cash_flow(months=2, as_of_date=TODAY)
+        result = LiveCashFlowService(db, org_id).monthly_cash_flow(months=2, as_of_date=as_of)
     finally:
         db.close()
 
-    assert result["as_of"] == TODAY.isoformat()
+    assert result["as_of"] == as_of.isoformat()
     assert result["data_sources"] == ["bank_transactions_actual"]
     assert result["message"] is None
     assert len(result["months"]) == 2
@@ -53,7 +55,7 @@ def test_monthly_cash_flow_sums_bank_transactions_per_calendar_month(fresh_org):
     assert m_prev["net_flow"] == 2000.0
     assert m_prev["cumulative"] == 2000.0
 
-    assert m_cur["month"] == MONTH_ANCHOR.strftime("%Y-%m")
+    assert m_cur["month"] == anchor.strftime("%Y-%m")
     assert m_cur["inflows"] == 5000.0
     assert m_cur["outflows"] == 1200.0
     assert m_cur["net_flow"] == 3800.0

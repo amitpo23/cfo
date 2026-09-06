@@ -23,7 +23,7 @@ from ...models import (
     Alert, Task, OnboardingTask, AlertStatus, TaskStatus,
     OrganizationSigningAuthority, OrganizationMembership, Account,
     ChatMessage, LLMUsage, MoshkoToolCall, MoshkoMemory, MoshkoFeedback,
-    PasswordResetToken, RevokedToken,
+    PasswordResetToken, RevokedToken, BillingCheckout,
 )
 from ...auth import (
     verify_password, get_password_hash, create_access_token,
@@ -131,50 +131,20 @@ def _freshness_status(last_finished_at: Optional[datetime]) -> dict:
     }
 
 
-async def _assert_registration_allowed(
-    registration_code: Optional[str],
-    checkout_session_id: Optional[str] = None,
-):
-    from ...config import settings
+async def _assert_registration_allowed(registration_code, checkout_session_id=None, *, db=None, email=None):
     from os import getenv
-
     if checkout_session_id:
-        if checkout_session_id.startswith("mock_") and getenv("VERCEL_ENV") != "production":
-            # Preview/dev: mock checkout satisfies payment. Skip VERCEL registration gate;
-            # still enforce registration_secret if one is explicitly configured.
-            if not settings.registration_secret:
-                return
-            # fall through to registration_secret check below
-        if settings.stripe_secret_key and checkout_session_id.startswith("cs_"):
-            import httpx
-
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(
-                    f"https://api.stripe.com/v1/checkout/sessions/{checkout_session_id}",
-                    headers={"Authorization": f"Bearer {settings.stripe_secret_key}"},
-                )
-            if resp.status_code >= 400:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Checkout session could not be verified",
-                )
-            session = resp.json()
-            if session.get("status") == "complete" and session.get("payment_status") in {"paid", "no_payment_required"}:
-                return
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Checkout session is not paid",
-            )
-    if getenv("VERCEL") and not settings.registration_secret:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Self-registration is disabled in production"
-        )
+        from ...services.billing_registration import verify_checkout
+        checkout = await verify_checkout(db, checkout_session_id, email)
+        if checkout.payment_status == "paid" or not settings.registration_secret:
+            return checkout
+    else:
+        checkout = None
+    if (getenv("VERCEL") or getenv("VERCEL_ENV") in {"production", "preview"}) and not settings.registration_secret:
+        raise HTTPException(403, "Self-registration is disabled on public deployments")
     if settings.registration_secret and registration_code != settings.registration_secret:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Registration requires a valid registration code"
-        )
+        raise HTTPException(403, "Registration requires a valid registration code")
+    return checkout
 
 
 def _plan_settings(
@@ -295,6 +265,15 @@ async def _create_stripe_checkout(body: CheckoutCreate) -> Optional[dict]:
     }
 
 
+@router.post("/billing/webhook", tags=["Billing"])
+async def stripe_subscription_webhook(request: Request, db: Session = Depends(get_db_session)):
+    from ...services.billing_registration import apply_subscription_event
+    raw = await request.body()
+    if len(raw) > 262144:
+        raise HTTPException(413, "Webhook payload is too large")
+    return apply_subscription_event(db, raw, request.headers.get("Stripe-Signature", ""))
+
+
 @router.get("/billing/status", tags=["Billing"])
 async def get_billing_status():
     """Expose checkout readiness for the public signup screen."""
@@ -302,7 +281,7 @@ async def get_billing_status():
 
 
 @router.post("/billing/checkout", tags=["Billing"])
-async def create_billing_checkout(body: CheckoutCreate):
+async def create_billing_checkout(body: CheckoutCreate, db: Session = Depends(get_db_session)):
     """Create a signup checkout session before tenant registration."""
     if body.selected_plan not in PLAN_PRICE_FALLBACKS:
         raise HTTPException(status_code=400, detail="Unknown plan")
@@ -324,6 +303,9 @@ async def create_billing_checkout(body: CheckoutCreate):
         )
 
     session_id = "mock_" + secrets.token_urlsafe(18)
+    db.add(BillingCheckout(session_id=session_id, email=body.email.strip().casefold() if body.email else None,
+                           selected_plan=body.selected_plan, payment_status="mock_ready"))
+    db.commit()
     query = urlencode({
         "checkout": "mock",
         "session_id": session_id,
@@ -360,7 +342,18 @@ def _create_self_registered_user(
     payment_template: Optional[str] = None,
     checkout_session_id: Optional[str] = None,
     payment_status: Optional[str] = None,
+    verified_checkout: Optional[BillingCheckout] = None,
 ) -> User:
+    # A registration code or checkout authorizes joining the platform, not
+    # another business. Existing identities join through memberships/invite
+    # and memberships/accept, where the organization's admin is the grantor.
+    if organization_id is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="Registration cannot select an existing organization; an invitation is required",
+        )
+    payment_status = verified_checkout.payment_status if verified_checkout else "pending"
+    selected_plan = verified_checkout.selected_plan if verified_checkout else selected_plan
     requested_organization_id = organization_id
     existing_user = db.query(User).filter(User.email == email).first()
     if existing_user:
@@ -369,17 +362,6 @@ def _create_self_registered_user(
             detail="Email already registered"
         )
     
-    if organization_id:
-        org = db.query(Organization).filter(Organization.id == organization_id).first()
-        if not org:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organization not found"
-            )
-    
-    # Open registration must never honor a client-supplied role: the first
-    # registered user bootstraps the system as admin, everyone after that
-    # starts as a regular user and is promoted by an admin.
     is_first_user = db.query(User).first() is None
 
     # Every self-registered user gets an organization of their own (and is
@@ -388,6 +370,8 @@ def _create_self_registered_user(
     # the FK is enforced (SQLite tests historically hid that bootstrapping bug).
     if organization_id is None:
         org = db.query(Organization).filter(Organization.id == 1).first() if is_first_user else None
+        if org is not None and not (org.settings or {}).get("seeded"):
+            org = None  # Never bootstrap ownership of an existing client file.
         if org is None:
             org = Organization(
                 name=f"{full_name}",
@@ -486,6 +470,9 @@ def _create_self_registered_user(
                 entity_id=authority.id,
                 details={"source": "self_registration"},
             ))
+    if verified_checkout is not None:
+        from ...services.billing_registration import consume_checkout
+        consume_checkout(db, verified_checkout, organization_id)
     db.commit()
     db.refresh(new_user)
     return new_user
@@ -509,7 +496,7 @@ async def register(
     db: Session = Depends(get_db_session)
 ):
     """הרשמת משתמש חדש"""
-    await _assert_registration_allowed(user_data.registration_code, user_data.checkout_session_id)
+    checkout = await _assert_registration_allowed(user_data.registration_code, user_data.checkout_session_id, db=db, email=user_data.email)
     new_user = _create_self_registered_user(
         db,
         email=user_data.email,
@@ -522,7 +509,7 @@ async def register(
         annual_report_requested=user_data.annual_report_requested,
         payment_template=user_data.payment_template,
         checkout_session_id=user_data.checkout_session_id,
-        payment_status=user_data.payment_status,
+        verified_checkout=checkout,
     )
     return _token_for_user(new_user)
 
@@ -569,7 +556,7 @@ async def google_login(
         db.refresh(user)
         return _token_for_user(user)
 
-    await _assert_registration_allowed(login_data.registration_code, login_data.checkout_session_id)
+    checkout = await _assert_registration_allowed(login_data.registration_code, login_data.checkout_session_id, db=db, email=email)
     full_name = payload.get("name") or email.split("@", 1)[0]
     new_user = _create_self_registered_user(
         db,
@@ -581,7 +568,7 @@ async def google_login(
         annual_report_requested=login_data.annual_report_requested,
         payment_template=login_data.payment_template,
         checkout_session_id=login_data.checkout_session_id,
-        payment_status=login_data.payment_status,
+        verified_checkout=checkout,
     )
     return _token_for_user(new_user)
 
@@ -1099,6 +1086,19 @@ async def get_current_user_info(
 ):
     """קבלת מידע על המשתמש המחובר"""
     return UserResponse.model_validate(current_user)
+
+
+@router.get("/auth/organizations", tags=["Auth"])
+async def selectable_organizations(current_user: User = Depends(get_current_user), db: Session = Depends(get_db_session)):
+    """List currently usable memberships without requiring an active selection."""
+    from ...services import membership_service
+    from ..dependencies import _selectable_organizations
+    if current_user.role == UserRole.SUPER_ADMIN:
+        return _selectable_organizations(db)
+    ids = [m.organization_id for m in membership_service.memberships_for(db, current_user.id)
+           if membership_service.is_member(db, current_user.id, m.organization_id)]
+    return [{"id": org.id, "name": org.name} for org in db.query(Organization).filter(
+        Organization.id.in_(ids), Organization.is_active.is_(True)).order_by(Organization.id).all()]
 
 
 # ==================== Organizations Management ====================

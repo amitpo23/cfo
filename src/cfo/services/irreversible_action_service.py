@@ -61,14 +61,28 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _reject_sensitive_payment_data(value: Any) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized = str(key).casefold().replace("_", "").replace("-", "")
+            if normalized in {"cardnumber", "cvv", "cvv2", "cvc", "securitycode"} and item:
+                raise ActionValidationError("Use a stored payment method; raw card data cannot be persisted")
+            _reject_sensitive_payment_data(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_sensitive_payment_data(item)
+
+
 def _canonical_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
     if not isinstance(payload, dict) or not payload:
         raise ActionValidationError("payload must be a non-empty object")
+    _reject_sensitive_payment_data(payload)
     try:
         encoded = json.dumps(
             payload,
             ensure_ascii=False,
             sort_keys=True,
+            allow_nan=False,
             separators=(",", ":"),
         )
     except (TypeError, ValueError) as exc:

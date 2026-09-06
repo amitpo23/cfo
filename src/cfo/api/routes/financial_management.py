@@ -566,7 +566,8 @@ async def assess_financial_risks(
     """הערכת סיכונים"""
     service = AdvancedAIService(db, organization_id=org_id)
     risks = service.assess_financial_risks()
-    return {"status": "success", "data": [vars(r) for r in risks]}
+    return {"status": "success", "data": [vars(r) for r in risks],
+            "unavailable_assessments": service.unavailable_assessments}
 
 
 @router.get("/ai/insights")

@@ -2,6 +2,33 @@
 
 **גרסה 1.0 · 2026-07-24 · זהו לוח הסטטוס היחיד של הפרויקט.** כל מסמכי התכנון האחרים כפופים לו; עבודה שלא מקדמת שער בתכנית הזו — לא מתבצעת.
 
+## Current stabilization status — 6 September 2026
+
+This is the current status for the approved September review plan. Earlier dated
+sections below are historical context. Local completion does not change the live
+pilot or official-book gates.
+
+| Work package | Current state | Evidence / remaining gate |
+|---|---|---|
+| Tenant registration and public authentication | Implemented locally | Regression tests passed; deployment/configuration verification pending |
+| Legacy action approvals and checkout | Implemented locally with explicit gated legacy prototypes | Durable intent/replay/failure tests and signed checkout/webhook tests passed; provider readback and live owner-approved verification remain gated |
+| P&L and cash-flow corrections | Implemented locally | Duplicate/credit/journal/payroll/partial-payment/null/export tests passed; official book reconciliation remains required |
+| Dependencies and QA | Implemented locally | 2,626 backend tests passed; build/lint, route audit and schema checks passed; Git-tracked evidence gate passed after staging |
+| Organization picker and mobile journeys | Verified locally | Both admin roles passed offline browser journeys at desktop and 390 px |
+| Health and recovery tooling | Verified with synthetic PostgreSQL | 68-table encrypted restore, migration parity, hashes and constraints passed; actual production backup/key/PITR evidence remains required |
+| Authorized provider pilot | Gated | Current consent/ownership/quota evidence, 20 documents, official posting evidence, seven morning cycles, triple-verified period package |
+| Calendar-month expansion decision | Gated by elapsed pilot evidence | At least 25 green days; no unexplained financial differences |
+
+Implementation details, API compatibility changes, release steps and evidence:
+[September stabilization report](audits/2026-09-06-stabilization.md).
+Review baseline: [English project review](audits/2026-09-06-project-review.md).
+Source counts: `python scripts/project_inventory.py`.
+
+No live sync, payment, customer message, regulatory submission, production schema
+change or deployment was performed during this local stabilization work. Release
+through the existing PR and Gate 0 process; do not use a successful synthetic drill
+as production recovery or official-book evidence.
+
 ## 1. הצפון
 
 > **חודש קלנדרי מלא של תיק אחד, מקצה לקצה, ממוחשב לחלוטין: מסמך → תיוק → ספרים → התאמות → ניתוח → דיווח. האדם רק מכריע ומאשר — לא מקליד, לא מתאים, לא זוכר.**

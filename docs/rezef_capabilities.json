@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-24",
+  "updated_at": "2026-09-06",
   "purpose": "Machine-readable contract connecting Rezef capabilities to knowledge, runtime evidence and safety gates.",
   "status_vocabulary": {
     "implemented": "Implemented and covered locally; production operation is a separate claim.",
@@ -323,12 +323,15 @@
       "runtime": [
         "src/cfo/services/daily_reports_service.py",
         "src/cfo/services/bank_report_service.py",
-        "src/cfo/services/ledger_service.py"
+        "src/cfo/services/ledger_service.py",
+        "src/cfo/services/financial_reports_service.py"
       ],
       "tests": [
         "tests/test_daily_reports.py",
         "tests/test_kpi_insights_bank_report.py",
-        "tests/test_balance_sheet_derived.py"
+        "tests/test_balance_sheet_derived.py",
+        "tests/test_report_consistency.py",
+        "tests/test_projection_boundary.py"
       ],
       "gates": [
         "organization_scope",
@@ -358,7 +361,9 @@
       "tests": [
         "tests/test_financial_control_overdue_status.py",
         "tests/test_financial_synthesis.py",
-        "tests/test_morning_brief.py"
+        "tests/test_morning_brief.py",
+        "tests/test_readiness_boundary.py",
+        "tests/test_organization_picker.py"
       ],
       "gates": [
         "organization_scope",
@@ -396,7 +401,8 @@
         "src/cfo/services/payment_orchestration.py",
         "src/cfo/services/filing_verification.py",
         "frontend/src/components/PolicyManagementDashboard.tsx",
-        "alembic/versions/e3f4a5b6c7d8_add_policy_enforcement.py"
+        "alembic/versions/e3f4a5b6c7d8_add_policy_enforcement.py",
+        "src/cfo/api/approved_actions.py"
       ],
       "tests": [
         "tests/test_irreversible_action_workflow.py",
@@ -407,7 +413,9 @@
         "tests/test_ai_chat_routes.py",
         "tests/test_open_finance_payments.py",
         "tests/test_filing_verification.py",
-        "tests/test_policy_persistence_and_enforcement.py"
+        "tests/test_policy_persistence_and_enforcement.py",
+        "tests/test_legacy_action_approvals.py",
+        "tests/test_registration_boundary.py"
       ],
       "gates": [
         "organization_scope",

@@ -151,6 +151,7 @@ class Settings(BaseSettings):
     # SaaS billing / checkout. Stripe Checkout enables Apple Pay and Google Pay
     # when the Stripe account, domain, and payment methods are configured.
     stripe_secret_key: Optional[str] = None
+    stripe_webhook_secret: Optional[str] = None
     stripe_price_company_up_to_2_5m: Optional[str] = None
     stripe_price_company_above_2_5m: Optional[str] = None
     stripe_price_office: Optional[str] = None
@@ -364,10 +365,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_settings(self):
-        if not os.getenv("VERCEL"):
+        public_deployment = bool(os.getenv("VERCEL")) or os.getenv("VERCEL_ENV") in {"production", "preview"}
+        if not public_deployment:
             return self
 
         errors = []
+        if self.auth_bypass_enabled:
+            errors.append("AUTH_BYPASS_ENABLED must be false on public deployments")
         if not self.database_url or self.database_url.startswith("sqlite:"):
             errors.append("DATABASE_URL must point to a persistent production database")
         if (

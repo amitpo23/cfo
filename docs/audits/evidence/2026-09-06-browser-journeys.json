@@ -1,0 +1,26 @@
+[
+  {
+    "role": "super_admin",
+    "checks": [
+      "home selection header",
+      "second organization",
+      "mobile content width",
+      "mobile navigation",
+      "logout clears scope",
+      "no JavaScript errors"
+    ],
+    "passed": true
+  },
+  {
+    "role": "admin",
+    "checks": [
+      "home selection header",
+      "second organization",
+      "mobile content width",
+      "mobile navigation",
+      "logout clears scope",
+      "no JavaScript errors"
+    ],
+    "passed": true
+  }
+]

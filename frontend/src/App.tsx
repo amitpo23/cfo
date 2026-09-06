@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import api from './services/api';
@@ -44,64 +44,66 @@ import {
   MessageCircle,
   Activity,
   FileX,
+  Menu,
+  X,
 } from 'lucide-react';
 
 // Dashboard Components
-import CustomerDashboard from './components/CustomerDashboard';
-import DocumentManager from './components/DocumentManager';
-import PaymentInterface from './components/PaymentInterface';
-import ForecastingDashboard from './components/ForecastingDashboard';
-import BankStatementDashboard from './components/BankStatementDashboard';
-import BankInsightsDashboard from './components/BankInsightsDashboard';
-import OfficeDashboard from './components/OfficeDashboard';
-import AdminClientsDashboard from './components/AdminClientsDashboard';
-import MoshkoObservabilityDashboard from './components/MoshkoObservabilityDashboard';
-import MoshkoKnowledgeDashboard from './components/MoshkoKnowledgeDashboard';
-import CalculatorsDashboard from './components/CalculatorsDashboard';
-import PayrollDashboard from './components/PayrollDashboard';
-import OpenFinanceOpsDashboard from './components/OpenFinanceOpsDashboard';
-import LedgerDashboard from './components/LedgerDashboard';
-import DailyReportsDashboard from './components/DailyReportsDashboard';
-import SuppliersMissingInvoices from './components/SuppliersMissingInvoices';
-import VatReportScreen from './components/VatReportScreen';
-import AnnualReportsDashboard from './components/AnnualReportsDashboard';
-import EngineDashboard from './components/EngineDashboard';
-import BusinessMenuDashboard from './components/BusinessMenuDashboard';
-import SumitCoverageDashboard from './components/SumitCoverageDashboard';
-import ReportsDashboard from './components/ReportsDashboard';
-import BudgetDashboard from './components/BudgetDashboard';
-import KPIDashboard from './components/KPIDashboard';
-import AIAnalyticsDashboard from './components/AIAnalyticsDashboard';
-import ChatAssistant from './components/ChatAssistant';
-import MoshkoSystemChat from './components/MoshkoSystemChat';
-import PolicyManagementDashboard from './components/PolicyManagementDashboard';
+const CustomerDashboard = lazy(() => import('./components/CustomerDashboard'));
+const DocumentManager = lazy(() => import('./components/DocumentManager'));
+const PaymentInterface = lazy(() => import('./components/PaymentInterface'));
+const ForecastingDashboard = lazy(() => import('./components/ForecastingDashboard'));
+const BankStatementDashboard = lazy(() => import('./components/BankStatementDashboard'));
+const BankInsightsDashboard = lazy(() => import('./components/BankInsightsDashboard'));
+const OfficeDashboard = lazy(() => import('./components/OfficeDashboard'));
+const AdminClientsDashboard = lazy(() => import('./components/AdminClientsDashboard'));
+const MoshkoObservabilityDashboard = lazy(() => import('./components/MoshkoObservabilityDashboard'));
+const MoshkoKnowledgeDashboard = lazy(() => import('./components/MoshkoKnowledgeDashboard'));
+const CalculatorsDashboard = lazy(() => import('./components/CalculatorsDashboard'));
+const PayrollDashboard = lazy(() => import('./components/PayrollDashboard'));
+const OpenFinanceOpsDashboard = lazy(() => import('./components/OpenFinanceOpsDashboard'));
+const LedgerDashboard = lazy(() => import('./components/LedgerDashboard'));
+const DailyReportsDashboard = lazy(() => import('./components/DailyReportsDashboard'));
+const SuppliersMissingInvoices = lazy(() => import('./components/SuppliersMissingInvoices'));
+const VatReportScreen = lazy(() => import('./components/VatReportScreen'));
+const AnnualReportsDashboard = lazy(() => import('./components/AnnualReportsDashboard'));
+const EngineDashboard = lazy(() => import('./components/EngineDashboard'));
+const BusinessMenuDashboard = lazy(() => import('./components/BusinessMenuDashboard'));
+const SumitCoverageDashboard = lazy(() => import('./components/SumitCoverageDashboard'));
+const ReportsDashboard = lazy(() => import('./components/ReportsDashboard'));
+const BudgetDashboard = lazy(() => import('./components/BudgetDashboard'));
+const KPIDashboard = lazy(() => import('./components/KPIDashboard'));
+const AIAnalyticsDashboard = lazy(() => import('./components/AIAnalyticsDashboard'));
+const ChatAssistant = lazy(() => import('./components/ChatAssistant'));
+const MoshkoSystemChat = lazy(() => import('./components/MoshkoSystemChat'));
+const PolicyManagementDashboard = lazy(() => import('./components/PolicyManagementDashboard'));
 
 // New Financial Operations Components
-import InvoicesDashboard from './components/InvoicesDashboard';
-import PaymentsDashboard from './components/PaymentsDashboard';
-import AgreementCashFlowDashboard from './components/AgreementCashFlowDashboard';
-import MasavDashboard from './components/MasavDashboard';
-import InventoryDashboard from './components/InventoryDashboard';
-import BankReportDashboard from './components/BankReportDashboard';
-import ExecutiveDashboard from './components/ExecutiveDashboard';
-import BudgetEntry from './components/BudgetEntry';
-import YearComparison from './components/YearComparison';
-import ExpenseFiling from './components/ExpenseFiling';
+const InvoicesDashboard = lazy(() => import('./components/InvoicesDashboard'));
+const PaymentsDashboard = lazy(() => import('./components/PaymentsDashboard'));
+const AgreementCashFlowDashboard = lazy(() => import('./components/AgreementCashFlowDashboard'));
+const MasavDashboard = lazy(() => import('./components/MasavDashboard'));
+const InventoryDashboard = lazy(() => import('./components/InventoryDashboard'));
+const BankReportDashboard = lazy(() => import('./components/BankReportDashboard'));
+const ExecutiveDashboard = lazy(() => import('./components/ExecutiveDashboard'));
+const BudgetEntry = lazy(() => import('./components/BudgetEntry'));
+const YearComparison = lazy(() => import('./components/YearComparison'));
+const ExpenseFiling = lazy(() => import('./components/ExpenseFiling'));
 
 // CFO Command Center Components
-import CFOOverview from './components/CFOOverview';
-import CFOARDashboard from './components/CFOARDashboard';
-import CFOAPDashboard from './components/CFOAPDashboard';
-import CFOSyncDashboard from './components/CFOSyncDashboard';
-import SettingsPage from './components/SettingsPage';
-import CFOAlertsTasks from './components/CFOAlertsTasks';
-import CFOCashFlowProjection from './components/CFOCashFlowProjection';
-import CashFlowDashboard from './components/CashFlowDashboard';
+const CFOOverview = lazy(() => import('./components/CFOOverview'));
+const CFOARDashboard = lazy(() => import('./components/CFOARDashboard'));
+const CFOAPDashboard = lazy(() => import('./components/CFOAPDashboard'));
+const CFOSyncDashboard = lazy(() => import('./components/CFOSyncDashboard'));
+const SettingsPage = lazy(() => import('./components/SettingsPage'));
+const CFOAlertsTasks = lazy(() => import('./components/CFOAlertsTasks'));
+const CFOCashFlowProjection = lazy(() => import('./components/CFOCashFlowProjection'));
+const CashFlowDashboard = lazy(() => import('./components/CashFlowDashboard'));
 
 import RezefLanding from './components/RezefLanding';
 import PrivacyPolicy from './components/PrivacyPolicy';
 import ResetPassword from './components/ResetPassword';
-import TeamManagement from './components/TeamManagement';
+const TeamManagement = lazy(() => import('./components/TeamManagement'));
 
 import './App.css';
 
@@ -114,7 +116,7 @@ const queryClient = new QueryClient({
   },
 });
 
-const AUTH_BYPASS = import.meta.env.VITE_AUTH_BYPASS === 'true';
+const AUTH_BYPASS = import.meta.env.DEV && import.meta.env.VITE_AUTH_BYPASS === 'true';
 
 // Navigation configuration
 const navigationConfig = [
@@ -192,6 +194,7 @@ const navigationConfig = [
 ];
 
 function App() {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -233,8 +236,9 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <Router>
         <div className={`flex h-screen ${darkMode ? 'dark bg-gray-900' : 'bg-gray-50'}`}>
+          {mobileNavOpen && <button aria-label="Close navigation" className="fixed inset-0 bg-black/40 z-40 md:hidden" onClick={() => setMobileNavOpen(false)} />}
           {/* Sidebar */}
-          <aside className={`${sidebarCollapsed ? 'w-20' : 'w-72'} ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-r shadow-lg transition-all duration-300 flex flex-col overflow-hidden`}>
+          <aside id="main-navigation" aria-label="Main navigation" onKeyDown={(event) => { if (event.key === 'Escape') setMobileNavOpen(false); }} className={`fixed inset-y-0 left-0 z-50 md:static shrink-0 ${mobileNavOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} ${sidebarCollapsed ? 'w-20' : 'w-72'} ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} border-r shadow-lg transition-all duration-300 flex flex-col overflow-hidden`}>
             {/* Logo Section */}
             <div className={`p-4 border-b ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
               <div className="flex items-center gap-3">
@@ -251,7 +255,7 @@ function App() {
             </div>
             
             {/* Navigation */}
-            <nav className="flex-1 overflow-y-auto py-4">
+            <nav onClick={(event) => { if ((event.target as HTMLElement).closest('a')) setMobileNavOpen(false); }} className="flex-1 overflow-y-auto py-4">
               {navigationConfig.map((group) => (
                 <div key={group.section} className="mb-4">
                   {!sidebarCollapsed && (
@@ -294,11 +298,12 @@ function App() {
           </aside>
 
           {/* Main Content Area */}
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="min-w-0 flex-1 flex flex-col overflow-hidden">
             {/* Top Header Bar */}
-            <header className={`h-16 border-b ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} shadow-sm flex items-center justify-between px-6`}>
+            <header className={`h-16 border-b ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'} shadow-sm flex items-center justify-between gap-2 px-2 md:px-6`}>
+              <button aria-label="Toggle navigation" aria-controls="main-navigation" aria-expanded={mobileNavOpen} className="md:hidden p-2 shrink-0" onClick={() => setMobileNavOpen(!mobileNavOpen)}>{mobileNavOpen ? <X size={20} /> : <Menu size={20} />}</button>
               {/* Search Bar */}
-              <div className="flex-1 max-w-md">
+              <div className="hidden lg:block flex-1 max-w-md">
                 <div className={`relative flex items-center ${darkMode ? 'bg-gray-700' : 'bg-gray-100'} rounded-lg`}>
                   <Search size={18} className={`absolute left-3 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`} />
                   <input
@@ -312,7 +317,7 @@ function App() {
               </div>
 
               {/* Right Side Actions */}
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-1 md:gap-4 min-w-0">
                 {/* Super-admin: act-as-client organization switcher */}
                 {currentUser && <OrgSwitcher currentUser={currentUser} darkMode={darkMode} />}
                 {/* חוסם כשהשרת מחזיר 409 active_organization_required */}
@@ -354,6 +359,7 @@ function App() {
                 {/* User Menu */}
                 <div className="relative">
                   <button
+                    aria-label={currentUser?.full_name || 'User menu'}
                     onClick={() => setShowUserMenu(!showUserMenu)}
                     className={`flex items-center gap-2 px-3 py-2 rounded-lg transition ${
                       darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
@@ -362,7 +368,7 @@ function App() {
                     <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
                       <User size={16} className="text-white" />
                     </div>
-                    <span className={`text-sm font-medium ${darkMode ? 'text-white' : 'text-gray-700'}`}>
+                    <span className={`hidden sm:inline text-sm font-medium ${darkMode ? 'text-white' : 'text-gray-700'}`}>
                       {currentUser?.full_name || 'Admin'}
                     </span>
                     <ChevronDown size={16} className={darkMode ? 'text-gray-400' : 'text-gray-500'} />
@@ -376,6 +382,7 @@ function App() {
 
             {/* Main Content */}
             <main className={`flex-1 overflow-y-auto ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
+              <Suspense fallback={<div role="status" className="p-6">Loading…</div>}>
               <Routes>
                 {/* CFO Command Center */}
                 <Route path="/" element={<CFOOverview darkMode={darkMode} />} />
@@ -435,6 +442,7 @@ function App() {
                 <Route path="/year-comparison" element={<YearComparison darkMode={darkMode} />} />
                 <Route path="/expenses" element={<ExpenseFiling darkMode={darkMode} />} />
               </Routes>
+              </Suspense>
             </main>
 
             {/* מושקו כצ'אט מערכת — מחוץ ל-<Routes> בכוונה, כדי שיהיה
@@ -584,6 +592,8 @@ const UserDropdown: React.FC<{ darkMode: boolean; currentUser: CurrentUser | nul
         <button
           onClick={() => {
             localStorage.removeItem('auth_token');
+            localStorage.removeItem('active_org_id');
+            queryClient.clear();
             window.location.href = '/';
           }}
           className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition text-red-500 hover:bg-red-50 ${

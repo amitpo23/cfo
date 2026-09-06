@@ -40,6 +40,8 @@ from ...services.irreversible_action_service import (
 )
 
 logger = logging.getLogger(__name__)
+from ..approved_actions import approved_provider_action, require_durable_adapter
+
 router = APIRouter()
 
 # Insight types produced by the bank-intelligence engine (for listing).
@@ -1004,6 +1006,7 @@ async def get_payment(payment_id: str, org_id: int = Depends(get_current_org_id)
 
 
 @router.delete("/payments/{payment_id}")
+@approved_provider_action('payment', 'open_finance.cancel_payment', target_key='payment_id')
 async def cancel_payment(
     payment_id: str,
     org_id: int = Depends(get_current_org_id),
@@ -1018,6 +1021,7 @@ async def cancel_payment(
 
 
 @router.post("/payments/{payment_id}/refund")
+@approved_provider_action('refund', 'open_finance.refund_payment')
 async def refund_payment(
     payment_id: str,
     body: dict = Body(...),
@@ -1046,6 +1050,7 @@ async def payment_status(payment_id: str, org_id: int = Depends(get_current_org_
 
 
 @router.post("/payments/init")
+@approved_provider_action('payment', 'open_finance.init_payment')
 async def init_payment(
     body: dict = Body(...),
     org_id: int = Depends(get_current_org_id),
@@ -1061,6 +1066,7 @@ async def init_payment(
 
 # ---- Mandates ---- #
 @router.post("/mandates")
+@approved_provider_action('mandate', 'open_finance.create_mandate')
 async def create_mandate(
     body: dict = Body(...),
     org_id: int = Depends(get_current_org_id),
@@ -1084,6 +1090,7 @@ async def get_mandate(resource_id: str, org_id: int = Depends(get_current_org_id
 
 
 @router.delete("/mandates/{resource_id}")
+@approved_provider_action('mandate', 'open_finance.delete_mandate', target_key='resource_id')
 async def delete_mandate(
     resource_id: str,
     org_id: int = Depends(get_current_org_id),

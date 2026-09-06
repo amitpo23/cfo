@@ -4,6 +4,21 @@
 והנחה לא-מאומתת ש-Neon PITR קיים. מהיום: גיבוי יומי מוצפן (GitHub
 Actions ‏`db-backup`, ‏02:00 UTC, שמירה 30 יום) + הנוהל הזה.
 
+## Local recovery verification — 2026-09-06
+
+A synthetic PostgreSQL 18.3 drill passed using `scripts/verify_postgres_restore.py`:
+68 tables, fresh Alembic migrations, full schema parity, encrypted backup/decryption,
+all-table row fingerprints, organization foreign keys, and checkout uniqueness.
+The measured fixture drill took 2.92 seconds. This is a small synthetic test,
+not a production RTO measurement or evidence that the production backup secrets work.
+
+The script accepts only loopback databases named `rezef_test_*` and refuses
+nonempty source/destination databases. CI now runs it against an isolated
+PostgreSQL service. Production backup retrieval, key availability, PITR settings,
+and a restore of an actual customer backup still require the owner-run drill below.
+
+Evidence: `audits/evidence/2026-09-06-postgres-restore.json`.
+
 ## יעדים (עד שהבעלים יקבע אחרת)
 
 - **RPO** (אובדן נתונים מרבי): ‏24 שעות — גיל הגיבוי היומי האחרון.
@@ -19,7 +34,7 @@ Actions ‏`db-backup`, ‏02:00 UTC, שמירה 30 יום) + הנוהל הזה.
 3. **לפענח** (עם ה-passphrase ממנהל הסיסמאות):
    ```bash
    openssl enc -d -aes-256-cbc -pbkdf2 -in backup-<stamp>.sql.enc \
-     -out backup-<stamp>.sql -pass pass:'<BACKUP_PASSPHRASE>'
+     -out backup-<stamp>.sql -pass env:BACKUP_PASSPHRASE
    grep -q "PostgreSQL database dump complete" backup-<stamp>.sql  # אימות
    ```
 4. **מסד יעד נקי**: ליצור מסד/branch חדש ב-Neon (לא לדרוס את החי לפני
@@ -29,7 +44,7 @@ Actions ‏`db-backup`, ‏02:00 UTC, שמירה 30 יום) + הנוהל הזה.
    ```
 5. **אימות אחרי שחזור** (חובה, לפי GATE0):
    ```bash
-   DATABASE_URL=<NEW_DATABASE_URL> python scripts/schema_drift_check.py
+   python scripts/schema_drift_check.py --env-file <OWNER_APPROVED_RESTORE_ENV_FILE>
    # + ספירות שורות מול הצפוי: organizations, invoices, journal_entries
    ```
    ואז `python -m alembic upgrade head` אם הגיבוי ישן מה-head.

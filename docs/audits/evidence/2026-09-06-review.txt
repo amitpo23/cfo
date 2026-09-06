@@ -1,0 +1,128 @@
+Rezef review evidence — 2026-09-06 — checkout 260706b
+Synthetic data only; provider requests mocked or blocked. No production verification.
+
+
+=== security-repro.log ===
+CROSS_TENANT_REGISTRATION 201 READ 200 {'status': 'success', 'data': [{'id': 1, 'name': 'REVIEW_SYNTHETIC_PRIVATE_CONTACT', 'email': 'private@example.com', 'phone': None, 'contact_type': 'customer', 'external_id': None}]}
+PRODUCTION_CONFIG_ACCEPTS_AUTH_BYPASS True
+UNAUTHENTICATED_BYPASS 200 super_admin
+REUSED_CHECKOUT 0 201
+STORED_PLAN office active
+REUSED_CHECKOUT 1 201
+STORED_PLAN office active
+UNHEALTHY_HTTP_STATUS 200
+
+
+=== action-repro.log ===
+ADMIN_WITHOUT_SIGNING_AUTHORITY 200 {'status': 'synthetic_cancelled'} PROVIDER_ADAPTER_CALLED ['synthetic-17']
+DURABLE_APPROVAL_REQUEST_COUNT 0
+
+
+=== financial-repro.log ===
+DEDUPLICATED_LEDGER_EXPENSES [{'account': '5000', 'name': 'הוצאות', 'type': 'expense', 'debit': 1000.0, 'credit': 0.0, 'balance': 1000.0}]
+REPORT {'period_start': '2026-05-01', 'period_end': '2026-05-31', 'revenue': [], 'cost_of_goods_sold': [], 'gross_profit': 0.0, 'gross_margin': 0.0, 'operating_expenses': [{'category': 'other', 'category_hebrew': 'אחר', 'amount': 2000.0, 'percentage': 100.0, 'previous_amount': 0.0, 'change_percentage': 0}], 'operating_income': -2000.0, 'operating_margin': 0.0, 'other_income': [], 'other_expenses': [], 'net_income_before_tax': -2000.0, 'tax_expense': 0.0, 'net_income': -2000.0, 'net_margin': 0.0, 'total_revenue': 0.0, 'total_expenses': 2000.0, 'coverage': {'revenue_documents': 0, 'expense_documents': 1, 'revenue_last_document': None, 'expense_last_document': '2026-05-03', 'balanced': False, 'warning_he': '⚠️ שני צדי הדוח אינם מסונכרנים באותה מידה: 0 מסמכי הכנסה מול 1 מסמכי הוצאה; אין ולו מסמך הכנסה אחד בתקופה. המספרים נכונים לנתונים שקיימים, אך אינם עדות לרווחיות עד שצד ההכנסות יושלם.'}}
+
+
+=== report-source-repro.log ===
+MANUAL_ENTRY_LEDGER_REVENUE [{'account': '4000', 'name': 'הכנסות', 'type': 'revenue', 'debit': 0.0, 'credit': 1000.0, 'balance': -1000.0}]
+MANUAL_ENTRY_REPORT_REVENUE 0.0
+UNPAID_INVOICE_CLASSIFIED_AS_HISTORICAL_CASH_INCOME {'2026-09': 1180.0}
+Opening-balance finding is based on code inspection (financial_reports_service.py:571); top-level report key lookup was not a valid measurement.
+
+
+=== schema.log ===
+OK — אין drift מבני: הסכמה החיה תואמת את המודלים
+WARN — חריגת dialect מתועדת ב-irreversible_action_requests: [{'kind': 'foreign_key', 'columns': ['approved_by_authority_id'], 'referred_table': 'organization_signing_authorities', 'referred_columns': ['id'], 'reason': 'SQLite additive ALTER cannot create this FK; PostgreSQL must enforce it'}]
+WARN — חריגת dialect מתועדת ב-expenses: [{'kind': 'foreign_key', 'columns': ['account_id'], 'referred_table': 'accounts', 'referred_columns': ['id'], 'reason': 'SQLite additive ALTER cannot create this FK; PostgreSQL must enforce it'}]
+WARN — חריגת dialect מתועדת ב-moshko_memory: [{'kind': 'foreign_key', 'columns': ['approved_by'], 'referred_table': 'users', 'referred_columns': ['id'], 'reason': 'SQLite additive ALTER cannot create this FK; PostgreSQL must enforce it'}]
+
+
+=== colscan.log ===
+colscan: clean — no bad model-column references
+
+
+=== frontend-build.log ===
+
+> cfo-frontend@0.2.0 build
+> tsc && vite build
+
+vite v6.4.3 building for production...
+transforming...
+Browserslist: browsers data (caniuse-lite) is 8 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+✓ 2437 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.97 kB │ gzip:   0.51 kB
+dist/assets/index-CECVNCAt.css   83.24 kB │ gzip:  13.14 kB
+dist/assets/query-B_G-lpXR.js    41.73 kB │ gzip:  12.15 kB
+dist/assets/utils-DgNp5v3s.js    90.74 kB │ gzip:  30.74 kB
+dist/assets/vendor-BKdbzvlf.js  160.31 kB │ gzip:  52.43 kB
+dist/assets/xlsx-ByDo_lG2.js    417.70 kB │ gzip: 138.85 kB
+dist/assets/charts-BrA9nSW4.js  444.55 kB │ gzip: 111.63 kB
+dist/assets/index-BqDspSiZ.js   654.80 kB │ gzip: 135.32 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 8.88s
+
+
+=== frontend-lint.log ===
+
+> cfo-frontend@0.2.0 lint
+> eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0
+
+
+
+=== browser.log ===
+BUTTONS ['Collapse', 'Synthetic Client', '', '', '', 'Synthetic Reviewer', 'שמור פרטי חברה', 'הנפק קוד קישור', '']
+ORG_BUTTONS ['Collapse', 'Synthetic Client', 'Synthetic Homeהבית שלי#1', 'Synthetic Client#5', '', '', '', 'Synthetic Reviewer', 'שמור פרטי חברה', 'הנפק קוד קישור', '']
+HOME_SELECTED_STORAGE None
+LAST_ME_REQUEST {'url': 'http://127.0.0.1:5199/api/admin/auth/me', 'org': None}
+MOBILE_WIDTH {'viewport': 390, 'body': 390, 'root': 390}
+JS_ERRORS []
+Starting server 1/1: cd frontend && npm run preview -- --host 127.0.0.1 --port 5199
+Waiting for server on port 5199...
+Server ready on port 5199
+
+All 1 server(s) ready
+Running: python /private/tmp/rezef-review-20260906/browser_review.py
+
+
+Stopping 1 server(s)...
+Server 1 stopped
+All servers stopped
+
+
+=== pytest.log (summary) ===
+tests/test_token_revocation.py::test_logout_purges_expired_denylist_rows
+  /Users/mymac/coding/cfo/tests/test_token_revocation.py:106: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    expires_at=datetime.utcnow() - timedelta(days=2),
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_live_cash_flow_service.py::test_monthly_cash_flow_sums_bank_transactions_per_calendar_month
+1 failed, 2590 passed, 37891 warnings in 1001.50s (0:16:41)
+
+=== failed-test-rerun.log (summary) ===
+tests/test_live_cash_flow_service.py: 13 warnings
+  /Users/mymac/coding/cfo/.venv/lib/python3.12/site-packages/sqlalchemy/sql/schema.py:3592: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return util.wrap_callable(lambda ctx: fn(), fn)  # type: ignore
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_live_cash_flow_service.py::test_monthly_cash_flow_sums_bank_transactions_per_calendar_month
+1 failed, 15 warnings in 0.74s
+
+=== routes-unconfigured.log (summary) ===
+
+## /api/whatsapp
+  [CONF] 503 /api/whatsapp/webhook  (ערוץ WhatsApp לא מוגדר)
+
+======================================================================
+סהכ: 263 | תקין(200): 173 | אזהרה(4xx): 50 | מוגדר-סביבה: 38 | כשל: 2
+CONF = תשובת not-configured בסביבת האודיט — התנהגות נכונה, לא ממצא.
+======================================================================
