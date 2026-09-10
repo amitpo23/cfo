@@ -45,7 +45,7 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 #
 # 23/08/2026 — אישור בעלים מפורש (ציטוט): "אפשר שמאז האירוע, הסדר יחזור
 # להיות כמו שצריך ומחזור אוטומטי מלא, אבל כמובן עם ההגבלות של ה-API Calls
-# ל-SUMIT עם ההגדרה הקשיחה שלנו". החזרת המחזור האוטומטי המלא — 8 crons —
+# ל-SUMIT עם ההגדרה הקשיחה שלנו". החזרת המחזור האוטומטי המלא — 8 crons (עד 10/09/2026, אז sync-sumit הוסר שוב) —
 # תחת אותם שערי-עלות מבניים שכבר קיימים בקוד (לא הוקלו/לא נוספו כאן; רק
 # אומתו לפני ההחזרה). פר-cron, מה רץ / תדירות / תקציב מדוד / ראיית הצלחה:
 #
@@ -124,8 +124,11 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 #    קורא `CfoInsight` מה-DB המקומי ושולח ל-Telegram/WhatsApp). חריגה מופיעה
 #    ב-`budget_skipped` וב-`results`, ולא נבלעת. ראיית
 #    הצלחה: `tests/test_channel_notifier.py`.
+# 10/09/2026 — הנחיית בעלים מפורשת: לעצור קריאות SUMIT אוטומטיות ולמנוע
+# חריגת מכסה/תשלום על קריאות. /api/cron/sync-sumit הוסר שוב מ-vercel.json.
+# שאר ה-crons נשארו (OF / בקרה מקומית / listquotas חינמית / תזכורות עם opt-in).
+
 EXPECTED_DAILY_SCHEDULES: dict[str, str] = {
-    "/api/cron/sync-sumit": "30 1 * * *",
     "/api/cron/sync-open-finance": "0 2 * * *",
     "/api/cron/bank-gap-scan": "15 3 * * *",
     "/api/cron/refresh-sumit-quota": "30 3 * * *",

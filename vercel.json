@@ -55,10 +55,6 @@
   ],
   "crons": [
     {
-      "path": "/api/cron/sync-sumit",
-      "schedule": "30 1 * * *"
-    },
-    {
       "path": "/api/cron/sync-open-finance",
       "schedule": "0 2 * * *"
     },
