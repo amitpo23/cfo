@@ -1,0 +1,1620 @@
+{
+  "schema_version": 1,
+  "checked_on": "2026-09-06",
+  "status_authority": "docs/MASTER_EXECUTION_PLAN.md",
+  "review_state": "in_progress",
+  "scope": "Relevant business flow inventory; rows are not endpoint counts and do not establish complete provider coverage",
+  "public_index_evidence": "docs/audits/evidence/2026-09-06-provider-public-index.json",
+  "public_index_blocker": "SUMIT HTTP 429 stopped further crawl; unread articles/collections remain explicit",
+  "sumit_contract": "docs/sumit_swagger_v1_2026-08-19.json",
+  "capabilities": [
+    {
+      "id": "AR-01",
+      "business_flow": "Tax invoice → channel selection → signed request → provider request readback",
+      "status": "implemented_locally",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "collection_settlement.py",
+        "IrreversibleActionRequest"
+      ],
+      "user_and_moshko_surface": "CollectionWorkbench /collections; propose_collection_request and existing execution tools",
+      "offline_evidence": [
+        "tests/test_collection_settlement.py"
+      ],
+      "required_completion": "Live product/account entitlement and owner-controlled provider validation remain gated.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AR-02",
+      "business_flow": "Existing receipt → multiple invoices / multiple receipts → invoice",
+      "status": "implemented_locally",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "collection_allocation_service.py",
+        "CollectionPaymentAllocation"
+      ],
+      "user_and_moshko_surface": "CollectionWorkbench; allocate_collection_receipt; get_collection_workbench",
+      "offline_evidence": [
+        "tests/test_collection_allocations.py"
+      ],
+      "required_completion": "Synthetic flow proven; migration and release validation pending.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AR-03",
+      "business_flow": "One receipt → multiple bank movements; partial coverage and excess",
+      "status": "implemented_locally",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "collection_allocation_service.py",
+        "collection_workbench.py"
+      ],
+      "user_and_moshko_surface": "CollectionWorkbench and get_collection_workbench",
+      "offline_evidence": [
+        "tests/test_collection_allocations.py"
+      ],
+      "required_completion": "Unallocated excess is visible; business classification of advance/refund still requires evidence.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AR-04",
+      "business_flow": "Receipt predating a collection proposal; duplicate channel prevention",
+      "status": "implemented_locally",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "collection_settlement.py",
+        "payment_evidence.py"
+      ],
+      "user_and_moshko_surface": "CollectionWorkbench and collection proposal/allocation tools share the same service",
+      "offline_evidence": [
+        "tests/test_collection_allocations.py",
+        "tests/test_collection_settlement.py"
+      ],
+      "required_completion": "Source-paid totals without explaining receipts remain a parity review blocker.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AR-05",
+      "business_flow": "Advance → appropriate document and customer credit → later allocation",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "collection_allocation_service.py",
+        "document_issuance_service.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_collection_allocations.py"
+      ],
+      "required_completion": "No automatic document choice for advance/proforma/exempt business. Add professionally reviewed event/business-type contract and evidence-aware issuance.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AR-06",
+      "business_flow": "Expired link / rejected / cancelled / timeout / unknown result → safe resolution",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "collection_settlement.py",
+        "payment_evidence.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_collection_settlement.py"
+      ],
+      "required_completion": "Unknown execution locks retries. Add owner resolution/readback for expired requests without fabricating expiry or transferring statuses.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AR-07",
+      "business_flow": "Provider-issued document reuse and late request/receipt identity",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "sumit_connector.py",
+        "sync_engine.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_collection_settlement.py",
+        "tests/test_payment_source_lineage.py"
+      ],
+      "required_completion": "Saved SUMIT schemas lack a payment→invoice link on the tested responses; external ID equality is not enough. Reviewed allocation is required.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AR-08",
+      "business_flow": "AR and cash/derived ledger parity without duplicate income",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "ledger_service.py",
+        "financial_synthesis.py",
+        "ar_ap_aging.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_collection_allocations.py",
+        "tests/test_financial_statements_reconcile.py"
+      ],
+      "required_completion": "Allocated receipts now post once. Expand report parity evidence for unallocated credits, reversals, FX and aggregate card settlement.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AP-01",
+      "business_flow": "Vendor bill → verified payee → proposal → approval → bank request → settlement",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "src/cfo/services/payable_settlement.py",
+        "src/cfo/services/payable_workbench.py",
+        "src/cfo/services/payment_evidence.py",
+        "src/cfo/api/routes/financial_management.py",
+        "IrreversibleActionRequest",
+        "Payment.bill_id",
+        "BankTransaction"
+      ],
+      "user_and_moshko_surface": "Supplier payments screen /supplier-payments; shared HTTP workbench; Moshko read/propose/execute/settle/reverse tools. Signing remains the existing approval workflow.",
+      "offline_evidence": [
+        "tests/test_payable_settlement.py",
+        "tests/browser_offline/payable_workbench.py",
+        "docs/audits/evidence/2026-09-06-payable-workbench-browser.json"
+      ],
+      "required_completion": "Local single-bill ILS flow implemented with owner-attested beneficiary/withholding evidence, partial/multiple booked outflows, replay prevention, source parity guards and reversal history. Official SUMIT payment posting/readback remains unsupported. Live entitlement, funding consent, beneficiary and certificate validity require owner/professional verification. Withholding deductions and advanced schedules are not implemented by this adapter.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AP-02",
+      "business_flow": "Partial / multiple / scheduled supplier payments",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "src/cfo/services/payable_settlement.py",
+        "src/cfo/services/payment_evidence.py",
+        "src/cfo/services/ledger_service.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_payable_settlement.py"
+      ],
+      "required_completion": "Partial bill requests and several booked outflows per request are locally tested; each settlement retains its own date and derived ledger entry. Multiple bills per outgoing payment, scheduled/bulk initiation and fees/FX need separate adapters and provider-specific evidence.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AP-03",
+      "business_flow": "Mandate creation / validity / modification / cancellation",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "open_finance_client.py",
+        "open_finance.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_approved_open_finance_payment.py"
+      ],
+      "required_completion": "Existing approved wrappers do not establish mandate→bill/occurrence business linkage. Financy mandate entitlement is unreviewed.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AP-04",
+      "business_flow": "Recurring charges without duplicate catch-up",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "recurring_billing_service.py",
+        "payment_request_service.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Review durable occurrence identity and document results. Legacy in-memory standing-order prototype is gated at HTTP but still needs retirement inside the service.",
+      "official_books_verified": false
+    },
+    {
+      "id": "AP-05",
+      "business_flow": "Refund / rejection / returned debit / chargeback",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://help.sumit.co.il/he/articles/5988476-מבוא-להחזרות-חיובים",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/04-billing-collection.md",
+              "line": 215,
+              "heading": "מבוא להחזרות חיובים — https://help.sumit.co.il/he/articles/5988476-מבוא-להחזרות-חיובים"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/he/articles/5796331-מהי-בקשה-להצגת-שובר",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/04-billing-collection.md",
+              "line": 222,
+              "heading": "מהי בקשה להצגת שובר? — https://help.sumit.co.il/he/articles/5796331-מהי-בקשה-להצגת-שובר"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/he/articles/5988501-מבוא-להחלפות-כרטיסי-אשראי",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/04-billing-collection.md",
+              "line": 236,
+              "heading": "מבוא להחלפות כרטיסי אשראי — https://help.sumit.co.il/he/articles/5988501-מבוא-להחלפות-כרטיסי-אשראי"
+            }
+          ]
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "payments.py",
+        "payment_evidence.py",
+        "bank_insights.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Separate refund execution evidence, credit document and counter-movement; approved wrappers alone do not complete this chain.",
+      "official_books_verified": false
+    },
+    {
+      "id": "BANK-01",
+      "business_flow": "Heuristic candidates versus identified final reconciliation",
+      "status": "implemented_locally",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "bank_reconciliation.py",
+        "manual_reconciliation.py"
+      ],
+      "user_and_moshko_surface": "BankInsightsDashboard and get_bank_reconciliation",
+      "offline_evidence": [
+        "tests/test_bank_reconciliation.py",
+        "tests/test_manual_reconciliation.py"
+      ],
+      "required_completion": "Amount/date/name are candidates only. Live identity and official posting remain separate.",
+      "official_books_verified": false
+    },
+    {
+      "id": "BANK-02",
+      "business_flow": "Append-only local allocation reversal",
+      "status": "implemented_locally",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "CollectionAllocationReversal",
+        "collection_allocation_service.py"
+      ],
+      "user_and_moshko_surface": "CollectionWorkbench and reverse_collection_allocation",
+      "offline_evidence": [
+        "tests/test_collection_allocations.py"
+      ],
+      "required_completion": "Legacy allocations without balance-effect reconstruction are blocked; no provider cancellation/refund implied.",
+      "official_books_verified": false
+    },
+    {
+      "id": "BANK-03",
+      "business_flow": "Card aggregate settlement and fees/date differences",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "bank_insights.py",
+        "financial_synthesis.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Add reviewed aggregate allocation and explicit fee evidence; heuristic merchant similarity cannot prove settlement.",
+      "official_books_verified": false
+    },
+    {
+      "id": "BANK-04",
+      "business_flow": "Foreign-currency settlement and exchange differences",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/11736207-שיערוך-יתרות-הפרשי-שער",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/08-books-data-intake-bookkeeping.md",
+              "line": 167,
+              "heading": "שיערוך יתרות (הפרשי שער) — https://help.sumit.co.il/books/he/articles/11736207-שיערוך-יתרות-הפרשי-שער"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/13939116-עדכון-ערכי-מט-ח-בתנועות-בדיעבד-באופן-גורף",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/08-books-data-intake-bookkeeping.md",
+              "line": 241,
+              "heading": "עדכון ערכי מט\"ח בתנועות בדיעבד באופן גורף — https://help.sumit.co.il/books/he/articles/13939116-עדכון-ערכי-מט-ח-בתנועות-בדיעבד-באופן-גורף"
+            }
+          ]
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "bank_reconciliation.py",
+        "bank_reconciliation.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Same-currency allocation supported; differing currencies fail closed. Add explicit rate/date/source and balanced adjustment decision.",
+      "official_books_verified": false
+    },
+    {
+      "id": "BANK-05",
+      "business_flow": "Internal transfers between owned accounts",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "bank_insights.py",
+        "financial_synthesis.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Require both owned-account legs and reviewed relationship; keep out of income/expense.",
+      "official_books_verified": false
+    },
+    {
+      "id": "BANK-06",
+      "business_flow": "Credit/refund/counter-movement reconciliation",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "manual_reconciliation.py",
+        "bank_insights.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Add reversal-group relationship without deleting earlier decisions.",
+      "official_books_verified": false
+    },
+    {
+      "id": "BOOKS-01",
+      "business_flow": "Document issue / file / send / credit with provider acceptance",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "document_issuance_service.py",
+        "expense_filing_service.py",
+        "approved_actions.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_document_issuance.py"
+      ],
+      "required_completion": "Extend business-event document decision, reuse and readback coverage. Sending is a separate authorized external communication.",
+      "official_books_verified": false
+    },
+    {
+      "id": "BOOKS-02",
+      "business_flow": "Approved reconciliations → official SUMIT batch",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "reconciliation_dispatch.py",
+        "accounting.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_reconciliation_dispatch.py"
+      ],
+      "required_completion": "Local dispatch is unsupported. Existing createbatch adapter returns executed_unverified; implement reviewed batch construction and operator verification handoff.",
+      "official_books_verified": false
+    },
+    {
+      "id": "BOOKS-03",
+      "business_flow": "Batch readback / close / official trial balance parity",
+      "status": "provider_blocked",
+      "provider_surface": "portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "accounting.py",
+        "parity_service.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_reconciliation_dispatch.py"
+      ],
+      "required_completion": "Latest saved Swagger exposes batch creation, not batch read/close. Authorized operator must inspect portal, attach evidence and separately close if approved.",
+      "official_books_verified": false
+    },
+    {
+      "id": "BOOKS-04",
+      "business_flow": "Storno / corrections / period locks / continuity",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/11736547-יצירת-סטורנו-לביטול-תנועות-יומן",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/08-books-data-intake-bookkeeping.md",
+              "line": 179,
+              "heading": "יצירת סטורנו לביטול תנועות יומן — https://help.sumit.co.il/books/he/articles/11736547-יצירת-סטורנו-לביטול-תנועות-יומן"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/10568157-דוח-רציפות-אסמכתאות",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/10-books-reports-bank-recon.md",
+              "line": 19,
+              "heading": "דוח רציפות אסמכתאות — https://help.sumit.co.il/books/he/articles/10568157-דוח-רציפות-אסמכתאות"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/11325489-דוח-רציפות-תנועות",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/10-books-reports-bank-recon.md",
+              "line": 52,
+              "heading": "דוח רציפות תנועות — https://help.sumit.co.il/books/he/articles/11325489-דוח-רציפות-תנועות"
+            }
+          ]
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "ledger_service.py",
+        "filing_verification.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Local reversal is not official storno. Build period-aware operator review; verify all correction/continuity controls in representative KB.",
+      "official_books_verified": false
+    },
+    {
+      "id": "SYNC-01",
+      "business_flow": "Pagination / delta / checkpoints / late links",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "sync_engine.py",
+        "sumit_connector.py",
+        "open_finance_connector.py",
+        "Account.provider_account_number",
+        "src/cfo/services/payable_settlement.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_payment_source_lineage.py",
+        "tests/test_sync_evidence_integrity.py",
+        "tests/test_payable_settlement.py",
+        "tests/test_open_finance_product_boundaries.py"
+      ],
+      "required_completion": "Missing monetary/date/identity evidence rejects transaction pages. Pagination validates continuation and commits rows with cursor atomically. Connection-key checkpoints and full historical deletion/late-link parity still require completion.",
+      "official_books_verified": false
+    },
+    {
+      "id": "SYNC-02",
+      "business_flow": "Authenticated event receipts / duplicates / out-of-order payment states",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "provider_event_service.py",
+        "ProviderEventReceipt"
+      ],
+      "user_and_moshko_surface": "CollectionWorkbench event review; Moshko workbench",
+      "offline_evidence": [
+        "tests/test_provider_event_integrity.py"
+      ],
+      "required_completion": "Authenticated callbacks update observation state and collection status only. Conflicts remain in the review queue; durable operator resolution workflow is still required.",
+      "official_books_verified": false
+    },
+    {
+      "id": "SYNC-03",
+      "business_flow": "Consent expiry / revocation / ambiguous tenant identity",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "provider_event_service.py",
+        "open_finance_onboarding.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_provider_event_integrity.py"
+      ],
+      "required_completion": "Active unique credential attribution now required; shared identities and contradictory connection events remain unresolved. Review all onboarding/reactivation paths.",
+      "official_books_verified": false
+    },
+    {
+      "id": "SYNC-04",
+      "business_flow": "Budget / retry / freshness / completeness / parity",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "webhook_delta_sync.py",
+        "sync_engine.py",
+        "parity_service.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_webhook_budget_gate.py",
+        "tests/test_open_finance_product_boundaries.py"
+      ],
+      "required_completion": "OF callbacks do not fetch; SUMIT targeted sync checks daily/per-key gates. Writes are not replayed on 401. Extend missing-source/delta completeness evidence.",
+      "official_books_verified": false
+    },
+    {
+      "id": "PRODUCT-01",
+      "business_flow": "Open Finance platform versus Financy access and plans",
+      "status": "implemented_locally",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs-financy.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "open_finance_product_policy.py",
+        "open_finance_client.py",
+        "cfo_sync.py"
+      ],
+      "user_and_moshko_surface": "CFOSyncDashboard product/plan configuration; integration status",
+      "offline_evidence": [
+        "tests/test_open_finance_product_boundaries.py"
+      ],
+      "required_completion": "Product/plan and active-connection checks are enforced locally. Owner-declared product/plan is not provider entitlement verification; broader unreviewed product operations remain blocked.",
+      "official_books_verified": false
+    },
+    {
+      "id": "PRODUCT-02",
+      "business_flow": "Financy connection creation",
+      "status": "owner_configuration_required",
+      "provider_surface": "portal",
+      "official_sources": [
+        {
+          "url": "https://docs-financy.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "open_finance_product_policy.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_open_finance_product_boundaries.py"
+      ],
+      "required_completion": "Create connections in Financy portal. Do not send platform connection-creation endpoints for Financy.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OFFICE-01",
+      "business_flow": "Fixed assets and depreciation",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/11883505-מבוא-לניהול-פחת",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/08-books-data-intake-bookkeeping.md",
+              "line": 187,
+              "heading": "מבוא לניהול פחת — https://help.sumit.co.il/books/he/articles/11883505-מבוא-לניהול-פחת"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/12569782-ניהול-נכסים",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/08-books-data-intake-bookkeeping.md",
+              "line": 210,
+              "heading": "ניהול נכסים — https://help.sumit.co.il/books/he/articles/12569782-ניהול-נכסים"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/14015412-יצירת-תנועות-לנכסים",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/08-books-data-intake-bookkeeping.md",
+              "line": 245,
+              "heading": "יצירת תנועות לנכסים — https://help.sumit.co.il/books/he/articles/14015412-יצירת-תנועות-לנכסים"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/15098063-יצירת-טופס-פחת",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/08-books-data-intake-bookkeeping.md",
+              "line": 275,
+              "heading": "יצירת טופס פחת — https://help.sumit.co.il/books/he/articles/15098063-יצירת-טופס-פחת"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/15691459-יצירת-שורות-פחת-בנכסים",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/08-books-data-intake-bookkeeping.md",
+              "line": 321,
+              "heading": "יצירת שורות פחת בנכסים — https://help.sumit.co.il/books/he/articles/15691459-יצירת-שורות-פחת-בנכסים"
+            }
+          ]
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "israeli_tax_rules.py",
+        "annual_report_service.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Local depreciation rates/calculation are not an asset register. SUMIT asset groups, acquisition/activation/disposal and form-versus-journal distinction require a reviewed portal export/import and asset lifecycle model. No reviewed asset-register API in saved Swagger.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OFFICE-02",
+      "business_flow": "Annual adjustments and business-specific annual filing package",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/12343499-מבוא-לתיאומים",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/12-books-tax-planning-annual.md",
+              "line": 100,
+              "heading": "מבוא לתיאומים — https://help.sumit.co.il/books/he/articles/12343499-מבוא-לתיאומים"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/12343448-יצירת-סוגי-תיאומים-כללים",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/12-books-tax-planning-annual.md",
+              "line": 87,
+              "heading": "יצירת סוגי תיאומים כללים — https://help.sumit.co.il/books/he/articles/12343448-יצירת-סוגי-תיאומים-כללים"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/12343479-יצירת-כרטיסי-תיאום",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/12-books-tax-planning-annual.md",
+              "line": 93,
+              "heading": "יצירת כרטיסי תיאום — https://help.sumit.co.il/books/he/articles/12343479-יצירת-כרטיסי-תיאום"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/12343490-היסטוריית-תיאומים",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/12-books-tax-planning-annual.md",
+              "line": 97,
+              "heading": "היסטוריית תיאומים — https://help.sumit.co.il/books/he/articles/12343490-היסטוריית-תיאומים"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/15259323-דוח-רווח-והפסד-מתואם",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/12-books-tax-planning-annual.md",
+              "line": 135,
+              "heading": "דוח רווח והפסד מתואם — https://help.sumit.co.il/books/he/articles/15259323-דוח-רווח-והפסד-מתואם"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/15322839-תיאום-רכב",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/12-books-tax-planning-annual.md",
+              "line": 142,
+              "heading": "תיאום רכב — https://help.sumit.co.il/books/he/articles/15322839-תיאום-רכב"
+            }
+          ]
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "annual_report_service.py",
+        "filing_verification.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Verify annual adjustments against representative KB; prepare only with professional authority and triple verification.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OFFICE-03",
+      "business_flow": "Corrective filings and filing-history tracking",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/6299203-הפקת-דוח-מתקן",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/09-books-periodic-reporting.md",
+              "line": 300,
+              "heading": "הפקת דוח מתקן — https://help.sumit.co.il/books/he/articles/6299203-הפקת-דוח-מתקן"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/10441122-ביטול-דו-ח-תקופתי",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/09-books-periodic-reporting.md",
+              "line": 31,
+              "heading": "ביטול דו\"ח תקופתי — https://help.sumit.co.il/books/he/articles/10441122-ביטול-דו-ח-תקופתי"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/12792086-איך-לעדכן-סטטוס-דיווח-ששודר-ידנית",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/09-books-periodic-reporting.md",
+              "line": 134,
+              "heading": "איך לעדכן סטטוס דיווח ששודר ידנית — https://help.sumit.co.il/books/he/articles/12792086-איך-לעדכן-סטטוס-דיווח-ששודר-ידנית"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/15285029-מעקב-דיווחים-רוחבי",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/11-books-office-client-interface.md",
+              "line": 172,
+              "heading": "מעקב דיווחים רוחבי — https://help.sumit.co.il/books/he/articles/15285029-מעקב-דיווחים-רוחבי"
+            }
+          ]
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "filing_verification.py",
+        "office_capabilities.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Portal correction/status procedures, evidence and office-wide task tracking require review; no actual transmission.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OFFICE-04",
+      "business_flow": "Office / case permissions and cross-client workflows",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "membership_service.py",
+        "office_service.py",
+        "office_capabilities.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [
+        "tests/test_auth_and_tenancy.py"
+      ],
+      "required_completion": "Existing role and office boundaries tested previously; review case lifecycle, granular module permissions and current representative portal conditions.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OFFICE-05",
+      "business_flow": "Material collection cycles and document correspondence",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/16088050-מסך-התכתבויות-פתוחות",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/08-books-data-intake-bookkeeping.md",
+              "line": 325,
+              "heading": "מסך התכתבויות פתוחות — https://help.sumit.co.il/books/he/articles/16088050-מסך-התכתבויות-פתוחות"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/11001216-השלמת-הוצאות-לרואה-החשבון",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/11-books-office-client-interface.md",
+              "line": 261,
+              "heading": "השלמת הוצאות לרואה החשבון — https://help.sumit.co.il/books/he/articles/11001216-השלמת-הוצאות-לרואה-החשבון"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/5836899-החזרת-הוצאות-ללקוחות",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/11-books-office-client-interface.md",
+              "line": 313,
+              "heading": "החזרת הוצאות ללקוחות — https://help.sumit.co.il/books/he/articles/5836899-החזרת-הוצאות-ללקוחות"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/he/articles/11003100-עדכון-משרד-הנהלת-החשבונות-על-סיום-העברת-החומרים-לתקופת-הדיווח",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/01-books-portal.md",
+              "line": 69,
+              "heading": "עדכון משרד הנהלת החשבונות על סיום העברת החומרים לתקופת הדיווח — https://help.sumit.co.il/he/articles/11003100-עדכון-משרד-הנהלת-החשבונות-על-סיום-העברת-החומרים-לתקופת-הדיווח"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/10693930-איך-מתעדכנים-כשהלקוח-מסיים-להעביר-חומרים",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/11-books-office-client-interface.md",
+              "line": 249,
+              "heading": "איך מתעדכנים כשהלקוח מסיים להעביר חומרים — https://help.sumit.co.il/books/he/articles/10693930-איך-מתעדכנים-כשהלקוח-מסיים-להעביר-חומרים"
+            }
+          ]
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "client_automation_service.py",
+        "expense_filing_service.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Review per-period material completion, document communication/acknowledgement and completeness; no autonomous outbound messages.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OFFICE-06",
+      "business_flow": "Opening/import/merge/freeze/backups/templates/branches",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "tenant_provisioning.py",
+        "schema_deployment.py",
+        "office_service.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Do not drop these from scope. Match each representative workflow to local need and operator evidence before calling complete.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OFFICE-07",
+      "business_flow": "Deferred VAT / excluded transactions / tax adjustments / joint filings",
+      "status": "not_tested",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/9879789-דחיית-תשומות-בדיווח-מע-מ",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/09-books-periodic-reporting.md",
+              "line": 319,
+              "heading": "דחיית תשומות בדיווח מע\"מ — https://help.sumit.co.il/books/he/articles/9879789-דחיית-תשומות-בדיווח-מע-מ"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/13941160-דיווח-תשומות-שנדחו-מדיווח-קודם-לאחר-יבוא-תיק",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/09-books-periodic-reporting.md",
+              "line": 188,
+              "heading": "דיווח תשומות שנדחו מדיווח קודם לאחר יבוא תיק — https://help.sumit.co.il/books/he/articles/13941160-דיווח-תשומות-שנדחו-מדיווח-קודם-לאחר-יבוא-תיק"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/14193794-סגירת-התאמות-בחשבון-מע-מ-לפי-תקופה",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/09-books-periodic-reporting.md",
+              "line": 215,
+              "heading": "סגירת התאמות בחשבון מע\"מ לפי תקופה — https://help.sumit.co.il/books/he/articles/14193794-סגירת-התאמות-בחשבון-מע-מ-לפי-תקופה"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/10402116-איך-מסירים-מדיווח-תנועות-ישנות-או-תנועות-שאינן-רלוונטיות",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/09-books-periodic-reporting.md",
+              "line": 17,
+              "heading": "איך מסירים מדיווח תנועות ישנות או תנועות שאינן רלוונטיות — https://help.sumit.co.il/books/he/articles/10402116-איך-מסירים-מדיווח-תנועות-ישנות-או-תנועות-שאינן-רלוונטיות"
+            }
+          ]
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "israeli_tax_rules.py",
+        "annual_report_service.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Professional contract and evidence required for each relevant case; do not reuse one uniform document/tax rule.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OFFICE-08",
+      "business_flow": "Cash/check deposits and MASAV cancellation",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/books/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://help.sumit.co.il/books/he/articles/13050666-ביטול-קובץ-תשלומים-לספקים-מס-ב",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/08-books-data-intake-bookkeeping.md",
+              "line": 217,
+              "heading": "ביטול קובץ תשלומים לספקים (מס\"ב) — https://help.sumit.co.il/books/he/articles/13050666-ביטול-קובץ-תשלומים-לספקים-מס-ב"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/he/articles/10042916-מהן-קופות-ואיך-יוצרים-קופה-חדשה",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/01-books-portal.md",
+              "line": 123,
+              "heading": "מהן קופות ואיך יוצרים קופה חדשה? — https://help.sumit.co.il/he/articles/10042916-מהן-קופות-ואיך-יוצרים-קופה-חדשה"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/he/articles/11030589-הפקדת-מזומנים-ושיקים",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/05-other-modules.md",
+              "line": 292,
+              "heading": "הפקדת מזומנים ושיקים — https://help.sumit.co.il/he/articles/11030589-הפקדת-מזומנים-ושיקים"
+            }
+          ]
+        },
+        {
+          "url": "https://help.sumit.co.il/he/articles/13867781-תיעוד-הפקדה-חלקית-של-מזומנים",
+          "checked_on": "2026-09-06",
+          "scope": "Historical local KB summary reviewed; public article body not re-fetched after rate limit",
+          "local_references": [
+            {
+              "file": "docs/sumit_help_kb/05-other-modules.md",
+              "line": 298,
+              "heading": "תיעוד הפקדה חלקית של מזומנים — https://help.sumit.co.il/he/articles/13867781-תיעוד-הפקדה-חלקית-של-מזומנים"
+            }
+          ]
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "masav_service.py",
+        "check_reconciliation.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Separate file preparation, bank acceptance, rejection/return and official posting; cancellation requires documented provider operation.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OTHER-01",
+      "business_flow": "Credit underwriting, scoring and loan CRM",
+      "status": "not_tested",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://docs.open-finance.ai/docs/getting-started",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "open_finance_client.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Platform wrappers exist. Determine product relevance, permission and actual user workflow; never inherit into Financy.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OTHER-02",
+      "business_flow": "Inventory, CRM, recurring card details, communication modules",
+      "status": "partial",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "sumit_integration.py",
+        "sumit_tool_manifest.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Existing wrappers/menus are not E2E proof. Audit operational need, official source conditions and safe access per module.",
+      "official_books_verified": false
+    },
+    {
+      "id": "OTHER-03",
+      "business_flow": "Time clock, branding, SSO, fundraising, integrations, bulk printing",
+      "status": "not_tested",
+      "provider_surface": "api_and_portal",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "sumit_tool_manifest.py"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Decide each against Rezef product need; no blanket exclusion because it is outside collection.",
+      "official_books_verified": false
+    },
+    {
+      "id": "EXCLUDED-01",
+      "business_flow": "New MPP/MCP/provider as a substitute for existing business linkage",
+      "status": "excluded",
+      "provider_surface": "not_applicable",
+      "official_sources": [
+        {
+          "url": "https://help.sumit.co.il/he/",
+          "checked_on": "2026-09-06",
+          "scope": "public index/product boundary; not proof of live entitlement"
+        }
+      ],
+      "conditions": {
+        "plan": "Owner/provider verification required",
+        "permission": "Active organization membership, action policy and signing authority where applicable",
+        "consent": "Provider consent required for bank access",
+        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+      },
+      "implementation": [
+        "REZEF_OPERATING_SYSTEM.md"
+      ],
+      "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
+      "offline_evidence": [],
+      "required_completion": "Explicitly excluded by user authorization: complete existing business relationships without adding a provider/protocol.",
+      "official_books_verified": false
+    }
+  ],
+  "local_kb_inventory": "docs/audits/evidence/2026-09-06-sumit-local-kb-index.json"
+}

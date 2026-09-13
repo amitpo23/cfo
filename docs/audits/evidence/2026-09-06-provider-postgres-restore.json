@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "synthetic_only": true,
+  "elapsed_seconds": 2.4,
+  "tables": 71,
+  "row_count": 5,
+  "checks": [
+    "fresh migrations",
+    "schema parity",
+    "encrypted round trip",
+    "all-table row hashes",
+    "foreign keys",
+    "checkout uniqueness"
+  ],
+  "production_backup_verified": false
+}

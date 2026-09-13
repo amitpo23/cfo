@@ -1,0 +1,869 @@
+{
+  "status": "public_reference_contract_review",
+  "checked_on": "2026-09-06",
+  "index_reference_entries": 20,
+  "reference_pages_parsed": 20,
+  "scope": "All 20 reference entries in the checked Financy index; not all guides or business workflows",
+  "source_authority": "https://docs-financy.open-finance.ai/llms.txt",
+  "status_authority": "docs/MASTER_EXECUTION_PLAN.md",
+  "live_entitlements_verified": false,
+  "operations": [
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/createmerchant.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "f373f5dd57fef8d3283f5c2d54d4a286dab0bbdfbf93d76003dd0e99946b1ee7",
+      "method": "POST",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/merchants",
+      "public_url_template": "https://api.open-finance.ai/v2/merchants",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "create:merchants"
+          ]
+        }
+      ],
+      "parameters": [],
+      "required_body_fields": [
+        "name"
+      ],
+      "body_fields": [
+        "name",
+        "bban",
+        "iban",
+        "psuId",
+        "psuCorporateId",
+        "phoneNumber",
+        "displayName",
+        "logo"
+      ],
+      "response_codes": [
+        "201",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/createpayment.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "92e039a210e42d01a35cfaf16b956a533e3f2c2bd0f4479f1c43c4b7ca711eab",
+      "method": "POST",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/payments",
+      "public_url_template": "https://api.open-finance.ai/v2/payments",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "create:payments"
+          ]
+        }
+      ],
+      "parameters": [],
+      "required_body_fields": [
+        "paymentInformation"
+      ],
+      "body_fields": [
+        "version",
+        "withEndToEndId",
+        "merchantId",
+        "redirectUrl",
+        "externalId",
+        "includeFakeProviders",
+        "redirectFinalizePath",
+        "psuId",
+        "psuCorporateId",
+        "psuIdType",
+        "providerIds",
+        "allowBusiness",
+        "isBusiness",
+        "language",
+        "paymentProduct",
+        "paymentService",
+        "iframe",
+        "directPayOnly",
+        "paymentInformation",
+        "bulkPaymentInformation",
+        "periodicPaymentInformation",
+        "callbackInformation"
+      ],
+      "response_codes": [
+        "201",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/createtoken.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "26193c3cf5299c8ada979e364be596d61f63b400c5996c26753539f2ea28e7cf",
+      "method": "POST",
+      "server": "https://api.open-finance.ai",
+      "path": "/oauth/token",
+      "public_url_template": "https://api.open-finance.ai/oauth/token",
+      "oauth_scopes": [],
+      "parameters": [],
+      "required_body_fields": [
+        "userId",
+        "clientId",
+        "clientSecret"
+      ],
+      "body_fields": [
+        "userId",
+        "clientId",
+        "clientSecret"
+      ],
+      "response_codes": [
+        "200"
+      ],
+      "local_policy_disposition": "dedicated_oauth_client",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/deleteconnection.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "03d075cedf394c0c9e1959c6b9c6405b9272eb25dbe792e701d482db3442eb72",
+      "method": "DELETE",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/connections/{connectionId}",
+      "public_url_template": "https://api.open-finance.ai/v2/connections/{connectionId}",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "delete:connections"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "connectionId",
+          "location": "path",
+          "required": true
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "204",
+        "400",
+        "401",
+        "403",
+        "404",
+        "423",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/deletemerchant.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "f434617ea61e518e89e87066ff015fce222a4ddcca71a92fbc29eeb0bb9ab9a4",
+      "method": "DELETE",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/merchants/{merchantId}",
+      "public_url_template": "https://api.open-finance.ai/v2/merchants/{merchantId}",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "delete:merchants"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "merchantId",
+          "location": "path",
+          "required": true
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "204",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getaccountbyid.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "3f747430c925487d70e97ebd8960a4df327f6da44238d91dd354912d1d9ed306",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/data/accounts/{accountId}",
+      "public_url_template": "https://api.open-finance.ai/v2/data/accounts/{accountId}",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:accounts"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "accountId",
+          "location": "path",
+          "required": true
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getaccounts.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "0ba36a348963bbf6ffdf0830af1c95fb739abfe72bf00557ccf83a5103361a8d",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/data/accounts",
+      "public_url_template": "https://api.open-finance.ai/v2/data/accounts",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:accounts"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "nextPage",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "includeDuplicates",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "connectionId",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "userId",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "accountType",
+          "location": "query",
+          "required": false
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getbankbranches.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "0310423b63a1d0cec28d86f45e21955fb337dc2e79f86800fb1ba73059bc64ca",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/bank-branches",
+      "public_url_template": "https://api.open-finance.ai/v2/bank-branches",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:providers"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "bankCode",
+          "location": "query",
+          "required": true
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "401",
+        "403",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getconnectionbyid.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "cc1d109bd1e8491191586001c59db1698fe3234ff7736fa8dfd682880bee5448",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/connections/{connectionId}",
+      "public_url_template": "https://api.open-finance.ai/v2/connections/{connectionId}",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:connections"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "connectionId",
+          "location": "path",
+          "required": true
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getconnections.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "c93f0adba37e491f39ba4fe79fef489e0abfd8bf777605bf9249745aff0fd050",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/connections",
+      "public_url_template": "https://api.open-finance.ai/v2/connections",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:connections"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "customerId",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "contactId",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "nextPage",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "status",
+          "location": "query",
+          "required": false
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getmerchantbyid.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "3f15f5ba7ec7cd2b74ff49882a4b1ea869cb33cea2727aa265b97698a976e03a",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/merchants/{merchantId}",
+      "public_url_template": "https://api.open-finance.ai/v2/merchants/{merchantId}",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:merchants"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "merchantId",
+          "location": "path",
+          "required": true
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getmerchants.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "ca5b9e549f867cec8c0f60202031e510205d4dfc2f9ff5e70fb8ec0fb6bc114d",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/merchants",
+      "public_url_template": "https://api.open-finance.ai/v2/merchants",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:merchants"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "limit",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "nextPage",
+          "location": "query",
+          "required": false
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "400",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getpaymentbyid.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "ccfa4daec2d0806f5df5e9b0c9a0faddeaa5e77d07b9de416f54ab8f1a73f41c",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/payments/{paymentId}",
+      "public_url_template": "https://api.open-finance.ai/v2/payments/{paymentId}",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:payments"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "paymentId",
+          "location": "path",
+          "required": true
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getpayments.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "e727ab63796589dd10e9be6eeaa3e15e5e0a38bce7253c96aaa0df18baebb3fb",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/payments",
+      "public_url_template": "https://api.open-finance.ai/v2/payments",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:payments"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "limit",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "nextPage",
+          "location": "query",
+          "required": false
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getpaymentstatus.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "78bbfef4d2f48ea9a7f383e51c6fe9e8bd40a96867898daeb81135762ceee308",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/payments/{paymentId}/status",
+      "public_url_template": "https://api.open-finance.ai/v2/payments/{paymentId}/status",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:payments"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "paymentId",
+          "location": "path",
+          "required": true
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/getproviders.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "bf5c3ceb7e3b94bd3a6c6699aaf5c6e23c3b3e22203d94dec3971a2b3b83237c",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/providers",
+      "public_url_template": "https://api.open-finance.ai/v2/providers",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:providers"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "includeFakeProviders",
+          "location": "query",
+          "required": false
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/gettransactionbyid.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "39c44e235ba9aba32c4f6c23838fc22a8c0d939b2f4b51d1f9bcdfaaf8580cd2",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/data/transactions/{SK}",
+      "public_url_template": "https://api.open-finance.ai/v2/data/transactions/{SK}",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:transactions"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "SK",
+          "location": "path",
+          "required": true
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/gettransactions.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "c80d7edc0bcc6fb18fa6ce51dde846f6795072ddabb8867e48f42c221b6f25bc",
+      "method": "GET",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/data/transactions",
+      "public_url_template": "https://api.open-finance.ai/v2/data/transactions",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:transactions"
+          ]
+        }
+      ],
+      "parameters": [
+        {
+          "name": "nextPage",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "dateFrom",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "dateTo",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "includeDuplicates",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "sort",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "accountId",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "connectionId",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "type",
+          "location": "query",
+          "required": false
+        },
+        {
+          "name": "providerId",
+          "location": "query",
+          "required": false
+        }
+      ],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/initiatepayment.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "2b629dfa527d2095835b0e828ea84565b679df1b0714e53044c315721c3c27f2",
+      "method": "POST",
+      "server": "https://api.open-finance.ai",
+      "path": "/v2/pay/open-banking-init",
+      "public_url_template": "https://api.open-finance.ai/v2/pay/open-banking-init",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "create:peyments"
+          ]
+        }
+      ],
+      "parameters": [],
+      "required_body_fields": [
+        "providerId"
+      ],
+      "body_fields": [
+        "version",
+        "withEndToEndId",
+        "psuId",
+        "psuCorporateId",
+        "callbackInformation",
+        "redirectFinalizePath",
+        "includeFakeProviders",
+        "psuIdType",
+        "providerId",
+        "paymentId",
+        "paymentProduct",
+        "paymentService",
+        "externalId",
+        "paymentInformation",
+        "bulkPaymentInformation",
+        "periodicPaymentInformation",
+        "redirectUrl",
+        "rtpPaymentInformation"
+      ],
+      "response_codes": [
+        "201",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "local_policy_disposition": "allowed_by_product_policy_only",
+      "policy_reason": null,
+      "business_flow_verified": false
+    },
+    {
+      "official_source": "https://docs-financy.open-finance.ai/reference/refreshconnections.md",
+      "checked_on": "2026-09-06",
+      "source_sha256": "71f2bec4c71d33cfbb38d79fbbc137e0faa8d6d074696009c4107c520c4e5dcd",
+      "method": "POST",
+      "server": "https://api.open-finance.ai/chat",
+      "path": "/chat/connections/refresh",
+      "public_url_template": "https://api.open-finance.ai/chat/chat/connections/refresh",
+      "oauth_scopes": [
+        {
+          "oAuth2ClientCredentials": [
+            "read:connections"
+          ]
+        }
+      ],
+      "parameters": [],
+      "required_body_fields": [],
+      "body_fields": [],
+      "response_codes": [
+        "200",
+        "401",
+        "402",
+        "409"
+      ],
+      "local_policy_disposition": "blocked_unreviewed_adapter",
+      "policy_reason": "Operation is not reviewed for the Financy product; do not inherit Open Finance platform capabilities",
+      "business_flow_verified": false
+    }
+  ]
+}

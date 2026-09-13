@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "synthetic_only": true,
+  "provider_is_fake": true,
+  "real_provider_requests": 0,
+  "fake_provider_requests": 1,
+  "checks": [
+    "concurrent proposals share one durable approval",
+    "distinct signing approval",
+    "overlapping execution submits exactly once",
+    "six signer-withdrawal versus execution races admit one winner",
+    "source and destination identity survive connection-pool restart",
+    "provider acknowledgement remains unverified"
+  ],
+  "official_books_verified": false
+}

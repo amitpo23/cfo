@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "synthetic_only": true,
+  "provider_requests": 0,
+  "checks": [
+    "DB-only screen",
+    "reviewed proposal",
+    "separate approval and execution",
+    "pending is not paid",
+    "provisional blocked",
+    "partial bank settlement",
+    "reversal history",
+    "mobile width",
+    "no JS errors"
+  ]
+}
