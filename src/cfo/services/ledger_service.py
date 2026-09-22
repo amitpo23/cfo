@@ -179,15 +179,15 @@ def post_expense(exp) -> Optional[Entry]:
     return e
 
 
-def post_payment(pay) -> Optional[Entry]:
+def post_payment(pay, allocated_receipt_amount=None) -> Optional[Entry]:
     """Receipt (invoice): DR 1200 CR 1100. Supplier payment (bill): DR 2100 CR 1200."""
     from .payment_evidence import is_accounting_payment
     if not is_accounting_payment(pay):
         return None
-    amount = _f(pay.amount)
+    amount = _f(allocated_receipt_amount if allocated_receipt_amount is not None and not pay.invoice_id else pay.amount)
     if amount == 0:
         return None
-    if pay.invoice_id:
+    if pay.invoice_id or allocated_receipt_amount is not None:
         e = Entry(entry_date=pay.payment_date, memo="תקבול מלקוח",
                   source_ref=f"payment:{pay.id}")
         e.lines = [
@@ -483,11 +483,21 @@ def build_journal(db, organization_id: int, *, start: Optional[date] = None,
         if e:
             entries.append(e)
 
-    for pay in db.query(Payment).filter(Payment.organization_id == organization_id).all():
+    from sqlalchemy import func
+    from ..models import CollectionPaymentAllocation
+    allocated_receipts = dict(db.query(CollectionPaymentAllocation.payment_id,
+        func.sum(CollectionPaymentAllocation.amount)).filter_by(organization_id=organization_id,
+            status='active').group_by(CollectionPaymentAllocation.payment_id).all())
+    from .payment_evidence import accounting_payment_parts
+    for pay in (part for row in db.query(Payment).filter(Payment.organization_id == organization_id).all()
+                for part in accounting_payment_parts(row)):
         if not _in_period(pay.payment_date, start, end):
             continue
-        e = post_payment(pay)
+        allocated = allocated_receipts.get(pay.id)
+        e = post_payment(pay, allocated_receipt_amount=allocated if allocated else None)
         if e:
+            if hasattr(pay, 'settlement_bank_id'):
+                e.source_ref += f':bank:{pay.settlement_bank_id}'
             entries.append(e)
 
     # פקודות יומן ידניות (התאמות רו"ח)
@@ -671,8 +681,8 @@ def contact_card(db, organization_id: int, contact_id: int, *,
             Payment.bill_id.in_(bill_ids),
         )
     )
-    from .payment_evidence import is_accounting_payment
-    for pay in payment_query.all():
+    from .payment_evidence import is_accounting_payment, accounting_payment_parts
+    for pay in (part for row in payment_query.all() for part in accounting_payment_parts(row)):
         if not is_accounting_payment(pay):
             continue
         d = pay.payment_date

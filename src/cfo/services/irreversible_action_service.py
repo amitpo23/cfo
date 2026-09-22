@@ -57,6 +57,10 @@ class ActionStateError(ActionWorkflowError):
     """The requested state transition is invalid or the row is not visible."""
 
 
+class ActionOutcomeUnknownError(ActionStateError):
+    """A provider request may have executed; consumers must not offer replay."""
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -250,7 +254,7 @@ class IrreversibleActionService:
     ) -> IrreversibleActionRequest:
         self._require_actor_scope(approved_by)
 
-        row = self.get(request_id)
+        row = self._query().filter(IrreversibleActionRequest.id == request_id).populate_existing().with_for_update().first()
         if row is None:
             raise ActionStateError(f"action request {request_id} not found")
         if row.status != "proposed":
@@ -298,18 +302,23 @@ class IrreversibleActionService:
             IrreversibleActionApproval.organization_id == self.organization_id,
             IrreversibleActionApproval.request_id == row.id,
         ).count()
-        row.policy_approved_decision = self._decision_evidence(decision)
+        changes = {'policy_approved_decision': self._decision_evidence(decision)}
         if approval_count >= decision.required_approvals:
-            row.status = "approved"
-            row.approved_by_user_id = approved_by.id
-            row.approver_role = (
+            changes['status'] = "approved"
+            changes['approved_by_user_id'] = approved_by.id
+            changes['approver_role'] = (
                 membership_service.role_in(
                     self.db, approved_by.id, self.organization_id,
                 ) or approved_by.role
             ).value
-            row.approved_by_authority_id = authority.id
-            row.approver_authority_type = authority.authority_type
-            row.approved_at = _utc_now()
+            changes['approved_by_authority_id'] = authority.id
+            changes['approver_authority_type'] = authority.authority_type
+            changes['approved_at'] = _utc_now()
+        changed = self._query().filter(IrreversibleActionRequest.id == request_id,
+            IrreversibleActionRequest.status == 'proposed').update(changes, synchronize_session=False)
+        if changed != 1:
+            self.db.rollback()
+            raise ActionStateError('Action changed during approval; review its current state')
         self.db.commit()
         self.db.refresh(row)
         return row
@@ -323,11 +332,13 @@ class IrreversibleActionService:
     ) -> IrreversibleActionRequest:
         self._require_actor_scope(rejected_by)
 
-        row = self.get(request_id)
+        row = self._query().filter(IrreversibleActionRequest.id == request_id).populate_existing().with_for_update().first()
         if row is None:
             raise ActionStateError(f"action request {request_id} not found")
-        if row.status != "proposed":
-            raise ActionStateError("only a proposed action can be rejected")
+        if row.status not in ('proposed', 'approved') or row.execution_started_at is not None:
+            raise ActionStateError('Only an unexecuted proposal or approval can be withdrawn')
+        if row.status == 'approved' and len((reason or '').strip()) < 20:
+            raise ActionValidationError('Withdrawing an approval requires a review reason of at least 20 characters')
         authority = self.db.query(OrganizationSigningAuthority).filter(
             OrganizationSigningAuthority.organization_id
             == self.organization_id,
@@ -347,13 +358,20 @@ class IrreversibleActionService:
                 "active signing authority for this action is required",
             )
 
-        row.status = "rejected"
-        row.approved_by_user_id = rejected_by.id
-        row.approver_role = rejected_by.role.value
-        row.approved_by_authority_id = authority.id
-        row.approver_authority_type = authority.authority_type
-        row.rejected_at = _utc_now()
-        row.error = reason
+        rejected_at = _utc_now()
+        changes = {'status': 'rejected', 'rejected_at': rejected_at, 'error': reason,
+            'policy_approved_decision': {**(row.policy_approved_decision or {}), 'withdrawal': {
+                'actor_id': rejected_by.id, 'authority_id': authority.id, 'previous_status': row.status,
+                'reason': reason, 'at': rejected_at.isoformat()}}}
+        if row.status == 'proposed':
+            changes.update(approved_by_user_id=rejected_by.id, approver_role=rejected_by.role.value,
+                approved_by_authority_id=authority.id, approver_authority_type=authority.authority_type)
+        changed = self._query().filter(IrreversibleActionRequest.id == request_id,
+            IrreversibleActionRequest.status == row.status,
+            IrreversibleActionRequest.execution_started_at.is_(None)).update(changes, synchronize_session=False)
+        if changed != 1:
+            self.db.rollback()
+            raise ActionStateError('Execution or another decision already started; withdrawal is not a reversal')
         self.db.commit()
         self.db.refresh(row)
         return row

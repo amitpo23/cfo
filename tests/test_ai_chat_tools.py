@@ -26,8 +26,15 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
     assert write_tools == {
         "issue_document", "log_collection_attempt", "create_payment_link",
         "create_bank_payment_request", "connect_bank_account",
+        # Explicit reviewed collection mutations; all enforce the caller's
+        # membership and policy again inside the service.
+        "propose_collection_request", "allocate_collection_receipt", "reverse_collection_allocation",
+        "propose_payable_request", "execute_payable_request", "settle_payable_request", "reverse_payable_settlement",
         "run_client_sync", "register_office_client",
         "create_expense_category", "set_expense_category", "classify_pending_expenses",
+        "review_document_source",  # Local source correction still requires explicit confirmation.
+        "derive_document_sources",  # PDF provenance/parent retirement is a confirmed local write.
+        "propose_expense_filing",  # Exact source-bound provider proposal, still a confirmed local write.
         "file_expense", "email_report", "propose_vat_filing_approval",
         "memory",
         "create_task",
@@ -981,22 +988,24 @@ def test_file_expense_tool_is_write_and_calls_file_to_sumit(monkeypatch, fresh_o
     ExpenseFilingService.file_to_sumit — must be category='write' so the
     chat confirmation gate never auto-executes a real SUMIT booking."""
     assert TOOLS["file_expense"].category == "write"
-    assert TOOLS["file_expense"].input_schema["required"] == ["expense_id"]
+    assert TOOLS["file_expense"].input_schema["required"] == ["expense_id", "approval_id"]
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
         called = {}
 
-        async def fake_file_to_sumit(self, expense_id):
+        async def fake_file_to_sumit(self, expense_id, *, approval_id, actor_id):
             called["expense_id"] = expense_id
-            return {"id": expense_id, "status": "filed"}
+            called['approval_id'], called['actor_id'] = approval_id, actor_id
+            return {"id": expense_id, "status": "submitted"}
 
         from cfo.services.expense_filing_service import ExpenseFilingService
         monkeypatch.setattr(ExpenseFilingService, "file_to_sumit", fake_file_to_sumit)
 
-        result = asyncio.run(TOOLS["file_expense"].fn(db, org_id, expense_id=42))
+        result = asyncio.run(TOOLS["file_expense"].fn(db, org_id, expense_id=42, approval_id=77, _user_id=9))
         assert called["expense_id"] == 42
-        assert result["status"] == "filed"
+        assert called['approval_id'] == 77 and called['actor_id'] == 9
+        assert result["status"] == "submitted"
     finally:
         db.close()
 

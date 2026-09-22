@@ -509,6 +509,7 @@ class SyncEngine:
         updated = 0
         skipped = 0
         cursor = cp.cursor  # resume from a previous page-capped run, if any
+        seen_cursors = {cursor} if cursor is not None else set()
         pages = 0
         page_capped = False
         max_pages = settings.sync_max_pages_per_entity
@@ -528,6 +529,11 @@ class SyncEngine:
                     # silently reporting 0 created/updated/skipped as if it succeeded.
                     raise RuntimeError(result.error)
 
+                if result.has_more:
+                    if not result.next_cursor or result.next_cursor in seen_cursors:
+                        raise ValueError('Provider pagination cursor is missing or repeated; completeness review required')
+                    seen_cursors.add(result.next_cursor)
+
                 for item in result.items:
                     action = upsert_method(item)
                     if action == "created":
@@ -537,12 +543,16 @@ class SyncEngine:
                     else:
                         skipped += 1
 
+                # Commit a complete page with its continuation cursor. A later
+                # failure must neither lose that checkpoint nor keep half a page.
+                cp.cursor = result.next_cursor if result.has_more else None
                 self.db.commit()
 
                 if not result.has_more:
                     break
                 cursor = result.next_cursor
         except Exception as exc:
+            self.db.rollback()
             self._record_entity_failure(cp, exc)
             raise
 
@@ -604,6 +614,8 @@ class SyncEngine:
                 existing.owner_name = item.owner_name
             if item.open_finance_connection_id is not None:
                 existing.open_finance_connection_id = item.open_finance_connection_id
+            if item.provider_account_number is not None:
+                existing.provider_account_number = item.provider_account_number
             existing.updated_at = datetime.now(timezone.utc)
             return "updated"
 
@@ -621,6 +633,7 @@ class SyncEngine:
             owner_national_id=item.owner_national_id,
             owner_name=item.owner_name,
             open_finance_connection_id=item.open_finance_connection_id,
+            provider_account_number=item.provider_account_number,
         )
         self.db.add(account)
         return "created"
@@ -686,7 +699,7 @@ class SyncEngine:
             Invoice.organization_id == self.org_id,
             Invoice.external_id == item.external_id,
             Invoice.source == self.source,
-        ).first()
+        ).with_for_update().first()
 
         # Resolve contact
         contact_id = None
@@ -711,9 +724,15 @@ class SyncEngine:
         status = status_map.get(item.status, InvoiceStatus.DRAFT)
 
         if existing:
-            from ..models import CollectionPaymentAllocation
+            from ..models import CollectionPaymentAllocation, CollectionAllocationReversal
             reviewed_paid = self.db.query(func.sum(CollectionPaymentAllocation.amount)).filter_by(
-                organization_id=self.org_id, invoice_id=existing.id).scalar() or Decimal(0)
+                organization_id=self.org_id, invoice_id=existing.id, status='active').scalar() or Decimal(0)
+            reversed_decision = self.db.query(CollectionAllocationReversal).join(
+                CollectionPaymentAllocation, CollectionPaymentAllocation.id == CollectionAllocationReversal.allocation_id).filter(
+                    CollectionAllocationReversal.organization_id == self.org_id,
+                    CollectionPaymentAllocation.invoice_id == existing.id).first()
+            if reversed_decision and (item.paid_amount != existing.paid_amount or item.total != existing.total or item.currency != existing.currency):
+                raise ValueError('Source invoice conflicts with a reviewed reversal; parity review required')
             if reviewed_paid and (item.currency != existing.currency or item.total != existing.total or
                     item.paid_amount > item.total or status in {InvoiceStatus.CANCELLED, InvoiceStatus.VOID, InvoiceStatus.DRAFT} or
                     (item.raw_data or {}).get('document_type') != 'invoice' or
@@ -777,7 +796,7 @@ class SyncEngine:
             Bill.organization_id == self.org_id,
             Bill.external_id == item.external_id,
             Bill.source == self.source,
-        ).first()
+        ).with_for_update().first()
 
         # Resolve vendor
         vendor_id = None
@@ -802,6 +821,13 @@ class SyncEngine:
         status = status_map.get(item.status, BillStatus.RECEIVED)
 
         if existing:
+            reviewed = [p for p in self.db.query(Payment).filter_by(
+                organization_id=self.org_id, bill_id=existing.id)
+                if (p.raw_data or {}).get('source_entity_type') == 'reviewed_payable_settlement']
+            if reviewed and (item.total != existing.total or item.currency != existing.currency or
+                    item.paid_amount != existing.paid_amount or item.balance != existing.balance or
+                    vendor_id != existing.vendor_id or status != existing.status):
+                raise ValueError('Bill source changed after reviewed supplier settlement; parity review required')
             if payload_hash and existing.payload_hash == payload_hash:
                 return "skipped"
             existing.vendor_id = vendor_id or existing.vendor_id
@@ -850,12 +876,14 @@ class SyncEngine:
             Payment.organization_id == self.org_id,
             Payment.external_id == item.external_id,
             Payment.source == self.source,
-        ).first()
+        ).with_for_update().first()
 
         # Resolve invoice/bill references
         invoice_id = None
         bill_id = None
         contact_id = None
+        if item.invoice_external_id and item.bill_external_id:
+            raise ValueError('A payment cannot assert both invoice and bill source identities; allocation review required')
 
         if item.invoice_external_id:
             inv = self.db.query(Invoice).filter(
@@ -865,6 +893,19 @@ class SyncEngine:
             ).first()
             if inv:
                 invoice_id = inv.id
+
+        if item.bill_external_id:
+            bill = self.db.query(Bill).filter_by(organization_id=self.org_id,
+                external_id=item.bill_external_id, source=self.source).first()
+            if bill:
+                bill_id = bill.id
+
+        if bill_id and self.source == 'sumit':
+            reviewed = [p for p in self.db.query(Payment).filter_by(
+                organization_id=self.org_id, bill_id=bill_id, source='open_finance')
+                if (p.raw_data or {}).get('source_entity_type') == 'reviewed_payable_settlement']
+            if reviewed and (existing is None or existing.bill_id != bill_id or item.amount != existing.amount):
+                raise ValueError('Official supplier payment arrived after local settlement; explicit source parity review required')
 
         if item.contact_external_id:
             c = self.db.query(Contact).filter(
@@ -888,7 +929,7 @@ class SyncEngine:
             from ..models import CollectionPaymentAllocation
             allocation = self.db.query(CollectionPaymentAllocation).filter_by(
                 organization_id=self.org_id, payment_id=existing.id).first()
-            if allocation and (item.amount != allocation.amount or item.currency != allocation.currency or
+            if allocation and (item.amount != existing.amount or item.currency != allocation.currency or
                                item.method != 'receipt' or str((item.raw_data or {}).get('document_id') or '') != allocation.document_external_id or
                                (item.raw_data or {}).get('document_type') != 'receipt' or
                                (item.raw_data or {}).get('status') not in {'open', 'closed', 'paid'} or
@@ -896,8 +937,21 @@ class SyncEngine:
                 raise ValueError('Payment source changed after reviewed allocation; reversal review required')
             if invoice_id and existing.invoice_id not in {None, invoice_id}:
                 raise ValueError('Provider invoice link conflicts with an existing allocation')
+            if bill_id and (existing.invoice_id or existing.bill_id not in {None, bill_id} or allocation):
+                raise ValueError('Provider bill link conflicts with an existing allocation')
+            if invoice_id and existing.bill_id:
+                raise ValueError('Provider invoice link conflicts with an existing bill allocation')
+            if invoice_id and allocation:
+                if self.db.query(CollectionPaymentAllocation).filter(
+                    CollectionPaymentAllocation.organization_id == self.org_id,
+                    CollectionPaymentAllocation.payment_id == existing.id,
+                    CollectionPaymentAllocation.status == 'active',
+                    CollectionPaymentAllocation.invoice_id != invoice_id).first():
+                    raise ValueError('Provider invoice link conflicts with reviewed split allocations')
             if invoice_id:
                 existing.invoice_id = invoice_id
+            if bill_id:
+                existing.bill_id = bill_id
             if contact_id:
                 existing.contact_id = contact_id
             if payload_hash and existing.payload_hash == payload_hash:
@@ -936,15 +990,32 @@ class SyncEngine:
             BankTransaction.organization_id == self.org_id,
             BankTransaction.external_id == item.external_id,
             BankTransaction.source == self.source,
-        ).first()
+        ).with_for_update().first()
+
+        account_id = None
+        if item.account_external_id:
+            acct = self.db.query(Account).filter_by(organization_id=self.org_id,
+                external_id=item.account_external_id, source=self.source).first()
+            if acct:
+                account_id = acct.id
 
         if existing:
             from ..models import CollectionPaymentAllocation
             allocation = self.db.query(CollectionPaymentAllocation).filter_by(
                 organization_id=self.org_id, bank_transaction_id=existing.id).first()
-            if allocation and (item.amount != allocation.amount or item.currency != allocation.currency or
+            reviewed_payable = any(any(e.get('bank_transaction_id') == existing.id
+                for e in (p.raw_data or {}).get('settlements', [])) for p in
+                self.db.query(Payment).filter_by(organization_id=self.org_id, source='open_finance'))
+            if reviewed_payable and (item.amount != existing.amount or item.currency != existing.currency or
+                    item.transaction_date != existing.transaction_date or (item.raw_data or {}).get('status') != 'BOOKED'):
+                raise ValueError('Bank source changed after reviewed supplier settlement; parity review required')
+            if allocation and (item.amount != existing.amount or item.currency != allocation.currency or
                                (item.raw_data or {}).get('status') != 'BOOKED'):
                 raise ValueError('Bank source changed after reviewed allocation; reversal review required')
+            if item.account_external_id and existing.account_id and existing.account_id != account_id:
+                raise ValueError('Bank source account changed; explicit relationship review required')
+            if account_id:
+                existing.account_id = account_id
             if payload_hash and existing.payload_hash == payload_hash:
                 return "skipped"
             existing.transaction_date = item.transaction_date or existing.transaction_date
@@ -954,16 +1025,6 @@ class SyncEngine:
             existing.raw_data = item.raw_data
             existing.payload_hash = payload_hash
             return "updated"
-
-        # Resolve account
-        account_id = None
-        if item.account_external_id:
-            acct = self.db.query(Account).filter(
-                Account.organization_id == self.org_id,
-                Account.external_id == item.account_external_id,
-            ).first()
-            if acct:
-                account_id = acct.id
 
         bank_tx = BankTransaction(
             organization_id=self.org_id,
@@ -1014,13 +1075,10 @@ class SyncEngine:
         return "created"
 
 
-def get_connector_for_org(
-    db: Session,
-    organization_id: int,
-    preferred_source: Optional[str] = None,
-) -> tuple:
-    """
-    Factory: returns (connector, connection_id, source) for the org's active integration.
+def get_connection_configuration(db: Session, organization_id: int, preferred_source: Optional[str] = None):
+    """Resolve saved org connection configuration without opening a provider client.
+
+    Credentials are for internal services only; never serialize them in actions.
     """
     from ..models import Organization
 
@@ -1045,7 +1103,23 @@ def get_connector_for_org(
     else:
         # Fall back to org-level credentials
         source = preferred_source or (org.integration_type.value if org.integration_type else "manual")
+        explicit = db.query(IntegrationConnection).filter_by(organization_id=organization_id, source=source).first()
+        if explicit is not None and explicit.status != 'active':
+            raise ValueError('Integration connection is inactive; explicit owner configuration is required')
         creds = org.api_credentials or {}
+
+    return conn, source, creds
+
+
+def get_connector_for_org(
+    db: Session,
+    organization_id: int,
+    preferred_source: Optional[str] = None,
+) -> tuple:
+    """
+    Factory: returns (connector, connection_id, source) for the org's active integration.
+    """
+    conn, source, creds = get_connection_configuration(db, organization_id, preferred_source)
 
     # Env credentials belong to the default organization only — other
     # tenants must configure their own via /integration/{source}/configure.
@@ -1090,6 +1164,9 @@ def get_connector_for_org(
         if missing:
             raise ValueError(f"Open Finance credentials not configured: {', '.join(missing)}")
 
+        from ..api.routes.open_finance import _has_shared_of_identity
+        if not creds.get('connection_id') and _has_shared_of_identity(db, organization_id):
+            raise ValueError('Shared provider identity requires an explicit bank connection scope before sync')
         connector = OpenFinanceConnector(
             client_id=client_id,
             client_secret=client_secret,
@@ -1099,6 +1176,8 @@ def get_connector_for_org(
             # Optional per-org bank-connection scope: several orgs can share one
             # Financy user; without this, one org's sync ingests another's bank.
             connection_id=creds.get("connection_id"),
+            provider_product=(conn.config or {}).get('provider_product', 'unverified') if conn else 'unverified',
+            provider_plan=(conn.config or {}).get('provider_plan') if conn else None,
         )
         return connector, conn.id if conn else None, source
 

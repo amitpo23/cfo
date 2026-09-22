@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
+import DocumentSourcePreview from './DocumentSourcePreview';
 
 type Payload = { expense_id: number; document_id: number; amount: string; currency: string;
   provider_target: { company_id: string; connection_id: number | null };
@@ -63,8 +64,10 @@ export default function ExpenseFilingWorkbench({ expenseId, onClose }: { expense
           <div><dt>סיווג ההוצאה</dt><dd>{fields.category}</dd></div><div><dt>קובץ מקור</dt><dd><bdi>{fields.filename}</bdi></dd></div>
         </dl>
         <div className="space-y-2 min-w-0"><button className="border rounded p-2" onClick={() => void showSource()}>הצגת המקור להצעה</button>
-          {preview && (fields.media_type.startsWith('image/') ? <img src={preview} alt="מקור להצעת תיוק" className="max-w-full" /> :
-            <iframe sandbox="" title="מקור להצעת תיוק" src={preview} className="w-full h-80 border" />)}</div>
+          {preview && <>
+            <a href={preview} download={fields.filename} className="block underline">הורדת המקור השמור</a>
+            <DocumentSourcePreview key={payload.document_id} documentId={payload.document_id} />
+          </>}</div>
       </div>}
       {state.provider_document_id && <p>מזהה שהספק החזיר: {state.provider_document_id}. קיום המסמך, הסיווג והספרים עדיין דורשים ראיה.</p>}
       {['not_proposed', 'rejected'].includes(state.approval_status) && !state.blocking_reason && <form className="space-y-2" onSubmit={event => {

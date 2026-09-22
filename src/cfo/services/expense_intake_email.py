@@ -6,16 +6,13 @@ Service polls IMAP, extracts PDFs/images, creates Expense records, runs OCR.
 """
 from __future__ import annotations
 
-import asyncio
-import base64
 import logging
-from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..models import Expense, Contact
+from ..models import Expense
 
 logger = logging.getLogger(__name__)
 
@@ -77,16 +74,15 @@ class EmailExpenseIntakeService:
 
             for msg_id in msg_ids:
                 try:
-                    _, msg_data = client.fetch(msg_id, "(RFC822)")
+                    _, msg_data = client.fetch(msg_id, "(BODY.PEEK[])")
                     email_body = msg_data[0][1]
                     result = await self._process_email(email_body)
                     results.append(result)
-                    if result.get("status") == "created":
-                        created += 1
-                    elif result.get("status") == "error":
-                        errors += 1
-                    # Mark as read
-                    client.store(msg_id, "+FLAGS", "\\Seen")
+                    created += result.get("created", 0)
+                    errors += result.get("errors", 0)
+                    # Keep partial failures unread. Replay deduplicates saved siblings.
+                    if not result.get("errors"):
+                        client.store(msg_id, "+FLAGS", "\\Seen")
                 except Exception as exc:
                     logger.exception("Failed to process email %s: %s", msg_id, exc)
                     errors += 1
@@ -111,81 +107,40 @@ class EmailExpenseIntakeService:
             }
 
     async def _process_email(self, email_bytes: bytes) -> dict[str, Any]:
-        """Extract expense from email (sender, subject, attachments)."""
+        """Preserve every relevant attachment; no OCR or invented expense amounts."""
         import email
-        from email.mime.base import MIMEBase
+        from .document_intake import DocumentIntakeService, MEDIA_TYPES
 
-        try:
-            msg = email.message_from_bytes(email_bytes)
-            sender_email = email.utils.parseaddr(msg["From"])[1]
-            subject = msg.get("Subject", "").strip()
-
-            # Find contact by email
-            contact = (
-                self.db.query(Contact)
-                .filter(
-                    Contact.organization_id == self.organization_id,
-                    Contact.email == sender_email,
-                )
-                .first()
-            )
-            contact_name = contact.name if contact else sender_email
-
-            # Extract attachments
-            attachments = []
-            for part in msg.walk():
-                if part.get_content_maintype() == "application":
-                    filename = part.get_filename()
-                    if filename and filename.lower().endswith((".pdf", ".png", ".jpg", ".jpeg")):
-                        attachments.append({
-                            "filename": filename,
-                            "content": base64.b64encode(part.get_payload(decode=True)).decode("ascii"),
-                            "media_type": part.get_content_type(),
-                        })
-
-            if not attachments:
-                return {
-                    "sender": sender_email,
-                    "status": "skipped",
-                    "reason": "No PDF/image attachments found",
-                }
-
-            # Create Expense record from email
-            exp = Expense(
-                organization_id=self.organization_id,
-                source="email",
-                supplier_name=contact_name or "Email Submission",
-                description=subject or "(No subject)",
-                amount=0,  # Will be filled by OCR
-                vat_amount=0,
-                total=0,
-                expense_date=datetime.now(timezone.utc).date(),
-                status="pending",
-                receipt_file=attachments[0]["content"],  # Store first attachment
-                raw_data={
-                    "sender_email": sender_email,
-                    "subject": subject,
-                    "attachment_count": len(attachments),
-                    "received_at": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-            self.db.add(exp)
-            self.db.commit()
-            self.db.refresh(exp)
-
-            return {
-                "sender": sender_email,
-                "subject": subject,
-                "expense_id": exp.id,
-                "attachments": len(attachments),
-                "status": "created",
-            }
-        except Exception as exc:
-            logger.exception("Email parsing failed: %s", exc)
-            return {
-                "status": "error",
-                "error": str(exc),
-            }
+        msg = email.message_from_bytes(email_bytes)
+        sender = email.utils.parseaddr(msg.get("From", ""))[1]
+        service = DocumentIntakeService(self.db, self.organization_id)
+        results = []
+        for index, part in enumerate(msg.walk()):
+            if part.is_multipart():
+                continue
+            filename = part.get_filename() or f"attachment-{index}"
+            media_type = part.get_content_type()
+            if media_type == 'application/octet-stream':
+                import mimetypes
+                media_type = mimetypes.guess_type(filename)[0]
+            if media_type not in MEDIA_TYPES:
+                continue
+            try:
+                result = service.receive(part.get_payload(decode=True) or b'',
+                    media_type=media_type, source='email', filename=filename,
+                    source_reference=f"{msg.get('Message-ID', '')}:{index}")
+                results.append(dict(result, filename=filename))
+            except Exception:
+                self.db.rollback()
+                logger.exception("Attachment intake failed")
+                results.append({'filename': filename, 'status': 'error',
+                    'error': 'Attachment could not be saved; retry this message'})
+        created = sum(r['status'] == 'queued' for r in results)
+        errors = sum(r['status'] == 'error' for r in results)
+        return {'sender': sender, 'subject': msg.get('Subject', ''),
+            'status': 'error' if errors else ('queued' if results else 'skipped'),
+            'created': created, 'duplicates': sum(r['status'] == 'duplicate' for r in results),
+            'errors': errors, 'attachments': len(results), 'results': results}
 
     async def send_confirmation(
         self,
@@ -225,7 +180,7 @@ class EmailExpenseIntakeService:
             # Note: Would require SMTP credentials in config
             # smtplib.SMTP_SSL(self.smtp_host, 465).send_message(msg)
             logger.info("Confirmation email prepared for %s (expense %s)", to_email, expense_id)
-            return {"status": "sent", "to": to_email}
+            return {"status": "prepared", "sent": False, "to": to_email}
         except Exception as exc:
             logger.error("Failed to send confirmation: %s", exc)
             return {"status": "error", "error": str(exc)}

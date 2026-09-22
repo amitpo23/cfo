@@ -12,7 +12,7 @@ from decimal import Decimal, InvalidOperation
 from ..models import DocumentIntake, Expense, IrreversibleActionRequest, Organization, User, UserRole
 from . import membership_service
 from .irreversible_action_service import (IrreversibleActionService, ActionAuthorizationError,
-    ActionConflictError, ActionStateError, ActionValidationError)
+    ActionConflictError, ActionOutcomeUnknownError, ActionValidationError)
 
 
 class ExpenseFilingWorkflow:
@@ -197,5 +197,5 @@ class ExpenseFilingWorkflow:
             expense.status = 'outcome_unknown'
             expense.filing_error = 'Provider outcome is unknown; do not retry or create a replacement document'
             self.actions.mark_failed(approval_id, error=f'Expense provider outcome unknown: {type(exc).__name__}')
-            raise ActionStateError('Provider outcome is unknown; independent review is required') from exc
+            raise ActionOutcomeUnknownError('Provider outcome is unknown; independent review is required') from exc
         return dict(ExpenseFilingService._serialize(expense), **self.status(expense_id))

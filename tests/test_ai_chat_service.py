@@ -1665,7 +1665,7 @@ def test_file_expense_write_tool_is_never_auto_executed(monkeypatch, fresh_org):
         db.close()
 
 
-def test_confirm_action_executes_file_expense_successfully(monkeypatch, fresh_org):
+def test_confirm_action_forwards_filing_approval_and_real_signer(monkeypatch, fresh_org):
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
     try:
@@ -1674,7 +1674,7 @@ def test_confirm_action_executes_file_expense_successfully(monkeypatch, fresh_or
         _patch_client(monkeypatch, responses=[
             SimpleNamespace(
                 stop_reason="tool_use",
-                content=[_tool_use_block("t1", "file_expense", {"expense_id": exp["id"]})],
+                content=[_tool_use_block("t1", "file_expense", {"expense_id": exp["id"], "approval_id": 77})],
             ),
         ])
         proposer_id = _org_user_id(db, org_id)
@@ -1690,17 +1690,35 @@ def test_confirm_action_executes_file_expense_successfully(monkeypatch, fresh_or
 
         from cfo.services.expense_filing_service import ExpenseFilingService
 
-        async def fake_file_to_sumit(self, expense_id):
-            return {"id": expense_id, "status": "filed", "sumit_expense_id": "SU-1"}
+        async def fake_file_to_sumit(self, expense_id, *, approval_id=None, actor_id=None):
+            assert approval_id == 77 and actor_id == signer.id
+            return {"id": expense_id, "status": "submitted", "sumit_expense_id": "991", "official_books_verified": False}
 
         monkeypatch.setattr(ExpenseFilingService, "file_to_sumit", fake_file_to_sumit)
 
         confirmed = asyncio.run(
             AIChatService(db, org_id, signer.id).confirm_action(pending_id)
         )
-        assert confirmed["result"]["status"] == "filed"
+        assert confirmed["result"]["status"] == "submitted"
+        assert confirmed["result"]["official_books_verified"] is False
     finally:
         db.close()
+
+
+def test_chat_confirmation_does_not_replace_source_bound_filing_approval(monkeypatch, fresh_org):
+    from cfo.services.ai_chat_service import ChatConfirmationError
+    org_id = fresh_org()['org_id']
+    with SessionLocal() as db:
+        expense = _seed_pending_expense(db, org_id, supplier_name='Synthetic office supplier', category='office')
+        _patch_client(monkeypatch, responses=[SimpleNamespace(stop_reason='tool_use',
+            content=[_tool_use_block('t1', 'file_expense', {'expense_id': expense['id']})])])
+        proposer_id = _org_user_id(db, org_id)
+        signer = _add_org_user(db, org_id, email=f'unsigned-filing-{org_id}@example.com', signing_scope='sumit_writeback')
+        proposed = asyncio.run(AIChatService(db, org_id, proposer_id).send_message('s1', 'File the synthetic expense'))
+        def forbidden(*args, **kwargs): raise AssertionError('Chat confirmation bypassed the durable filing approval')
+        monkeypatch.setattr('cfo.services.sync_engine.get_connector_for_org', forbidden)
+        with pytest.raises(ChatConfirmationError, match='Approval-Id'):
+            asyncio.run(AIChatService(db, org_id, signer.id).confirm_action(proposed['message_id']))
 
 
 def test_system_prompt_tells_the_model_about_rezef_help():
@@ -1708,3 +1726,27 @@ def test_system_prompt_tells_the_model_about_rezef_help():
     only a pointer to the rezef_help tool is, so "how do I / what can Rezef
     do" questions don't inflate every single request's token count."""
     assert "rezef_help" in ai_chat_service.SYSTEM_PROMPT
+
+
+def test_filing_unknown_outcome_stays_unknown_in_chat_and_cannot_be_confirmed_again(monkeypatch, fresh_org):
+    from cfo.services.irreversible_action_service import ActionOutcomeUnknownError
+    from cfo.services.expense_filing_service import ExpenseFilingService
+    org_id = fresh_org()['org_id']
+    with SessionLocal() as db:
+        proposer_id = _org_user_id(db, org_id)
+        expense = _seed_pending_expense(db, org_id, supplier_name='Synthetic office supplier', category='office')
+        signer = _add_org_user(db, org_id, email=f'unknown-filing-{org_id}@example.com', signing_scope='sumit_writeback')
+        _patch_client(monkeypatch, responses=[SimpleNamespace(stop_reason='tool_use', content=[
+            _tool_use_block('t1', 'file_expense', {'expense_id': expense['id'], 'approval_id': 77})])])
+        proposed = asyncio.run(AIChatService(db, org_id, proposer_id).send_message('s1', 'File the synthetic expense'))
+        calls = []
+        async def unknown(self, expense_id, **kwargs):
+            calls.append(expense_id)
+            raise ActionOutcomeUnknownError('Provider outcome is unknown; independent review is required')
+        monkeypatch.setattr(ExpenseFilingService, 'file_to_sumit', unknown)
+        service = AIChatService(db, org_id, signer.id)
+        with pytest.raises(ChatConfirmationError): asyncio.run(service.confirm_action(proposed['message_id']))
+        db.expire_all()
+        assert db.get(ChatMessage, proposed['message_id']).action_status == 'unknown'
+        with pytest.raises(ChatConfirmationError): asyncio.run(service.confirm_action(proposed['message_id']))
+        assert calls == [expense['id']]

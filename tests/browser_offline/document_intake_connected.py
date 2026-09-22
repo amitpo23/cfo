@@ -1,7 +1,7 @@
 """Real React → FastAPI → SQLite journey, with synthetic inputs and external sockets blocked.
 
 Playwright forwards API requests to the real ASGI TestClient; no API responses or
-business services are mocked. Restarting the application lifespan/connection pool
+business services are mocked. Only the SUMIT provider is synthetic. Restarting the application lifespan/connection pool
 uses the same temporary database. The separate fixture-browser tests cover failures.
 """
 import asyncio
@@ -13,6 +13,7 @@ from email.message import EmailMessage
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlsplit
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'scripts'), str(ROOT / 'src')]
@@ -25,7 +26,9 @@ os.environ['CHAT_RECEIPT_INTAKE_ENABLED'] = 'false'
 from fastapi.testclient import TestClient
 from cfo.api import app
 from cfo.database import SessionLocal, engine
-from cfo.models import DocumentIntake, Expense, Note, ReportRecord, SyncCheckpoint
+from cfo.models import DocumentIntake, Expense, Note, ReportRecord, SyncCheckpoint, User, UserRole, OrganizationSigningAuthority, IrreversibleActionRequest, Organization
+from cfo.auth import create_access_token, get_password_hash
+from cfo.services import membership_service
 from cfo.services.expense_intake_email import EmailExpenseIntakeService
 from playwright.sync_api import sync_playwright, expect
 from reportlab.pdfgen import canvas
@@ -38,6 +41,27 @@ registration = client.post('/api/admin/auth/register', json={'email': 'synthetic
     'password': 'synthetic-test-password', 'full_name': 'בדיקה סינתטית'})
 assert registration.status_code == 201, registration.text
 identity = registration.json(); org_id = identity['user']['organization_id']
+with SessionLocal() as db:
+    db.get(Organization, org_id).api_credentials = {'company_id': '123', 'api_key': 'synthetic-only'}
+    owner = db.query(User).filter_by(organization_id=org_id).one()
+    signer = User(organization_id=org_id, email='synthetic-signer@example.com',
+        password_hash=get_password_hash('synthetic-test-password'), full_name='מורשה חתימה סינתטי', role=UserRole.ADMIN, is_active=True)
+    db.add(signer); db.flush()
+    membership_service.grant(db, organization_id=org_id, user_id=signer.id, role=UserRole.ADMIN,
+        granted_by_user_id=owner.id, status=membership_service.ACTIVE)
+    db.add(OrganizationSigningAuthority(organization_id=org_id, user_id=signer.id,
+        authority_type='authorized_signer', action_types=['sumit_writeback'], is_active=True, granted_by_user_id=owner.id))
+    db.commit(); signer_token = create_access_token({'sub': signer.id})
+provider_calls = []
+class FakeSumit:
+    company_id = '123'
+    async def add_expense(self, request):
+        assert request.is_draft is True and request.invoice_number == 'SYN-118'
+        provider_calls.append({'invoice_number': request.invoice_number, 'draft': request.is_draft})
+        return {'DocumentID': 991, 'expense_id': '991'}
+def synthetic_connector(db, organization_id, **kwargs):
+    assert organization_id == org_id and kwargs['preferred_source'] == 'sumit'
+    return FakeSumit(), None, 'sumit'
 
 def pdf(*texts):
     b = BytesIO(); c = canvas.Canvas(b)
@@ -91,6 +115,42 @@ with sync_playwright() as p:
     panel.get_by_label('סיבת התיקון והראיה שנבדקה').fill('בדיקה ידנית של נתוני המקור הסינתטי לפני יצירת טיוטת הוצאה')
     panel.get_by_role('button', name='שמירת בדיקת המקור').click()
     expect(panel.get_by_role('heading', name='בדיקת מקור מתועדת')).to_be_visible()
+    # Correct classification and review the exact proposal in the actual UI.
+    expense_row = page.locator('tr[id^="expense-"]')
+    category = expense_row.locator('input:not([type="number"])')
+    category.fill('office'); category.press('Tab')
+    page.wait_for_load_state('networkidle')
+    expense_row.get_by_role('button', name='מקור, הצעה וסטטוס תיוק').click()
+    filing = page.get_by_role('region', name='אישור תיוק מקור')
+    expect(filing.get_by_text('SYN-118', exact=True)).to_be_visible()
+    filing.get_by_role('button', name='הצגת המקור להצעה').click()
+    expect(filing.get_by_alt_text('תצוגת עמוד מקור')).to_be_visible()
+    expect(filing.get_by_text('עמוד 1 מתוך 1', exact=False)).to_be_visible()
+    page.wait_for_load_state('networkidle')
+    assert filing.get_by_alt_text('תצוגת עמוד מקור').evaluate('(image) => image.naturalWidth > 0')
+    filing.get_by_alt_text('תצוגת עמוד מקור').screenshot(path=str(output / 'source-preview.png'))
+    filing.get_by_label('סיבת הצעת התיוק').fill('המקור והסיווג נבדקו — בקשת טיוטה סינתטית בלבד לצורך בדיקה')
+    filing.get_by_role('button', name='שמירת הצעה לאישור תיוק').click()
+    expect(filing.get_by_text('ממתין לאישור מורשה חתימה', exact=True)).to_be_visible()
+    page.evaluate('(token) => localStorage.setItem("auth_token", token)', signer_token)
+    filing.get_by_role('button', name='אישור ההצעה המדויקת').click()
+    expect(filing.get_by_text('אושר לביצוע', exact=True)).to_be_visible()
+    filing.get_by_label('סיבת ביטול האישור לפני ביצוע').fill('ביטול מקומי של אישור הבדיקה לפני כל בקשת ספק, תוך שימור ההיסטוריה')
+    filing.get_by_role('button', name='ביטול האישור בידי מורשה חתימה').click()
+    expect(filing.get_by_text('ההצעה נדחתה', exact=True)).to_be_visible()
+    page.evaluate('(token) => localStorage.setItem("auth_token", token)', identity['access_token'])
+    filing.get_by_role('button', name='שמירת הצעה לאישור תיוק').click()
+    expect(filing.get_by_text('ממתין לאישור מורשה חתימה', exact=True)).to_be_visible()
+    page.evaluate('(token) => localStorage.setItem("auth_token", token)', signer_token)
+    filing.get_by_role('button', name='אישור ההצעה המדויקת').click()
+    expect(filing.get_by_text('אושר לביצוע', exact=True)).to_be_visible()
+    page.evaluate('(token) => localStorage.setItem("auth_token", token)', identity['access_token'])
+    with patch('cfo.services.sync_engine.get_connector_for_org', synthetic_connector):
+        filing.get_by_role('button', name='ביצוע בקשת הטיוטה המאושרת').click()
+        expect(filing.get_by_text('הספק החזיר מזהה — נדרש אימות מסמך וספרים', exact=True)).to_be_visible()
+    expect(filing.get_by_role('button', name='ביצוע בקשת הטיוטה המאושרת')).to_have_count(0)
+    page.screenshot(path=str(output / 'filing.png'), full_page=True)
+    filing.get_by_role('button', name='סגירת התצוגה').click()
     panel.get_by_text('ארגון עמודי PDF — פיצול או מיזוג', exact=True).click()
     panel.get_by_role('checkbox', name='packet.pdf', exact=True).check()
     panel.get_by_label('קבוצות עמודים לפיצול', exact=False).fill('1;2')
@@ -105,6 +165,10 @@ with sync_playwright() as p:
     expect(panel.get_by_role('heading', name='מקור העמודים')).to_be_visible()
     panel.get_by_role('button', name='עיון במקור — עמודים 1', exact=True).click()
     expect(panel.get_by_role('button', name='תיקון נתונים מהמקור')).to_have_count(0)
+    panel.get_by_role('button', name='הצגת המקור', exact=True).click()
+    expect(panel.get_by_text('עמוד 1 מתוך 2', exact=False)).to_be_visible()
+    panel.get_by_role('button', name='עמוד הבא', exact=True).click()
+    expect(panel.get_by_text('עמוד 2 מתוך 2', exact=False)).to_be_visible()
     page.goto(base + '/reports'); page.wait_for_load_state('networkidle')
     reports = page.get_by_role('region', name='דוחות שמורים', exact=True)
     reports.get_by_label('שם תבנית חדשה').fill('דוח בדיקה מחובר')
@@ -130,13 +194,19 @@ with sync_playwright() as p:
     with SessionLocal() as db:
         assert db.query(DocumentIntake).filter_by(organization_id=org_id).count() == 5
         expense = db.query(Expense).filter_by(organization_id=org_id).one()
-        assert expense.status == 'pending' and expense.total == 118
+        assert expense.status == 'submitted' and expense.total == 118 and expense.sumit_expense_id == '991'
+        actions = db.query(IrreversibleActionRequest).filter_by(organization_id=org_id, action_type='sumit_writeback').order_by(IrreversibleActionRequest.id).all()
+        assert len(actions) == 2 and actions[0].status == 'rejected'
+        action = actions[1]
+        assert action.status == 'executed' and action.execution_result['official_books_verified'] is False
         assert db.query(Note).filter_by(organization_id=org_id, entity_type='document_intake').count() == 1
         assert db.query(ReportRecord).filter_by(organization_id=org_id, kind='file').count() == 1
         assert db.query(SyncCheckpoint).count() == initial_checkpoints
-    assert len(writes) == 5, writes
+    assert len(writes) == 12, writes
+    assert len(provider_calls) == 1
     result = {'passed': True, 'synthetic_only': True, 'api_responses_mocked': False, 'external_network_blocked': True,
-        'journey': 'three email attachments, cross-channel upload duplicate, reviewed source draft, PDF split and lineage, app lifespan restart, saved report and download, RTL mobile',
+        'journey': 'three email attachments, cross-channel duplicate, source correction, classification, distinct signer approval, pre-execution withdrawal and replacement approval, fake SUMIT draft acknowledgement, PDF split and lineage, app lifespan restart, saved report and download, RTL mobile',
+        'provider_calls': provider_calls, 'provider_is_fake': True,
         'api_requests': requests, 'writes': writes, 'javascript_errors': errors, 'official_books_verified': False,
         'payment_or_period_close_executed': False}
     (output / 'evidence.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')

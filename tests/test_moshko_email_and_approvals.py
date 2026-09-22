@@ -248,7 +248,13 @@ def test_needs_user_regression_on_existing_tools():
     the real caller identity to scope a personal write, search_history
     needs it to scope a personal read."""
     flagged = {name for name, t in TOOLS.items() if t.needs_user}
-    assert flagged == {"propose_vat_filing_approval", "memory", "search_history"}
+    assert flagged == {"propose_vat_filing_approval", "memory", "search_history",
+        # Source review and PDF transformations record/recheck the real actor.
+        "review_document_source", "derive_document_sources",
+        "propose_expense_filing", "file_expense",
+        # Local collection decisions must receive the real caller identity.
+        "propose_collection_request", "allocate_collection_receipt", "reverse_collection_allocation",
+        "propose_payable_request", "execute_payable_request", "settle_payable_request", "reverse_payable_settlement"}
 
 
 def test_needs_user_tool_receives_user_id_kwarg(monkeypatch, fresh_org):

@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { FileCheck, Plus, Send, RefreshCw, CheckCircle, Clock, XCircle, Tags, Upload as UploadAll } from 'lucide-react';
+import { FileCheck, Plus, RefreshCw, CheckCircle, Clock, XCircle, Tags } from 'lucide-react';
 import apiService from '../services/api';
+import DocumentIntakePanel from './DocumentIntakePanel';
+import ExpenseFilingWorkbench from './ExpenseFilingWorkbench';
 
 interface Props {
   darkMode?: boolean;
@@ -16,7 +18,7 @@ interface Expense {
   expense_date: string;
   category?: string;
   invoice_number?: string;
-  status: 'pending' | 'filed' | 'error';
+  status: 'pending' | 'filed' | 'error' | 'submitting' | 'submitted' | 'outcome_unknown' | 'source_conflict';
   sumit_expense_id?: string;
   filing_error?: string;
 }
@@ -29,6 +31,7 @@ const ExpenseFiling: React.FC<Props> = ({ darkMode }) => {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<any>(empty);
   const [message, setMessage] = useState<string | null>(null);
+  const [filingExpenseId, setFilingExpenseId] = useState<number | null>(null);
 
   const card = darkMode ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-200';
   const input = `w-full px-3 py-2 rounded-lg border ${darkMode ? 'bg-gray-700 border-gray-600 text-white' : 'border-gray-300'}`;
@@ -48,12 +51,6 @@ const ExpenseFiling: React.FC<Props> = ({ darkMode }) => {
     mutationFn: () => apiService.createExpense(form),
     onSuccess: () => { setMessage('הוצאה נוצרה'); setShowForm(false); setForm(empty); refresh(); },
     onError: (e: any) => setMessage(e?.response?.data?.detail || 'שגיאה ביצירה'),
-  });
-
-  const fileMutation = useMutation({
-    mutationFn: (id: number) => apiService.fileExpense(id),
-    onSuccess: () => { setMessage('ההוצאה תויקה ב-SUMIT'); refresh(); },
-    onError: (e: any) => setMessage(e?.response?.data?.detail || 'שגיאה בתיוק'),
   });
 
   const updateMutation = useMutation({
@@ -97,21 +94,21 @@ const ExpenseFiling: React.FC<Props> = ({ darkMode }) => {
     onError: (e: any) => setMessage(e?.response?.data?.detail || 'שגיאה בפתרון שמות'),
   });
 
-  const fileAllMutation = useMutation({
-    mutationFn: () => apiService.fileAllExpenses(),
-    onSuccess: (res: any) => { setMessage(`תויקו ${res?.data?.filed ?? 0}, נכשלו ${res?.data?.failed ?? 0}`); refresh(); },
-    onError: (e: any) => setMessage(e?.response?.data?.detail || 'שגיאה בתיוק גורף'),
-  });
-
   const statusBadge = (s: string, err?: string) => {
     if (s === 'filed') return <span className="text-green-600 flex items-center gap-1"><CheckCircle className="w-4 h-4" />תויק</span>;
     if (s === 'error') return <span className="text-red-600 flex items-center gap-1" title={err}><XCircle className="w-4 h-4" />שגיאה</span>;
+    if (s === 'submitted') return <span>בקשת טיוטה נשלחה — נדרש אימות</span>;
+    if (s === 'submitting') return <span>בקשת ספק בטיפול</span>;
+    if (s === 'outcome_unknown') return <span className="text-red-600">תוצאה לא ידועה — נדרשת בדיקה</span>;
+    if (s === 'source_conflict') return <span className="text-red-600">המקור השתנה בזמן הביצוע — נדרשת הכרעה</span>;
     return <span className="text-amber-600 flex items-center gap-1"><Clock className="w-4 h-4" />ממתין</span>;
   };
 
   return (
     <div dir="rtl" className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <DocumentIntakePanel />
+      {filingExpenseId !== null && <ExpenseFilingWorkbench key={filingExpenseId} expenseId={filingExpenseId} onClose={() => setFilingExpenseId(null)} />}
+      <div className="flex flex-wrap gap-3 items-center justify-between">
         <div className="flex items-center gap-3">
           <FileCheck className="w-8 h-8 text-blue-600" />
           <div>
@@ -119,7 +116,7 @@ const ExpenseFiling: React.FC<Props> = ({ darkMode }) => {
             <p className="text-sm text-gray-500">יצירת הוצאות ותיוקן ב-SUMIT מתוך המערכת</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button onClick={() => setShowForm(!showForm)}
             className="px-4 py-2 border border-blue-600 text-blue-600 rounded-lg flex items-center gap-2 hover:bg-blue-50">
             <Plus className="w-4 h-4" /> הוצאה
@@ -135,10 +132,6 @@ const ExpenseFiling: React.FC<Props> = ({ darkMode }) => {
           <button onClick={() => pcnMutation.mutate()} disabled={pcnMutation.isPending}
             className="px-4 py-2 border border-teal-600 text-teal-600 rounded-lg flex items-center gap-2 hover:bg-teal-50 disabled:opacity-50">
             <FileCheck className="w-4 h-4" /> מוכנות PCN874
-          </button>
-          <button onClick={() => fileAllMutation.mutate()} disabled={fileAllMutation.isPending}
-            className="px-4 py-2 border border-green-600 text-green-600 rounded-lg flex items-center gap-2 hover:bg-green-50 disabled:opacity-50">
-            <UploadAll className="w-4 h-4" /> תייק הכל
           </button>
           <button onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50">
@@ -191,9 +184,9 @@ const ExpenseFiling: React.FC<Props> = ({ darkMode }) => {
               </thead>
               <tbody>
                 {data.map((e) => {
-                  const isFiled = e.status === 'filed';
+                  const isFiled = ['filed', 'submitting', 'submitted', 'outcome_unknown', 'source_conflict'].includes(e.status);
                   return (
-                    <tr key={e.id} className="border-b">
+                    <tr key={e.id} id={`expense-${e.id}`} className="border-b">
                       <td className="py-2">{e.supplier_name}</td>
                       <td>{e.expense_date}</td>
                       <td>
@@ -217,10 +210,10 @@ const ExpenseFiling: React.FC<Props> = ({ darkMode }) => {
                       <td>₪{e.vat_amount.toLocaleString()}</td>
                       <td>{statusBadge(e.status, e.filing_error)}</td>
                       <td>
-                        {!isFiled && (
-                          <button onClick={() => fileMutation.mutate(e.id)} disabled={fileMutation.isPending}
+                        {e.status !== 'filed' && (
+                          <button onClick={() => setFilingExpenseId(e.id)}
                             className="px-3 py-1 bg-blue-600 text-white rounded flex items-center gap-1 hover:bg-blue-700 disabled:opacity-50">
-                            <Send className="w-3 h-3" /> אשר ותייק
+                            מקור, הצעה וסטטוס תיוק
                           </button>
                         )}
                       </td>

@@ -1388,9 +1388,15 @@ class SumitIntegration(BaseIntegration):
         }
         if expense.notes:
             payload["Description"] = expense.notes
+        if expense.invoice_number:
+            payload["ExpenseNumber"] = expense.invoice_number
+        if expense.supplier_tax_id:
+            payload["Supplier"]["CompanyNumber"] = expense.supplier_tax_id
+        if expense.is_draft is not None:
+            payload["IsDraft"] = expense.is_draft
         if expense.receipt_file:
             payload["ExpenseFile"] = expense.receipt_file
-            payload["ExpenseFilename"] = "receipt.pdf"
+            payload["ExpenseFilename"] = expense.receipt_filename or "receipt.pdf"
         data = await self._post("/accounting/documents/addexpense/", payload)
         document_id = data.get("DocumentID")
         result = dict(data)

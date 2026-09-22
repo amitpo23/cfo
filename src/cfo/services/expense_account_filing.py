@@ -72,6 +72,9 @@ def file_expense_to_account(
             f"הוצאה {expense_id} אינה קיימת בארגון {organization_id}"
         )
 
+    if expense.status in ('submitting', 'submitted', 'outcome_unknown', 'source_conflict'):
+        raise ExpenseFilingError('Unresolved provider filing requires review before changing its local account')
+
     account = db.query(Account).filter(Account.id == account_id).first()
     if account is None:
         raise ExpenseFilingError(f"כרטיס {account_id} אינו קיים")
