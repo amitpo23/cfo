@@ -15,7 +15,7 @@ from environment import test_engine, evidence_path
 from verify_postgres_restore import local_test_url, fingerprint, run
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
-from cfo.models import DocumentIntake, ReportRecord
+from cfo.models import DocumentDerivation, DocumentIntake, ReportRecord, Expense, IrreversibleActionRequest
 from cfo.services.schema_sync import compute_schema_drift, has_schema_drift
 
 source = test_engine()
@@ -46,10 +46,30 @@ with Session(target) as db:
         assert row.sources
     for row in db.query(ReportRecord).filter_by(kind='file'):
         assert hashlib.sha256(base64.b64decode(row.payload['content_base64'])).hexdigest() == row.payload['sha256']
+    for recipe in db.query(DocumentDerivation):
+        for doc, digest in recipe.recipe['source_hashes'].items():
+            parent = db.query(DocumentIntake).filter_by(id=int(doc), organization_id=recipe.organization_id).one()
+            assert parent.content_hash == digest and parent.status == 'superseded'
+        for output in recipe.outputs:
+            child = db.query(DocumentIntake).filter_by(id=output['document_id'], organization_id=recipe.organization_id).one()
+            assert child.content_hash == output['content_hash']
+    filing_acknowledgements = 0
+    for action in db.query(IrreversibleActionRequest).filter_by(action_type='sumit_writeback'):
+        payload, result = action.payload or {}, action.execution_result or {}
+        if payload.get('operation') != 'expenses.add_source_expense_draft' or not action.provider_reference:
+            continue
+        original = db.query(DocumentIntake).filter_by(id=payload['document_id'], organization_id=action.organization_id).one()
+        expense = db.query(Expense).filter_by(id=payload['expense_id'], organization_id=action.organization_id).one()
+        assert original.content_hash == payload['source_sha256']
+        assert expense.sumit_expense_id == action.provider_reference == result['provider_document_id']
+        assert payload['provider_target'] == result['provider_target']
+        assert result['official_books_verified'] is False
+        filing_acknowledgements += 1
 result = {'status': 'passed', 'synthetic_only': True, 'tables': len(before),
     'intake_rows': before['document_intakes']['rows'], 'report_rows': before['report_records']['rows'],
+    'derivation_rows': before['document_derivations']['rows'], 'filing_acknowledgements': filing_acknowledgements,
     'checks': ['populated encrypted restore', 'all-table row hash parity', 'source bytes and provenance',
-        'saved report file integrity', 'schema parity'], 'production_backup_verified': False}
+        'saved report file integrity', 'source-bound filing and provider destination identity', 'derived pages and retired parent identity', 'schema parity'], 'production_backup_verified': False}
 evidence_path('2026-09-07-document-report-populated-restore.json').write_text(json.dumps(result, indent=2) + '\n')
 print(json.dumps(result))
 source.dispose(); target.dispose()

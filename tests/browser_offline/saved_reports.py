@@ -76,6 +76,7 @@ with sync_playwright() as p:
     panel.get_by_label('שם תבנית חדשה').fill('בדיקת נייד')
     expect(panel).to_have_attribute('dir', 'rtl')
     assert panel.evaluate('(el) => el.scrollWidth <= el.clientWidth + 1')
+    assert panel.evaluate('(el) => el.getBoundingClientRect().left >= 0 && el.getBoundingClientRect().right <= innerWidth'), panel.bounding_box()
     page.screenshot(path=str(output / 'mobile.png'), full_page=True)
     assert not errors and len(writes) == 4
     (output / 'evidence.json').write_text(json.dumps({'synthetic': True, 'external_requests_blocked': True,

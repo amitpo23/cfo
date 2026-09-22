@@ -655,7 +655,7 @@ class ScheduleRequest(BaseModel):
     name: str
     frequency: str
     recipients: List[str]
-    delivery_method: str = 'email'
+    delivery_method: str = 'download'
     format: str = 'excel'
     filters: Optional[List[Dict]] = None
     parameters: Optional[Dict] = None
@@ -680,20 +680,26 @@ async def create_report_template(
     request: ReportTemplateRequest,
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
+    current_user=Depends(require_admin),
 ):
     """יצירת תבנית"""
     service = ReportBuilderService(db, organization_id=org_id)
-    template = service.create_template(
-        name=request.name,
-        report_type=request.report_type,
-        columns=request.columns,
-        description=request.description,
-        default_filters=request.default_filters,
-        grouping=request.grouping,
-        sorting=request.sorting,
-        summary_fields=request.summary_fields,
-        is_public=request.is_public
-    )
+    try:
+        template = service.create_template(
+            name=request.name,
+            report_type=request.report_type,
+            columns=request.columns,
+            description=request.description,
+            default_filters=request.default_filters,
+            grouping=request.grouping,
+            sorting=request.sorting,
+            summary_fields=request.summary_fields,
+            is_public=request.is_public,
+            created_by=f'user:{current_user.id}'
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
     return {"status": "success", "data": vars(template)}
 
 
@@ -702,15 +708,21 @@ async def generate_report(
     request: ReportGenerateRequest,
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
+    current_user=Depends(require_admin),
 ):
     """יצירת דוח"""
     service = ReportBuilderService(db, organization_id=org_id)
-    report = service.generate_report(
-        template_id=request.template_id,
-        format=ReportFormat(request.format),
-        filters=request.filters,
-        parameters=request.parameters
-    )
+    try:
+        report = service.generate_report(
+            template_id=request.template_id,
+            format=ReportFormat(request.format),
+            filters=request.filters,
+            parameters=request.parameters,
+            generated_by=f'user:{current_user.id}'
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
     return {"status": "success", "data": vars(report)}
 
 
@@ -748,18 +760,25 @@ async def create_report_schedule(
     request: ScheduleRequest,
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
+    current_user=Depends(require_admin),
 ):
     """יצירת תזמון"""
     service = ReportBuilderService(db, organization_id=org_id)
-    schedule = service.create_schedule(
-        template_id=request.template_id,
-        name=request.name,
-        frequency=ReportFrequency(request.frequency),
-        recipients=request.recipients,
-        format=ReportFormat(request.format),
-        filters=request.filters,
-        parameters=request.parameters
-    )
+    try:
+        schedule = service.create_schedule(
+            template_id=request.template_id,
+            name=request.name,
+            frequency=ReportFrequency(request.frequency),
+            recipients=request.recipients,
+            delivery_method=request.delivery_method,
+            created_by=f'user:{current_user.id}',
+            format=ReportFormat(request.format),
+            filters=request.filters,
+            parameters=request.parameters
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
     return {"status": "success", "data": vars(schedule)}
 
 
@@ -768,6 +787,7 @@ async def delete_report_schedule(
     schedule_id: str,
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
+    current_user=Depends(require_admin),
 ):
     """מחיקת תזמון"""
     service = ReportBuilderService(db, organization_id=org_id)
@@ -782,6 +802,7 @@ async def pause_schedule(
     schedule_id: str,
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
+    current_user=Depends(require_admin),
 ):
     """השהיית תזמון"""
     service = ReportBuilderService(db, organization_id=org_id)
@@ -796,6 +817,7 @@ async def resume_schedule(
     schedule_id: str,
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
+    current_user=Depends(require_admin),
 ):
     """חידוש תזמון"""
     service = ReportBuilderService(db, organization_id=org_id)
@@ -824,12 +846,35 @@ async def run_scheduled_reports(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
+    current_user=Depends(require_admin),
 ):
     """הרצת דוחות מתוזמנים"""
     service = ReportBuilderService(db, organization_id=org_id)
     # בפרודקשן - background task
     executions = await service.run_scheduled_reports()
     return {"status": "success", "data": [vars(e) for e in executions]}
+
+
+@router.get('/reports/files/{report_id}')
+async def download_saved_report(report_id: str, db: Session = Depends(get_db),
+                                org_id: int = Depends(get_current_org_id)):
+    import base64
+    import hashlib
+    from fastapi import Response
+    service = ReportBuilderService(db, org_id)
+    evidence = service._files.get(report_id)
+    if not evidence:
+        raise HTTPException(404, 'Saved report not found')
+    content = base64.b64decode(evidence['content_base64'])
+    if hashlib.sha256(content).hexdigest() != evidence['sha256']:
+        raise HTTPException(409, 'Saved report evidence failed integrity verification')
+    format = evidence['report']['format']
+    mime = {'json': 'application/json', 'csv': 'text/csv', 'html': 'text/html',
+        'excel': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}
+    extension = 'xlsx' if format == 'excel' else format
+    return Response(content, media_type=mime[format], headers={'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'",
+        'Content-Disposition': f'attachment; filename="{report_id}.{extension}"'})
 
 
 # ============ Collection Reminder Routes ============
@@ -888,6 +933,81 @@ async def collection_run(
 
 
 # Collection evidence slice. These are Rezef routes; no new provider API is assumed.
+class PayableRequestBody(BaseModel):
+    bill_id: int
+    amount: str
+    idempotency_key: str = Field(min_length=1, max_length=160)
+    creditor: dict[str, str]
+    beneficiary_evidence: str = Field(min_length=20, max_length=2000)
+    withholding_decision: str
+    withholding_evidence: str = Field(min_length=20, max_length=2000)
+    funding_account_id: int | None = None
+    funding_account_type: str | None = None
+
+
+class PayableBankDecisionBody(BaseModel):
+    bank_transaction_id: int
+    reason: str = Field(min_length=20, max_length=2000)
+
+
+@router.get('/payables/workbench')
+def get_payable_workbench(limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0),
+        db: Session = Depends(get_db), org_id: int = Depends(get_current_org_id)):
+    from ...services.payable_workbench import payable_workbench
+    return payable_workbench(db, org_id, limit=limit, offset=offset)
+
+
+@router.post('/payables/requests', status_code=201)
+def propose_payable(body: PayableRequestBody, db: Session = Depends(get_db),
+        org_id: int = Depends(get_current_org_id), actor=Depends(require_admin)):
+    from ...services.payable_settlement import PayableSettlementService
+    service = PayableSettlementService(db, org_id)
+    try:
+        request = service.propose(**body.model_dump(), proposed_by=actor)
+        return service.status(request.id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get('/payables/requests/{request_id}')
+def payable_request_status(request_id: int, db: Session = Depends(get_db), org_id: int = Depends(get_current_org_id)):
+    from ...services.payable_settlement import PayableSettlementService
+    try:
+        return PayableSettlementService(db, org_id).status(request_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.post('/payables/requests/{request_id}/execute')
+async def execute_payable_request(request_id: int, db: Session = Depends(get_db),
+        org_id: int = Depends(get_current_org_id), _actor=Depends(require_admin)):
+    from ...services.payable_settlement import PayableSettlementService
+    try:
+        return await PayableSettlementService(db, org_id).execute(request_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post('/payables/requests/{request_id}/settle')
+def settle_payable_request(request_id: int, body: PayableBankDecisionBody, db: Session = Depends(get_db),
+        org_id: int = Depends(get_current_org_id), actor=Depends(require_admin)):
+    from ...services.payable_settlement import PayableSettlementService
+    try:
+        return PayableSettlementService(db, org_id).settle(request_id, **body.model_dump(), decided_by=actor)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post('/payables/requests/{request_id}/reverse')
+def reverse_payable_request(request_id: int, body: PayableBankDecisionBody, db: Session = Depends(get_db),
+        org_id: int = Depends(get_current_org_id), actor=Depends(require_admin)):
+    from ...services.payable_settlement import PayableSettlementService
+    try:
+        return PayableSettlementService(db, org_id).reverse(request_id, **body.model_dump(), decided_by=actor)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 class CollectionRequestBody(BaseModel):
     invoice_id: int
     amount: str
@@ -900,6 +1020,44 @@ class CollectionAllocationBody(BaseModel):
     payment_id: int
     bank_transaction_id: int
     reason: str = Field(min_length=10, max_length=2000)
+
+
+class ExistingCollectionAllocationBody(CollectionAllocationBody):
+    invoice_id: int
+    amount: str
+    idempotency_key: str = Field(min_length=1, max_length=160)
+    request_id: int | None = None
+
+
+class CollectionReversalBody(BaseModel):
+    reason: str = Field(min_length=10, max_length=2000)
+
+
+@router.get('/collection/workbench')
+def get_collection_workbench(limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0),
+        db: Session = Depends(get_db), org_id: int = Depends(get_current_org_id)):
+    from ...services.collection_workbench import collection_workbench
+    return collection_workbench(db, org_id, limit=limit, offset=offset)
+
+
+@router.post('/collection/allocations', status_code=201)
+def allocate_existing_collection(body: ExistingCollectionAllocationBody, db: Session = Depends(get_db),
+        org_id: int = Depends(get_current_org_id), actor=Depends(require_admin)):
+    from ...services.collection_settlement import CollectionSettlementService
+    try:
+        return CollectionSettlementService(db, org_id).allocate_existing(**body.model_dump(), decided_by=actor)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post('/collection/allocations/{allocation_id}/reverse')
+def reverse_collection_allocation(allocation_id: int, body: CollectionReversalBody, db: Session = Depends(get_db),
+        org_id: int = Depends(get_current_org_id), actor=Depends(require_admin)):
+    from ...services.collection_settlement import CollectionSettlementService
+    try:
+        return CollectionSettlementService(db, org_id).reverse_allocation(allocation_id, **body.model_dump(), decided_by=actor)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post('/collection/requests', status_code=201)

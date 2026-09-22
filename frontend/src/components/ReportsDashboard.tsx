@@ -28,6 +28,7 @@ import {
   Legend
 } from 'recharts';
 import api from '../services/api';
+import SavedReportsPanel from './SavedReportsPanel';
 import ExportButtons, { ExportSheet } from './ExportButtons';
 
 type ReportType = 'profit-loss' | 'balance-sheet' | 'cash-flow-projection';
@@ -985,6 +986,7 @@ export const ReportsDashboard: React.FC = () => {
 
   return (
     <div className="p-6 space-y-6 bg-gray-50 min-h-screen" dir="rtl">
+      <SavedReportsPanel />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
