@@ -453,8 +453,8 @@ class AdvancedAIService:
                 "ניתוח AI דורש נתונים פיננסיים אמיתיים של הארגון; לא סופקו"
             )
 
-        from openai import OpenAI
-        client = OpenAI(api_key=settings.openai_api_key)
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
 
         prompt = f"""
 אתה יועץ פיננסי מומחה למערכות ניהול כספים בישראל.
@@ -470,11 +470,18 @@ class AdvancedAIService:
 3. סיכונים שיש לקחת בחשבון
 """
 
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=1000
+        )
+
+        from .moshko_observability import record_llm_usage_best_effort
+        record_llm_usage_best_effort(
+            self.db, organization_id=self.organization_id, user_id=None,
+            session_id=None, provider="openai", model="gpt-4",
+            usage=getattr(response, "usage", None), purpose="ai_analytics.get_ai_analysis",
         )
 
         return response.choices[0].message.content
