@@ -38,6 +38,8 @@ class OpenFinanceConnector(AccountingConnector):
         oauth_url: str = "https://api.open-finance.ai/oauth/token",
         timeout: float = 30.0,
         connection_id: "Optional[str]" = None,
+        provider_product: str = 'open_finance',
+        provider_plan: str | None = None,
     ):
         # Derive the host prefix from the configured v2 base so v3/loans lines up too.
         v2_base = api_base_url.rstrip("/")
@@ -50,6 +52,8 @@ class OpenFinanceConnector(AccountingConnector):
             v2_base=v2_base,
             v3_loans_base=v3_loans_base,
             timeout=timeout,
+            provider_product=provider_product,
+            provider_plan=provider_plan,
         )
         self.user_id = user_id
         # כמה תיקים (orgs) חיים תחת אותו משתמש Financy — כל org חייב להסתנכרן
@@ -154,20 +158,29 @@ class OpenFinanceConnector(AccountingConnector):
             owner_national_id=_owner_national_id(item),
             owner_name=_owner_name(item),
             open_finance_connection_id=_first_str(item, "connectionId"),
+            provider_account_number=_first_str(item, "accountNumber"),
         )
 
     def _normalize_transaction(self, item: dict[str, Any]) -> NormalizedBankTransaction:
-        external_id = _first_str(item, "id", "SK", "transactionProviderIdentifier") or _stable_id(item)
-        account_id = _first_str(item, "accountId", "accountNumber")
+        external_id = _first_str(item, "id", "SK", "transactionProviderIdentifier")
+        if not external_id:
+            raise ValueError('Open Finance transaction source identity is missing')
+        # An account number is not an account resource id.
+        account_id = _first_str(item, "accountId")
         amount, currency = _transaction_amount(item)
+        transaction_date = _transaction_date(item)
+        if transaction_date is None:
+            raise ValueError('Open Finance transaction date is missing or invalid')
+        if not isinstance(currency, str) or len(currency) != 3 or not currency.isalpha():
+            raise ValueError('Open Finance transaction currency is missing or invalid')
         description = _transaction_description(item)
         return NormalizedBankTransaction(
             external_id=f"open_finance:{external_id}",
             account_external_id=f"open_finance:{account_id}" if account_id else None,
-            transaction_date=_transaction_date(item) or datetime.now(timezone.utc).date(),
+            transaction_date=transaction_date,
             description=description,
             amount=amount,
-            currency=currency or "ILS",
+            currency=_normalize_currency(currency),
             raw_data=item,
         )
 
@@ -291,11 +304,21 @@ def _transaction_amount(item: dict[str, Any]) -> tuple[Decimal, Optional[str]]:
         for key in ("chargedAmount", "originalAmount"):
             sub = amount_obj.get(key)
             if isinstance(sub, dict) and sub.get("amount") is not None:
-                return _decimal(sub.get("amount")), sub.get("currency")
+                return _transaction_decimal(sub.get("amount")), sub.get("currency")
         if amount_obj.get("amount") is not None:
-            return _decimal(amount_obj.get("amount")), amount_obj.get("currency")
+            return _transaction_decimal(amount_obj.get("amount")), amount_obj.get("currency")
     # flat fallback
-    return _decimal(amount_obj if amount_obj is not None else 0), _first_str(item, "currency")
+    return _transaction_decimal(amount_obj), _first_str(item, "currency")
+
+
+def _transaction_decimal(value: Any) -> Decimal:
+    try:
+        number = Decimal(str(value))
+        if not number.is_finite():
+            raise ValueError('non-finite')
+        return number
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError('Open Finance transaction amount is missing or invalid') from exc
 
 
 def _transaction_description(item: dict[str, Any]) -> Optional[str]:
@@ -316,8 +339,6 @@ def _transaction_date(item: dict[str, Any]):
         raw = date_obj.get("bookingDate") or date_obj.get("transactionDate") or date_obj.get("valueDate")
     elif isinstance(date_obj, str):
         raw = date_obj
-    if not raw:
-        raw = _first_str(item, "createdAt")
     return _parse_date(raw)
 
 

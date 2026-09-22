@@ -18,6 +18,13 @@ from cfo.models import BankConnection, IntegrationConnection
 from cfo.services.credentials_vault import decrypt_credentials, encrypt_credentials
 
 
+def _configure_platform(org_id):
+    with SessionLocal() as db:
+        db.add(IntegrationConnection(organization_id=org_id, source='open_finance',
+            status='active', config={'provider_product': 'open_finance'}))
+        db.commit()
+
+
 # ------------------------------------------------------------------ #
 # ensure_of_identity
 # ------------------------------------------------------------------ #
@@ -133,6 +140,7 @@ def test_start_bank_connection_returns_connect_url_and_persists_id(fresh_org, pl
     from cfo.services.open_finance_onboarding import start_bank_connection
 
     org_id = fresh_org()["org_id"]
+    _configure_platform(org_id)
 
     captured = {}
 
@@ -191,6 +199,7 @@ def test_start_bank_connection_rejects_incomplete_provider_response(
     import asyncio
 
     org_id = fresh_org()["org_id"]
+    _configure_platform(org_id)
 
     async def fake_create_connection(self, body):
         return {"id": "conn-without-url"}
@@ -335,6 +344,7 @@ def test_connection_routes_refuse_cross_org_id_before_provider_access(
     from cfo.services.open_finance_client import OpenFinanceClient
 
     source_org = fresh_org()
+    _configure_platform(source_org["org_id"])
     other_org = fresh_org()
 
     async def fake_create_connection(self, body):
@@ -441,6 +451,7 @@ def test_onboarding_start_route_org_scoped(client, fresh_org, platform_creds, mo
     from cfo.services.open_finance_client import OpenFinanceClient
 
     org = fresh_org()
+    _configure_platform(org["org_id"])
 
     async def fake_create_connection(self, body):
         return {"id": "conn-route-1", "connectUrl": "https://consent.example.com/conn-route-1"}

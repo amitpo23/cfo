@@ -77,7 +77,11 @@ def ensure_of_identity(db: Session, org_id: int) -> IntegrationConnection:
         return conn
 
     if conn.status != "active":
-        conn.status = "active"
+        raise OpenFinanceError(409, 'Connection is inactive; explicit owner configuration is required')
+    if (conn.config or {}).get('provider_product') == 'financy':
+        if not (decrypt_credentials(conn.credentials_encrypted) or {}).get('user_id'):
+            raise OpenFinanceError(409, 'Financy identity must come from the owner configuration')
+        return conn
 
     if org_id == 1:
         # Leave org 1 alone — env fallback covers an empty-credentials row.
@@ -190,6 +194,14 @@ async def start_bank_connection(
     """
     from ..api.routes.open_finance import get_open_finance_client, _clean
 
+    configured = db.query(IntegrationConnection).filter_by(
+        organization_id=org_id, source='open_finance').first()
+    if configured is None or (configured.config or {}).get('provider_product') not in {'open_finance', 'financy'}:
+        raise OpenFinanceError(409, 'Provider product configuration is required before starting bank consent')
+    if configured.status != 'active':
+        raise OpenFinanceError(409, 'Connection is inactive; explicit owner configuration is required')
+    if configured.config['provider_product'] == 'financy':
+        raise OpenFinanceError(409, 'Create the bank connection in the Financy portal, then configure its exact identity in Rezef')
     conn = ensure_of_identity(db, org_id)
 
     client = get_open_finance_client(db, org_id)

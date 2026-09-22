@@ -127,3 +127,22 @@ def test_onboarding_does_not_change_identity_or_reactivate_unreviewed_connection
             asyncio.run(start_bank_connection(db, org))
         db.refresh(conn)
         assert conn.credentials_encrypted == original and conn.status == status
+
+
+def test_connected_party_evidence_survives_normalization_and_database_storage(fresh_org):
+    from cfo.database import SessionLocal
+    from cfo.models import BankConnection, Account
+    from cfo.services.open_finance_connector import OpenFinanceConnector
+    from cfo.services.sync_engine import SyncEngine
+    from cfo.api.routes.open_finance import _active_connected_account_numbers
+    org = fresh_org()['org_id']
+    with SessionLocal() as db:
+        db.add(BankConnection(organization_id=org, source='open_finance', connection_id='synthetic-connection', status='ACTIVE'))
+        db.commit()
+        item = OpenFinanceConnector('fake', 'fake', 'fake')._normalize_account({'id': 'account-1',
+            'connectionId': 'synthetic-connection', 'accountNumber': 'synthetic-exact-account', 'currency': 'ILS',
+            'balances': [{'amount': 1000, 'currency': 'ILS'}]})
+        SyncEngine(db, None, org, 'open_finance')._upsert_account(item); db.commit()
+        db.expire_all()
+        assert _active_connected_account_numbers(db, org) == {'synthetic-exact-account'}
+        assert db.query(Account).filter_by(organization_id=org).one().provider_account_number == 'synthetic-exact-account'

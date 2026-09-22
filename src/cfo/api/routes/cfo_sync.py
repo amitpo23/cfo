@@ -4,14 +4,14 @@ Sync API routes.
 """
 import json
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ...database import get_db_session
-from ..dependencies import get_current_org_id
+from ..dependencies import get_current_org_id, require_admin
 from ...models import SyncRun, SyncStatus, IntegrationConnection, SyncCheckpoint
 from ...config import settings
 from ...services.sync_engine import SOURCE_CHECKPOINT_ENTITY, SyncEngine, SyncSkipped, get_connector_for_org
@@ -31,6 +31,8 @@ class OpenFinanceConfigRequest(BaseModel):
     # מזהה חיבור בנק ב-Open Finance: מגדר את הסנכרון של ה-org לחיבור אחד
     # כשכמה תיקים חיים תחת אותו משתמש Financy.
     connection_id: Optional[str] = None
+    provider_product: Literal['unverified', 'open_finance', 'financy'] = 'unverified'
+    provider_plan: Literal['free', 'starter', 'pro', 'ultra'] | None = None
 
 
 class SumitConfigRequest(BaseModel):
@@ -163,6 +165,7 @@ async def integration_status(
 
     return {
         "organization_id": org_id,
+        "open_finance_product": _open_finance_product_status(db, org_id),
         "configured": configured,
         "missing": missing,
         "connections": connections,
@@ -186,6 +189,7 @@ async def configure_open_finance(
     background_tasks: BackgroundTasks,
     org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
+    _actor=Depends(require_admin),
 ):
     """
     Store Open Finance credentials for the organization.
@@ -206,6 +210,9 @@ async def configure_open_finance(
         credentials["connection_id"] = request.connection_id
 
     conn = _upsert_connection(db, org_id, "open_finance", credentials, ["accounts", "bank_transactions"])
+    conn.config = {**(conn.config or {}), 'provider_product': request.provider_product,
+        'provider_plan': request.provider_plan, 'product_reviewed_at': datetime.utcnow().isoformat()}
+    db.commit()
     _kickoff_onboarding(db, org_id, "open_finance", background_tasks)
 
     return {
@@ -218,10 +225,21 @@ async def configure_open_finance(
     }
 
 
+def _open_finance_product_status(db, org_id):
+    row = db.query(IntegrationConnection).filter_by(organization_id=org_id, source='open_finance').first()
+    config = (row.config or {}) if row else {}
+    product = config.get('provider_product', 'unverified')
+    return {'product': product, 'plan': config.get('provider_plan'),
+        'reviewed_at': config.get('product_reviewed_at'),
+        'connection_creation': 'financy_portal' if product == 'financy' else ('platform_api' if product == 'open_finance' else 'owner_configuration_required'),
+        'provider_permissions_verified': False}
+
+
 @router.post("/integration/sumit/configure")
 async def configure_sumit(
     request: SumitConfigRequest,
     background_tasks: BackgroundTasks,
+    _admin=Depends(require_admin),
     org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
