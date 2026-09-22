@@ -86,9 +86,15 @@ duplicate proposal/execution, timeout, missing evidence, existing payments, orga
 isolation, revoked authority, policy denial, later source changes and reversal history.
 HTTP and Moshko share the same workbench and services.
 
-The full-suite result for this expansion is pending at the time of this report's
-initial write. The earlier 2,668 result is the committed baseline, not validation of
-these changes. Final validation evidence will be recorded here after completion.
+Final serial QA passed **all nine local gates**. Its full suite passed **2,763
+tests**, with 40,587 warnings, in 1,120.24 seconds, and its tenancy selection passed
+**86 tests** in 233.16 seconds. The live Neon check was skipped. The earlier 2,668
+result is the committed baseline. The focused Moshko provider-attribution correction
+passed a further **39 focused tests** after the gate; it distinguishes provider
+execution from local proposal and settlement operations. Actual Moshko tool-schema
+exposure was also checked offline. The owned Vite and PostgreSQL test processes
+were stopped after validation. Changes remain local and uncommitted.
+[Final validation evidence](evidence/2026-09-06-provider-final-validation.json).
 
 Passing local evidence already recorded:
 
@@ -104,7 +110,15 @@ Passing local evidence already recorded:
   uniqueness. This is not evidence of an actual production backup or PITR recovery.
 - PostgreSQL concurrency checks for customer allocations and supplier settlements:
   over-capacity competitors are blocked, replay is idempotent and reversal history
-  remains intact.
+  remains intact. A deterministic sync race first reproduced a reviewed balance
+  being replaced with a stale source value. Financial source rows now lock before
+  checking reviewed decisions; the same race passes with a visible parity conflict.
+
+Reproducible PostgreSQL checks live in [tests/postgres_offline](../../tests/postgres_offline).
+They require an explicitly selected loopback `rezef_test_*` database, the synthetic
+test user, and exclusively synthetic organization records. CI runs them after the
+migration/restore fixture, separately from the SQLite pytest suite. These scripts
+do not accept a production DSN or call a real provider.
 
 The migrations add event history, generalize the existing collection allocation
 constraints and retain provider account identity. The earlier allocation migration

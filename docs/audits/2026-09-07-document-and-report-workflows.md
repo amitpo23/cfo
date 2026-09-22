@@ -55,13 +55,71 @@ formats/types/filters and external email/webhook delivery are refused. A previou
 period actual is no longer labelled as a budget; missing source queries fail rather
 than creating a successful empty report. HTML output escapes external text.
 
+## Source-bound provider draft filing
+
+The legacy direct filing route is now a reviewed-source workflow. It requires a
+preserved source, explicit document kind, supplier identity/document number,
+classification and balanced positive ILS amounts. A generic `invoice` OCR label
+is no longer treated as evidence of a tax invoice. Credit/FX/unknown-kind cases
+remain outside this creation path. Existing provider documents are not cancelled
+or replaced implicitly. Unsigned bulk filing is refused.
+
+The proposal saves the original SHA-256, source/expense IDs, exact reviewed fields,
+amount/currency and destination SUMIT company/connection in the existing irreversible
+action record. Credentials and file bytes are excluded from that payload. The RTL
+workbench displays it beside the original, requests a reason, and uses the existing
+signing service. Moshko uses the same actor-aware service and confirmation policy.
+The source queue exposes source-review and filing-approval states separately.
+
+Execution rechecks actor/membership, policy/signing authority, source parity,
+duplicate evidence and connection identity. It claims the approved request before
+one `addexpense` call. The documented request fields preserve source number,
+supplier company number, filename and **IsDraft=true**. A consistent returned
+DocumentID means `submitted` and an executed action; it does not mean verified
+books, final classification, payment or period close. Missing/contradictory IDs and
+timeouts persist `outcome_unknown` and block repeats and replacement proposals.
+Source changes during execution retain the acknowledgement and immutable approved
+values while creating a `source_conflict`. Editing, reclassification and local
+account filing cannot overwrite these unresolved states. A later list sync reuses
+the acknowledged document by exact saved company/connection/reference, without a
+second Expense or silent source overwrite.
+
+A signer can withdraw an approval with a reason while execution has not started.
+The old payload and signing records remain; a corrected replacement has a new ID.
+Approval/withdrawal transitions use row locks and conditional updates. Withdrawal
+cannot reverse an execution, provider document or money transfer.
+
+The current provider contract was checked against the repository's latest saved
+Swagger, `sumit_swagger_v1_2026-08-19.json`, on 7 September 2026. No provider call was
+made. The adapter's fake-payload test verifies only that documented request shape;
+it does not prove live provider acceptance.
+
+- [Connected filing browser](evidence/2026-09-07-expense-filing-connected-browser.json):
+  actual React → FastAPI → temporary SQLite; all API responses are real. Only the
+  provider is fake. Twelve explicit writes cover source/classification, distinct
+  signing, withdrawal/replacement, one draft acknowledgement, page provenance and
+  saved-report download across an application-lifespan restart.
+- [Filing screen](evidence/2026-09-07-expense-filing-connected.png).
+- [PostgreSQL filing races](evidence/2026-09-07-expense-filing-concurrency.json):
+  one durable proposal, exactly one fake provider call under overlapping workers,
+  six signer-withdrawal versus execution races with one winner, preserved source
+  and company identity after disposing the connection pool.
+- `tests/test_expense_filing_workflow.py` covers unsigned calls, partial/missing
+  source evidence, duplicate/repeated execution, timeout/unknown result, existing
+  provider documents, stale source/company, source changes during the request,
+  organization isolation, revoked execution authority, unsupported writing,
+  document-kind honesty, draft request shape, pre-execution withdrawal and late sync.
+  The focused filing/approval run passed **77 tests**. The later source/preview/chat/filing check passed 104 tests. The final full
+  suite was interrupted at the owner’s handoff request; it has no completion result.
+
 ## Evidence and limits of the tests
 
 The initial intake/report implementation passed 2,789 full-suite tests. The source
 review/PDF/Moshko follow-up passed 165 focused tests; the final membership refresh
-passed 11 further PDF tests and the PostgreSQL revocation race. The final full-suite
-run is recorded separately once it completes. Frontend lint and production build
-passed. No commit was made.
+passed 11 further PDF tests and the PostgreSQL revocation race. The follow-up full run had 2,805 passes and one explicit actor-tool inventory
+failure. The inventory was updated for the two new confirmed writes; 38 focused
+regression tests then passed. A clean full rerun remains required before commit.
+Frontend lint and production build passed. No commit was made.
 
 - [Connected browser evidence](evidence/2026-09-07-document-connected-browser.json):
   real React requests are forwarded to the actual FastAPI ASGI application with a
@@ -121,12 +179,15 @@ are closed explicitly. The accounting rules were not broadened by this package.
 ## What remains open
 
 The complete requested document→approved journal→official books→payment→bank→close
-journey has not been proven. The new source draft is not yet joined to a reviewed
-multiline journal and durable provider-filing action. Existing local account filing
+journey has not been proven. The source is now joined to a durable provider-draft
+filing action, but not a reviewed multiline journal or independently verified books. Existing local account filing
 and `Expense.status=filed` are not independent evidence of official books. SUMIT
 batch readback/close remains an authorized portal step; createbatch is not finality.
-Existing legacy expense filing also needs an exact-payload approval adapter and
-safe ambiguous-result handling before connecting it to this source workspace.
+Independent document readback must validate raw provider fields without the legacy
+parser defaults for missing ID/date/amount/currency. A request acknowledgement is
+insufficient. Recovery after an ambiguous external result and a sync that sees a
+provider document before its creation acknowledgement need a reviewed resolution
+operation; the sequential late-sync proof does not cover every such race.
 
 Interrupted extraction has a visible durable claim but no recovery action yet.
 Unattended queue scheduling, images beyond the explicit allowlist, email-error

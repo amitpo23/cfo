@@ -18,24 +18,34 @@
           "url": "https://help.sumit.co.il/he/",
           "checked_on": "2026-09-06",
           "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://docs-financy.open-finance.ai/reference/createpayment",
+          "checked_on": "2026-09-06",
+          "scope": "public payment schema and fee conditions; no live entitlement proof"
         }
       ],
       "conditions": {
         "plan": "Owner/provider verification required",
         "permission": "Active organization membership, action policy and signing authority where applicable",
         "consent": "Provider consent required for bank access",
-        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+        "cost": "Provider contract and plan must be verified. Financy documents fees on first successful new ILS completion; plan percentages/min/max are recorded in docs/audits/2026-09-06-provider-contract-review.md. Existing sync quotas and 20-hour gates remain enforced."
       },
       "implementation": [
-        "collection_settlement.py",
-        "IrreversibleActionRequest"
+        "src/cfo/services/collection_settlement.py"
       ],
       "user_and_moshko_surface": "CollectionWorkbench /collections; propose_collection_request and existing execution tools",
       "offline_evidence": [
         "tests/test_collection_settlement.py"
       ],
       "required_completion": "Live product/account entitlement and owner-controlled provider validation remain gated.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": [
+        {
+          "path": "src/cfo/models.py",
+          "record": "IrreversibleActionRequest"
+        }
+      ]
     },
     {
       "id": "AR-02",
@@ -56,15 +66,20 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "collection_allocation_service.py",
-        "CollectionPaymentAllocation"
+        "src/cfo/services/collection_allocation_service.py"
       ],
       "user_and_moshko_surface": "CollectionWorkbench; allocate_collection_receipt; get_collection_workbench",
       "offline_evidence": [
         "tests/test_collection_allocations.py"
       ],
       "required_completion": "Synthetic flow proven; migration and release validation pending.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": [
+        {
+          "path": "src/cfo/models.py",
+          "record": "CollectionPaymentAllocation"
+        }
+      ]
     },
     {
       "id": "AR-03",
@@ -85,15 +100,16 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "collection_allocation_service.py",
-        "collection_workbench.py"
+        "src/cfo/services/collection_allocation_service.py",
+        "src/cfo/services/collection_workbench.py"
       ],
       "user_and_moshko_surface": "CollectionWorkbench and get_collection_workbench",
       "offline_evidence": [
         "tests/test_collection_allocations.py"
       ],
       "required_completion": "Unallocated excess is visible; business classification of advance/refund still requires evidence.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "AR-04",
@@ -114,8 +130,8 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "collection_settlement.py",
-        "payment_evidence.py"
+        "src/cfo/services/collection_settlement.py",
+        "src/cfo/services/payment_evidence.py"
       ],
       "user_and_moshko_surface": "CollectionWorkbench and collection proposal/allocation tools share the same service",
       "offline_evidence": [
@@ -123,7 +139,8 @@
         "tests/test_collection_settlement.py"
       ],
       "required_completion": "Source-paid totals without explaining receipts remain a parity review blocker.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "AR-05",
@@ -144,15 +161,16 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "collection_allocation_service.py",
-        "document_issuance_service.py"
+        "src/cfo/services/collection_allocation_service.py",
+        "src/cfo/services/document_issuance_service.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
         "tests/test_collection_allocations.py"
       ],
       "required_completion": "No automatic document choice for advance/proforma/exempt business. Add professionally reviewed event/business-type contract and evidence-aware issuance.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "AR-06",
@@ -173,15 +191,16 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "collection_settlement.py",
-        "payment_evidence.py"
+        "src/cfo/services/collection_settlement.py",
+        "src/cfo/services/payment_evidence.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
         "tests/test_collection_settlement.py"
       ],
       "required_completion": "Unknown execution locks retries. Add owner resolution/readback for expired requests without fabricating expiry or transferring statuses.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "AR-07",
@@ -202,8 +221,8 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "sumit_connector.py",
-        "sync_engine.py"
+        "src/cfo/services/sumit_connector.py",
+        "src/cfo/services/sync_engine.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
@@ -211,7 +230,8 @@
         "tests/test_payment_source_lineage.py"
       ],
       "required_completion": "Saved SUMIT schemas lack a payment→invoice link on the tested responses; external ID equality is not enough. Reviewed allocation is required.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "AR-08",
@@ -232,9 +252,9 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "ledger_service.py",
-        "financial_synthesis.py",
-        "ar_ap_aging.py"
+        "src/cfo/services/ledger_service.py",
+        "src/cfo/services/financial_synthesis.py",
+        "src/cfo/services/ar_ap_aging.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
@@ -242,7 +262,8 @@
         "tests/test_financial_statements_reconcile.py"
       ],
       "required_completion": "Allocated receipts now post once. Expand report parity evidence for unallocated credits, reversals, FX and aggregate card settlement.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "AP-01",
@@ -254,31 +275,49 @@
           "url": "https://docs.open-finance.ai/docs/getting-started",
           "checked_on": "2026-09-06",
           "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://docs-financy.open-finance.ai/reference/createpayment",
+          "checked_on": "2026-09-06",
+          "scope": "public payment schema and fee conditions; no live entitlement proof"
         }
       ],
       "conditions": {
         "plan": "Owner/provider verification required",
         "permission": "Active organization membership, action policy and signing authority where applicable",
         "consent": "Provider consent required for bank access",
-        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+        "cost": "Provider contract and plan must be verified. Financy documents fees on first successful new ILS completion; plan percentages/min/max are recorded in docs/audits/2026-09-06-provider-contract-review.md. Existing sync quotas and 20-hour gates remain enforced."
       },
       "implementation": [
         "src/cfo/services/payable_settlement.py",
         "src/cfo/services/payable_workbench.py",
         "src/cfo/services/payment_evidence.py",
-        "src/cfo/api/routes/financial_management.py",
-        "IrreversibleActionRequest",
-        "Payment.bill_id",
-        "BankTransaction"
+        "src/cfo/api/routes/financial_management.py"
       ],
       "user_and_moshko_surface": "Supplier payments screen /supplier-payments; shared HTTP workbench; Moshko read/propose/execute/settle/reverse tools. Signing remains the existing approval workflow.",
       "offline_evidence": [
         "tests/test_payable_settlement.py",
         "tests/browser_offline/payable_workbench.py",
-        "docs/audits/evidence/2026-09-06-payable-workbench-browser.json"
+        "docs/audits/evidence/2026-09-06-payable-workbench-browser.json",
+        "tests/postgres_offline/verify_payable_concurrency.py",
+        "tests/postgres_offline/verify_payable_sync_concurrency.py"
       ],
-      "required_completion": "Local single-bill ILS flow implemented with owner-attested beneficiary/withholding evidence, partial/multiple booked outflows, replay prevention, source parity guards and reversal history. Official SUMIT payment posting/readback remains unsupported. Live entitlement, funding consent, beneficiary and certificate validity require owner/professional verification. Withholding deductions and advanced schedules are not implemented by this adapter.",
-      "official_books_verified": false
+      "required_completion": "Local single-bill ILS flow implemented with owner-attested beneficiary/withholding evidence, partial/multiple booked outflows, replay prevention, source parity guards and reversal history. Official SUMIT payment posting/readback remains unsupported. Live entitlement, funding consent, beneficiary and certificate validity require owner/professional verification. Withholding deductions and advanced schedules are not implemented by this adapter. Public Financy debtor-field requirements are inconsistent between descriptions and required lists; verify the accepted contract before live use.",
+      "official_books_verified": false,
+      "data_model": [
+        {
+          "path": "src/cfo/models.py",
+          "record": "IrreversibleActionRequest"
+        },
+        {
+          "path": "src/cfo/models.py",
+          "record": "Payment.bill_id"
+        },
+        {
+          "path": "src/cfo/models.py",
+          "record": "BankTransaction"
+        }
+      ]
     },
     {
       "id": "AP-02",
@@ -308,7 +347,8 @@
         "tests/test_payable_settlement.py"
       ],
       "required_completion": "Partial bill requests and several booked outflows per request are locally tested; each settlement retains its own date and derived ledger entry. Multiple bills per outgoing payment, scheduled/bulk initiation and fees/FX need separate adapters and provider-specific evidence.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "AP-03",
@@ -329,15 +369,16 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "open_finance_client.py",
-        "open_finance.py"
+        "src/cfo/services/open_finance_client.py",
+        "src/cfo/api/routes/open_finance.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
         "tests/test_approved_open_finance_payment.py"
       ],
       "required_completion": "Existing approved wrappers do not establish mandate→bill/occurrence business linkage. Financy mandate entitlement is unreviewed.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "AP-04",
@@ -358,13 +399,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "recurring_billing_service.py",
-        "payment_request_service.py"
+        "src/cfo/services/recurring_billing_service.py",
+        "src/cfo/services/payment_request_service.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Review durable occurrence identity and document results. Legacy in-memory standing-order prototype is gated at HTTP but still needs retirement inside the service.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "AP-05",
@@ -421,14 +463,15 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "payments.py",
-        "payment_evidence.py",
-        "bank_insights.py"
+        "src/cfo/api/routes/payments.py",
+        "src/cfo/services/payment_evidence.py",
+        "src/cfo/services/bank_insights.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Separate refund execution evidence, credit document and counter-movement; approved wrappers alone do not complete this chain.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "BANK-01",
@@ -449,8 +492,9 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "bank_reconciliation.py",
-        "manual_reconciliation.py"
+        "src/cfo/services/bank_reconciliation.py",
+        "src/cfo/services/manual_reconciliation.py",
+        "src/cfo/api/routes/manual_reconciliation.py"
       ],
       "user_and_moshko_surface": "BankInsightsDashboard and get_bank_reconciliation",
       "offline_evidence": [
@@ -458,7 +502,8 @@
         "tests/test_manual_reconciliation.py"
       ],
       "required_completion": "Amount/date/name are candidates only. Live identity and official posting remain separate.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "BANK-02",
@@ -479,15 +524,20 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "CollectionAllocationReversal",
-        "collection_allocation_service.py"
+        "src/cfo/services/collection_allocation_service.py"
       ],
       "user_and_moshko_surface": "CollectionWorkbench and reverse_collection_allocation",
       "offline_evidence": [
         "tests/test_collection_allocations.py"
       ],
       "required_completion": "Legacy allocations without balance-effect reconstruction are blocked; no provider cancellation/refund implied.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": [
+        {
+          "path": "src/cfo/models.py",
+          "record": "CollectionAllocationReversal"
+        }
+      ]
     },
     {
       "id": "BANK-03",
@@ -508,13 +558,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "bank_insights.py",
-        "financial_synthesis.py"
+        "src/cfo/services/bank_insights.py",
+        "src/cfo/services/financial_synthesis.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Add reviewed aggregate allocation and explicit fee evidence; heuristic merchant similarity cannot prove settlement.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "BANK-04",
@@ -559,13 +610,13 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "bank_reconciliation.py",
-        "bank_reconciliation.py"
+        "src/cfo/services/bank_reconciliation.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Same-currency allocation supported; differing currencies fail closed. Add explicit rate/date/source and balanced adjustment decision.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "BANK-05",
@@ -586,13 +637,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "bank_insights.py",
-        "financial_synthesis.py"
+        "src/cfo/services/bank_insights.py",
+        "src/cfo/services/financial_synthesis.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Require both owned-account legs and reviewed relationship; keep out of income/expense.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "BANK-06",
@@ -613,13 +665,15 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "manual_reconciliation.py",
-        "bank_insights.py"
+        "src/cfo/services/manual_reconciliation.py",
+        "src/cfo/api/routes/manual_reconciliation.py",
+        "src/cfo/services/bank_insights.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Add reversal-group relationship without deleting earlier decisions.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "BOOKS-01",
@@ -640,16 +694,17 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "document_issuance_service.py",
-        "expense_filing_service.py",
-        "approved_actions.py"
+        "src/cfo/services/document_issuance_service.py",
+        "src/cfo/services/expense_filing_service.py",
+        "src/cfo/api/approved_actions.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
         "tests/test_document_issuance.py"
       ],
       "required_completion": "Extend business-event document decision, reuse and readback coverage. Sending is a separate authorized external communication.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "BOOKS-02",
@@ -670,15 +725,16 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "reconciliation_dispatch.py",
-        "accounting.py"
+        "src/cfo/services/reconciliation_dispatch.py",
+        "src/cfo/api/routes/accounting.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
         "tests/test_reconciliation_dispatch.py"
       ],
       "required_completion": "Local dispatch is unsupported. Existing createbatch adapter returns executed_unverified; implement reviewed batch construction and operator verification handoff.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "BOOKS-03",
@@ -699,15 +755,16 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "accounting.py",
-        "parity_service.py"
+        "src/cfo/api/routes/accounting.py",
+        "src/cfo/services/parity_service.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
         "tests/test_reconciliation_dispatch.py"
       ],
       "required_completion": "Latest saved Swagger exposes batch creation, not batch read/close. Authorized operator must inspect portal, attach evidence and separately close if approved.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "BOOKS-04",
@@ -764,13 +821,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "ledger_service.py",
-        "filing_verification.py"
+        "src/cfo/services/ledger_service.py",
+        "src/cfo/services/filing_verification.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Local reversal is not official storno. Build period-aware operator review; verify all correction/continuity controls in representative KB.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "SYNC-01",
@@ -791,10 +849,9 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "sync_engine.py",
-        "sumit_connector.py",
-        "open_finance_connector.py",
-        "Account.provider_account_number",
+        "src/cfo/services/sync_engine.py",
+        "src/cfo/services/sumit_connector.py",
+        "src/cfo/services/open_finance_connector.py",
         "src/cfo/services/payable_settlement.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
@@ -802,10 +859,17 @@
         "tests/test_payment_source_lineage.py",
         "tests/test_sync_evidence_integrity.py",
         "tests/test_payable_settlement.py",
-        "tests/test_open_finance_product_boundaries.py"
+        "tests/test_open_finance_product_boundaries.py",
+        "tests/postgres_offline/verify_payable_sync_concurrency.py"
       ],
       "required_completion": "Missing monetary/date/identity evidence rejects transaction pages. Pagination validates continuation and commits rows with cursor atomically. Connection-key checkpoints and full historical deletion/late-link parity still require completion.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": [
+        {
+          "path": "src/cfo/models.py",
+          "record": "Account.provider_account_number"
+        }
+      ]
     },
     {
       "id": "SYNC-02",
@@ -826,15 +890,20 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "provider_event_service.py",
-        "ProviderEventReceipt"
+        "src/cfo/services/provider_event_service.py"
       ],
       "user_and_moshko_surface": "CollectionWorkbench event review; Moshko workbench",
       "offline_evidence": [
         "tests/test_provider_event_integrity.py"
       ],
       "required_completion": "Authenticated callbacks update observation state and collection status only. Conflicts remain in the review queue; durable operator resolution workflow is still required.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": [
+        {
+          "path": "src/cfo/models.py",
+          "record": "ProviderEventReceipt"
+        }
+      ]
     },
     {
       "id": "SYNC-03",
@@ -855,15 +924,16 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "provider_event_service.py",
-        "open_finance_onboarding.py"
+        "src/cfo/services/provider_event_service.py",
+        "src/cfo/services/open_finance_onboarding.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
         "tests/test_provider_event_integrity.py"
       ],
       "required_completion": "Active unique credential attribution now required; shared identities and contradictory connection events remain unresolved. Review all onboarding/reactivation paths.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "SYNC-04",
@@ -884,9 +954,9 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "webhook_delta_sync.py",
-        "sync_engine.py",
-        "parity_service.py"
+        "src/cfo/services/webhook_delta_sync.py",
+        "src/cfo/services/sync_engine.py",
+        "src/cfo/services/parity_service.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
@@ -894,7 +964,8 @@
         "tests/test_open_finance_product_boundaries.py"
       ],
       "required_completion": "OF callbacks do not fetch; SUMIT targeted sync checks daily/per-key gates. Writes are not replayed on 401. Extend missing-source/delta completeness evidence.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "PRODUCT-01",
@@ -906,25 +977,31 @@
           "url": "https://docs-financy.open-finance.ai/docs/getting-started",
           "checked_on": "2026-09-06",
           "scope": "public index/product boundary; not proof of live entitlement"
+        },
+        {
+          "url": "https://docs-financy.open-finance.ai/reference/createpayment",
+          "checked_on": "2026-09-06",
+          "scope": "public payment schema and fee conditions; no live entitlement proof"
         }
       ],
       "conditions": {
         "plan": "Owner/provider verification required",
         "permission": "Active organization membership, action policy and signing authority where applicable",
         "consent": "Provider consent required for bank access",
-        "cost": "Existing quotas and 20-hour gates; no live calls authorized"
+        "cost": "Provider contract and plan must be verified. Financy documents fees on first successful new ILS completion; plan percentages/min/max are recorded in docs/audits/2026-09-06-provider-contract-review.md. Existing sync quotas and 20-hour gates remain enforced."
       },
       "implementation": [
-        "open_finance_product_policy.py",
-        "open_finance_client.py",
-        "cfo_sync.py"
+        "src/cfo/services/open_finance_product_policy.py",
+        "src/cfo/services/open_finance_client.py",
+        "src/cfo/api/routes/cfo_sync.py"
       ],
       "user_and_moshko_surface": "CFOSyncDashboard product/plan configuration; integration status",
       "offline_evidence": [
         "tests/test_open_finance_product_boundaries.py"
       ],
       "required_completion": "Product/plan and active-connection checks are enforced locally. Owner-declared product/plan is not provider entitlement verification; broader unreviewed product operations remain blocked.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "PRODUCT-02",
@@ -945,14 +1022,15 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "open_finance_product_policy.py"
+        "src/cfo/services/open_finance_product_policy.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
         "tests/test_open_finance_product_boundaries.py"
       ],
       "required_completion": "Create connections in Financy portal. Do not send platform connection-creation endpoints for Financy.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OFFICE-01",
@@ -1033,13 +1111,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "israeli_tax_rules.py",
-        "annual_report_service.py"
+        "src/cfo/services/israeli_tax_rules.py",
+        "src/cfo/services/annual_report_service.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Local depreciation rates/calculation are not an asset register. SUMIT asset groups, acquisition/activation/disposal and form-versus-journal distinction require a reviewed portal export/import and asset lifecycle model. No reviewed asset-register API in saved Swagger.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OFFICE-02",
@@ -1132,13 +1211,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "annual_report_service.py",
-        "filing_verification.py"
+        "src/cfo/services/annual_report_service.py",
+        "src/cfo/services/filing_verification.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Verify annual adjustments against representative KB; prepare only with professional authority and triple verification.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OFFICE-03",
@@ -1207,13 +1287,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "filing_verification.py",
-        "office_capabilities.py"
+        "src/cfo/services/filing_verification.py",
+        "src/cfo/services/office_capabilities.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Portal correction/status procedures, evidence and office-wide task tracking require review; no actual transmission.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OFFICE-04",
@@ -1234,16 +1315,17 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "membership_service.py",
-        "office_service.py",
-        "office_capabilities.py"
+        "src/cfo/services/membership_service.py",
+        "src/cfo/services/office_service.py",
+        "src/cfo/services/office_capabilities.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [
         "tests/test_auth_and_tenancy.py"
       ],
       "required_completion": "Existing role and office boundaries tested previously; review case lifecycle, granular module permissions and current representative portal conditions.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OFFICE-05",
@@ -1324,13 +1406,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "client_automation_service.py",
-        "expense_filing_service.py"
+        "src/cfo/services/client_automation_service.py",
+        "src/cfo/services/expense_filing_service.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Review per-period material completion, document communication/acknowledgement and completeness; no autonomous outbound messages.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OFFICE-06",
@@ -1351,14 +1434,15 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "tenant_provisioning.py",
-        "schema_deployment.py",
-        "office_service.py"
+        "src/cfo/services/tenant_provisioning.py",
+        "src/cfo/services/schema_deployment.py",
+        "src/cfo/services/office_service.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Do not drop these from scope. Match each representative workflow to local need and operator evidence before calling complete.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OFFICE-07",
@@ -1427,13 +1511,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "israeli_tax_rules.py",
-        "annual_report_service.py"
+        "src/cfo/services/israeli_tax_rules.py",
+        "src/cfo/services/annual_report_service.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Professional contract and evidence required for each relevant case; do not reuse one uniform document/tax rule.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OFFICE-08",
@@ -1502,13 +1587,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "masav_service.py",
-        "check_reconciliation.py"
+        "src/cfo/services/masav_service.py",
+        "src/cfo/services/check_reconciliation.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Separate file preparation, bank acceptance, rejection/return and official posting; cancellation requires documented provider operation.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OTHER-01",
@@ -1529,12 +1615,13 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "open_finance_client.py"
+        "src/cfo/services/open_finance_client.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Platform wrappers exist. Determine product relevance, permission and actual user workflow; never inherit into Financy.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OTHER-02",
@@ -1555,13 +1642,14 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "sumit_integration.py",
-        "sumit_tool_manifest.py"
+        "src/cfo/integrations/sumit_integration.py",
+        "src/cfo/services/sumit_tool_manifest.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Existing wrappers/menus are not E2E proof. Audit operational need, official source conditions and safe access per module.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "OTHER-03",
@@ -1582,12 +1670,13 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "sumit_tool_manifest.py"
+        "src/cfo/services/sumit_tool_manifest.py"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Decide each against Rezef product need; no blanket exclusion because it is outside collection.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     },
     {
       "id": "EXCLUDED-01",
@@ -1608,13 +1697,23 @@
         "cost": "Existing quotas and 20-hour gates; no live calls authorized"
       },
       "implementation": [
-        "REZEF_OPERATING_SYSTEM.md"
+        "docs/REZEF_OPERATING_SYSTEM.md"
       ],
       "user_and_moshko_surface": "Existing service/API; end-to-end UI review pending",
       "offline_evidence": [],
       "required_completion": "Explicitly excluded by user authorization: complete existing business relationships without adding a provider/protocol.",
-      "official_books_verified": false
+      "official_books_verified": false,
+      "data_model": []
     }
   ],
-  "local_kb_inventory": "docs/audits/evidence/2026-09-06-sumit-local-kb-index.json"
+  "local_kb_inventory": "docs/audits/evidence/2026-09-06-sumit-local-kb-index.json",
+  "financy_reference_evidence": "docs/audits/evidence/2026-09-06-financy-reference-contracts.json",
+  "status_vocabulary": {
+    "implemented_locally": "The bounded local behavior has implementation and offline evidence; no live or official-book claim.",
+    "partial": "Some behavior exists; the recorded business completion remains unfinished.",
+    "provider_blocked": "A required documented provider operation or authoritative readback is unavailable or unverified.",
+    "owner_configuration_required": "An owner-controlled entitlement, connection or configuration step is required.",
+    "not_tested": "No complete verification has been recorded; not a completion claim.",
+    "excluded": "Explicitly excluded with a recorded scope reason."
+  }
 }

@@ -2,6 +2,126 @@
 
 **גרסה 1.0 · 2026-07-24 · זהו לוח הסטטוס היחיד של הפרויקט.** כל מסמכי התכנון האחרים כפופים לו; עבודה שלא מקדמת שער בתכנית הזו — לא מתבצעת.
 
+## Competitor completion — 7 September 2026 (active local work)
+
+The authorized scope extends the existing provider work; it does not replace it.
+C01–C36 below are the complete denominator from the September competitor research.
+This table is the completion map and the sole status board for this extension.
+“Partial” means the broader capability is still open, even when a bounded local
+scenario passes. A provider or professional dependency is not an implemented feature.
+The current priority remains evidence-backed document intake and the pilot month;
+market expansion is retained below rather than silently dropped.
+
+| ID | Current classification and business process | Existing implementation to reuse | Required change / dependency / acceptance |
+|---|---|---|---|
+| C01 | Partial: multichannel document intake | `expense_intake_email`, `chat_expense_intake`, `document_intake`, `ExpenseFiling` | Three email attachments → cross-channel duplicate → source correction → one pending expense passes through React, real FastAPI and temporary SQLite. Explicit extraction, bounded retry and revocation tests pass. Interrupted claims still need a recovery operation; unattended queue scheduling and additional image formats remain open. |
+| C02 | Works end to end locally in the declared PDF scope | `DocumentIntake`, `DocumentDerivation`, `DocumentDerivationForm`, confirmed Moshko tool | Reviewed split/merge preserves original bytes, exact page maps, order, actor/reason and stable replay. Parent processing is blocked; changed source/version and revoked membership cannot overwrite a decision. Real PDF HTTP tests, connected React/FastAPI browser, PostgreSQL races and populated restore pass. Scope: 1–10 PDF parents, all pages exactly once, at most 100 pages, 10 MiB/output; image conversion/automatic document-boundary detection are not implemented. |
+| C03 | Partial: duplicate control | `duplicate_gate`, org/content unique intake identity, collection allocation guards | Exact byte duplicates share source history locally. Business duplicates remain evidence-based review; verify variant scans and concurrent receipt creation. |
+| C04 | Partial: original alongside accounting proposal | `ExpenseFiling`, `DocumentIntakePanel`, `expense_account_filing`, `ledger_service` | Versioned source correction with reviewer/reason/history, duplicate check and pending expense link now works in UI and Moshko. The connected filing workbench now shows the exact source, destination company, signing approval and fake-provider draft acknowledgement. Journal lines and official intake/readback remain open. |
+| C05 | Partial: line extraction | `vision_extractor`, `expense_ocr_pipeline` | Persist true line evidence and header parity; missing lines cannot be reconstructed from totals. |
+| C06 | Partial / professional dependency: complex journals | `JournalEntry`, manual journal route, `israeli_tax_rules`, `expense_account_filing` | Source-linked balanced multiline proposal, correction history and professional review; provider posting/readback remains separate. |
+| C07 | Partial: organizational learning | `expense_classifier`, `classifier_ml_training`, `test_classifier_learning_loop` | Versioned promotion and reversal of approved precedents; no cross-organization or legal-policy override. |
+| C08 | Partial / disconnected onboarding | `chart_of_accounts_importer`, `hashavshevet_journal_importer`, `office_service` | Wizard with mapping, periods, balance/dedup errors and approval; repeated import must preserve existing accounts/history. |
+| C09 | Provider/format validation dependency | `openfrmt` DRAFT and source import adapters | A specified product/version and accepted test import are required; generic CSV is not ERP integration. |
+| C10 | Deferred beyond active pilot: additional ERPs | `connector_base`, provider business evidence matrix | Per-operation read/write/event/export/result contract for each justified target; no new connector without a verified need/specification. |
+| C11 | Partial: supplier evidence and withholding | `Contact`, `company_registry`, supplier workbench | Effective dates and professional evidence for supplier certificates; no guessed form-1000 format or deduction. |
+| C12 | Partial / provider dependency: draft to official journal | `irreversible_action_service`, `expense_account_filing`, SUMIT createbatch adapter | Reviewed source → immutable company-bound proposal → distinct signer → one provider draft request is implemented and tested locally. Unknown outcomes and source drift stay unresolved; pre-execution withdrawal preserves history. Independent document/books readback and SUMIT batch finality remain open. |
+| C13 | Missing official reversal workflow | `JournalEntry`, irreversible approvals; local allocation reversal history | Original-entry linkage, reason and accepted reversal evidence; allocation reversal cannot substitute for storno. |
+| C14 | Partial; AR/AP local slices proven | `collection_allocation_service`, `payable_settlement`, both workbenches | September 6 synthetic HTTP/browser/PostgreSQL proofs cover partial/repeated/source-conflict cases. Aggregate/FX and official writeback remain open. |
+| C15 | Partial; linked request/money states proven locally | `payment_evidence`, collection/payable status services | Bring the same durable links into document workspace; never equate verified request or provisional movement with cash. |
+| C16 | Partial: business AP approval rounds | `PolicyGrant`, signing authority, irreversible approval service | Business invoice routing, groups/delegation/escalation; invoice approval must not grant payment signing authority. |
+| C17 | Partial / disconnected document collaboration | Existing `Note`, `Task`, `AuditLog` | Document-scoped comments, assignee and chronological decisions, with authorization and optimistic concurrency. |
+| C18 | Missing three-way procurement match | Document type enums only; no goods-receipt-line model found | Actual PO/receipt lines and quantity/price exceptions; partial goods receipt must not approve a full invoice. |
+| C19 | Partial: archive and search | Intake source hash, `Expense.receipt_file`, document views | Search, versions, evidence export, retention and restore; no archive certification claim. |
+| C20 | External professional/business dependency | Source evidence and audit history | Verified archive/signature requirements and certification evidence; hashes do not establish legal certification. |
+| C21 | Partial: missing materials and case readiness | `Task`, `bank_expense_gap`, `office_service`, morning brief | Assign each unresolved source/period gap to an actionable task and show its evidence; outbound reminders retain permission gates. |
+| C22 | Partial; durable saved-report slice works locally | `report_builder_service`, `report_storage`, `ReportRecord`, `SavedReportsPanel`, Moshko `get_saved_reports` | Templates/schedules/executions/files persist per org with versions and occurrence claims. Real React/FastAPI creation/download and app-lifespan restart pass; PostgreSQL overlapping workers and encrypted restore pass. External delivery is refused; unattended scheduler activation, broader report/source drilldown and complete freshness evidence remain open. |
+| C23 | Partial: variance explanation | `financial_reports_service`, report builder, CFO services | Period comparison with source drilldown and distinction between business movement and missing data. |
+| C24 | Partial: month-close workspace | `DailySnapshot`, `filing_verification`, `parity_service`, `Task`, KB10 | Persistent checklist/dependencies/workpapers/sign-offs; snapshot and local readiness cannot close official books. |
+| C25 | Missing full accrual/recurring journal engine | `JournalEntry`, existing approvals | Separate professional packages for prepaids/accruals/recurring journals, reversals and period locks; recurring payment is not a journal engine. |
+| C26 | Deferred beyond pilot: consolidation | `office_service` is office oversight only | Ownership group, authorized cross-company mappings/currencies and eliminations; never sum unrelated office clients as a group. |
+| C27 | Partial: concurrent case work | Membership, durable action claims, allocation locks; intake version claim | Assignees and conflict controls across the complete document/journal workflow; test source changes after decisions. |
+| C28 | Partial / later market scope: client UX and languages | Existing channel gateways and RTL expense workspace | Complete short client intake/missing-material journey; additional languages require per-screen tests and business prioritization. |
+| C29 | Provider/owner/professional dependency: authority filing | `filing_verification`, SUMIT operations map | Triple verification plus authorized filing/acknowledgement; no live submission is authorized here. |
+| C30 | Partial / professional dependency: FX | Currency-tagged bank/payment evidence; mixed-currency allocation refusal | Preserve currency/date/rate evidence and explicit FX journal adjustments; source intake blocks unsupported FX expense conversion. |
+| C31 | Business dependency: service and onboarding | Existing runbooks, office/task services | Named support ownership, escalation and evidence handoff; code cannot prove staffed support. |
+| C32 | Deferred business decision: pricing/trial | Moshko usage/cost telemetry, synthetic journeys | Measure full completed-document cost including human work; no pricing or competitor accuracy claims from endpoint counts. |
+| C33 | Partial: measured extraction quality | `vision_extractor`, existing synthetic OCR tests | Source-field parity checks added locally; agreed human-labelled sample and time/correction/silent-error measures remain necessary. |
+| C34 | Missing fixed-assets engine | Tax classification has depreciation category only | Asset register, source cost, book/tax schedules, disposal and professionally approved journal examples. |
+| C35 | Partial; split receipt/reversal slices proven | Collection allocations and reversals, AP bank settlement history | Existing synthetic capacity/replay/reversal proofs retained; fees, refunds, aggregate payouts and currency adjustments remain explicit cases. |
+| C36 | Partial: explained bank/books/CFO | `ledger_service`, `financial_synthesis`, live cash/forecast services | Evidence-linked period package and actionable assumptions; official parity/live freshness and complete journey are still open. |
+
+The source-filing follow-up adds a real React/FastAPI/SQLite approval journey with
+**12 explicit browser writes and one fake provider request**, including withdrawal
+and replacement of an unexecuted approval. PostgreSQL tests prove one proposal,
+one provider call under overlapping execution, and six withdrawal/claim races.
+The latest focused filing/approval run passed **77 tests**; a later source/preview/chat/filing run passed **104 tests**. The final full offline suite
+was stopped at the owner’s handoff request and has no completion result. No additional broad C capability is
+marked complete: C04/C12 advance locally but official journal/books verification
+remains open. [Filing browser evidence](audits/evidence/2026-09-07-expense-filing-connected-browser.json).
+
+Execution was stopped at the owner’s request on 7 September. Continue from the
+[agent handoff](audits/2026-09-07-agent-handoff.md); do not treat the interrupted full run as green.
+
+Current local evidence is detailed in the
+[document and report implementation audit](audits/2026-09-07-document-and-report-workflows.md).
+The initial intake/report package passed **2,789 full-suite tests**. Subsequent source
+correction, PDF transformations, Moshko writes and multipage OCR safeguards passed
+**165 focused tests**, followed by **11 PDF tests** after the cached-membership fix.
+The follow-up full run reached **2,805 passed / 1 failed**: the explicit actor-tool
+inventory omitted the two new confirmed writes. That inventory was corrected and
+**38 focused tests passed**; a clean full rerun is still required before commit. Frontend build/lint,
+synthetic failure-browser checks and the connected React/FastAPI browser pass.
+Revision `c81e6395fd71` passes local SQLite schema parity and a **74-table populated
+PostgreSQL encrypted restore**, including original sources, page recipes and report
+files. These are local proofs. The full requested document→books→payment→month-close
+journey remains open; C02 is complete only in the explicitly bounded local PDF scope.
+
+## Provider business-flow expansion — 6 September 2026 (in progress)
+
+The owner explicitly authorized extending the existing local stabilization work
+across relevant SUMIT business/representative and Open Finance/Financy workflows.
+The [business evidence matrix](provider_business_evidence.json) is subordinate to
+this board. Its rows describe business processes; previous endpoint-wrapper counts
+below are historical inventories and do not establish business capability coverage.
+
+Current local implementation: authenticated provider event history and replay guards;
+split receipt/invoice/bank allocations, excess and reversals; supplier bill-linked
+requests, partial/multiple bank settlement and source-parity protection; shared
+HTTP/Moshko workbenches; explicit Financy product/plan and connected-party limits.
+Both collection and supplier screens pass synthetic browser journeys. Final serial
+QA passed **all nine local gates**, including **2,763 full-suite tests** and **86
+tenant-isolation tests**. The Neon check was skipped. The previous 2,668-test result
+below belongs to `ab3fd18`.
+A final **39-test focused run** verifies supplier workflows and the corrected
+Moshko provider-call audit classification after the gate.
+Revision `95eb3062ca48` passes fresh synthetic PostgreSQL migration/encrypted restore
+(71 tables), and guarded PostgreSQL tests verify allocation capacities, replay,
+reversal and overlapping sync. The backed-up local SQLite schema matches the models.
+Changes remain uncommitted and do not establish live readiness.
+[Implementation report and remaining gates](audits/2026-09-06-provider-business-expansion.md).
+[Final local validation](audits/evidence/2026-09-06-provider-final-validation.json).
+
+The public SUMIT help index crawl discovered 763 article links across cached pages,
+including 161 IDs absent from the local corpus index. The local 12-file corpus has
+968 distinct referenced article IDs. These are index observations, not counts of
+reviewed implementations. HTTP 429 stopped further public crawling; 144 discovered
+collection URLs remain uncached. [Partial index evidence](audits/evidence/2026-09-06-provider-public-index.json).
+The latest saved SUMIT Swagger remains `sumit_swagger_v1_2026-08-19.json` (84 paths).
+All 20 reference entries in the checked Financy public index were separately parsed
+for route, effective server, scopes, inputs and response contracts. This is a defined
+documentation inventory, not a business coverage percentage. Fee conditions and
+scope/debtor-field discrepancies are recorded in the
+[public contract review](audits/2026-09-06-provider-contract-review.md).
+
+Remaining implementation: advances/document selection; terminal or ambiguous request
+resolution; multi-bill/scheduled outgoing payments; recurring/mandate lifecycle;
+aggregate/FX/internal-transfer reconciliation; official batch/operator evidence;
+source completeness and remaining office capabilities. Provider/accountant/owner
+blocks stay explicit in the matrix. The broad completion request remains open.
+No live provider API, production operation,
+payment, filing, batch close, quota bypass, push or deployment is authorized here.
+
 ## Current stabilization status — 6 September 2026
 
 This is the current status for the approved September review plan. Earlier dated

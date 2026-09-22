@@ -1,5 +1,13 @@
 # רישום פערים מודע — צד המייצגים (KB ‏07–12)
 
+> **Evidence update — 6 September 2026:** historical counts below are retained as
+> collection history. The current mechanical inventory finds 968 distinct article
+> IDs across all 12 local files; it does not reproduce the older 1,126 count.
+> Current completion claims belong to [MASTER_EXECUTION_PLAN.md](MASTER_EXECUTION_PLAN.md)
+> and its [business evidence matrix](provider_business_evidence.json).
+> [The public comparison](audits/2026-09-06-provider-contract-review.md) is incomplete
+> because the help site returned HTTP 429. No row below is removed or silently closed.
+
 **מקור:** סריקת כיסוי מלאה של 12 קובצי מרכז הידע (20/08/2026, ‏1,126 מאמרים):
 ‏367 יכולות אופרטיביות — ‏125 ממומשות, ‏71 חלקיות, ‏38 פער-מודע קודם, ‏133 לא-ממופות.
 המסמך הזה הופך את ה-133 (ובעיקר 58 שבצד המייצגים) מ"החלטה לא-מודעת" ל**פער רשום**:

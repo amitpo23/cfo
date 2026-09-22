@@ -1,5 +1,11 @@
 # מרכז ידע — Open Finance API
 
+**Current evidence, 6 September 2026:** Open Finance platform and Financy have
+different access contracts. See the [public contract review](audits/2026-09-06-provider-contract-review.md)
+and [business evidence matrix](provider_business_evidence.json) for product, consent,
+callback authentication, cost and payment-settlement boundaries. A verified request
+does not imply that money settled. The historical help collection below is retained.
+
 **מקור:** [help.open-finance.ai/he](https://help.open-finance.ai/he/) (מרכז העזרה הרשמי, 25 מאמרים, 4 קטגוריות)
 **נאסף:** 2026-07-10
 **הקשר בפרויקט:** מקור הידע ליכולת `open-finance-ingestion` ב-
@@ -7,6 +13,8 @@
 [`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md); המימוש ב-
 [`OpenFinanceClient`](../src/cfo/services/open_finance_client.py).
 **דוקומנטציה מלאה (interactive):** `docs.open-finance.ai`
+
+**לימוד משלים (2026-09-06):** [סוכני AI ובנקאות פתוחה — פרק 183 והשלכות לרצף](OPEN_FINANCE_AI_PODCAST_LEARNING_2026-09-06.md). סיכום ממוקד, מיפוי לקוד והמלצות עם גבולות ראיה; אינו מפרט API או הוכחת מוכנות לפרוד.
 
 ---
 

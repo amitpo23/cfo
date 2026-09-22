@@ -23,6 +23,27 @@ The saved index evidence contains 160 platform entries and 37 Financy entries
 (139 and 20 reference entries respectively). Duplicates, versions and guides make
 these unsuitable as a denominator for unique API or business capability coverage.
 
+All **20 Financy reference entries** in that index were subsequently fetched and
+their OpenAPI definitions inspected for methods, effective server/path composition,
+OAuth scopes, required inputs and response codes. The
+[reference contract evidence](evidence/2026-09-06-financy-reference-contracts.json)
+records each source hash and its current local product-policy disposition. This is
+a defined reference-page inventory, not proof of 20 completed business workflows.
+
+The payment API reference describes completion-based fees for new ILS payments:
+Starter 0.4% with a ₪0.50 minimum; Pro 0.3% with a ₪0.50 minimum and ₪3.50 maximum;
+Ultra 0.2% with a ₪0.50 minimum and ₪2.70 maximum. It excludes failed/cancelled,
+sandbox, ATM and non-ILS cases from that fee description. These are documented
+conditions as checked, not a verified quote for the owner's contract.
+[Official payment reference](https://docs-financy.open-finance.ai/reference/createpayment).
+
+Two documentation discrepancies remain explicit: the direct-initiation reference
+spells its scope `create:peyments`, while hosted creation uses `create:payments`;
+and debtor-field descriptions include requirements stronger than the enclosing
+schema's required-field list. The implementation does not invent a new scope or a
+debtor identity to resolve either discrepancy. Owner/provider contract verification
+is required before live use. [Direct initiation](https://docs-financy.open-finance.ai/reference/initiatepayment).
+
 Financy requires at least one payment party to be a connected account. The account
 number used for this check must be actual provider account evidence. The normalized
 account model now retains `provider_account_number`; it does not infer a bank account

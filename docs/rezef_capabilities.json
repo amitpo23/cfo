@@ -16,7 +16,8 @@
     "code_agent_rules": [
       "AGENTS.md",
       "CLAUDE.md"
-    ]
+    ],
+    "provider_business_evidence": "docs/provider_business_evidence.json"
   },
   "daily_workflow": [
     "acquire_org_lock_and_enforce_budget",
@@ -38,7 +39,7 @@
       "knowledge": [
         "docs/SUMIT_KNOWLEDGE_BASE.md",
         "docs/SUMIT_API_REFERENCE.md",
-        "docs/sumit_swagger_v1_2026-07-10.json"
+        "docs/sumit_swagger_v1_2026-08-19.json"
       ],
       "runtime": [
         "src/cfo/config.py",
@@ -92,7 +93,9 @@
         "src/cfo/services/open_finance_connector.py",
         "src/cfo/services/open_finance_onboarding.py",
         "src/cfo/services/sync_engine.py",
-        "alembic/versions/05c6d7e8f9a0_add_of_account_connection.py"
+        "alembic/versions/05c6d7e8f9a0_add_of_account_connection.py",
+        "src/cfo/services/provider_event_service.py",
+        "src/cfo/services/open_finance_product_policy.py"
       ],
       "tests": [
         "tests/test_open_finance_client.py",
@@ -101,7 +104,11 @@
         "tests/test_open_finance_routes.py",
         "tests/test_of_snapshot_cache.py",
         "tests/test_credit_line_persistence.py",
-        "tests/test_sync_call_protection.py"
+        "tests/test_sync_call_protection.py",
+        "tests/test_provider_event_integrity.py",
+        "tests/test_open_finance_product_boundaries.py",
+        "tests/test_sync_evidence_integrity.py",
+        "tests/test_sync_late_relationships.py"
       ],
       "gates": [
         "organization_scope",
@@ -172,12 +179,31 @@
       "runtime": [
         "src/cfo/services/expense_ocr_pipeline.py",
         "src/cfo/services/expense_filing_service.py",
-        "src/cfo/services/israeli_tax_rules.py"
+        "src/cfo/services/israeli_tax_rules.py",
+        "src/cfo/services/document_intake.py",
+        "src/cfo/services/expense_intake_email.py",
+        "src/cfo/services/chat_expense_intake.py",
+        "frontend/src/components/DocumentIntakePanel.tsx",
+        "src/cfo/services/document_derivation.py",
+        "frontend/src/components/DocumentDerivationForm.tsx",
+        "src/cfo/services/expense_filing_workflow.py",
+        "frontend/src/components/ExpenseFilingWorkbench.tsx",
+        "frontend/src/components/DocumentSourcePreview.tsx"
       ],
       "tests": [
         "tests/test_expense_ocr_pipeline.py",
         "tests/test_expense_filing.py",
-        "tests/test_israeli_tax_rules.py"
+        "tests/test_israeli_tax_rules.py",
+        "tests/test_document_intake.py",
+        "tests/test_chat_expense_intake.py",
+        "tests/browser_offline/document_intake.py",
+        "tests/browser_offline/document_intake_connected.py",
+        "tests/test_document_source_review.py",
+        "tests/test_document_derivation.py",
+        "tests/postgres_offline/verify_document_derivation_concurrency.py",
+        "tests/test_expense_filing_workflow.py",
+        "tests/postgres_offline/verify_expense_filing_concurrency.py",
+        "tests/test_document_preview.py"
       ],
       "gates": [
         "organization_scope",
@@ -186,7 +212,7 @@
         "honest_null",
         "human_decision_queue"
       ],
-      "honest_boundary": "Classification and filing paths exist, but ambiguous documents, missing vehicle profiles and unsupported evidence must remain in review rather than be auto-filed. Measured in production 2026-08-05: 415 of the pending SUMIT drafts carry total=0 (org1 243, org2 16, org5 156) because the API returns an empty draft envelope -- the readable receipt lives behind the app.sumit.co.il session, so no key-based pipeline can extract them. Only the 41 'sumit_fileexpense' rows for org5 (ILS 211,107.98) carry real amounts. 1,200 of 1,491 expenses have no supplier_tax_id, which blocks registry verification and a correct PCN874 base.",
+      "honest_boundary": "Classification and filing paths exist, but ambiguous documents, missing vehicle profiles and unsupported evidence must remain in review rather than be auto-filed. Measured in production 2026-08-05: 415 of the pending SUMIT drafts carry total=0 (org1 243, org2 16, org5 156) because the API returns an empty draft envelope -- the readable receipt lives behind the app.sumit.co.il session, so no key-based pipeline can extract them. Only the 41 'sumit_fileexpense' rows for org5 (ILS 211,107.98) carry real amounts. 1,200 of 1,491 expenses have no supplier_tax_id, which blocks registry verification and a correct PCN874 base. September 7 local extension: email/upload/chat sources use a durable organization/content identity before expense creation. Supported PDF/PNG/JPEG/WebP/TIFF attachments are retained independently; no zero expense is created at intake. Extraction is explicit and cost-gated; unreadable, missing, inconsistent, non-accounting and unsupported-currency sources remain visible without invented financial values. Versioned manual source correction preserves original bytes, reviewer/reason/history and the existing business duplicate gate; both the RTL screen and confirmed Moshko write use the same service. Explicit PDF split/merge preserves every source page exactly once, durable page recipes and source hashes, blocks separate parent processing, and survives replay. Local PostgreSQL tests cover overlapping recipes, processing claims, and user/membership revocation during generation. The image-only OCR fallback refuses multipage PDFs rather than dropping later pages. Interrupted extraction claims still require recovery; journal approval and official-book linkage remain open; this is not the full intake-to-close journey. The source filing extension binds reviewed fields, original hash and destination SUMIT company/connection to an immutable signing approval. HTTP, RTL workbench and confirmed Moshko writes share the service. It requests IsDraft=true, preserves DocumentID as submitted rather than filed/verified, blocks replay after unknown outcomes, and queues source drift without losing the acknowledgement. A signer may withdraw an unexecuted approval with a reason; execution and withdrawal cannot both win. Later list sync recognizes the exact saved acknowledgement without recreating the expense. Tests use fake providers only. Strict independent document readback, final journal classification and official books remain open. Source previews now render explicit pages as local PNG images (PDF and supported image formats, including multi-frame TIFF), with original downloads and SHA-256 integrity checks. Previews neither extract financial fields nor mutate source state; documents over 100 pages or unsupported renderings remain visible as preview failures. Moshko retains uncertain filing outcomes as unknown and cannot reconfirm them.",
       "next_gate": "MASTER_EXECUTION_PLAN gates 1-2: complete intake coverage and 20 consecutive correctly filed documents. Blocked on a browser-session route for the 415 blank envelopes; the API route cannot reach them."
     },
     {
@@ -234,13 +260,16 @@
         "src/cfo/services/bank_reconciliation.py",
         "src/cfo/services/manual_reconciliation.py",
         "src/cfo/services/bank_expense_gap.py",
-        "src/cfo/services/collection_settlement.py"
+        "src/cfo/services/collection_settlement.py",
+        "src/cfo/services/collection_allocation_service.py"
       ],
       "tests": [
         "tests/test_bank_reconciliation.py",
         "tests/test_manual_reconciliation.py",
         "tests/test_bank_expense_gap.py",
-        "tests/test_collection_settlement.py"
+        "tests/test_collection_settlement.py",
+        "tests/test_collection_allocations.py",
+        "tests/test_collection_migration_preservation.py"
       ],
       "gates": [
         "organization_scope",
@@ -268,13 +297,27 @@
         "src/cfo/services/collection_service.py",
         "src/cfo/services/collection_settlement.py",
         "src/cfo/services/financial_synthesis.py",
-        "src/cfo/services/payment_evidence.py"
+        "src/cfo/services/payment_evidence.py",
+        "src/cfo/services/collection_workbench.py",
+        "src/cfo/services/collection_allocation_service.py",
+        "frontend/src/components/CollectionWorkbench.tsx",
+        "src/cfo/services/payable_settlement.py",
+        "src/cfo/services/payable_workbench.py",
+        "frontend/src/components/PayableWorkbench.tsx"
       ],
       "tests": [
         "tests/test_ar_real_values.py",
         "tests/test_ap_service_honest_values.py",
         "tests/test_collection_cases.py",
-        "tests/test_collection_settlement.py"
+        "tests/test_collection_settlement.py",
+        "tests/test_collection_allocations.py",
+        "tests/test_legacy_payment_retirement.py",
+        "tests/browser_offline/collection_workbench.py",
+        "tests/test_payable_settlement.py",
+        "tests/browser_offline/payable_workbench.py",
+        "tests/postgres_offline/verify_collection_concurrency.py",
+        "tests/postgres_offline/verify_payable_concurrency.py",
+        "tests/postgres_offline/verify_payable_sync_concurrency.py"
       ],
       "gates": [
         "organization_scope",
@@ -331,14 +374,20 @@
         "src/cfo/services/daily_reports_service.py",
         "src/cfo/services/bank_report_service.py",
         "src/cfo/services/ledger_service.py",
-        "src/cfo/services/financial_reports_service.py"
+        "src/cfo/services/financial_reports_service.py",
+        "src/cfo/services/report_builder_service.py",
+        "src/cfo/services/report_storage.py",
+        "frontend/src/components/SavedReportsPanel.tsx"
       ],
       "tests": [
         "tests/test_daily_reports.py",
         "tests/test_kpi_insights_bank_report.py",
         "tests/test_balance_sheet_derived.py",
         "tests/test_report_consistency.py",
-        "tests/test_projection_boundary.py"
+        "tests/test_projection_boundary.py",
+        "tests/test_report_persistence.py",
+        "tests/test_report_builder_real.py",
+        "tests/browser_offline/saved_reports.py"
       ],
       "gates": [
         "organization_scope",
@@ -347,7 +396,7 @@
         "derived_label",
         "reconciliation_status"
       ],
-      "honest_boundary": "Several reports are real and derived; legacy transaction-backed screens and forecasts cannot be promoted as current until their data plane is unified.",
+      "honest_boundary": "Several reports are real and derived; legacy transaction-backed screens and forecasts cannot be promoted as current until their data plane is unified. September 7 local extension: saved-report definitions, schedule versions, occurrence claims, execution history and file/hash evidence are organization-scoped database records. Explicit local runs and authorized downloads are connected to the reports screen; Moshko reads metadata only. Unsupported delivery, format and source failures remain explicit. No external delivery or background scheduler activation is proved. This does not complete period close, official parity or report-wide data-source unification.",
       "next_gate": "Make one canonical trial-balance-backed P&L, balance sheet and cash-flow package with freshness and reconciliation evidence."
     },
     {
@@ -410,7 +459,8 @@
         "frontend/src/components/PolicyManagementDashboard.tsx",
         "alembic/versions/e3f4a5b6c7d8_add_policy_enforcement.py",
         "src/cfo/api/approved_actions.py",
-        "src/cfo/services/collection_settlement.py"
+        "src/cfo/services/collection_settlement.py",
+        "src/cfo/services/payable_settlement.py"
       ],
       "tests": [
         "tests/test_irreversible_action_workflow.py",
@@ -424,7 +474,8 @@
         "tests/test_policy_persistence_and_enforcement.py",
         "tests/test_legacy_action_approvals.py",
         "tests/test_registration_boundary.py",
-        "tests/test_collection_settlement.py"
+        "tests/test_collection_settlement.py",
+        "tests/test_payable_settlement.py"
       ],
       "gates": [
         "organization_scope",
