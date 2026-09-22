@@ -26,6 +26,7 @@ _FULL_DRIFT_KEYS = (
     "primary_keys",
     "foreign_keys",
     "unique_constraints",
+    "incompatible_unique_constraints",
     "check_constraints",
     "indexes",
 )
@@ -56,6 +57,7 @@ def empty_schema_drift() -> Dict[str, Any]:
         "primary_keys": {},
         "foreign_keys": {},
         "unique_constraints": {},
+        "incompatible_unique_constraints": {},
         "check_constraints": {},
         "indexes": {},
         "dialect_exemptions": {},
@@ -320,6 +322,16 @@ def compute_schema_drift(engine: Engine) -> Dict[str, Any]:
             report["unique_constraints"][table_name] = [
                 list(columns) for columns in sorted(missing_uniques)
             ]
+
+        # These legacy restrictions prevent split settlements. They are not
+        # harmless extra objects and additive repair cannot remove them.
+        if table_name == 'collection_payment_allocations':
+            obsolete = {('request_id',), ('payment_id',), ('bank_transaction_id',)}
+            actual = _actual_unique_constraints(inspector, table_name)
+            actual |= {columns for columns, unique in _actual_indexes(inspector, table_name) if unique}
+            incompatible = actual & obsolete
+            if incompatible:
+                report['incompatible_unique_constraints'][table_name] = [list(columns) for columns in sorted(incompatible)]
 
         missing_indexes = _expected_indexes(table) - _actual_indexes(inspector, table_name)
         if missing_indexes:

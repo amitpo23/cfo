@@ -39,6 +39,14 @@ class CollectionSettlementService:
             raise ValueError('Invoice not found in organization')
         return row
 
+    def allocate_existing(self, **kwargs):
+        from .collection_allocation_service import CollectionAllocationService
+        return CollectionAllocationService(self).allocate(**kwargs)
+
+    def reverse_allocation(self, allocation_id, **kwargs):
+        from .collection_allocation_service import CollectionAllocationService
+        return CollectionAllocationService(self).reverse(allocation_id, **kwargs)
+
     def _request(self, request_id):
         row = self.actions.get(request_id)
         if row is None or (row.payload or {}).get('operation') != OPERATION:
@@ -66,7 +74,11 @@ class CollectionSettlementService:
         if actor.role != UserRole.SUPER_ADMIN and role_in(self.db, actor.id, self.org_id) != UserRole.ADMIN:
             raise ValueError('An active organization admin must record the evidence decision')
 
-    def propose(self, *, invoice_id, amount, channel, proposed_by, idempotency_key, creditor=None):
+    def _request_fully_allocated(self, request):
+        from .collection_allocation_service import amount_allocated
+        return amount_allocated(self.db, self.org_id, request_id=request.id) >= money(request.payload['amount'])
+
+    def propose(self, *, invoice_id, amount, channel, proposed_by, idempotency_key, creditor=None, origin_channel='web'):
         self._admin(proposed_by)
         amount = money(amount)
         if channel not in {'open_finance','sumit'}:
@@ -95,15 +107,25 @@ class CollectionSettlementService:
         if existing is None:
             if invoice.status in {InvoiceStatus.DRAFT,InvoiceStatus.CANCELLED,InvoiceStatus.VOID,InvoiceStatus.PAID} or invoice.balance is None or amount > invoice.balance:
                 raise ValueError('Invoice has no sufficient verified open balance')
+            from .collection_allocation_service import amount_allocated
+            for receipt in self.db.query(Payment).filter_by(organization_id=self.org_id,
+                    contact_id=contact.id, source='sumit', method='receipt').all():
+                if receipt.bill_id or (receipt.raw_data or {}).get('status') not in {'open', 'closed', 'paid'}:
+                    continue
+                if receipt.invoice_id is None and receipt.amount > amount_allocated(self.db, self.org_id, payment_id=receipt.id):
+                    raise ValueError('An unallocated customer receipt requires review before another collection request')
+                if receipt.invoice_id == invoice.id and receipt.amount > invoice.paid_amount:
+                    raise ValueError('An already-linked receipt requires balance review before collection')
             # Serialize proposals on the invoice. No second channel/request while
             # another claim is pending or has an unknown external outcome.
             for request in self.db.query(IrreversibleActionRequest).filter_by(organization_id=self.org_id,action_type='payment').all():
                 if (request.payload or {}).get('operation') == OPERATION and request.payload.get('invoice_id') == invoice_id:
-                    allocated = self.db.query(CollectionPaymentAllocation).filter_by(organization_id=self.org_id,request_id=request.id).first()
+                    allocated = self._request_fully_allocated(request)
                     if not allocated and request.status not in {'rejected','cancelled'}:
                         raise ValueError('An unresolved collection request already exists for this invoice')
         return self.actions.propose(proposed_by=proposed_by, action_type='payment',payload=payload,
-            idempotency_key=idempotency_key,description='Collect the reviewed invoice balance; verify creditor account before approval')
+            idempotency_key=idempotency_key, channel=origin_channel,
+            description='Collect the reviewed invoice balance; verify creditor account before approval')
 
     async def execute(self, request_id):
         request = self._request(request_id)
@@ -115,8 +137,7 @@ class CollectionSettlementService:
         for other in self.db.query(IrreversibleActionRequest).filter_by(organization_id=self.org_id,action_type='payment').all():
             if other.id == request.id or (other.payload or {}).get('operation') != OPERATION or other.payload.get('invoice_id') != invoice.id:
                 continue
-            if other.status in {'executing','executed','verified','verification_failed','failed'} and not self.db.query(CollectionPaymentAllocation).filter_by(
-                    organization_id=self.org_id,request_id=other.id).first():
+            if other.status in {'executing','executed','verified','verification_failed','failed'} and not self._request_fully_allocated(other):
                 raise ValueError('Another collection attempt has an unresolved provider outcome')
         self.actions.claim_approved_for_execution(request.id,action_type='payment',submitted_payload=request.payload)
         client = None
@@ -158,92 +179,50 @@ class CollectionSettlementService:
                 await client.close()
 
     def allocate(self, request_id, *, payment_id, bank_transaction_id, decided_by, reason):
+        """Compatibility entry point using the shared, reversible allocation path."""
         self._admin(decided_by)
         request = self._request(request_id)
-        invoice = self._invoice(request.payload['invoice_id'])
-        self._validate_invoice_identity(request, invoice)
-        prior = self.db.query(CollectionPaymentAllocation).filter_by(organization_id=self.org_id,request_id=request_id).first()
-        if prior:
-            if prior.payment_id != payment_id or prior.bank_transaction_id != bank_transaction_id:
-                raise ValueError('Request already allocated to different evidence')
-            return self.status(request_id)
-        if request.status not in {'executed','verified','verification_failed'}:
-            raise ValueError('No provider request evidence to settle')
-        if not reason or len(reason.strip()) < 10:
-            raise ValueError('Record the reviewed identity/reference evidence; amount and date are insufficient')
-        if invoice.status in {InvoiceStatus.DRAFT, InvoiceStatus.CANCELLED, InvoiceStatus.VOID}:
-            raise ValueError('Invoice no longer eligible for settlement; review the source change')
-        payment = self.db.query(Payment).filter_by(id=payment_id,organization_id=self.org_id).with_for_update().first()
-        bank = self.db.query(BankTransaction).filter_by(id=bank_transaction_id,organization_id=self.org_id).with_for_update().first()
-        if not payment or not bank:
-            raise ValueError('Payment or bank movement not found in organization')
-        raw = payment.raw_data or {}
-        doc_id = raw.get('document_id')
-        if payment.source != 'sumit' or payment.method != 'receipt' or raw.get('document_type') != 'receipt' or not doc_id or raw.get('status') not in {'open','closed','paid'}:
-            raise ValueError('A final, existing SUMIT receipt with source identity is required; document issuance remains pending')
-        if bank.is_provisional or bank.source != 'open_finance' or (bank.raw_data or {}).get('status') != 'BOOKED' or not bank.external_id:
-            raise ValueError('A non-provisional booked bank movement is required')
-        if payment.contact_id != invoice.contact_id or payment.invoice_id not in {None,invoice.id} or payment.bill_id:
-            raise ValueError('Receipt identity conflicts with the invoice customer or allocation')
-        if bank.is_reconciled and (bank.matched_entity_type,bank.matched_entity_id) not in {('payment',payment.id),('invoice',invoice.id)}:
-            raise ValueError('Bank movement already belongs to another reconciliation')
-        amount=money(request.payload['amount'])
-        if payment.amount != amount or bank.amount != amount or payment.currency != invoice.currency or bank.currency != invoice.currency:
-            raise ValueError('Receipt, booked inflow and approved amount/currency must agree; split/FX/fees require review')
-        duplicate=self.db.query(CollectionPaymentAllocation).filter(
-            (CollectionPaymentAllocation.payment_id==payment.id)|(CollectionPaymentAllocation.bank_transaction_id==bank.id)).first()
-        if duplicate:
-            raise ValueError('Receipt or bank movement already allocated')
-        linked_payments = self.db.query(Payment).filter_by(
-            organization_id=self.org_id, invoice_id=invoice.id,
-        ).all()
-        accounting_payments = [p for p in linked_payments if is_accounting_payment(p)]
-        if any(p.currency != invoice.currency for p in accounting_payments):
-            raise ValueError('Existing payment currency needs parity review before allocation')
-        linked_before = sum((p.amount for p in accounting_payments), Decimal(0))
-        # Already-paid source snapshots and already-linked receipts must not be
-        # subtracted again. If a source paid total cannot be explained, stop.
-        was_linked=payment.invoice_id == invoice.id
-        if invoice.paid_amount > linked_before:
-            raise ValueError('Existing paid total needs source-payment parity before allocation')
-        paid=max(invoice.paid_amount,linked_before+(Decimal(0) if was_linked else amount))
-        if paid > invoice.total:
-            raise ValueError('Payment would over-allocate invoice')
-        payment.invoice_id=invoice.id
-        invoice.paid_amount=paid;invoice.balance=invoice.total-paid
-        invoice.status = InvoiceStatus.PAID if invoice.balance == 0 else InvoiceStatus.PARTIALLY_PAID
-        bank.is_reconciled=True;bank.matched_entity_type='payment';bank.matched_entity_id=payment.id
-        bank.reconciliation_dispatch_status='unsupported'
-        bank.reconciliation_error='SUMIT has no reviewed bank reconciliation write-back/readback adapter'
-        row=CollectionPaymentAllocation(organization_id=self.org_id,request_id=request.id,invoice_id=invoice.id,
-             payment_id=payment.id,bank_transaction_id=bank.id,amount=amount,currency=invoice.currency,
-             document_external_id=str(doc_id),decided_by_user_id=decided_by.id,
-             evidence={'decision':'human_review','reason':reason.strip(),'request_reference':request.provider_reference,
-                       'payment_source':payment.source,'payment_external_id':payment.external_id,'payment_hash':payment.payload_hash or hashlib.sha256(json.dumps(raw,sort_keys=True,default=str).encode()).hexdigest(),
-                       'bank_source':bank.source,'bank_external_id':bank.external_id,'bank_hash':bank.payload_hash or hashlib.sha256(json.dumps(bank.raw_data,sort_keys=True,default=str).encode()).hexdigest(),
-                       'invoice_source':invoice.source,
-                       'payment_date':payment.payment_date.isoformat(), 'bank_date':bank.transaction_date.isoformat(),
-                       'document_type':'receipt', 'document_external_id':str(doc_id),
-                       'payment_observed_at':payment.created_at.isoformat(), 'bank_observed_at':bank.created_at.isoformat(),
-                       'invoice_external_id':invoice.external_id,'provider_status':(request.verification_evidence or {}).get('provider_status'),
-                       'observed_at':datetime.now(timezone.utc).isoformat()})
-        self.db.add(row)
-        try: self.db.commit()
-        except IntegrityError as exc:
-            self.db.rollback();raise ValueError('Receipt allocation conflicted with another execution') from exc
+        self.allocate_existing(invoice_id=request.payload['invoice_id'],
+            payment_id=payment_id, bank_transaction_id=bank_transaction_id,
+            amount=request.payload['amount'], request_id=request.id,
+            idempotency_key=f'collection-request:{request.id}',
+            decided_by=decided_by, reason=reason)
         return self.status(request_id)
 
     def status(self, request_id):
         request=self._request(request_id)
         invoice=self.db.query(Invoice).filter_by(id=request.payload['invoice_id'],organization_id=self.org_id).one()
-        allocation=self.db.query(CollectionPaymentAllocation).filter_by(organization_id=self.org_id,request_id=request_id).first()
+        from .collection_allocation_service import active_allocations, amount_allocated
+        allocation=active_allocations(self.db,self.org_id,request_id=request_id).first()
+        allocated=amount_allocated(self.db,self.org_id,request_id=request_id)
+        remaining=money(request.payload['amount'])-allocated
         evidence=request.verification_evidence or request.execution_result or {}
+        observation = None
+        if request.payload['payment_channel'] == 'open_finance' and request.provider_reference:
+            from ..models import ProviderEventReceipt
+            from .provider_event_service import FINAL_PAYMENT_STATUSES
+            event = self.db.query(ProviderEventReceipt).filter_by(organization_id=self.org_id,
+                source='open_finance', entity_type='payment', external_id=request.provider_reference,
+                disposition='applied').order_by(ProviderEventReceipt.id.desc()).first()
+            if event:
+                observed = payment_outcome(event.evidence)
+                previous_code = evidence.get('provider_status')
+                new_code = observed['provider_status']
+                conflict = previous_code in FINAL_PAYMENT_STATUSES and previous_code != new_code and (previous_code, new_code) != ('ACSC', 'ACCC')
+                observation = {'scope': 'authenticated_callback', 'event_receipt_id': event.id,
+                    'observed_at': event.observed_at.isoformat(), 'provider_status': new_code,
+                    'review_required': conflict}
+                if not conflict:
+                    evidence = {**evidence, **observed}
         return {'request_id':request.id,'organization_id':self.org_id,'invoice_id':invoice.id,
                 'invoice_external_id':invoice.external_id,'amount':request.payload['amount'],'currency':request.payload['currency'],
                 'channel':request.payload['payment_channel'],'approval_status':request.status,
+                'approval_payload':request.payload,
                 'request_verified':request.status=='verified','verification_scope':'payment_request',
                 'provider_reference':request.provider_reference,'provider_status':evidence.get('provider_status'),
-                'money_status':'received' if allocation else evidence.get('money_status','unknown'),
+                'provider_observation':observation,
+                'money_status':('received' if remaining == 0 else 'partially_received') if allocation else evidence.get('money_status','unknown'),
+                'allocated_amount':f'{allocated:.2f}', 'remaining_collection_amount':f'{remaining:.2f}',
                 'invoice_observed_at':invoice.updated_at.isoformat() if invoice.updated_at else None,
                 'request_created_at':request.proposed_at.isoformat() if request.proposed_at else None,
                 'derived_balance':True,

@@ -639,6 +639,11 @@ class AccountsPayableService:
             )
             if not pay:
                 continue
+            from .payment_evidence import accounting_payment_parts
+            parts = accounting_payment_parts(pay)
+            if not parts:
+                continue
+            pay = max(parts, key=lambda part: part.payment_date)
             considered += 1
             if b.issue_date:
                 days_to_pay.append((pay.payment_date - b.issue_date).days)

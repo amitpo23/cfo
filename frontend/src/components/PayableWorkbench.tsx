@@ -60,7 +60,7 @@ export default function PayableWorkbench({ currentUser }: { currentUser: Current
     } catch (e) { reportError(e); }
     finally { await load(); setBusy(false); }
   };
-  return <div dir="ltr" className="min-h-full bg-slate-50 p-4 text-slate-900 md:p-8"><div className="mx-auto max-w-6xl space-y-6">
+  return <div dir="ltr" className="min-h-full bg-slate-50 p-4 text-left text-slate-900 md:p-8"><div className="mx-auto max-w-6xl space-y-6">
     <header><h1 className="text-2xl font-bold">Supplier payments and bank evidence</h1><p className="mt-2 text-sm text-slate-600">Review the bill, beneficiary and withholding evidence before signing a payment request.</p><Link to="/ap" className="text-sm text-blue-700 underline">Supplier aging</Link></header>
     <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">Signing approval, bank authorization, money settlement and official SUMIT posting are separate steps. This workflow records local bank decisions; official posting remains pending.</p>
     {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-800">{error}</p>}

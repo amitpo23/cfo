@@ -64,7 +64,7 @@ export default function CollectionWorkbench({ currentUser }: { currentUser: Curr
   };
   const selectedInvoice = data?.invoices.find(i => i.id === Number(invoiceId));
 
-  return <div dir="ltr" className="min-h-full bg-slate-50 p-4 text-slate-900 md:p-8">
+  return <div dir="ltr" className="min-h-full bg-slate-50 p-4 text-left text-slate-900 md:p-8">
     <div className="mx-auto max-w-7xl space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div><h1 className="text-2xl font-bold">Collections and settlement evidence</h1>

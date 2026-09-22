@@ -50,7 +50,9 @@ with sync_playwright() as p:
             data['bills'][0]['balance'] = '600.00'; data['bank_movements'][0]['reconciled'] = True; response = {}
         elif url.endswith('/requests/5/reverse'):
             data['requests'][0]['settlement_history'][0]['status'] = 'reversed'
-            data['bills'][0]['balance'] = '1000.00'; response = {}
+            data['requests'][0].update(settled_amount='0.00', remaining_request_amount='600.00',
+                remaining_balance='1000.00', money_status='pending')
+            data['bills'][0]['balance'] = '1000.00'; data['bank_movements'][0]['reconciled'] = False; response = {}
         else:
             r.fulfill(status=503, json={'detail': 'Synthetic unavailable service'}); return
         r.fulfill(status=200, json=response)
@@ -75,6 +77,8 @@ with sync_playwright() as p:
     expect(page.get_by_text('Awaiting bank evidence: 200.00', exact=False)).to_be_visible()
     page.get_by_role('button', name='Reverse local settlement').click()
     expect(page.get_by_text('BANK-3 · 400.00 ILS · reversed')).to_be_visible()
+    expect(page.get_by_text('Settled locally: 0.00', exact=False)).to_be_visible()
+    expect(page.get_by_text('Awaiting bank evidence: 600.00', exact=False)).to_be_visible()
     assert len(writes) == 5
     page.screenshot(path=str(output / '2026-09-06-payable-workbench.png'), full_page=True)
     page.set_viewport_size({'width': 390, 'height': 844})

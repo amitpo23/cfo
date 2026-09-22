@@ -207,7 +207,7 @@ class ManualReconciliationService:
     def _assert_not_allocated(self, txn):
         from ..models import CollectionPaymentAllocation
         if self.db.query(CollectionPaymentAllocation).filter_by(
-            organization_id=self.organization_id, bank_transaction_id=txn.id).first():
+            organization_id=self.organization_id, bank_transaction_id=txn.id, status='active').first():
             raise ValueError("This bank movement has a reviewed receipt allocation; use a reversal review")
 
     def _load_transaction(self, txn_id: int) -> Optional[BankTransaction]:

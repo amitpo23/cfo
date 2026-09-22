@@ -55,6 +55,8 @@ const PaymentInterface = lazy(() => import('./components/PaymentInterface'));
 const ForecastingDashboard = lazy(() => import('./components/ForecastingDashboard'));
 const BankStatementDashboard = lazy(() => import('./components/BankStatementDashboard'));
 const BankInsightsDashboard = lazy(() => import('./components/BankInsightsDashboard'));
+const CollectionWorkbench = lazy(() => import('./components/CollectionWorkbench'));
+const PayableWorkbench = lazy(() => import('./components/PayableWorkbench'));
 const OfficeDashboard = lazy(() => import('./components/OfficeDashboard'));
 const AdminClientsDashboard = lazy(() => import('./components/AdminClientsDashboard'));
 const MoshkoObservabilityDashboard = lazy(() => import('./components/MoshkoObservabilityDashboard'));
@@ -80,7 +82,6 @@ const PolicyManagementDashboard = lazy(() => import('./components/PolicyManageme
 
 // New Financial Operations Components
 const InvoicesDashboard = lazy(() => import('./components/InvoicesDashboard'));
-const PaymentsDashboard = lazy(() => import('./components/PaymentsDashboard'));
 const AgreementCashFlowDashboard = lazy(() => import('./components/AgreementCashFlowDashboard'));
 const MasavDashboard = lazy(() => import('./components/MasavDashboard'));
 const InventoryDashboard = lazy(() => import('./components/InventoryDashboard'));
@@ -161,6 +162,8 @@ const navigationConfig = [
       { to: '/sumit-coverage', icon: ClipboardCheck, label: 'כיסוי מודולי SUMIT', description: 'מפת API: מוכן, חלקי, חסום' },
       { to: '/engine', icon: Cpu, label: 'המנוע המאחד', description: 'מרכז בקרה אחד מעל הכל — סטטוס, הנה"ח, סינתזה ודוחות' },
       { to: '/bank-insights', icon: Sparkles, label: 'תובנות בנק', description: 'אנומליות, מנויים, עמלות וחיסכון מדפי הבנק' },
+      { to: '/collections', icon: Sparkles, label: 'גבייה והתאמות', description: 'חשבוניות, בקשות גבייה, קבלות וראיות בנק' },
+      { to: '/supplier-payments', icon: Receipt, label: 'Supplier payments', description: 'Bills, approvals and bank evidence' },
       { to: '/office', icon: Building2, label: 'ניהול משרד', description: 'תיקי לקוחות, סנכרון רוחבי והתאמות נדרשות' },
       { to: '/admin-clients', icon: Database, label: 'אדמין — כל הלקוחות', description: 'תצוגת על של כל תיקי הלקוחות' },
       { to: '/admin-moshko', icon: Activity, label: 'ניטור מושקו', description: 'שיחות, כלים ועלויות LLM', superAdminOnly: true },
@@ -407,6 +410,8 @@ function App() {
                 <Route path="/reports" element={<ReportsDashboard />} />
                 <Route path="/bank" element={<BankStatementDashboard />} />
                 <Route path="/bank-insights" element={<BankInsightsDashboard />} />
+                <Route path="/collections" element={<CollectionWorkbench currentUser={currentUser} />} />
+                <Route path="/supplier-payments" element={<PayableWorkbench currentUser={currentUser} />} />
                 <Route path="/office" element={<OfficeDashboard />} />
                 <Route path="/admin-clients" element={<AdminClientsDashboard />} />
                 <Route path="/admin-moshko" element={<MoshkoObservabilityDashboard currentUser={currentUser} />} />
@@ -432,7 +437,7 @@ function App() {
 
                 {/* Financial Operations */}
                 <Route path="/invoices" element={<InvoicesDashboard />} />
-                <Route path="/payment-requests" element={<PaymentsDashboard />} />
+                <Route path="/payment-requests" element={<Navigate to="/collections" replace />} />
                 <Route path="/agreements" element={<AgreementCashFlowDashboard />} />
                 <Route path="/masav" element={<MasavDashboard darkMode={darkMode} />} />
                 <Route path="/inventory" element={<InventoryDashboard darkMode={darkMode} />} />

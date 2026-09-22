@@ -51,6 +51,7 @@ def main() -> int:
         "primary_keys": "מפתחות ראשיים חסרים/שונים",
         "foreign_keys": "מפתחות זרים חסרים",
         "unique_constraints": "אילוצי unique חסרים",
+        "incompatible_unique_constraints": "אילוצי unique ישנים החוסמים את מודל ההקצאות",
         "check_constraints": "אילוצי check חסרים",
         "indexes": "אינדקסים חסרים",
     }

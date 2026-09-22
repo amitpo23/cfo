@@ -525,6 +525,7 @@ async def create_payment_request(
     db: Session = Depends(get_db)
 ):
     """יצירת בקשת תשלום"""
+    require_durable_adapter()
     service = PaymentRequestService(db)
     
     allowed = None
@@ -554,6 +555,7 @@ async def send_payment_request(
     db: Session = Depends(get_db)
 ):
     """שליחת בקשת תשלום"""
+    require_durable_adapter()
     service = PaymentRequestService(db)
     return await service.send_payment_request(request_id, send_email, send_sms)
 
@@ -665,6 +667,7 @@ async def create_payment_demand(
     db: Session = Depends(get_db)
 ):
     """יצירת דרישת תשלום"""
+    require_durable_adapter()
     service = PaymentRequestService(db)
     return await service.create_payment_demand(
         customer_id=request.customer_id,
@@ -685,6 +688,7 @@ async def send_payment_demand(
     db: Session = Depends(get_db)
 ):
     """שליחת דרישת תשלום"""
+    require_durable_adapter()
     service = PaymentRequestService(db)
     return await service.send_payment_demand(demand_id, send_email, send_sms)
 
@@ -697,6 +701,7 @@ async def mark_demand_paid(
     db: Session = Depends(get_db)
 ):
     """סימון דרישה כשולמה"""
+    require_durable_adapter()
     service = PaymentRequestService(db)
     return await service.mark_demand_paid(
         demand_id,
