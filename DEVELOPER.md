@@ -86,7 +86,7 @@ cd frontend && npm run build && npm run lint
 | זיכרון מושקו | `src/cfo/services/moshko_memory.py` |
 | דשבורד תפעול | `frontend/.../MoshkoObservabilityDashboard.tsx` (‏`/admin-moshko`) |
 | ידע בזמן ריצה | `kb_loader.py` + `kb_lookup` |
-| ערוצים | Telegram (`telegram_webhook.py`), Web (`MoshkoSystemChat.tsx`) |
+| ערוצים | Web (`MoshkoSystemChat.tsx`), Telegram (`telegram_webhook.py`), Meta/WhatsApp (`whatsapp_webhook.py`, `whatsapp_gateway.py`); מצב הפעלה ב־`docs/MASTER_EXECUTION_PLAN.md` ומדריך חיבור ב־`docs/MOSHKO_ACTIVATION_RUNBOOK.md` |
 
 ## תיעוד — לאן ללכת
 
