@@ -1,14 +1,14 @@
 # Core Dependencies
 python-dotenv==1.0.0
-pydantic==2.5.0
+pydantic==2.13.5
 pydantic-settings==2.1.0
 email-validator==2.1.0.post1
 
 # Security & Authentication
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
-python-jose[cryptography]==3.3.0
-python-multipart==0.0.6
+python-jose[cryptography]==3.5.0
+python-multipart==0.0.32
 
 # Database
 sqlalchemy==2.0.23
@@ -16,9 +16,10 @@ alembic==1.13.1
 psycopg[binary]==3.2.9
 
 # API & Web
-fastapi==0.108.0
+fastapi==0.141.1
+starlette==1.6.0
 uvicorn[standard]==0.25.0
-httpx==0.26.0
+httpx==0.27.2
 
 # Data Processing
 pandas==2.1.4

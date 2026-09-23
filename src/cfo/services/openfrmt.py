@@ -215,7 +215,9 @@ def build_openfrmt(db, organization_id: int, date_from: date, date_to: date) -> 
 
     # ---- תקבולים (D120) ---------------------------------------------------------
     d120_lines: list[str] = []
-    for pay in db.query(Payment).filter(Payment.organization_id == organization_id).all():
+    from .payment_evidence import accounting_payment_parts
+    for pay in (part for row in db.query(Payment).filter(Payment.organization_id == organization_id).all()
+                for part in accounting_payment_parts(row)):
         if not _in_range(pay.payment_date):
             continue
         ref_number = None

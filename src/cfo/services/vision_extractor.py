@@ -36,8 +36,8 @@ EXTRACTION_PROMPT = """אתה מחלץ נתונים מצילום/סריקה של
   "net_amount": מספר — הסכום לפני מע"מ, או null,
   "invoice_number": "מספר החשבונית/קבלה או null",
   "expense_date": "תאריך המסמך בפורמט YYYY-MM-DD או null",
-  "currency": "ILS לרוב, או קוד מטבע אחר",
-  "document_type": "invoice / receipt / invoice_receipt / unknown",
+  "currency": "קוד המטבע לפי סימון מפורש במקור, או null אם לא זוהה",
+  "document_type": "tax_invoice / invoice / receipt / invoice_receipt / unknown",
   "confidence": מספר בין 0 ל-1 — עד כמה אתה בטוח בקריאה,
   "is_readable": true/false — האם המסמך קריא מספיק לחילוץ,
   "notes": "הערות חריגות (למשל: מסמך דהוי, חסר ח.פ) או null"
@@ -46,6 +46,7 @@ EXTRACTION_PROMPT = """אתה מחלץ נתונים מצילום/סריקה של
 כללים:
 - ח.פ ישראלי הוא 9 ספרות לרוב. החזר ספרות בלבד.
 - אל תמציא ערכים. אם שדה לא קריא — החזר null ו-confidence נמוך.
+- tax_invoice רק כשכתוב במקור חשבונית מס; חשבונית ללא ראיה זו היא invoice או unknown.
 - אם מע"מ לא מופיע במפורש אך יש סכום כולל וסכום לפני מע"מ — חשב את ההפרש.
 - אם המסמך לא קריא בכלל — is_readable=false."""
 
@@ -91,7 +92,7 @@ def _normalize(raw: Dict[str, Any]) -> Dict[str, Any]:
                            if raw.get("invoice_number") not in (None, "", "null") else None),
         "expense_date": (str(raw.get("expense_date")).strip()
                          if raw.get("expense_date") not in (None, "", "null") else None),
-        "currency": (raw.get("currency") or "ILS").strip() or "ILS",
+        "currency": (raw["currency"].strip().upper() or None) if isinstance(raw.get("currency"), str) else None,
         "document_type": (raw.get("document_type") or "unknown").strip(),
         "confidence": num(raw.get("confidence")) or 0.0,
         "is_readable": bool(raw.get("is_readable", True)),
@@ -267,7 +268,7 @@ async def _extract_openai(
 
 
 def _pdf_to_image(content: bytes):
-    """רסטור עמוד ראשון של PDF ל-PNG (נדרש למסלול OpenAI)."""
+    """Single-page PDF fallback; never silently discard later evidence pages."""
     try:
         import pypdfium2 as pdfium
     except ImportError as exc:
@@ -276,11 +277,20 @@ def _pdf_to_image(content: bytes):
             "pypdfium2), או השתמש ב-Anthropic שקורא PDF באופן טבעי."
         ) from exc
     import io
-
-    pdf = pdfium.PdfDocument(content)
-    page = pdf[0]
-    bitmap = page.render(scale=2.0)
-    pil_image = bitmap.to_pil()
-    buf = io.BytesIO()
-    pil_image.save(buf, format="PNG")
-    return buf.getvalue(), "image/png"
+    from contextlib import ExitStack, closing
+    from .pdf_runtime import PDFIUM_LOCK
+    try:
+        with PDFIUM_LOCK, ExitStack() as stack:
+            pdf = stack.enter_context(closing(pdfium.PdfDocument(content)))
+            if len(pdf) != 1:
+                raise VisionExtractionError('PDF מרובה עמודים דורש בדיקת מקור או מסלול הקורא את כל העמודים; לא חולץ עמוד חלקי')
+            page = stack.enter_context(closing(pdf[0]))
+            bitmap = stack.enter_context(closing(page.render(scale=2.0)))
+            pil_image = stack.enter_context(closing(bitmap.to_pil()))
+            buf = io.BytesIO()
+            pil_image.save(buf, format="PNG")
+            return buf.getvalue(), "image/png"
+    except VisionExtractionError:
+        raise
+    except Exception as exc:
+        raise VisionExtractionError('PDF אינו קריא במסלול חילוץ התמונה') from exc

@@ -188,7 +188,7 @@ async def unhandled_exception_handler(request, exc: Exception):
     ומוחזרת כ-500 כן — בלי להדליף פרטים פנימיים."""
     from ..services.system_health import record_system_error_best_effort
 
-    record_system_error_best_effort(path=str(getattr(request, "url", "")))
+    record_system_error_best_effort(path=request.url.path, exception=exc)
     return JSONResponse(
         status_code=500,
         content={
@@ -412,4 +412,6 @@ async def health_check():
     היום. עד 21/08 החזיר מחרוזת קבועה גם כשה-DB היה מת."""
     from ..services.system_health import health_snapshot
 
-    return health_snapshot()
+    snapshot = health_snapshot()
+    return JSONResponse(status_code=503 if snapshot["status"] == "unhealthy" else 200,
+                        content=snapshot)

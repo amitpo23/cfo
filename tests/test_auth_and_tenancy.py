@@ -37,10 +37,10 @@ def test_client_supplied_role_is_ignored(client, owner):
         "password": "secret123",
         "full_name": "Wannabe",
         "role": "super_admin",
-        "organization_id": 1,
     })
     assert resp.status_code == 201
-    assert resp.json()["user"]["role"] == "user"
+    assert resp.json()["user"]["role"] == "admin"
+    assert resp.json()["user"]["organization_id"] != owner["user"]["organization_id"]
 
 
 def test_second_user_gets_own_org(owner, tenant):

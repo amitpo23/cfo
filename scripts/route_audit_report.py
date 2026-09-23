@@ -19,12 +19,18 @@ _CONFIG_MARKERS = (
 )
 
 
-def classify(code, detail: str = "") -> str:
+def classify(code, detail: str = "", *, path: str = "") -> str:
     """OK | WARN | CONFIG | FAIL.
 
     CONFIG = 400/503 שנובע מהיעדר קרדנשלים/תצורה בסביבת הבדיקה. תקין, לא ממצא.
     FAIL   = כל השאר: 5xx, חריגות, ו-400 שאינו על תצורה (למשל ולידציה שבורה).
     """
+    known_gates = {
+        "/api/financial/ai/predict/revenue": "חיזוי מדדים דורש היסטוריית נתונים אמיתית שעדיין לא קיימת במערכת",
+        "/api/financial/ai/recommendations": "המלצות AI מנותחות-תיק עדיין לא הופעלו",
+    }
+    if code == 400 and path in known_gates and detail.startswith(known_gates[path]):
+        return "CONFIG"
     if code == 200:
         return "OK"
     if isinstance(code, int) and code in (401, 403, 404, 422):

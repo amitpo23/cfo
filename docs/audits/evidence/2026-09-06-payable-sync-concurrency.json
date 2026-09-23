@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "synthetic_only": true,
+  "provider_requests": 0,
+  "checks": [
+    "overlapping sync waits for reviewed bill row",
+    "stale source balance requires parity review",
+    "committed supplier balance retained"
+  ]
+}

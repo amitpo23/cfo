@@ -30,6 +30,10 @@ def test_sumit_dispatch_marks_unsupported_when_connector_has_no_writeback(client
         )
         db.add_all([inv, tx])
         db.commit()
+        # A recorded human decision, not amount/date similarity, authorizes
+        # local reconciliation. Official writeback remains unsupported.
+        from cfo.services.manual_reconciliation import ManualReconciliationService
+        ManualReconciliationService(db, org_id).match_transaction(tx.id, 'invoice', inv.id)
 
         result = client.post(
             "/api/open-finance/reconcile/sumit-dispatch",

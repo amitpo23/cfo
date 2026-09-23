@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "synthetic_only": true,
+  "checks": [
+    "request_uniqueness",
+    "payment_uniqueness",
+    "bank_uniqueness"
+  ],
+  "migration": "62b80d39f715"
+}

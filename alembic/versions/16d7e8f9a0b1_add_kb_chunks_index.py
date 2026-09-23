@@ -49,16 +49,21 @@ def upgrade() -> None:
     )
 
     if op.get_context().dialect.name == "postgresql":
-        try:
-            op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-            op.execute(
-                "CREATE INDEX IF NOT EXISTS ix_kb_chunk_content_trgm "
-                "ON kb_chunks USING gin (content gin_trgm_ops)"
-            )
-        except Exception:  # pragma: no cover - תלוי בהרשאות ה-role ב-Neon
-            # ההרחבה אינה זמינה ל-role הזה. האחזור עדיין עובד (ILIKE +
-            # דירוג בפייתון); רק איטי יותר על אינדקס גדול.
-            pass
+        # A PostgreSQL exception aborts its transaction even when Python catches
+        # it. A PL/pgSQL exception block supplies the required subtransaction,
+        # and works in both online migrations and generated offline SQL.
+        op.execute("""
+            DO $optional_trgm$
+            BEGIN
+                CREATE EXTENSION IF NOT EXISTS pg_trgm;
+                CREATE INDEX IF NOT EXISTS ix_kb_chunk_content_trgm
+                    ON kb_chunks USING gin (content gin_trgm_ops);
+            EXCEPTION
+                WHEN insufficient_privilege OR feature_not_supported OR undefined_file THEN
+                    RAISE NOTICE 'Optional pg_trgm unavailable; using ordinary text lookup';
+            END
+            $optional_trgm$;
+        """)
 
 
 def downgrade() -> None:

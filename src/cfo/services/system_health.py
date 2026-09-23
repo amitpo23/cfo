@@ -20,8 +20,13 @@ def _day_window(now: datetime) -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def record_system_error_best_effort(*, path: str = "") -> None:
+def record_system_error_best_effort(*, path: str = "", exception: Exception | None = None) -> None:
     """מונה כשל-מערכת אחד (חלון יומי, עמיד, חוצה-שרתים)."""
+    if exception is not None:
+        import traceback
+        frames = traceback.extract_tb(exception.__traceback__)
+        stack = " -> ".join(f"{frame.filename}:{frame.lineno} in {frame.name}" for frame in frames)
+        logger.error("unhandled %s on %s; stack: %s", type(exception).__name__, path, stack)
     try:
         from ..database import SessionLocal
         from .sumit_request_budget import SumitRequestLimiter
@@ -101,7 +106,7 @@ def health_snapshot() -> dict:
     status = "healthy"
     if database != "ok":
         status = "unhealthy"
-    elif errors_today > 0 or errors_today == -1:
+    elif errors_today > 0 or errors_today == -1 or revision in (None, "unknown"):
         status = "degraded"
     return {
         "status": status,

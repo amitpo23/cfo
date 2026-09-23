@@ -143,12 +143,14 @@ def build_events(
             ))
 
     if event_type in (None, "payment"):
-        for payment in db.query(Payment).filter(Payment.organization_id == organization_id).all():
+        from .payment_evidence import accounting_payment_parts
+        for payment in (part for row in db.query(Payment).filter(Payment.organization_id == organization_id).all()
+                        for part in accounting_payment_parts(row)):
             if not _in_period(payment.payment_date, start, end):
                 continue
             direction = "customer_receipt" if payment.invoice_id else "supplier_payment" if payment.bill_id else "unlinked_payment"
             events.append(AccountingEvent(
-                event_id=f"payment:{payment.id}",
+                event_id=f"payment:{payment.id}" + (f":bank:{payment.settlement_bank_id}" if hasattr(payment, 'settlement_bank_id') else ''),
                 organization_id=organization_id,
                 event_type="payment",
                 event_date=payment.payment_date,

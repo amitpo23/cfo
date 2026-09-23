@@ -4,7 +4,7 @@ from datetime import date
 from cfo.services.bank_reconciliation import reconcile, BankTxnLite, DocLite
 
 
-def test_inflow_matches_invoice_and_outflow_matches_bill():
+def test_inflow_and_outflow_propose_candidates_without_confirming():
     txns = [
         BankTxnLite(1, 1170.0, date(2026, 6, 5), "תשלום מאת אקמה"),
         BankTxnLite(2, -450.0, date(2026, 6, 7), "ספק כלשהו"),
@@ -14,11 +14,12 @@ def test_inflow_matches_invoice_and_outflow_matches_bill():
     bills = [DocLite("b1", "bill", 450.0, date(2026, 6, 6), "ספק כלשהו")]
 
     res = reconcile(txns, invoices, bills, [])
-    assert res["matched_count"] == 2
-    matched = {m["bank_txn_id"]: (m["entity_type"], m["entity_id"]) for m in res["matches"]}
+    assert res["matched_count"] == 0
+    assert res["candidate_count"] == 2
+    matched = {m["bank_txn_id"]: (m["entity_type"], m["entity_id"]) for m in res["candidates"]}
     assert matched[1] == ("invoice", "i1")
     assert matched[2] == ("bill", "b1")
-    assert res["unmatched_txns"] == [3]
+    assert res["unmatched_txns"] == [1, 2, 3]
 
 
 def test_amount_outside_tolerance_does_not_match():
@@ -29,23 +30,24 @@ def test_amount_outside_tolerance_does_not_match():
     assert res["unmatched_txns"] == [1]
 
 
-def test_each_document_matched_at_most_once():
+def test_equal_amount_candidates_do_not_claim_document():
     txns = [
         BankTxnLite(1, -200.0, date(2026, 6, 5), "ספק"),
         BankTxnLite(2, -200.0, date(2026, 6, 6), "ספק"),
     ]
     bills = [DocLite("b1", "bill", 200.0, date(2026, 6, 5), "ספק")]
     res = reconcile(txns, [], bills, [])
-    # Only one txn can claim the single bill.
-    assert res["matched_count"] == 1
-    assert len(res["unmatched_txns"]) == 1
+    # Both remain review candidates; neither claims the document.
+    assert res["matched_count"] == 0
+    assert res["candidate_count"] == 2
+    assert len(res["unmatched_txns"]) == 2
 
 
 def test_score_capped_at_one():
     txns = [BankTxnLite(1, 1000.0, date(2026, 6, 5), "אקמה בעמ")]
     invoices = [DocLite("i1", "invoice", 1000.0, date(2026, 6, 5), "אקמה בעמ")]
     res = reconcile(txns, invoices, [], [])
-    assert res["matches"][0]["score"] <= 1.0
+    assert res["candidates"][0]["score"] <= 1.0
 
 
 def test_unmatched_txn_details_carries_is_provisional_additively():

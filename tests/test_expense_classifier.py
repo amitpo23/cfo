@@ -142,9 +142,9 @@ def test_bulk_classify_endpoint(client, acc):
     assert accountant and accountant[0]["category"] == "professional"
 
 
-def test_file_all_without_sumit(client, acc):
-    # אין חיבור SUMIT -> כל ניסיון נכשל נקי, מדווח failed (לא קריסה)
+def test_file_all_is_permanently_disabled(client, acc):
+    # תיוק גורף בלי סקירה פר-פריט בוטל במכוון (אפס אוטונומיה בבלתי-הפיך,
+    # CLAUDE.md) — ה-route מסרב תמיד עם 409, גם כשיש/אין חיבור SUMIT.
     r = client.post("/api/expenses/file-all", headers=acc["headers"])
-    assert r.status_code == 200, r.text
-    d = r.json()["data"]
-    assert d["filed"] == 0 and d["failed"] >= 1
+    assert r.status_code == 409, r.text
+    assert "reviewed batch" in r.json()["detail"]

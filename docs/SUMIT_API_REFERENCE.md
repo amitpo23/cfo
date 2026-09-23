@@ -1209,3 +1209,18 @@ plan's scope — most of it doesn't exist as specified:
 - **Chargeback alerts**: no chargeback-specific endpoint or webhook trigger type (`/triggers/triggers/subscribe/`'s `TriggerType` is generic CRM-entity CreateOrUpdate/Create/Update/Archive/Delete, nothing payment-specific). The only signal is `Payment.Status`/`Payment.ValidPayment` from `/billing/payments/list/`, and `Status` is undocumented free text — any detection would be a heuristic guess without real chargeback data to validate against.
 
 **Bug found while auditing 8.3**: `POST /api/payments/recurring/{id}/charge` routed directly to `charge_recurring()` — a documented Not-Supported Stub that always raises a bare `Exception` (not `SumitAPIError`), so no handler caught it and any call would have leaked an unhandled 500 in production. Removed the route (kept the stub method, same as every other Not-Supported Stub — documented, never routed).
+
+## Source-bound expense draft contract — local review, 7 September 2026
+
+The latest repository snapshot is `sumit_swagger_v1_2026-08-19.json`.
+`/accounting/documents/addexpense/` references
+`Accounting_Documents_AddExpense_Request`, including `ExpenseNumber`,
+`ExpenseFile`, `ExpenseFilename`, `Supplier` and `IsDraft`; the supplier object
+supports `CompanyNumber`. Rezef's reviewed-source workflow now preserves these
+fields and requests `IsDraft=true`. `DocumentID` in the response is saved as an
+acknowledgement (`submitted`), with independent document/books verification still
+required. The proposal binds the saved destination company and connection; it does
+not expose credentials. No cancellation, move-to-books or live verification was
+performed by this development package. See the September 7 implementation audit
+and `tests/test_expense_filing_workflow.py`. This is a bounded workflow contract,
+not a new endpoint-count or coverage claim.

@@ -1,0 +1,20 @@
+{
+  "base_commit": "260706bad7f1f3c081e607efbfa2debb56163775",
+  "backend": {
+    "files": 207,
+    "lines": 81687
+  },
+  "frontend": {
+    "files": 63,
+    "lines": 24737
+  },
+  "test_sources": {
+    "files": 296,
+    "lines": 57960
+  },
+  "alembic_migrations": {
+    "files": 58,
+    "lines": 3714
+  },
+  "note": "Source inventory is not a count of collected tests or proof of operational capability."
+}

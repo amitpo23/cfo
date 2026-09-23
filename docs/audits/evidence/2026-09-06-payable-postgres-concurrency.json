@@ -1,0 +1,11 @@
+{
+  "status": "passed",
+  "synthetic_only": true,
+  "provider_requests": 0,
+  "checks": [
+    "concurrent bank capacity enforced",
+    "same-bank replay returns one payment",
+    "reversal preserves original settlement history"
+  ],
+  "official_books_verified": false
+}

@@ -2,7 +2,7 @@
 Payments API routes
 Handles payments, recurring payments, credit card transactions, and billing
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -24,6 +24,9 @@ from ..dependencies import (
     get_sumit_integration,
     require_admin,
 )
+from ..approved_actions import execute_approved_action
+
+from ..approved_actions import approved_provider_action, require_durable_adapter
 
 router = APIRouter()
 
@@ -33,12 +36,24 @@ router = APIRouter()
 @router.post("/charge", response_model=PaymentResponse)
 async def charge_customer(
     charge: ChargeRequest,
+    response: Response,
+    approval_id: Optional[int] = Header(None, alias="X-Rezef-Approval-Id"),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db),
     current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
 ):
     """Charge customer"""
-    async with sumit:
-        return await sumit.charge_customer(charge)
+    if charge.card is not None:
+        raise HTTPException(400, "Use a stored payment method; raw card data cannot enter an approval")
+    async def execute(payload):
+        async with sumit:
+            return await sumit.charge_customer(ChargeRequest.model_validate(payload))
+    return await execute_approved_action(
+        db=db, org_id=org_id, approval_id=approval_id, response=response,
+        action_type="payment", payload={**charge.model_dump(mode="json", exclude_none=True), "operation":"sumit.payment.charge"},
+        execute=execute, reference=lambda result: result.payment_id,
+    )
 
 
 @router.get("/{payment_id}", response_model=PaymentResponse)
@@ -87,6 +102,7 @@ async def get_payment_methods(
 
 
 @router.post("/methods/set")
+@approved_provider_action('mandate', 'payments.set_payment_method')
 async def set_payment_method(
     customer_id: str = Query(...),
     payment_method_id: str = Query(...),
@@ -100,6 +116,7 @@ async def set_payment_method(
 
 
 @router.post("/methods/remove")
+@approved_provider_action('mandate', 'payments.remove_payment_method')
 async def remove_payment_method(
     customer_id: str = Query(...),
     payment_method_id: str = Query(...),
@@ -149,15 +166,27 @@ async def list_customer_recurring(
 @router.post("/recurring/{recurring_id}/cancel")
 async def cancel_recurring(
     recurring_id: str,
+    response: Response,
+    approval_id: Optional[int] = Header(None, alias="X-Rezef-Approval-Id"),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db),
     current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
 ):
     """Cancel recurring payment"""
-    async with sumit:
-        return await sumit.cancel_recurring(recurring_id)
+    async def execute(payload):
+        async with sumit:
+            return await sumit.cancel_recurring(payload["recurring_id"])
+    return await execute_approved_action(
+        db=db, org_id=org_id, approval_id=approval_id, response=response,
+        action_type="recurring_cancel",
+        payload={"operation":"sumit.recurring.cancel", "recurring_id":recurring_id},
+        execute=execute, reference=lambda result: recurring_id,
+    )
 
 
 @router.put("/recurring/{recurring_id}", response_model=RecurringPaymentResponse)
+@approved_provider_action('mandate', 'payments.update_recurring', target_key='recurring_id')
 async def update_recurring(
     recurring_id: str,
     updates: RecurringPaymentRequest,
@@ -174,12 +203,22 @@ async def update_recurring(
 @router.post("/terminal/transaction", response_model=TransactionResponse)
 async def create_card_transaction(
     transaction: TransactionRequest,
+    response: Response,
+    approval_id: Optional[int] = Header(None, alias="X-Rezef-Approval-Id"),
+    org_id: int = Depends(get_current_org_id),
+    db: Session = Depends(get_db),
     current_user: dict = Depends(require_admin),
     sumit: SumitIntegration = Depends(get_sumit_integration),
 ):
     """Create credit card transaction"""
-    async with sumit:
-        return await sumit.create_card_transaction(transaction)
+    async def execute(payload):
+        async with sumit:
+            return await sumit.create_card_transaction(TransactionRequest.model_validate(payload))
+    return await execute_approved_action(
+        db=db, org_id=org_id, approval_id=approval_id, response=response,
+        action_type="payment", payload={**transaction.model_dump(mode="json", exclude_none=True), "operation":"sumit.terminal.transaction"},
+        execute=execute, reference=lambda result: result.transaction_id,
+    )
 
 
 @router.get("/terminal/transaction/{transaction_id}", response_model=TransactionResponse)
@@ -226,6 +265,7 @@ async def process_billing_transactions(
     sumit: SumitIntegration = Depends(get_sumit_integration),
 ):
     """Process billing transactions"""
+    require_durable_adapter()
     async with sumit:
         return await sumit.process_billing_transactions(transaction_ids)
 

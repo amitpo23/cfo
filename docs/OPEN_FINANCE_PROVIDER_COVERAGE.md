@@ -1,5 +1,14 @@
 # Open Finance Provider API — Coverage Map
 
+> **Current interpretation — 6 September 2026:** the counts below are a historical
+> adapter inventory, not verified business-flow coverage. The current product split,
+> public indexes and unresolved routes are documented in
+> [the public contract review](audits/2026-09-06-provider-contract-review.md) and
+> [business evidence matrix](provider_business_evidence.json), under
+> [MASTER_EXECUTION_PLAN.md](MASTER_EXECUTION_PLAN.md). Financy does not inherit all
+> platform routes. Automatic authentication retry now applies only to safe reads;
+> payment writes are not replayed after an ambiguous result.
+
 **Generated:** 2026-06-28  
 **Client source:** `src/cfo/services/open_finance_client.py`  
 **Provider catalog source:** `docs/open-finance/API_REFERENCE.md` (local authoritative reference) + `https://docs.open-finance.ai/llms.txt` (live index, spot-verified)  

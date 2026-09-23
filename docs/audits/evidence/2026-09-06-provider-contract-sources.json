@@ -1,0 +1,84 @@
+{
+  "status": "reviewed_public_subset",
+  "sources": [
+    {
+      "url": "https://docs-financy.open-finance.ai/reference/refreshconnections.md",
+      "checked_on": "2026-09-06",
+      "sha256": "71f2bec4c71d33cfbb38d79fbbc137e0faa8d6d074696009c4107c520c4e5dcd",
+      "bytes": 8029,
+      "scope": "public documentation only; no provider API call"
+    },
+    {
+      "url": "https://docs-financy.open-finance.ai/docs/transactions.md",
+      "checked_on": "2026-09-06",
+      "sha256": "0a63404cedd39543b7562bfec585761d4b921de4dc748bfbbd20639d1a7b69d7",
+      "bytes": 7362,
+      "scope": "public documentation only; no provider API call"
+    },
+    {
+      "url": "https://docs-financy.open-finance.ai/docs/payment-statuses.md",
+      "checked_on": "2026-09-06",
+      "sha256": "fcf73600b036e87ac070a20509b85ff9608ed61cd4c3abc7054dc5b344ef231a",
+      "bytes": 4852,
+      "scope": "public documentation only; no provider API call"
+    },
+    {
+      "url": "https://docs-financy.open-finance.ai/docs/payment-webhooks.md",
+      "checked_on": "2026-09-06",
+      "sha256": "565ea29d59d2ad2b7274bb61162c93807fda83344226c7e224589369804bd19a",
+      "bytes": 5812,
+      "scope": "public documentation only; no provider API call"
+    },
+    {
+      "url": "https://docs.open-finance.ai/docs/webhooks-event-types.md",
+      "checked_on": "2026-09-06",
+      "sha256": "de78938599e020eecf760681dc4c4a0b2ba4bc072ec44b3c12b6ae11f0477b10",
+      "bytes": 1172,
+      "scope": "public documentation only; no provider API call"
+    },
+    {
+      "url": "https://docs.open-finance.ai/docs/periodic-payments-sandbox.md",
+      "checked_on": "2026-09-06",
+      "sha256": "a2cd1518140abd359fe95cb8186e593b05eab6a5f5553ad71b291f7ea0ec9e20",
+      "bytes": 14579,
+      "scope": "public documentation only; no provider API call"
+    },
+    {
+      "url": "https://docs.open-finance.ai/docs/bulk-payment-initialization.md",
+      "checked_on": "2026-09-06",
+      "sha256": "bbceea72a22b9e3f9881a194c45f109738e28aefd05e66304dd9319568be1f15",
+      "bytes": 12499,
+      "scope": "public documentation only; no provider API call"
+    },
+    {
+      "url": "https://docs.open-finance.ai/reference/delete_v2-mandates-resourceid.md",
+      "checked_on": "2026-09-06",
+      "sha256": "90589c476f2633fd1e9a76134d8170ff190f429261e15e0b14a917efd2e30f50",
+      "bytes": 6647,
+      "scope": "public documentation only; no provider API call"
+    },
+    {
+      "url": "https://docs.open-finance.ai/reference/post_payments-paymentid-refund.md",
+      "checked_on": "2026-09-06",
+      "sha256": "f6dda5794807922ef46b021ad97410ce9813344432f16fb453076f8f2315daf9",
+      "bytes": 6233,
+      "scope": "public documentation only; no provider API call"
+    },
+    {
+      "url": "https://docs-financy.open-finance.ai/docs/accounts-balances.md",
+      "checked_on": "2026-09-06",
+      "sha256": "97a4346628dab205ecd01634a07cf5670edb7eef3238463b7614225c17104330",
+      "bytes": 7710,
+      "scope": "public documentation only; no provider API call"
+    },
+    {
+      "url": "https://docs-financy.open-finance.ai/docs/errors.md",
+      "checked_on": "2026-09-06",
+      "sha256": "8261fa8060099b1e72b0f7c996897638710d16d9db64d5dad0eb77e47d5c71e5",
+      "bytes": 10384,
+      "scope": "public documentation only; no provider API call"
+    }
+  ],
+  "review": "docs/audits/2026-09-06-provider-contract-review.md",
+  "complete_provider_inventory": false
+}

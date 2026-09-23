@@ -17,6 +17,26 @@ from sqlalchemy.orm import declarative_base, relationship
 Base = declarative_base()
 
 
+class BillingCheckout(Base):
+    """Single-use registration entitlement; consumed atomically with the tenant."""
+    __tablename__ = "billing_checkouts"
+    session_id = Column(String(255), primary_key=True)
+    email = Column(String(320), nullable=True)
+    selected_plan = Column(String(64), nullable=False)
+    payment_status = Column(String(32), nullable=False)
+    subscription_id = Column(String(255), nullable=True, unique=True)
+    webhook_created = Column(Integer, nullable=False, default=0, server_default="0")
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class BillingWebhookReceipt(Base):
+    __tablename__ = "billing_webhook_receipts"
+    event_id = Column(String(255), primary_key=True)
+    payload_sha256 = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class UserRole(str, Enum):
     """תפקידי משתמש"""
     SUPER_ADMIN = "super_admin"  # מנהל על
@@ -548,6 +568,8 @@ class Account(Base):
     # opaque per-bank consent id.  NULL for manual/SUMIT accounts and for old
     # observations that predate the mapping (honest-null; never guessed).
     open_finance_connection_id = Column(String(255), nullable=True)
+    # Exact accountNumber from the provider, independent of resource external_id.
+    provider_account_number = Column(String(255), nullable=True)
     # Source chart-of-accounts provenance.  These columns intentionally live on
     # Account (the existing connector chart data plane), not ExpenseCategory and
     # not a parallel ledger-account table.
@@ -749,6 +771,30 @@ class OpenFinancePayment(Base):
 
     __table_args__ = (
         Index("ix_ofpayment_org_ext", "organization_id", "external_payment_id", unique=True),
+    )
+
+
+class ProviderEventReceipt(Base):
+    """Append-only, tenant-scoped evidence of a distinct authenticated event.
+
+    A receipt records an observation, never proof of settlement or official books.
+    Fingerprints suppress exact redelivery across workers without losing conflicts.
+    """
+    __tablename__ = 'provider_event_receipts'
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey('organizations.id'), nullable=False)
+    source = Column(String(50), nullable=False)
+    entity_type = Column(String(40), nullable=False)
+    external_id = Column(String(255), nullable=False)
+    fingerprint = Column(String(64), nullable=False)
+    disposition = Column(String(40), nullable=False)
+    evidence = Column(JSON, nullable=False)
+    observed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index('ix_provider_event_org_fingerprint', 'organization_id', 'source', 'fingerprint', unique=True),
+        Index('ix_provider_event_org_entity', 'organization_id', 'source', 'entity_type', 'external_id'),
     )
 
 
@@ -1259,6 +1305,47 @@ class Payment(Base):
     )
 
 
+class CollectionPaymentAllocation(Base):
+    """An amount-bearing reviewed edge between receipt, invoice and bank.
+
+    Provider records stay in Payment/Invoice/BankTransaction; this is their
+    evidence-bearing business relationship, not another ledger or payment.
+    """
+    __tablename__ = "collection_payment_allocations"
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    request_id = Column(Integer, ForeignKey("irreversible_action_requests.id"), nullable=True)
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False)
+    payment_id = Column(Integer, ForeignKey("payments.id"), nullable=False)
+    bank_transaction_id = Column(Integer, ForeignKey("bank_transactions.id"), nullable=False)
+    idempotency_key = Column(String(255), nullable=True)
+    status = Column(String(20), nullable=False, default='active', server_default='active')
+    amount = Column(Numeric(12, 2), nullable=False)
+    currency = Column(String(10), nullable=False)
+    document_external_id = Column(String(255), nullable=False)
+    decided_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    evidence = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        Index("ix_collection_allocation_org_invoice", "organization_id", "invoice_id"),
+        Index('ix_collection_allocation_org_key', 'organization_id', 'idempotency_key', unique=True),
+        Index('ix_collection_allocation_org_payment', 'organization_id', 'payment_id'),
+        Index('ix_collection_allocation_org_bank', 'organization_id', 'bank_transaction_id'),
+    )
+
+
+class CollectionAllocationReversal(Base):
+    """An explicit local decision reversal; original evidence is retained."""
+    __tablename__ = 'collection_allocation_reversals'
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey('organizations.id'), nullable=False)
+    allocation_id = Column(Integer, ForeignKey('collection_payment_allocations.id'), nullable=False, unique=True)
+    decided_by_user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    evidence = Column(JSON, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    __table_args__ = (Index('ix_collection_reversal_org', 'organization_id'),)
+
+
 class CollectionReminder(Base):
     """תיעוד תזכורת גבייה שנשלחה — מצב להסלמה ומניעת ספאם."""
     __tablename__ = "collection_reminders"
@@ -1562,6 +1649,60 @@ class Expense(Base):
             postgresql_where=text("external_id IS NOT NULL"),
             sqlite_where=text("external_id IS NOT NULL"),
         ),
+    )
+
+
+class DocumentIntake(Base):
+    """Original source and durable extraction work, not an accounting expense."""
+    __tablename__ = "document_intakes"
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    content_base64 = Column(Text, nullable=False)
+    media_type = Column(String(100), nullable=False)
+    filename = Column(String(255), nullable=False)
+    sources = Column(JSON, nullable=False, default=list)
+    status = Column(String(30), nullable=False, default="queued")
+    attempts = Column(Integer, nullable=False, default=0)
+    version = Column(Integer, nullable=False, default=1)
+    result = Column(JSON, nullable=True)
+    expense_id = Column(Integer, ForeignKey("expenses.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "content_hash", name="uq_document_intake_org_hash"),
+        Index("ix_document_intake_org_status", "organization_id", "status"),
+    )
+
+
+class DocumentDerivation(Base):
+    """Immutable page recipe and outcome; original source bytes remain in DocumentIntake."""
+    __tablename__ = "document_derivations"
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    recipe_hash = Column(String(64), nullable=False)
+    recipe = Column(JSON, nullable=False)
+    outputs = Column(JSON, nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    reason = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__ = (UniqueConstraint("organization_id", "recipe_hash", name="uq_document_derivation_recipe"),)
+
+
+class ReportRecord(Base):
+    """Organization-local report definitions, schedules, execution and file evidence."""
+    __tablename__ = "report_records"
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    kind = Column(String(20), nullable=False)
+    reference = Column(String(255), nullable=False)
+    payload = Column(JSON, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    deleted = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("organization_id", "kind", "reference", name="uq_report_record_org_kind_ref"),
     )
 
 

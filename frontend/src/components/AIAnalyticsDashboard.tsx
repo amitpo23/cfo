@@ -88,13 +88,15 @@ export const AIAnalyticsDashboard: React.FC = () => {
   });
 
   // Fetch risks
-  const { data: risks } = useQuery({
+  const { data: riskResponse } = useQuery({
     queryKey: ['ai-risks'],
     queryFn: async () => {
-      const response = await api.get('/api/financial/ai/risks') as { data: FinancialRisk[] };
-      return response.data;
+      const response = await api.get('/api/financial/ai/risks') as { data: FinancialRisk[]; unavailable_assessments?: string[] };
+      return response;
     },
   });
+
+  const risks = riskResponse?.data;
 
   // Fetch insights
   const { data: insights, isLoading: loadingInsights } = useQuery({
@@ -422,6 +424,7 @@ export const AIAnalyticsDashboard: React.FC = () => {
           </div>
 
           {/* Risk Cards */}
+          {riskResponse?.unavailable_assessments?.map((reason) => <p key={reason} role="note" className="p-4 bg-amber-50 text-amber-900 rounded-lg">{reason}</p>)}
           {risks?.map((risk) => (
             <div
               key={risk.risk_id}

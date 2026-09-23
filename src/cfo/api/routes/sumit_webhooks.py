@@ -35,7 +35,9 @@ async def sumit_webhook(
 ):
     """Receive SUMIT trigger events (document created/updated) and run a
     targeted delta sync. No signature scheme beyond the shared secret."""
-    if settings.sumit_webhook_secret and not secrets.compare_digest(
+    if not settings.sumit_webhook_secret:
+        raise HTTPException(503, "Webhook authentication is not configured")
+    if not secrets.compare_digest(
         x_webhook_secret or "", settings.sumit_webhook_secret,
     ):
         raise HTTPException(401, "invalid webhook credentials")
@@ -44,6 +46,9 @@ async def sumit_webhook(
         event = await request.json()
     except Exception:  # noqa: BLE001
         raise HTTPException(400, "invalid JSON")
+
+    if not isinstance(event, dict) or not event:
+        raise HTTPException(400, "An event object is required")
 
     result = await handle_sumit_trigger_event(db, event)
     logger.info("SUMIT webhook received: keys=%s", list(event.keys()) if isinstance(event, dict) else type(event))

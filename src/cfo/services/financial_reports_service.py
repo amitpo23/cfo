@@ -66,6 +66,10 @@ class ProfitLossReport:
     # כלכלית כששני הצדדים אינם מסונכרנים באותה מידה — ר'
     # `_coverage_disclosure`. אופציונלי כדי לא לשבור קוראים קיימים.
     coverage: Optional[Dict] = None
+    derived: bool = True
+    disclaimer: str = ledger_service.DISCLAIMER
+    includes_imported: bool = False
+    imported_warning_he: Optional[str] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -134,11 +138,11 @@ class BalanceSheetReport:
 class CashFlowProjectionItem:
     """פריט בתזרים חזוי"""
     month: str
-    opening_balance: float
+    opening_balance: Optional[float]
     inflows: float
     outflows: float
     net_flow: float
-    closing_balance: float
+    closing_balance: Optional[float]
     inflow_details: Dict[str, float]
     outflow_details: Dict[str, float]
 
@@ -151,21 +155,28 @@ class CashFlowProjectionReport:
     company_name: str
     prepared_by: str
     # נתונים היסטוריים
-    historical_average_inflows: float
-    historical_average_outflows: float
+    historical_average_inflows: Optional[float]
+    historical_average_outflows: Optional[float]
     # תחזית
     projections: List[CashFlowProjectionItem]
     # סיכום
     total_projected_inflows: float
     total_projected_outflows: float
     total_net_flow: float
-    ending_balance: float
-    minimum_balance: float
-    maximum_balance: float
+    ending_balance: Optional[float]
+    minimum_balance: Optional[float]
+    maximum_balance: Optional[float]
     # מדדים
-    average_monthly_burn: float
-    runway_months: float
+    average_monthly_burn: Optional[float]
+    runway_months: Optional[float]
     
+    balance_basis: str = "unavailable"
+    balance_reason: Optional[str] = None
+    assumptions: Optional[List[str]] = None
+    data_sources: Optional[List[str]] = None
+    excluded_no_due_date: Optional[Dict[str, int]] = None
+    message: Optional[str] = None
+
     def to_dict(self) -> Dict:
         return asdict(self)
 
@@ -311,30 +322,13 @@ class FinancialReportsService:
         הפקת דוח רווח והפסד
         Generate Profit & Loss Statement
         """
-        # שליפת כל העסקאות בתקופה
-        # Transaction.transaction_date is DateTime; report bounds are dates.
-        # Half-open intervals include every timestamp on end_date on both
-        # SQLite and PostgreSQL, including midnight on the first of a month.
-        end_exclusive = end_date + timedelta(days=1)
-        transactions = self.db.query(Transaction).filter(
-            Transaction.organization_id == organization_id,
-            Transaction.transaction_date >= start_date,
-            Transaction.transaction_date < end_exclusive,
-        ).all()
+        if end_date < start_date:
+            raise ValueError("end_date must be on or after start_date")
         
         # חישוב תקופה קודמת להשוואה
         period_days = (end_date - start_date).days
         prev_end = start_date - timedelta(days=1)
         prev_start = prev_end - timedelta(days=period_days)
-        
-        prev_transactions = []
-        if compare_previous:
-            prev_end_exclusive = prev_end + timedelta(days=1)
-            prev_transactions = self.db.query(Transaction).filter(
-                Transaction.organization_id == organization_id,
-                Transaction.transaction_date >= prev_start,
-                Transaction.transaction_date < prev_end_exclusive,
-            ).all()
         
         # ארגון נתונים לפי קטגוריה — מקור אמת: שכבת ה-ledger (Invoice/Bill/Expense)
         # בסכומי נטו מפוצלי-מע"מ. טבלת Transaction מנופחת (כולל מע"מ) ולא משמשת כאן.
@@ -413,6 +407,11 @@ class FinancialReportsService:
             total_expenses=float(total_expenses),
             coverage=self._coverage_disclosure(
                 organization_id, start_date, end_date),
+            includes_imported=self._report_includes_imported(organization_id, start_date, end_date),
+            imported_warning_he=(
+                "Includes imported accounting entries for analysis only; do not refile previously reported periods."
+                if self._report_includes_imported(organization_id, start_date, end_date) else None
+            ),
         )
     
     def generate_balance_sheet(
@@ -538,127 +537,68 @@ class FinancialReportsService:
         )
     
     def generate_cash_flow_projection(
-        self,
-        organization_id: int,
-        months: int = 12,
-        opening_balance: Optional[float] = None
+        self, organization_id: int, months: int = 12,
+        opening_balance: Optional[float] = None, as_of_date: Optional[date] = None,
     ) -> CashFlowProjectionReport:
-        """
-        הפקת תזרים מזומנים חזוי לבנק
-        Generate Projected Cash Flow for Bank
-        """
-        # שליפת נתונים היסטוריים (6 חודשים אחרונים)
-        end_date = date.today()
-        start_date = end_date - timedelta(days=180)
-        
-        # מקור: מסמכי ה-ledger בסכומי ברוטו (total) — תזרים עוסק בתנועת מזומן
-        # בפועל, הכוללת מע"מ. (P&L לעומת זאת משתמש בנטו.)
-        (monthly_income, monthly_expense,
-         income_by_category, expense_by_category) = self._ledger_cash_aggregates(
-            organization_id, start_date, end_date)
-
-        # ממוצעים
-        avg_income = sum(monthly_income.values()) / max(len(monthly_income), 1)
-        avg_expense = sum(monthly_expense.values()) / max(len(monthly_expense), 1)
-        
-        # נרמול לחודש
-        num_months = max(len(monthly_income), 1)
-        monthly_income_detail = {k: v / num_months for k, v in income_by_category.items()}
-        monthly_expense_detail = {k: v / num_months for k, v in expense_by_category.items()}
-        
-        # יתרת פתיחה
-        if opening_balance is None:
-            account = self.db.query(Account).filter(
-                Account.organization_id == organization_id,
-                Account.account_type == AccountType.ASSET
-            ).first()
-            opening_balance = float(account.balance) if account else 0
-        
-        # יצירת תחזית
-        projections = []
-        current_balance = opening_balance
-        min_balance = current_balance
-        max_balance = current_balance
-        
-        # גורמי עונתיות — מחושב מהכנסות ה-ledger החודשיות
-        seasonality = self._seasonality_from_monthly(monthly_income)
-        
-        for i in range(months):
-            proj_date = date.today() + timedelta(days=30 * (i + 1))
-            month_name = proj_date.strftime('%Y-%m')
-            month_num = proj_date.month
-            
-            # התאמת עונתיות
-            season_factor = seasonality.get(month_num, 1.0)
-            
-            # חיזוי כניסות ויציאות — דטרמיניסטי, ללא רעש אקראי מלאכותי.
-            projected_inflows = avg_income * season_factor
-            projected_outflows = avg_expense
-
-            net_flow = projected_inflows - projected_outflows
-            closing = current_balance + net_flow
-            
-            # פירוט
-            inflow_details = {
-                self.CATEGORY_HEBREW.get(k, k): v * season_factor
-                for k, v in monthly_income_detail.items()
-            }
-            outflow_details = {
-                self.CATEGORY_HEBREW.get(k, k): v
-                for k, v in monthly_expense_detail.items()
-            }
-            
-            projections.append(CashFlowProjectionItem(
-                month=month_name,
-                opening_balance=round(current_balance, 2),
-                inflows=round(projected_inflows, 2),
-                outflows=round(projected_outflows, 2),
-                net_flow=round(net_flow, 2),
-                closing_balance=round(closing, 2),
-                inflow_details={k: round(v, 2) for k, v in inflow_details.items()},
-                outflow_details={k: round(v, 2) for k, v in outflow_details.items()}
-            ))
-            
-            min_balance = min(min_balance, closing)
-            max_balance = max(max_balance, closing)
-            current_balance = closing
-        
-        # חישוב סיכומים
-        total_inflows = sum(p.inflows for p in projections)
-        total_outflows = sum(p.outflows for p in projections)
-        total_net = total_inflows - total_outflows
-        avg_burn = total_outflows / months
-        
-        # Runway
-        if avg_burn > avg_income:
-            runway = opening_balance / (avg_burn - avg_income)
+        """Bank actuals are history; dated outstanding balances are forward scenarios."""
+        from .live_forecast_service import LiveForecastService
+        from .live_cash_flow_service import LiveCashFlowService
+        if not 1 <= months <= 36:
+            raise ValueError("Projection months must be between 1 and 36")
+        as_of = as_of_date or date.today()
+        forward = LiveForecastService(self.db, organization_id).monthly_forecast(months, as_of)
+        actual = forward["historical_context"]
+        avg_in = round(actual["inflow"] / 3, 2) if actual["available"] else None
+        avg_out = round(actual["outflow"] / 3, 2) if actual["available"] else None
+        assumptions = list(forward.get("assumptions", []))
+        reason = None
+        if opening_balance is not None:
+            import math
+            if not math.isfinite(opening_balance):
+                raise ValueError("Opening balance must be finite")
+            basis = "user_supplied_scenario"
+            assumptions.append("Opening balance was supplied by the user; it is not a verified bank balance.")
+        elif as_of != date.today():
+            basis, reason = "unavailable", "A current bank snapshot cannot establish a historical opening balance."
         else:
-            runway = float('inf')
-        
-        # קבלת שם החברה
-        org = self.db.query(Organization).filter(
-            Organization.id == organization_id
-        ).first()
-        company_name = org.name if org else "החברה"
-        
+            balance, reason = LiveCashFlowService(self.db, organization_id)._live_cash_balance()
+            opening_balance = float(balance) if balance is not None else None
+            basis = "fresh_open_finance_bank_balance" if balance is not None else "unavailable"
+        projections = []
+        current = opening_balance
+        balances = [current] if current is not None else []
+        for row in forward["months"]:
+            closing = round(current + row["net_flow"], 2) if current is not None else None
+            projections.append(CashFlowProjectionItem(
+                month=row["month"], opening_balance=current, inflows=row["inflow_total"],
+                outflows=row["outflow_total"], net_flow=row["net_flow"], closing_balance=closing,
+                inflow_details={c["source"]: c["amount"] for c in row["components"] if c["direction"] == "inflow"},
+                outflow_details={c["source"]: c["amount"] for c in row["components"] if c["direction"] == "outflow"},
+            ))
+            current = closing
+            if closing is not None:
+                balances.append(closing)
+        total_in = round(sum(p.inflows for p in projections), 2)
+        total_out = round(sum(p.outflows for p in projections), 2)
+        burn = round(total_out / months, 2) if projections else None
+        net_burn = (total_out - total_in) / months
+        runway = (round(max(opening_balance, 0) / net_burn, 1)
+                  if opening_balance is not None and net_burn > 0 else None)
+        org = self.db.get(Organization, organization_id)
         return CashFlowProjectionReport(
-            generated_date=date.today().isoformat(),
-            projection_months=months,
-            company_name=company_name,
-            prepared_by="CFO System",
-            historical_average_inflows=round(avg_income, 2),
-            historical_average_outflows=round(avg_expense, 2),
-            projections=projections,
-            total_projected_inflows=round(total_inflows, 2),
-            total_projected_outflows=round(total_outflows, 2),
-            total_net_flow=round(total_net, 2),
-            ending_balance=round(current_balance, 2),
-            minimum_balance=round(min_balance, 2),
-            maximum_balance=round(max_balance, 2),
-            average_monthly_burn=round(avg_burn, 2),
-            runway_months=round(runway, 1) if runway != float('inf') else -1
+            generated_date=as_of.isoformat(), projection_months=months,
+            company_name=org.name if org else "Unknown organization", prepared_by="Rezef",
+            historical_average_inflows=avg_in, historical_average_outflows=avg_out,
+            projections=projections, total_projected_inflows=total_in,
+            total_projected_outflows=total_out, total_net_flow=round(total_in-total_out, 2),
+            ending_balance=current if projections else None,
+            minimum_balance=min(balances) if balances and projections else None,
+            maximum_balance=max(balances) if balances and projections else None,
+            average_monthly_burn=burn, runway_months=runway, balance_basis=basis,
+            balance_reason=reason, assumptions=assumptions, data_sources=forward["data_sources"],
+            excluded_no_due_date=forward["excluded_no_due_date"], message=forward["message"],
         )
-    
+
     def export_profit_loss_excel(
         self,
         report: ProfitLossReport
@@ -971,11 +911,13 @@ class FinancialReportsService:
         ws['A9'] = 'יתרה מינימלית צפויה:'
         ws['B9'] = report.minimum_balance
         ws['B9'].number_format = currency_format
-        if report.minimum_balance < 0:
+        if report.minimum_balance is not None and report.minimum_balance < 0:
             ws['B9'].fill = negative_fill
         
         ws['A10'] = 'Runway (חודשים):'
-        ws['B10'] = report.runway_months if report.runway_months > 0 else '∞'
+        ws['B10'] = report.runway_months if report.runway_months is not None else 'Unavailable'
+        ws['A11'] = 'Basis / limitations'
+        ws['B11'] = ' | '.join(filter(None, [report.balance_basis, report.balance_reason, report.message, *(report.assumptions or [])]))
         
         # טבלת תחזית
         row = 13
@@ -1004,7 +946,7 @@ class FinancialReportsService:
             
             closing_cell = ws.cell(row=row, column=6, value=proj.closing_balance)
             closing_cell.number_format = currency_format
-            if proj.closing_balance < 0:
+            if proj.closing_balance is not None and proj.closing_balance < 0:
                 closing_cell.fill = negative_fill
             
             row += 1
@@ -1084,9 +1026,11 @@ class FinancialReportsService:
         previous = _bucket(prev_start, prev_end) if compare_previous else {}
         self._merge_sums(current, self._manual_sums(
             organization_id, start_date, end_date, TransactionType.INCOME))
+        self._merge_sums(current, self._journal_sums(organization_id, start_date, end_date, "revenue"))
         if compare_previous:
             self._merge_sums(previous, self._manual_sums(
                 organization_id, prev_start, prev_end, TransactionType.INCOME))
+            self._merge_sums(previous, self._journal_sums(organization_id, prev_start, prev_end, "revenue"))
         return self._items_from_sums(current, previous)
 
     def _ledger_expense_items(
@@ -1100,27 +1044,61 @@ class FinancialReportsService:
 
         def _bucket(lo, hi):
             sums: Dict[str, float] = {}
+            posted_bill_ids = set()
             for r in bills:
                 d = self._doc_date(r)
                 if d is None or not (lo <= d <= hi) or not bill_counts(r.status):
                     continue
-                sums["other"] = sums.get("other", 0.0) + abs(self._net_of(r, "subtotal", "total", "tax"))
+                sums["other"] = sums.get("other", 0.0) + self._net_of(r, "subtotal", "total", "tax")
+                if r.external_id:
+                    posted_bill_ids.add(str(r.external_id))
             for r in exps:
                 d = self._doc_date(r)
                 if d is None or not (lo <= d <= hi) or not expense_counts(getattr(r, "status", None)):
                     continue
+                if r.external_id and str(r.external_id) in posted_bill_ids:
+                    continue
                 cat = (getattr(r, "category", None) or "other")
-                sums[cat] = sums.get(cat, 0.0) + abs(self._net_of(r, "amount", "total", "vat_amount"))
+                sums[cat] = sums.get(cat, 0.0) + self._net_of(r, "amount", "total", "vat_amount")
             return sums
 
         current = _bucket(start_date, end_date)
         previous = _bucket(prev_start, prev_end) if compare_previous else {}
         self._merge_sums(current, self._manual_sums(
             organization_id, start_date, end_date, TransactionType.EXPENSE))
+        self._merge_sums(current, self._journal_sums(organization_id, start_date, end_date, "expense"))
         if compare_previous:
             self._merge_sums(previous, self._manual_sums(
                 organization_id, prev_start, prev_end, TransactionType.EXPENSE))
+            self._merge_sums(previous, self._journal_sums(organization_id, prev_start, prev_end, "expense"))
         return self._items_from_sums(current, previous)
+
+    def _report_includes_imported(self, organization_id, lo, hi) -> bool:
+        from ..models import JournalEntry
+        return self.db.query(JournalEntry.id).filter(
+            JournalEntry.organization_id == organization_id,
+            JournalEntry.source.in_(ledger_service.IMPORT_SOURCES),
+            JournalEntry.entry_date >= lo, JournalEntry.entry_date <= hi,
+        ).first() is not None
+
+    def _journal_sums(self, organization_id, lo, hi, account_type) -> Dict[str, float]:
+        """Use the ledger's journal normalization for manual/payroll/imported entries."""
+        entries = (
+            ledger_service._manual_entries(self.db, organization_id)
+            + ledger_service._payroll_entries(self.db, organization_id)
+            + ledger_service._imported_entries(self.db, organization_id)
+        )
+        sums: Dict[str, float] = {}
+        for entry in entries:
+            if entry.entry_date is None or not lo <= entry.entry_date <= hi:
+                continue
+            for line in entry.lines:
+                if ledger_service.CHART.get(line.account, {}).get("type") != account_type:
+                    continue
+                category = "salaries" if line.account == "5100" else ("sales" if account_type == "revenue" else "other")
+                amount = line.credit - line.debit if account_type == "revenue" else line.debit - line.credit
+                sums[category] = sums.get(category, 0) + amount
+        return sums
 
     def _ledger_cash_aggregates(self, organization_id, start_date, end_date):
         """אגרגציות תזרים ממסמכי ledger בברוטו (total) — תנועת מזומן בפועל.

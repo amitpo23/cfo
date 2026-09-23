@@ -28,6 +28,7 @@ import {
   Legend
 } from 'recharts';
 import api from '../services/api';
+import SavedReportsPanel from './SavedReportsPanel';
 import ExportButtons, { ExportSheet } from './ExportButtons';
 
 type ReportType = 'profit-loss' | 'balance-sheet' | 'cash-flow-projection';
@@ -100,29 +101,33 @@ interface BalanceSheetReport {
 
 interface CashFlowProjectionItem {
   month: string;
-  opening_balance: number;
+  opening_balance: number | null;
   inflows: number;
   outflows: number;
   net_flow: number;
-  closing_balance: number;
+  closing_balance: number | null;
 }
 
 interface CashFlowProjectionReport {
   generated_date: string;
   projection_months: number;
   company_name: string;
-  historical_average_inflows: number;
-  historical_average_outflows: number;
+  historical_average_inflows: number | null;
+  historical_average_outflows: number | null;
   projections: CashFlowProjectionItem[];
   total_projected_inflows: number;
   total_projected_outflows: number;
-  ending_balance: number;
-  minimum_balance: number;
-  runway_months: number;
-  average_monthly_burn: number;
+  ending_balance: number | null;
+  minimum_balance: number | null;
+  runway_months: number | null;
+  average_monthly_burn: number | null;
+  message?: string;
+  balance_reason?: string;
+  assumptions?: string[];
 }
 
-const formatCurrency = (amount: number) => {
+const formatCurrency = (amount: number | null | undefined) => {
+  if (amount == null) return 'לא זמין';
   return new Intl.NumberFormat('he-IL', {
     style: 'currency',
     currency: 'ILS',
@@ -799,27 +804,32 @@ export const ReportsDashboard: React.FC = () => {
 
     return (
       <div className="space-y-6">
-        {/* סיכום */}
+        {(cfReport.message || cfReport.balance_reason || cfReport.assumptions?.length) && <div role="note" className="p-4 mb-4 bg-amber-50 text-amber-900 rounded-lg">
+        {cfReport.message && <p>{cfReport.message}</p>}
+        {cfReport.balance_reason && <p>{cfReport.balance_reason}</p>}
+        {cfReport.assumptions?.map((assumption) => <p key={assumption}>{assumption}</p>)}
+      </div>}
+      {/* סיכום */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-white rounded-xl shadow-sm p-4">
             <p className="text-sm text-gray-500 mb-1">יתרת סגירה צפויה</p>
-            <p className={`text-2xl font-bold ${cfReport.ending_balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            <p className={`text-2xl font-bold ${(cfReport.ending_balance ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
               {formatCurrency(cfReport.ending_balance)}
             </p>
           </div>
           <div className="bg-white rounded-xl shadow-sm p-4">
             <p className="text-sm text-gray-500 mb-1">יתרה מינימלית</p>
-            <p className={`text-2xl font-bold ${cfReport.minimum_balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+            <p className={`text-2xl font-bold ${(cfReport.minimum_balance ?? 0) >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
               {formatCurrency(cfReport.minimum_balance)}
             </p>
-            {cfReport.minimum_balance < 0 && (
+            {cfReport.minimum_balance != null && cfReport.minimum_balance < 0 && (
               <p className="text-xs text-red-500 mt-1">⚠️ צפוי גירעון</p>
             )}
           </div>
           <div className="bg-white rounded-xl shadow-sm p-4">
             <p className="text-sm text-gray-500 mb-1">Runway</p>
             <p className="text-2xl font-bold text-purple-600">
-              {cfReport.runway_months > 0 ? `${cfReport.runway_months} חודשים` : '∞'}
+              {cfReport.runway_months != null ? `${cfReport.runway_months} חודשים` : 'לא זמין'}
             </p>
           </div>
           <div className="bg-white rounded-xl shadow-sm p-4">
@@ -869,7 +879,7 @@ export const ReportsDashboard: React.FC = () => {
               </thead>
               <tbody>
                 {cfReport.projections.map((proj: CashFlowProjectionItem, i: number) => (
-                  <tr key={i} className={`border-t ${proj.closing_balance < 0 ? 'bg-red-50' : ''}`}>
+                  <tr key={i} className={`border-t ${proj.closing_balance != null && proj.closing_balance < 0 ? 'bg-red-50' : ''}`}>
                     <td className="p-3 font-medium">{proj.month}</td>
                     <td className="p-3">{formatCurrency(proj.opening_balance)}</td>
                     <td className="p-3 text-green-600">{formatCurrency(proj.inflows)}</td>
@@ -877,7 +887,7 @@ export const ReportsDashboard: React.FC = () => {
                     <td className={`p-3 font-medium ${proj.net_flow >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                       {formatCurrency(proj.net_flow)}
                     </td>
-                    <td className={`p-3 font-bold ${proj.closing_balance >= 0 ? '' : 'text-red-600'}`}>
+                    <td className={`p-3 font-bold ${(proj.closing_balance ?? 0) >= 0 ? '' : 'text-red-600'}`}>
                       {formatCurrency(proj.closing_balance)}
                     </td>
                   </tr>
@@ -976,6 +986,7 @@ export const ReportsDashboard: React.FC = () => {
 
   return (
     <div className="p-6 space-y-6 bg-gray-50 min-h-screen" dir="rtl">
+      <SavedReportsPanel />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

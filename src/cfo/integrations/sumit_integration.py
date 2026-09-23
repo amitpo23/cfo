@@ -1388,9 +1388,15 @@ class SumitIntegration(BaseIntegration):
         }
         if expense.notes:
             payload["Description"] = expense.notes
+        if expense.invoice_number:
+            payload["ExpenseNumber"] = expense.invoice_number
+        if expense.supplier_tax_id:
+            payload["Supplier"]["CompanyNumber"] = expense.supplier_tax_id
+        if expense.is_draft is not None:
+            payload["IsDraft"] = expense.is_draft
         if expense.receipt_file:
             payload["ExpenseFile"] = expense.receipt_file
-            payload["ExpenseFilename"] = "receipt.pdf"
+            payload["ExpenseFilename"] = expense.receipt_filename or "receipt.pdf"
         data = await self._post("/accounting/documents/addexpense/", payload)
         document_id = data.get("DocumentID")
         result = dict(data)
@@ -2536,6 +2542,8 @@ class SumitIntegration(BaseIntegration):
         redirect_url: Optional[str] = None,
         cancel_redirect_url: Optional[str] = None,
         expiration_hours: Optional[int] = None,
+        external_identifier: Optional[str] = None,
+        document_type: Optional[str] = None,
     ) -> PaymentLinkResponse:
         """
         Generate a hosted payment-page URL for a customer to pay via
@@ -2547,6 +2555,12 @@ class SumitIntegration(BaseIntegration):
             "Customer": self._customer_ref(charge.customer_id or "Customer"),
             "Items": self._charge_items(charge),
         }
+        if external_identifier is not None:
+            payload['ExternalIdentifier'] = external_identifier
+        if document_type is not None:
+            payload['DocumentType'] = self._map_document_type(document_type)
+            payload['VATIncluded'] = True
+            payload['DraftDocument'] = False
         if charge.description:
             payload["DocumentDescription"] = charge.description
         if redirect_url:

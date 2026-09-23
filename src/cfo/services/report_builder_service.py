@@ -97,6 +97,7 @@ class ReportTemplate:
     created_at: str
     is_public: bool
     organization_id: int
+    version: int = 1
 
 
 @dataclass
@@ -116,6 +117,7 @@ class ScheduledReport:
     created_by: str
     organization_id: int
     parameters: Dict
+    version: int = 1
 
 
 @dataclass
@@ -163,11 +165,36 @@ class ReportBuilderService:
         # תבניות ברירת מחדל
         self._default_templates = self._create_default_templates()
         
-        # אחסון זמני (בפרודקשן - database)
-        self._templates: Dict[str, ReportTemplate] = {}
-        self._schedules: Dict[str, ScheduledReport] = {}
-        self._executions: List[ReportExecution] = []
+        from .report_storage import ReportStore
+        self._templates = ReportStore(db, organization_id, 'template', self._decode_template)
+        self._schedules = ReportStore(db, organization_id, 'schedule', self._decode_schedule)
+        self._executions = ReportStore(db, organization_id, 'execution', self._decode_execution)
+        self._files = ReportStore(db, organization_id, 'file', dict)
     
+    @staticmethod
+    def _decode_template(payload):
+        data = dict(payload)
+        data['report_type'] = ReportType(data['report_type'])
+        data['columns'] = [ReportColumn(**c) for c in data['columns']]
+        data['default_filters'] = [ReportFilter(**f) for f in data['default_filters']]
+        return ReportTemplate(**data)
+
+    @staticmethod
+    def _decode_schedule(payload):
+        data = dict(payload)
+        data['frequency'] = ReportFrequency(data['frequency'])
+        data['format'] = ReportFormat(data['format'])
+        data['delivery_method'] = DeliveryMethod(data['delivery_method'])
+        data['filters'] = [ReportFilter(**f) for f in data['filters']]
+        return ScheduledReport(**data)
+
+    @staticmethod
+    def _decode_execution(payload):
+        data = dict(payload)
+        if data['result']:
+            data['result'] = GeneratedReport(**data['result'])
+        return ReportExecution(**data)
+
     # ===== Template Management =====
     
     def create_template(
@@ -189,8 +216,9 @@ class ReportBuilderService:
         """
         import uuid
         
+        report_type = ReportType(report_type)
         template = ReportTemplate(
-            template_id=f'TPL-{uuid.uuid4().hex[:8].upper()}',
+            template_id=f'TPL-{uuid.uuid4().hex.upper()}',
             name=name,
             description=description,
             report_type=report_type,
@@ -245,10 +273,12 @@ class ReportBuilderService:
         if not template:
             return None
         
-        for key, value in updates.items():
-            if hasattr(template, key):
-                setattr(template, key, value)
-        
+        allowed = {'name', 'description', 'columns', 'default_filters', 'grouping', 'sorting', 'summary_fields', 'is_public'}
+        if set(updates) - allowed:
+            raise ValueError('Immutable or unsupported report template field')
+        data = dict(asdict(template), **updates)
+        template = self._decode_template(data)
+        self._templates[template_id] = template
         return template
     
     def delete_template(self, template_id: str) -> bool:
@@ -260,7 +290,27 @@ class ReportBuilderService:
     
     # ===== Report Generation =====
     
-    def generate_report(
+    def generate_report(self, template_id: str, format: ReportFormat = ReportFormat.EXCEL,
+                        filters=None, parameters=None, generated_by='system') -> GeneratedReport:
+        import uuid
+        if generated_by.startswith('schedule:'):
+            return self._generate_report(template_id, format, filters, parameters, generated_by)
+        execution = ReportExecution(f'EXC-{uuid.uuid4().hex}', None, template_id, 'running',
+            datetime.now().isoformat(), None, None, None)
+        self._executions[execution.execution_id] = execution
+        try:
+            report = self._generate_report(template_id, format, filters, parameters, generated_by)
+            execution.status, execution.result = 'completed', report
+            return report
+        except Exception as exc:
+            self.db.rollback()
+            execution.status, execution.error_message = 'failed', str(exc)
+            raise
+        finally:
+            execution.completed_at = datetime.now().isoformat()
+            self._executions[execution.execution_id] = execution
+
+    def _generate_report(
         self,
         template_id: str,
         format: ReportFormat = ReportFormat.EXCEL,
@@ -281,6 +331,8 @@ class ReportBuilderService:
         if not template:
             raise ValueError(f"תבנית {template_id} לא נמצאה")
         
+        if format not in (ReportFormat.EXCEL, ReportFormat.CSV, ReportFormat.JSON, ReportFormat.HTML):
+            raise ValueError('Report output format is not implemented')
         # מיזוג פילטרים
         all_filters = list(template.default_filters)
         if filters:
@@ -293,7 +345,7 @@ class ReportBuilderService:
         data = self._execute_report_query(template, all_filters, parameters)
         
         # יצירת הקובץ
-        report_id = f'RPT-{uuid.uuid4().hex[:8].upper()}'
+        report_id = f'RPT-{uuid.uuid4().hex.upper()}'
         filename = f"{report_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         if format == ReportFormat.EXCEL:
@@ -309,7 +361,7 @@ class ReportBuilderService:
         
         generation_time = int((time.time() - start_time) * 1000)
         
-        return GeneratedReport(
+        report = GeneratedReport(
             report_id=report_id,
             template_id=template_id,
             generated_at=datetime.now().isoformat(),
@@ -321,9 +373,19 @@ class ReportBuilderService:
             filters_applied=[asdict(f) if hasattr(f, '__dataclass_fields__') else f for f in all_filters],
             generated_by=generated_by,
             expires_at=(datetime.now() + timedelta(days=7)).isoformat(),
-            download_url=f'/api/reports/download/{report_id}' if file_path else None
+            download_url=f'/api/financial/reports/files/{report_id}' if file_path else None
         )
     
+        import base64
+        import hashlib
+        content = file_path.read_bytes()
+        self._files[report_id] = {'report': asdict(report),
+            'content_base64': base64.b64encode(content).decode('ascii'),
+            'sha256': hashlib.sha256(content).hexdigest(), 'parameters': parameters or {},
+            'organization_id': self.organization_id, 'derived': True,
+            'official_books_verified': False, 'source_completeness': 'not_verified'}
+        return report
+
     def preview_report(
         self,
         template_id: str,
@@ -389,8 +451,12 @@ class ReportBuilderService:
         """
         import uuid
         
+        if self.get_template(template_id) is None:
+            raise ValueError('Report template not found in this organization')
+        if DeliveryMethod(delivery_method) != DeliveryMethod.DOWNLOAD:
+            raise ValueError('Only saved-download delivery is implemented; external delivery is not verified')
         schedule = ScheduledReport(
-            schedule_id=f'SCH-{uuid.uuid4().hex[:8].upper()}',
+            schedule_id=f'SCH-{uuid.uuid4().hex.upper()}',
             template_id=template_id,
             name=name,
             frequency=frequency,
@@ -437,6 +503,8 @@ class ReportBuilderService:
         if not schedule:
             return None
         
+        if set(updates) - {'name', 'frequency', 'next_run', 'filters', 'parameters', 'is_active'}:
+            raise ValueError('Immutable or unsupported report schedule field')
         for key, value in updates.items():
             if hasattr(schedule, key):
                 if key == 'frequency':
@@ -445,6 +513,8 @@ class ReportBuilderService:
                 else:
                     setattr(schedule, key, value)
         
+        schedule = self._decode_schedule(asdict(schedule))
+        self._schedules[schedule_id] = schedule
         return schedule
     
     def delete_schedule(self, schedule_id: str) -> bool:
@@ -459,6 +529,7 @@ class ReportBuilderService:
         schedule = self._schedules.get(schedule_id)
         if schedule:
             schedule.is_active = False
+            self._schedules[schedule_id] = schedule
             return True
         return False
     
@@ -468,68 +539,59 @@ class ReportBuilderService:
         if schedule:
             schedule.is_active = True
             schedule.next_run = self._calculate_next_run(schedule.frequency)
+            self._schedules[schedule_id] = schedule
             return True
         return False
     
     # ===== Execution =====
     
     async def run_scheduled_reports(self) -> List[ReportExecution]:
-        """
-        הרצת דוחות מתוזמנים
-        Run Scheduled Reports
-        """
-        import uuid
-        
+        """Claim each due occurrence durably before generation; no silent catch-up."""
+        from sqlalchemy.exc import IntegrityError
+        from ..models import ReportRecord
         now = datetime.now()
         executions = []
-        
-        for schedule in self._schedules.values():
-            if not schedule.is_active:
+        for schedule in list(self._schedules.values()):
+            if not schedule.is_active or datetime.fromisoformat(schedule.next_run) > now:
                 continue
-            
-            next_run = datetime.fromisoformat(schedule.next_run)
-            if next_run <= now:
-                execution = ReportExecution(
-                    execution_id=f'EXC-{uuid.uuid4().hex[:8].upper()}',
-                    schedule_id=schedule.schedule_id,
-                    template_id=schedule.template_id,
-                    status='running',
-                    started_at=datetime.now().isoformat(),
-                    completed_at=None,
-                    error_message=None,
-                    result=None
-                )
-                
-                try:
-                    # יצירת הדוח
-                    report = self.generate_report(
-                        template_id=schedule.template_id,
-                        format=schedule.format,
-                        filters=[asdict(f) for f in schedule.filters],
-                        parameters=schedule.parameters,
-                        generated_by=f'schedule:{schedule.schedule_id}'
-                    )
-                    
-                    # משלוח
-                    await self._deliver_report(schedule, report)
-                    
-                    execution.status = 'completed'
-                    execution.result = report
-                    
-                    # עדכון תזמון
-                    schedule.last_run = datetime.now().isoformat()
-                    schedule.next_run = self._calculate_next_run(schedule.frequency)
-                    
-                except Exception as e:
-                    execution.status = 'failed'
-                    execution.error_message = str(e)
-                
-                execution.completed_at = datetime.now().isoformat()
-                self._executions.append(execution)
-                executions.append(execution)
-        
+            occurrence = f'{schedule.schedule_id}:{schedule.next_run}'
+            execution = ReportExecution(occurrence, schedule.schedule_id, schedule.template_id,
+                'running', now.isoformat(), None, None, None)
+            # Concurrent workers share the unique organization/kind/reference claim.
+            try:
+                with self.db.begin_nested():
+                    self.db.add(ReportRecord(organization_id=self.organization_id, kind='execution',
+                        reference=occurrence, payload=asdict(execution), version=1, deleted=False))
+                    self.db.flush()
+                self.db.commit()
+            except IntegrityError:
+                self.db.rollback()
+                continue
+            try:
+                # Re-read after claiming, so a paused or modified schedule does not execute.
+                current = self._schedules[schedule.schedule_id]
+                if not current.is_active or current.version != schedule.version:
+                    raise ValueError('Schedule changed after the occurrence was claimed')
+                if current.delivery_method != DeliveryMethod.DOWNLOAD:
+                    raise ValueError('External report delivery is not implemented')
+                report = self.generate_report(template_id=schedule.template_id, format=schedule.format,
+                    filters=[asdict(f) for f in schedule.filters], parameters=schedule.parameters,
+                    generated_by=f'schedule:{schedule.schedule_id}')
+                execution.status, execution.result = 'completed', report
+                current.last_run = datetime.now().isoformat()
+                current.next_run = self._calculate_next_run(current.frequency)
+                if current.frequency == ReportFrequency.ON_DEMAND:
+                    current.is_active = False
+                self._schedules[current.schedule_id] = current
+            except Exception as exc:
+                self.db.rollback()
+                execution.status, execution.error_message = 'failed', str(exc)
+                # Existing occurrence claim prevents replay. Do not overwrite an operator's newer decision.
+            execution.completed_at = datetime.now().isoformat()
+            self._executions[occurrence] = execution
+            executions.append(execution)
         return executions
-    
+
     def get_execution_history(
         self,
         schedule_id: Optional[str] = None,
@@ -540,7 +602,7 @@ class ReportBuilderService:
         היסטוריית ביצועים
         Execution History
         """
-        executions = self._executions
+        executions = list(self._executions.values())
         
         if schedule_id:
             executions = [e for e in executions if e.schedule_id == schedule_id]
@@ -639,16 +701,35 @@ class ReportBuilderService:
         parameters: Optional[Dict]
     ) -> List[Dict]:
         """ביצוע שאילתת הדוח — מקור אמת: השירותים הפיננסיים האמיתיים (org-scoped)."""
-        if template.report_type == ReportType.PROFIT_LOSS:
-            return self._generate_pl_data(parameters)
-        elif template.report_type == ReportType.AGING_REPORT:
-            return self._generate_aging_data(parameters)
-        elif template.report_type == ReportType.KPI_DASHBOARD:
-            return self._generate_kpi_data(parameters)
-        elif template.report_type == ReportType.BUDGET_VS_ACTUAL:
-            return self._generate_budget_data(parameters)
-        else:
-            return []
+        generators = {ReportType.PROFIT_LOSS: self._generate_pl_data,
+            ReportType.AGING_REPORT: self._generate_aging_data,
+            ReportType.KPI_DASHBOARD: self._generate_kpi_data,
+            ReportType.BUDGET_VS_ACTUAL: self._generate_budget_data}
+        if template.report_type not in generators:
+            raise ValueError('This report type is not implemented by the saved-report adapter')
+        fields = {c.field_name for c in template.columns}
+        for filter in filters:
+            if filter.field_name not in fields or filter.operator not in ('eq', 'ne', 'gte', 'lte'):
+                raise ValueError('Unsupported report filter field or operator')
+        data = generators[template.report_type](parameters)
+        for filter in filters:
+            def keep(row):
+                value = row.get(filter.field_name)
+                if value is None: return False
+                if filter.operator == 'eq': return value == filter.value
+                if filter.operator == 'ne': return value != filter.value
+                if filter.operator == 'gte': return value >= filter.value
+                return value <= filter.value
+            try:
+                data = [row for row in data if keep(row)]
+            except TypeError as exc:
+                raise ValueError('Filter value does not match report field type') from exc
+        for ordering in reversed(template.sorting):
+            field = ordering.get('field')
+            if field not in fields and not all(field in row for row in data):
+                raise ValueError('Unsupported report sort field')
+            data.sort(key=lambda row: (row.get(field) is None, row.get(field)), reverse=ordering.get('direction') == 'desc')
+        return data
 
     @staticmethod
     def _period_from(parameters: Optional[Dict]) -> tuple:
@@ -668,7 +749,7 @@ class ReportBuilderService:
                 self.organization_id, start, end, compare_previous=True)
         except Exception:
             logger.exception("report_builder P&L failed for org %s", self.organization_id)
-            return []
+            raise ValueError("Report source unavailable; no successful empty report was produced")
 
         sections = [
             ('הכנסות', rep.revenue), ('עלות המכר', rep.cost_of_goods_sold),
@@ -682,7 +763,7 @@ class ReportBuilderService:
                     'category': section,
                     'subcategory': it.category_hebrew,
                     'amount': it.amount,
-                    'budget': it.previous_amount,
+                    'budget': None,  # Prior actuals are not an approved budget.
                     'variance': it.change_percentage,
                     'previous_period': it.previous_amount,
                 })
@@ -695,7 +776,7 @@ class ReportBuilderService:
             rep = AccountsReceivableService(self.db, self.organization_id).get_aging_report()
         except Exception:
             logger.exception("report_builder aging failed for org %s", self.organization_id)
-            return []
+            raise ValueError("Report source unavailable; no successful empty report was produced")
         return [{
             'customer_name': c.customer_name,
             'current': c.current,
@@ -713,7 +794,7 @@ class ReportBuilderService:
             dash = KPIService(self.db, self.organization_id).get_kpi_dashboard()
         except Exception:
             logger.exception("report_builder KPI failed for org %s", self.organization_id)
-            return []
+            raise ValueError("Report source unavailable; no successful empty report was produced")
         return [{
             'category': k.category.value if hasattr(k.category, 'value') else str(k.category),
             'kpi_name': k.name_hebrew or k.name,
@@ -731,7 +812,7 @@ class ReportBuilderService:
             summary = BudgetService(self.db, self.organization_id).get_budget_vs_actual(year, month)
         except Exception:
             logger.exception("report_builder budget failed for org %s", self.organization_id)
-            return []
+            raise ValueError("Report source unavailable; no successful empty report was produced")
         return [{
             'category': c.category_hebrew,
             'budget': c.budget_amount,
@@ -835,13 +916,14 @@ class ReportBuilderService:
     
     def _generate_html(self, filename: str, template: ReportTemplate, data: List[Dict]) -> Path:
         """יצירת קובץ HTML"""
+        from html import escape
         file_path = self.reports_dir / f'{filename}.html'
         
         html = f"""<!DOCTYPE html>
 <html dir="rtl" lang="he">
 <head>
     <meta charset="UTF-8">
-    <title>{template.name}</title>
+    <title>{escape(template.name)}</title>
     <style>
         body {{ font-family: Arial, sans-serif; margin: 20px; direction: rtl; }}
         h1 {{ color: #366092; }}
@@ -855,12 +937,12 @@ class ReportBuilderService:
     </style>
 </head>
 <body>
-    <h1>{template.name}</h1>
+    <h1>{escape(template.name)}</h1>
     <p class="meta">תאריך הפקה: {datetime.now().strftime('%d/%m/%Y %H:%M')}</p>
     <table>
         <thead>
             <tr>
-                {''.join(f'<th>{col.display_name}</th>' for col in template.columns)}
+                {''.join(f'<th>{escape(col.display_name)}</th>' for col in template.columns)}
             </tr>
         </thead>
         <tbody>
@@ -874,7 +956,7 @@ class ReportBuilderService:
                     value = f'₪{value:,.0f}'
                 elif col.data_type == 'percentage' and isinstance(value, (int, float)):
                     value = f'{value:.1f}%'
-                html += f'<td class="{col.data_type}">{value}</td>'
+                html += f'<td class="{escape(col.data_type, quote=True)}">{escape(str(value))}</td>'
             html += '</tr>\n'
         
         html += """
@@ -931,10 +1013,8 @@ class ReportBuilderService:
     
     async def _send_email(self, recipients: List[str], report: GeneratedReport):
         """שליחת מייל"""
-        # בפרודקשן - שילוב עם שירות מייל
-        pass
+        raise ValueError('Scheduled email delivery is not implemented')
     
     async def _send_webhook(self, url: str, report: GeneratedReport):
         """שליחת webhook"""
-        # בפרודקשן - HTTP POST
-        pass
+        raise ValueError('Scheduled webhook delivery is not implemented')

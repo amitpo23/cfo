@@ -37,7 +37,7 @@ def test_normalize_transaction_real_shape():
 
 def test_normalize_transaction_falls_back_to_merchant_name():
     conn = _connector()
-    raw = {"SK": "sk-2", "amount": {"amount": -10, "currency": "ILS"}, "merchantName": "Kiosk"}
+    raw = {"SK": "sk-2", "amount": {"amount": -10, "currency": "ILS"}, "merchantName": "Kiosk", "date": "2026-09-06"}
     t = conn._normalize_transaction(raw)
     assert t.external_id == "open_finance:sk-2"
     assert t.description == "Kiosk"

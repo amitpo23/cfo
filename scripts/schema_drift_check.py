@@ -24,9 +24,12 @@ def main() -> int:
                 k, _, v = line.partition("=")
                 os.environ.setdefault(k.strip(), v.strip().strip('"'))
 
-    # No explicit fallback needed here: cfo.config.Settings.database_url
-    # already defaults to the local sqlite db when DATABASE_URL isn't set —
-    # that's what makes "no --env-file" mean "check the local db".
+    else:
+        # An implicit .env must never redirect an offline check to Neon.
+        configured = os.environ.get("DATABASE_URL", "")
+        if not configured.startswith("sqlite:"):
+            os.environ["DATABASE_URL"] = "sqlite:///" + str(Path(__file__).resolve().parent.parent / "cfo.db")
+
     from cfo.database import engine
     from cfo.services.schema_sync import compute_schema_drift, has_schema_drift
 
@@ -48,6 +51,7 @@ def main() -> int:
         "primary_keys": "מפתחות ראשיים חסרים/שונים",
         "foreign_keys": "מפתחות זרים חסרים",
         "unique_constraints": "אילוצי unique חסרים",
+        "incompatible_unique_constraints": "אילוצי unique ישנים החוסמים את מודל ההקצאות",
         "check_constraints": "אילוצי check חסרים",
         "indexes": "אינדקסים חסרים",
     }

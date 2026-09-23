@@ -23,7 +23,9 @@ honest-null: קבלה לא-קריאה/ביטחון נמוך מוחזרת עם st
 from __future__ import annotations
 
 import base64
+import math
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
@@ -81,12 +83,42 @@ def _parse_date(value: Any) -> Optional[date]:
 
 
 def _resolve_amounts(extract: dict):
-    """(total, net, vat) — שימוש חוזר בגזירת-הסכומים של ExpenseOCRPipeline
-    כדי ששני מסלולי קליטת-קבלה (טיוטת-SUMIT מול קליטת-צ'אט) יפעילו בדיוק
-    את אותו חשבון השלמת-מע\"מ, לא שני עותקים שעלולים לסטות."""
-    from .expense_ocr_pipeline import ExpenseOCRPipeline
+    """Derive only an arithmetic identity from two explicit source amounts.
 
-    return ExpenseOCRPipeline._resolve_amounts(extract)
+    The legacy SUMIT draft pipeline estimates VAT from a rate when only a total
+    exists. Source intake cannot promote that estimate to an extracted fact.
+    """
+    values = [extract.get(k) for k in ('amount_total', 'net_amount', 'vat_amount')]
+    parsed = []
+    for value in values:
+        if value is None:
+            parsed.append(None)
+            continue
+        if isinstance(value, bool):
+            raise ValueError('Invalid source amount')
+        try:
+            number = Decimal(str(value))
+        except InvalidOperation as exc:
+            raise ValueError('Invalid source amount') from exc
+        if not number.is_finite():
+            raise ValueError('Invalid source amount')
+        parsed.append(number)
+    total, net, vat = parsed
+    if sum(v is not None for v in parsed) < 2:
+        return None, None, None
+    if total is None: total = net + vat
+    if net is None: net = total - vat
+    if vat is None: vat = total - net
+    if abs(total - net - vat) > Decimal('.01'):
+        raise ValueError('Source amounts do not balance')
+    return float(total), float(net), float(vat)
+
+
+def _safe_extraction(value):
+    if isinstance(value, dict): return {key: _safe_extraction(item) for key, item in value.items()}
+    if isinstance(value, list): return [_safe_extraction(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value): return str(value)
+    return value
 
 
 def _format_created_message(extract: dict, total, vat, exp_date) -> str:
@@ -103,6 +135,27 @@ def _format_created_message(extract: dict, total, vat, exp_date) -> str:
 
 
 async def intake_receipt_bytes(
+    db: Session, organization_id: int, content: bytes, *,
+    media_type: Optional[str] = None, source: str = "telegram",
+    uploaded_by_user_id: Optional[int] = None, session_id: Optional[str] = None,
+) -> dict:
+    from .document_intake import DocumentIntakeService
+    if not settings.chat_receipt_intake_enabled or settings.chat_receipt_daily_limit <= 0:
+        return {"status": "disabled", "message": "קליטת קבלות דרך הצ'אט כבויה כרגע."}
+    if count_receipts_today(db, organization_id, source) >= settings.chat_receipt_daily_limit:
+        return {"status": "limit_reached", "message": "הגעת למכסה היומית של קליטת קבלות בצ'אט."}
+    if media_type is None:
+        media_type = "application/pdf" if content.startswith(b"%PDF") else "image/jpeg"
+    service = DocumentIntakeService(db, organization_id)
+    received = service.receive(content, media_type=media_type, source=source,
+        source_reference=session_id)
+    if received['status'] == 'duplicate':
+        return dict(received, message="המסמך כבר נקלט; אפשר לראות את מצב הטיפול בתור המסמכים.")
+    return await service.process(received['document_id'], uploaded_by_user_id=uploaded_by_user_id,
+        session_id=session_id)
+
+
+async def _extract_receipt_bytes(
     db: Session,
     organization_id: int,
     content: bytes,
@@ -111,6 +164,8 @@ async def intake_receipt_bytes(
     source: str = "telegram",
     uploaded_by_user_id: Optional[int] = None,
     session_id: Optional[str] = None,
+    commit: bool = True,
+    reauthorize=None,
 ) -> dict:
     """בייטים -> הוצאה (טיוטה), או סטטוס כנה של אי-יצירה. לעולם לא זורק —
     כל מצב כשל (שגיאת LLM, לא קריא, כפילות, מיצוי תקרה) הוא dict מוחזר עם
@@ -143,7 +198,17 @@ async def intake_receipt_bytes(
     except VisionExtractionError as exc:
         return {"status": "error", "message": f"חילוץ נתוני הקבלה נכשל: {exc}"}
 
-    if not extract.get("is_readable", True) or (extract.get("confidence") or 0.0) < MIN_CONFIDENCE:
+    if reauthorize:
+        reauthorize()
+
+    return _expense_from_extraction(db, organization_id, content, extract, source=source,
+        uploaded_by_user_id=uploaded_by_user_id, commit=commit)
+
+
+def _expense_from_extraction(db, organization_id, content, extract, *, source,
+                             uploaded_by_user_id=None, commit=False, human_reviewed=False):
+    """Shared evidence, duplicate and classification checks for OCR and source review."""
+    if not human_reviewed and (not extract.get("is_readable", True) or (extract.get("confidence") or 0.0) < MIN_CONFIDENCE):
         return {
             "status": "unreadable",
             "extracted": extract,
@@ -153,10 +218,17 @@ async def intake_receipt_bytes(
             ),
         }
 
-    total, net, vat = _resolve_amounts(extract)
+    kind = extract.get('document_type')
+    if kind in ('not_accounting', 'non_accounting', 'purchase_order', 'quote'):
+        return {'status': 'non_accounting', 'extracted': _safe_extraction(extract),
+            'message': 'המקור נשמר; המסמך אינו ראיה להוצאה חשבונאית.'}
+    try:
+        total, net, vat = _resolve_amounts(extract)
+    except ValueError as exc:
+        return {'status': 'needs_review', 'extracted': _safe_extraction(extract), 'message': str(exc)}
     if total is None:
         return {
-            "status": "unreadable",
+            "status": "needs_review" if any(extract.get(k) is not None for k in ('amount_total', 'net_amount', 'vat_amount')) else "unreadable",
             "extracted": extract,
             "message": (
                 "לא הצלחתי לזהות סכום בקבלה. אפשר לנסות לצלם שוב, או "
@@ -165,7 +237,13 @@ async def intake_receipt_bytes(
         }
 
     exp_date = _parse_date(extract.get("expense_date"))
+    if exp_date is None or extract.get('currency') != 'ILS':
+        return {'status': 'needs_review', 'extracted': extract,
+            'message': 'נדרשים תאריך מסמך ומטבע מאומת. הוצאות במטבע אחר ממתינות למסלול מט״ח.'}
 
+    from ..models import Organization
+    # Serialize the final business-duplicate check and draft insert, after OCR has finished.
+    db.query(Organization).filter_by(id=organization_id).with_for_update().one()
     from .duplicate_gate import find_duplicate_candidates
 
     candidates = find_duplicate_candidates(
@@ -201,7 +279,9 @@ async def intake_receipt_bytes(
         "expense_date": exp_date,
         "invoice_number": extract.get("invoice_number"),
         "receipt_file": receipt_b64,
-    })
+        "doc_kind": {'invoice_receipt': 'tax_invoice',
+            'tax_invoice': 'tax_invoice', 'receipt': 'receipt'}.get(kind, 'unknown'),
+    }, commit=commit)
 
     # supplier_tax_id ו-raw_data (עקבות ביקורת: מה חולץ, מי העלה) אינם
     # פרמטרים של create_expense — נשמרים ישירות על הרשומה, באותו אופן ש-
@@ -212,8 +292,13 @@ async def intake_receipt_bytes(
     if exp is not None:
         if extract.get("supplier_tax_id"):
             exp.supplier_tax_id = extract["supplier_tax_id"]
-        exp.raw_data = {"uploaded_by_user_id": uploaded_by_user_id, "vision_extract": extract}
-        db.commit()
+        exp.raw_data = ({"reviewed_by_user_id": uploaded_by_user_id, "reviewed_extract": extract,
+            "extraction_method": "human_source_review"} if human_reviewed else
+            {"uploaded_by_user_id": uploaded_by_user_id, "vision_extract": extract})
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(exp)
         created["supplier_tax_id"] = exp.supplier_tax_id
 

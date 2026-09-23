@@ -63,3 +63,10 @@ def test_summary_line_reports_the_four_buckets_separately():
     assert "אזהרה(4xx): 39" in line
     assert "מוגדר-סביבה: 37" in line
     assert "כשל: 0" in line
+
+
+def test_known_honest_null_is_bound_to_endpoint_and_status():
+    detail = 'חיזוי מדדים דורש היסטוריית נתונים אמיתית שעדיין לא קיימת במערכת'
+    assert classify(400, detail, path='/api/financial/ai/predict/revenue') == 'CONFIG'
+    assert classify(500, detail, path='/api/financial/ai/predict/revenue') == 'FAIL'
+    assert classify(400, detail, path='/api/unrelated') == 'FAIL'

@@ -168,8 +168,11 @@ def test_ocr_flags_unreadable_expense(client, acc, monkeypatch):
     assert data["review_reasons"]
 
 
-def test_ocr_extracts_verifies_and_files(client, acc, monkeypatch):
-    """מסמך קריא + ח.פ מאומת ברשם -> תיוק אוטומטי ל-SUMIT, שם רשמי מתקן OCR."""
+def test_ocr_extracts_verifies_but_requires_approval_before_filing(client, acc, monkeypatch):
+    """מסמך קריא + ח.פ מאומת ברשם -> חילוץ/סיווג נשמרים, אבל תיוק בפועל
+    ל-SUMIT חסום-לתמיד בלי X-Rezef-Approval-Id מאושר (אפס אוטונומיה
+    בבלתי-הפיך, CLAUDE.md). auto_file=true אינו עוקף את השער — לכן
+    add_expense/cancel_document אסור שייקראו כלל."""
     from cfo.database import SessionLocal
     from cfo.models import Expense
     import cfo.services.sync_engine as se
@@ -216,16 +219,20 @@ def test_ocr_extracts_verifies_and_files(client, acc, monkeypatch):
     monkeypatch.setattr(cr.CompanyRegistry, "lookup", fake_lookup)
 
     f = client.post(f"/api/expenses/{eid}/ocr?auto_file=true", headers=acc["headers"])
-    assert f.status_code == 200, f.text
-    data = f.json()["data"]
-    assert data["status"] == "filed"
-    assert data["registry_confirmed"] is True
-    assert data["supplier_name"] == "שופרסל בע\"מ"     # שם רשמי החליף את ה-OCR
-    assert data["sumit_expense_id"] == "SUMIT-OCR-1"
-    # הסכומים נגזרו נכון מהסה"כ (104.90 כולל מע"מ 18%)
-    assert calls["filed"]["supplier"] == "שופרסל בע\"מ"
-    assert calls["canceled"] == "DOC-OK"               # הטיוטה המקורית בוטלה
-    assert round(calls["filed"]["vat"], 2) == round(104.90 - 104.90 / 1.18, 2)
+    assert f.status_code == 400, f.text
+    assert "X-Rezef-Approval-Id" in f.json()["detail"]
+    # לא נכתב כלום ל-SUMIT בלי אישור אנושי — לא תיוק ולא ביטול הטיוטה.
+    assert calls["filed"] is None
+    assert calls["canceled"] is None
+
+    # החילוץ/הסיווג/האימות עדיין קרו ונשמרו ל-DB, רק הכתיבה ל-SUMIT נחסמה.
+    db = SessionLocal()
+    try:
+        e = db.query(Expense).filter(Expense.id == eid).first()
+        assert e.supplier_name == "שופרסל בע\"מ"       # שם רשמי החליף את ה-OCR
+        assert round(float(e.vat_amount), 2) == round(104.90 - 104.90 / 1.18, 2)
+    finally:
+        db.close()
 
 
 # ---------- israeli_tax_rules integration: doc_kind + vat_claimable ---------- #
@@ -275,7 +282,11 @@ def _patch_connector_and_extract(monkeypatch, extract_payload):
 
 
 def test_ocr_plain_tax_invoice_full_vat_path_unchanged(client, acc, monkeypatch):
-    """מסמך tax_invoice בקטגוריה עם שבר 1 (services) -> vat_claimable = כל המע\"מ, מתויק כרגיל."""
+    """מסמך tax_invoice בקטגוריה עם שבר 1 (services) -> vat_claimable = כל המע\"מ,
+    מחושב ונשמר; תיוק בפועל חסום-לתמיד בלי אישור אנושי (D0b)."""
+    from cfo.database import SessionLocal
+    from cfo.models import Expense
+
     eid = _setup_ocr_expense(client, acc, "DOC-PLAIN")
     _patch_connector_and_extract(monkeypatch, {
         "supplier_name": "מנוי SaaS בע\"מ", "supplier_tax_id": "520022732",
@@ -285,15 +296,24 @@ def test_ocr_plain_tax_invoice_full_vat_path_unchanged(client, acc, monkeypatch)
         "is_readable": True, "notes": None,
     })
     f = client.post(f"/api/expenses/{eid}/ocr?auto_file=true", headers=acc["headers"])
-    assert f.status_code == 200, f.text
-    data = f.json()["data"]
-    assert data["status"] == "filed"
-    assert data["doc_kind"] == "tax_invoice"
-    assert data["vat_claimable"] == 36.0
+    assert f.status_code == 400, f.text
+    assert "X-Rezef-Approval-Id" in f.json()["detail"]
+
+    db = SessionLocal()
+    try:
+        e = db.query(Expense).filter(Expense.id == eid).first()
+        assert e.doc_kind == "tax_invoice"
+        assert float(e.vat_claimable) == 36.0
+    finally:
+        db.close()
 
 
 def test_ocr_hospitality_expense_vat_claimable_zero(client, acc, monkeypatch):
-    """אירוח (מסעדה) עם חשבונית מס — מוכר 0 תשומות תמיד, אך עדיין מתויק (הוכרע, לא הכרעה חסרה)."""
+    """אירוח (מסעדה) עם חשבונית מס — מוכר 0 תשומות תמיד (הוכרע, לא הכרעה
+    חסרה); תיוק בפועל חסום-לתמיד בלי אישור אנושי (D0b)."""
+    from cfo.database import SessionLocal
+    from cfo.models import Expense
+
     eid = _setup_ocr_expense(client, acc, "DOC-HOSP")
     _patch_connector_and_extract(monkeypatch, {
         "supplier_name": "מסעדה של השף", "supplier_tax_id": "520022732",
@@ -303,11 +323,16 @@ def test_ocr_hospitality_expense_vat_claimable_zero(client, acc, monkeypatch):
         "is_readable": True, "notes": None,
     })
     f = client.post(f"/api/expenses/{eid}/ocr?auto_file=true", headers=acc["headers"])
-    assert f.status_code == 200, f.text
-    data = f.json()["data"]
-    assert data["category"] == "hospitality"
-    assert data["status"] == "filed"
-    assert data["vat_claimable"] == 0.0
+    assert f.status_code == 400, f.text
+    assert "X-Rezef-Approval-Id" in f.json()["detail"]
+
+    db = SessionLocal()
+    try:
+        e = db.query(Expense).filter(Expense.id == eid).first()
+        assert e.category == "hospitality"
+        assert float(e.vat_claimable) == 0.0
+    finally:
+        db.close()
 
 
 def test_ocr_unknown_doc_kind_goes_to_review_not_auto_filed(client, acc, monkeypatch):
@@ -331,9 +356,10 @@ def test_ocr_unknown_doc_kind_goes_to_review_not_auto_filed(client, acc, monkeyp
 
 
 def test_ocr_vehicle_expense_uses_single_vehicle_profile(client, fresh_org, monkeypatch):
-    """רכב עם פרופיל-רכב יחיד (primarily_business=True) -> 2/3 מהמע\"מ נתבע."""
+    """רכב עם פרופיל-רכב יחיד (primarily_business=True) -> 2/3 מהמע\"מ נתבע;
+    תיוק בפועל חסום-לתמיד בלי אישור אנושי (D0b)."""
     from cfo.database import SessionLocal
-    from cfo.models import VehicleProfile
+    from cfo.models import Expense, VehicleProfile
 
     org = fresh_org()
     org_id = org["org_id"]
@@ -354,11 +380,16 @@ def test_ocr_vehicle_expense_uses_single_vehicle_profile(client, fresh_org, monk
         "is_readable": True, "notes": None,
     })
     f = client.post(f"/api/expenses/{eid}/ocr?auto_file=true", headers=org["headers"])
-    assert f.status_code == 200, f.text
-    data = f.json()["data"]
-    assert data["category"] == "vehicle"
-    assert data["status"] == "filed"
-    assert round(data["vat_claimable"], 2) == round(18.0 * 2 / 3, 2)
+    assert f.status_code == 400, f.text
+    assert "X-Rezef-Approval-Id" in f.json()["detail"]
+
+    db = SessionLocal()
+    try:
+        e = db.query(Expense).filter(Expense.id == eid).first()
+        assert e.category == "vehicle"
+        assert round(float(e.vat_claimable), 2) == round(18.0 * 2 / 3, 2)
+    finally:
+        db.close()
 
 
 def test_llm_ocr_disabled_by_default_api_reserved_for_chat(monkeypatch):

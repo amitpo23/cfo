@@ -503,15 +503,19 @@ class SumitConnector(AccountingConnector):
                         to_date=date.today(),
                     )
                     for p in raw_payments:
+                        if getattr(p, 'status', None) != 'completed':
+                            continue  # A failed/pending charge is not a receipt.
                         payments.append(NormalizedPayment(
-                            external_id=str(p.id),
-                            contact_external_id=str(getattr(p, "customer_id", None)),
+                            external_id=f"billing:{p.id}",
+                            contact_external_id=str(p.customer_id) if getattr(p, "customer_id", None) else None,
                             payment_date=p.date if isinstance(p.date, date) else None,
                             amount=Decimal(str(p.amount or 0)),
                             currency=getattr(p, "currency", "ILS") or "ILS",
                             method=getattr(p, "payment_method", None),
                             reference=getattr(p, "reference", None),
-                            raw_data=p.__dict__ if hasattr(p, "__dict__") else {},
+                            raw_data={**(p.model_dump(mode='json') if hasattr(p, 'model_dump') else p.__dict__),
+                                      'source_entity_type':'billing_payment', 'source_entity_id':str(p.id),
+                                      'invoice_link_status':'unavailable_in_provider_list'},
                         ))
                 except Exception as e:
                     logger.warning("list_payments unavailable, continuing: %s", e)
@@ -523,18 +527,22 @@ class SumitConnector(AccountingConnector):
                 # שזוכו). CreditReceipt (7) — החזר כספי ללקוח — לא נמשך עדיין; מתועד.
                 receipts = await self._list_documents_all(client, "2", updated_since)
                 for doc in receipts:
+                    if getattr(doc, 'status', None) not in {'open', 'closed', 'paid'}:
+                        continue
                     amount = abs(Decimal(str(doc.total or 0)))
                     if amount == 0:
                         continue
                     payments.append(NormalizedPayment(
-                        external_id=str(doc.id),
+                        external_id=f"receipt:{doc.id}",
                         contact_external_id=str(doc.customer_id) if doc.customer_id else None,
                         payment_date=doc.date if isinstance(doc.date, date) else None,
                         amount=amount,
                         currency=_normalize_currency(getattr(doc, "currency", None)),
                         method="receipt",
                         reference=getattr(doc, "document_number", None),
-                        raw_data=doc.__dict__ if hasattr(doc, "__dict__") else {},
+                        raw_data={**(doc.model_dump(mode='json') if hasattr(doc, 'model_dump') else doc.__dict__),
+                                  'source_entity_type':'receipt', 'source_entity_id':str(doc.id),
+                                  'invoice_link_status':'unavailable_in_provider_list'},
                     ))
 
                 return FetchResult(items=payments, has_more=False)

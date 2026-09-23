@@ -61,7 +61,7 @@ class ExpenseFilingService:
         rows = q.order_by(Expense.expense_date.desc()).all()
         return [self._serialize(e) for e in rows]
 
-    def create_expense(self, data: Dict) -> Dict:
+    def create_expense(self, data: Dict, *, commit: bool = True) -> Dict:
         from .expense_classifier import classify_expense
         from . import expense_category_service
         from .classifier_ml_training import ClassifierMLTrainingService
@@ -104,7 +104,10 @@ class ExpenseFilingService:
             self.db, self.organization_id, category=category, vat_amount=vat, doc_kind=doc_kind,
         )
         self.db.add(exp)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         self.db.refresh(exp)
         return self._serialize(exp)
 
@@ -119,6 +122,9 @@ class ExpenseFilingService:
         )
         if not exp:
             raise ValueError(f"הוצאה {expense_id} לא נמצאה")
+        if exp.status in ('submitting', 'submitted', 'outcome_unknown', 'source_conflict'):
+            from .irreversible_action_service import ActionConflictError
+            raise ActionConflictError('Provider filing is in progress or unverified; source corrections require review')
         if data.get("category") is not None:
             from .expense_classifier import VALID_CATEGORIES
             from . import expense_category_service
@@ -165,7 +171,8 @@ class ExpenseFilingService:
         learned_rules = ClassifierMLTrainingService(
             self.db, self.organization_id
         ).get_learned_rules_map()
-        q = self.db.query(Expense).filter(Expense.organization_id == self.organization_id)
+        q = self.db.query(Expense).filter(Expense.organization_id == self.organization_id,
+            Expense.status.notin_(['submitting', 'submitted', 'outcome_unknown', 'source_conflict']))
         if not reclassify_all:
             q = q.filter((Expense.category.is_(None)) | (Expense.category == "") | (Expense.category == "other"))
         updated = 0
@@ -408,7 +415,8 @@ class ExpenseFilingService:
                 elif status == "review":
                     review += 1
                 else:
-                    filed += 1  # ברירת מחדל שמרנית — לא אמור לקרות
+                    failed += 1
+                    errors.append({'expense_id': exp.id, 'error': 'No verified filing result'})
             except ValueError as e:
                 failed += 1
                 errors.append({"expense_id": exp.id, "error": str(e)})
@@ -418,108 +426,11 @@ class ExpenseFilingService:
         }
 
 
-    async def file_to_sumit(self, expense_id: int) -> Dict:
-        """תיוק הוצאה ב-SUMIT עם ה-credentials של הארגון."""
-        from .sync_engine import get_connector_for_org
-        from ..integrations.sumit_models import ExpenseRequest
-
-        exp = (
-            self.db.query(Expense)
-            .filter(
-                Expense.organization_id == self.organization_id,
-                Expense.id == expense_id,
-            ).first()
-        )
-        if not exp:
-            raise ValueError(f"הוצאה {expense_id} לא נמצאה")
-        if exp.status == "filed":
-            return self._serialize(exp)
-
-        connector, _conn_id, source = get_connector_for_org(
-            self.db, self.organization_id, preferred_source="sumit"
-        )
-        if source != "sumit":
-            raise ValueError("SUMIT אינו מחובר עבור ארגון זה")
-
-        if not hasattr(connector, "add_expense"):
-            raise ValueError("הקונקטור אינו תומך ביצירת הוצאה")
-
-        # שער כפילויות (P0, 2026-07): לפני יצירת מסמך חדש ב-SUMIT — בודקים
-        # אם ההוצאה הזו כבר קיימת (Bill/Expense) בארגון. HIGH (ח.פ+אסמכתא
-        # זהים) => לא מתייקים בכלל, מסומן כ-duplicate. SUSPECT (סכום+תאריך
-        # קרובים בלבד, בלי ח.פ+אסמכתא תואמים) => לא מתייקים אוטומטית, מסומן
-        # ל-review (טעון הכרעת אדם — למשל שתי נסיעות זהות באותו יום לגיטימיות).
-        from .duplicate_gate import find_duplicate_candidates
-
-        dup_candidates = find_duplicate_candidates(
-            self.db, self.organization_id,
-            supplier_tax_id=exp.supplier_tax_id,
-            reference=exp.invoice_number,
-            amount=exp.total,
-            doc_date=exp.expense_date,
-            exclude_id=exp.id,
-            exclude_source="expense",
-            external_id=exp.external_id,
-        )
-        high = [c for c in dup_candidates if c["confidence"] == "HIGH"]
-        suspect = [c for c in dup_candidates if c["confidence"] == "SUSPECT"]
-        if high:
-            exp.status = "duplicate"
-            exp.filing_error = (
-                "כפילות מזוהה (ח.פ+אסמכתא תואמים) מול "
-                + ", ".join(f"{c['source']} #{c['id']}" for c in high)
-                + " — לא תויק. יש לבדוק ידנית לפני תיוק."
-            )
-            self.db.commit()
-            self.db.refresh(exp)
-            result = self._serialize(exp)
-            result["duplicate_check"] = {"confidence": "HIGH", "candidates": high}
-            return result
-        if suspect:
-            exp.status = "review"
-            exp.filing_error = (
-                "חשד לכפילות (סכום+תאריך קרובים) מול "
-                + ", ".join(f"{c['source']} #{c['id']}" for c in suspect)
-                + " — לא תויק אוטומטית. טעון הכרעת אדם (למשל שתי נסיעות זהות "
-                "באותו יום הן לגיטימיות)."
-            )
-            self.db.commit()
-            self.db.refresh(exp)
-            result = self._serialize(exp)
-            result["duplicate_check"] = {"confidence": "SUSPECT", "candidates": suspect}
-            return result
-
-        # יוצרים תמיד מסמך הוצאה עם הקטגוריה שלנו — כך הסיווג נכנס ל-SUMIT
-        # (ל-SUMIT אין API לעדכון קטגוריה של טיוטה קיימת).
-        request = ExpenseRequest(
-            supplier_name=exp.supplier_name,
-            amount=Decimal(str(exp.amount or 0)),
-            vat_amount=Decimal(str(exp.vat_amount or 0)),
-            expense_date=exp.expense_date,
-            category=exp.category,
-            notes=exp.description or (
-                f"חשבונית: {exp.invoice_number}" if exp.invoice_number else None
-            ),
-            receipt_file=exp.receipt_file,
-        )
-        try:
-            response = await connector.add_expense(request)
-            new_id = response.get("expense_id")
-            # אם ההוצאה הגיעה מטיוטה סרוקה ב-SUMIT — מבטלים את המקור כדי שלא תהיה כפילות.
-            if exp.source == "sumit" and exp.external_id and hasattr(connector, "cancel_document"):
-                await connector.cancel_document(exp.external_id)
-            exp.sumit_expense_id = new_id
-            exp.status = "filed"
-            exp.filing_error = None
-        except Exception as e:  # נשמר המצב כדי לאפשר ניסיון חוזר
-            exp.status = "error"
-            exp.filing_error = str(e)
-            self.db.commit()
-            raise ValueError(f"תיוק ל-SUMIT נכשל: {e}")
-
-        self.db.commit()
-        self.db.refresh(exp)
-        return self._serialize(exp)
+    async def file_to_sumit(self, expense_id: int, *, approval_id=None, actor_id=None) -> Dict:
+        """Execute only the immutable, signed source-filing request."""
+        from .expense_filing_workflow import ExpenseFilingWorkflow
+        return await ExpenseFilingWorkflow(self.db, self.organization_id).execute(expense_id,
+            approval_id=approval_id, actor_id=actor_id)
 
     async def sync_pending_from_sumit(
         self,
@@ -564,9 +475,26 @@ class ExpenseFilingService:
             limit=1000,
         )
         docs = await connector.list_documents(request)
+        # A submitted source already owns this exact provider acknowledgement.
+        # Later list sync is not independent books verification and must not
+        # create a second expense or overwrite the reviewed source fields.
+        from ..models import IrreversibleActionRequest
+        target = {'source': source, 'connection_id': _conn_id,
+            'company_id': str(getattr(connector, 'company_id', None))}
+        acknowledged = {}
+        for action in self.db.query(IrreversibleActionRequest).filter(
+                IrreversibleActionRequest.organization_id == self.organization_id,
+                IrreversibleActionRequest.action_type == 'sumit_writeback',
+                IrreversibleActionRequest.provider_reference.isnot(None)):
+            payload, result = action.payload or {}, action.execution_result or {}
+            if (payload.get('operation') == 'expenses.add_source_expense_draft'
+                    and result.get('provider_target') == target
+                    and result.get('provider_document_id') == action.provider_reference):
+                acknowledged[action.provider_reference] = payload.get('expense_id')
         created = 0
         drafts = 0
         filed = 0
+        linked_existing = 0
         for d in docs:
             ext = str(getattr(d, "document_id", "") or getattr(d, "id", "") or "")
             if not ext:
@@ -576,6 +504,10 @@ class ExpenseFilingService:
             doc_type = str(getattr(d, "document_type", "") or "")
             # רק מסמכי הוצאה (לא חשבוניות מכירה / קבלות הכנסה)
             if doc_type not in EXPENSE_TYPE_CODES:
+                continue
+            if ext in acknowledged and self.db.query(Expense).filter_by(
+                    id=acknowledged[ext], organization_id=self.organization_id, sumit_expense_id=ext).first():
+                linked_existing += 1
                 continue
             existing = (
                 self.db.query(Expense)
@@ -637,6 +569,7 @@ class ExpenseFilingService:
             "imported": created,
             "pending_drafts": drafts,
             "already_filed": filed,
+            "linked_existing_documents": linked_existing,
             "total_expense_docs_from_sumit": len(docs),
         }
 

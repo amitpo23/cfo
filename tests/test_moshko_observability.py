@@ -269,6 +269,9 @@ def test_tool_target_mapping_is_explicit_for_all_registered_tools():
         "sumit", "open_finance", "rezef_db", "local",
     }
     assert tool_target_system("connect_bank_account") == "open_finance"
+    assert tool_target_system("execute_payable_request") == "open_finance"
+    assert tool_target_system("propose_payable_request") == "rezef_db"
+    assert tool_target_system("settle_payable_request") == "rezef_db"
     assert tool_target_system("query_bank_transactions") == "rezef_db"
     assert tool_target_system("rezef_help") == "local"
 

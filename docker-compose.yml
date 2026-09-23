@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: cfo
       POSTGRES_PASSWORD: cfo_local_password
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - rezef_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -31,7 +31,7 @@ services:
       AUTO_CREATE_DB: "false"
       AUTH_BYPASS_ENABLED: "true"
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -50,7 +50,7 @@ services:
         VITE_API_BASE_URL: /api
         VITE_AUTH_BYPASS: "true"
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     depends_on:
       api:
         condition: service_healthy

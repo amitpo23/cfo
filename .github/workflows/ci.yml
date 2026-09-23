@@ -32,3 +32,129 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+
+
+  postgres-migrations-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18.3
+        env:
+          POSTGRES_USER: rezef_test
+          POSTGRES_PASSWORD: synthetic_ci_only
+          POSTGRES_DB: rezef_test_source
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rezef_test -d rezef_test_source"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Install matching PostgreSQL tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - name: Create empty restore destination
+        env:
+          PGPASSWORD: synthetic_ci_only
+        run: createdb -h 127.0.0.1 -U rezef_test rezef_test_restored
+      - name: Migrate and restore synthetic fixture
+        run: >-
+          python scripts/verify_postgres_restore.py
+          --source-url postgresql://rezef_test:synthetic_ci_only@127.0.0.1:5432/rezef_test_source
+          --restore-url postgresql://rezef_test:synthetic_ci_only@127.0.0.1:5432/rezef_test_restored
+          --output postgres-restore-evidence.json
+      - name: Verify financial decision concurrency
+        env:
+          REZEF_TEST_POSTGRES_URL: postgresql+psycopg://rezef_test:synthetic_ci_only@127.0.0.1:5432/rezef_test_source
+          REZEF_TEST_EVIDENCE_DIR: postgres-concurrency-evidence
+        run: |
+          python tests/postgres_offline/verify_collection_concurrency.py
+          python tests/postgres_offline/verify_payable_concurrency.py
+          python tests/postgres_offline/verify_payable_sync_concurrency.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: postgres-concurrency-evidence
+          path: postgres-concurrency-evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: postgres-restore-evidence
+          path: postgres-restore-evidence.json
+          if-no-files-found: error
+
+  browser-journeys:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install playwright
+      - run: python -m playwright install --with-deps chromium
+      - run: npm ci && npm run build
+        working-directory: frontend
+      - name: Offline organization and mobile journeys
+        env:
+          REZEF_BROWSER_OUTPUT: browser-evidence
+        run: >-
+          python .agents/skills/webapp-testing/scripts/with_server.py
+          --server "cd frontend && npm run preview -- --host 127.0.0.1 --port 5199"
+          --port 5199 -- python tests/browser_offline/stabilization_journeys.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-evidence
+          path: browser-evidence
+      - name: Offline collection candidate screen
+        env:
+          REZEF_BROWSER_OUTPUT: collection-browser-evidence
+        run: >-
+          python .agents/skills/webapp-testing/scripts/with_server.py
+          --server "cd frontend && npm run preview -- --host 127.0.0.1 --port 5199"
+          --port 5199 -- python tests/browser_offline/collection_candidates.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collection-browser-evidence
+          path: collection-browser-evidence
+      - name: Offline collection allocation workbench
+        env:
+          REZEF_BROWSER_OUTPUT: collection-workbench-evidence
+        run: >-
+          python .agents/skills/webapp-testing/scripts/with_server.py
+          --server "cd frontend && npm run preview -- --host 127.0.0.1 --port 5199"
+          --port 5199 -- python tests/browser_offline/collection_workbench.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collection-workbench-evidence
+          path: collection-workbench-evidence
+      - name: Offline supplier payment workbench
+        env:
+          REZEF_BROWSER_BASE: http://127.0.0.1:5199
+          REZEF_BROWSER_OUTPUT: payable-workbench-evidence
+        run: >-
+          python .agents/skills/webapp-testing/scripts/with_server.py
+          --server "cd frontend && npm run preview -- --host 127.0.0.1 --port 5199"
+          --port 5199 -- python tests/browser_offline/payable_workbench.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: payable-workbench-evidence
+          path: payable-workbench-evidence

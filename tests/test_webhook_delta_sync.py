@@ -108,7 +108,7 @@ def test_of_debounce(monkeypatch):
     assert len(calls) == 1
 
 
-def test_of_payment_event_recorded_when_match_exists(fresh_org):
+def test_of_payment_id_does_not_infer_a_normalized_record_link(fresh_org):
     from cfo.database import SessionLocal
     from cfo.models import Payment
 
@@ -134,10 +134,10 @@ def test_of_payment_event_recorded_when_match_exists(fresh_org):
             wds_mod._resolve_of_org = orig
 
         assert result["handled"] is True
-        assert result["matched"] is True
+        assert result["matched"] is False
 
         row = db.query(Payment).filter(Payment.external_id == "of-pay-777").first()
-        assert row.raw_data["webhook_event"]["paymentStatus"] == "ACCC"
+        assert not row.raw_data
     finally:
         db.close()
 
@@ -329,7 +329,7 @@ def test_sumit_webhook_accepts_good_secret_and_wires_to_service(client, monkeypa
     assert captured["payload"]["EntityID"] == "d1"
 
 
-def test_sumit_webhook_no_secret_configured_allows_through(client, monkeypatch):
+def test_sumit_webhook_no_secret_configured_is_disabled(client, monkeypatch):
     from cfo.api.routes import sumit_webhooks
     monkeypatch.setattr(sumit_webhooks.settings, "sumit_webhook_secret", None)
 
@@ -338,8 +338,7 @@ def test_sumit_webhook_no_secret_configured_allows_through(client, monkeypatch):
     monkeypatch.setattr(sumit_webhooks, "handle_sumit_trigger_event", _fake_handle)
 
     r = client.post("/api/sumit/webhooks", json={"foo": "bar"})
-    assert r.status_code == 200
-    assert r.json()["received"] is True
+    assert r.status_code == 503
 
 
 # --------------------------------------------------------------------- #
