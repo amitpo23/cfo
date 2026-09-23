@@ -5,6 +5,8 @@
 
 ## חובה לפני עבודה
 
+מפתח חדש מתחיל ב־[`NEW_DEVELOPER_START_HERE.md`](NEW_DEVELOPER_START_HERE.md) — סדר קריאה, סביבת פיתוח וגבולות גישה.
+
 | מתי | מה לטעון |
 | --- | --- |
 | כל משימת מוצר/יכולת | [`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md) — חוזה יציב; [`rezef_capabilities.json`](rezef_capabilities.json) — סטטוס וראיות ברי-בדיקה |

@@ -1,5 +1,9 @@
 # תוכנית + ספרינט — Handoff למתכנת חדש בפרויקט "רצף"
 
+## עדכון מצב — 23.09.2026
+
+המסמך שמתחת לסעיף הזה הוא צילום מצב מתאריך 22.09, לא רשימת חסמים נוכחית. ענף `fix/rezef-stabilization-20260906` פורסם ב־GitHub ב־`ac091ff`; תיקוני `.gitignore`, חמשת טסטי שער האישור, guard על credentials, תיקון `AsyncOpenAI` ומחיקת `ai_insights.py` כבר נכנסו לקומיטים. אחרי שילוב `main` ותיקוני סביבת הפיתוח, הסוויטה המלאה עברה: **2,839 passed, 0 failed** (`.venv/bin/python -m pytest tests/ -q --disable-warnings`, ‏17:59 דקות). הסנדבוקס במצב Vercel `Ready`; health וכניסת חשבון הבדיקה החזירו 200. `main` ב־GitHub התקדם בינתיים ל־`86c9a7b` (עצירת cron SUMIT), ושולב בענף בלי קונפליקטים לקראת PR. מצב ה־PR וה־CI נבדק ב־GitHub לפני תחילת עבודה. הוראות מסירה נוכחיות: [`../../NEW_DEVELOPER_START_HERE.md`](../../NEW_DEVELOPER_START_HERE.md).
+
 מקור: סוכן תכנון (Fable 5.1), הרצה מלאה עם אימות בפועל (pytest, git, audit_routes, schema_drift, frontend build/lint) — לא הועתק ממסמכים היסטוריים. איפה שלא ניתן היה לאמת (למשל drift מול Neon פרוד) מסומן honest-null במפורש. לא בוצעה קריאת רשת ל-SUMIT/Open Finance, לא commit, לא push, לא שינוי קובץ.
 
 ---
@@ -63,12 +67,11 @@
 ## ראש 3 — סביבת עבודה למתכנת החדש, ≤$10/חודש
 
 ### המלצה 1 (חינם, מיידי) — Docker Compose מקומי, **כבר קיים בריפו**
-`docker-compose.yml` + `docker/env.docker.example` כבר בנויים: Postgres 16 אמיתי מבודד, `AUTH_BYPASS_ENABLED=true`, כל הסודות דמה מפורשים, מפתחות ספק ריקים כברירת מחדל (honest-null UI, לא נפילה). `docs/DATABASE_MAP.md` מגדיר את גבולות שלוש הסביבות.
+`docker-compose.yml` + `docker/env.docker.example` כבר בנויים: Postgres 16 אמיתי מבודד, `AUTH_BYPASS_ENABLED=true`, כל הסודות דמה מפורשים, מפתחות ספק ריקים כברירת מחדל (honest-null UI, לא נפילה). `docs/DATABASE_MAP.md` מגדיר את גבולות שלוש הסביבות. תיקון 23.09: Compose קורא את `docker/env.docker.example` ישירות; העתקת הקובץ ל־`docker/.env.docker` אינה מחליפה אותו.
 
 ```bash
 git clone <repo> && cd cfo
 git checkout fix/rezef-stabilization-20260906   # אחרי יציוב לפי ראש 2
-cp docker/env.docker.example docker/.env.docker
 docker compose up --build
 # frontend: http://localhost:8080 | api: http://localhost:8001/api/health
 ```

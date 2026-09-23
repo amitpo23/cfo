@@ -10,24 +10,24 @@
 בנקאות פתוחה (Open Finance), מנועי דוחות (מע"מ/רו"ה/מאזן/תזרים), ועוזר AI
 בשם **מושקו** שמפעיל את היכולות דרך צ'אט עם שערי אישור.
 
-- Backend: FastAPI + SQLAlchemy + Alembic (Python 3.13) — `src/cfo/`
+- Backend: FastAPI + SQLAlchemy + Alembic (Python 3.12) — `src/cfo/`
 - Frontend: React + Vite + TypeScript — `frontend/`
-- פרוד: Vercel (cfo-2.vercel.app) + Neon Postgres (מסד-לכל-דייר)
+- פרוד: Vercel (cfo-2.vercel.app) + Neon Postgres (מסד משותף עם הפרדה לפי ארגון)
 - מקומי: Postgres (docker-compose) או SQLite (`cfo.db`) לפיתוח מהיר
 
 ## מפת התיקיות
 
 | נתיב | מה יש בו |
 | --- | --- |
-| `src/cfo/api/` | FastAPI app; `api/routes/` — ‏44 קובצי routes (כל דומיין קובץ) |
-| `src/cfo/services/` | ‏137 שירותים — לב הלוגיקה. מרכזיים: `ai_chat_service.py` (לולאת מושקו), `ai_chat_tools.py` (קטלוג הכלים), `sumit_request_budget.py` + `sumit_quota.py` (שערי עלות), `israeli_tax_rules.py` (דיני מס — לערוך רק כאן), `kb_loader.py` (מרכזי ידע בזמן ריצה) |
+| `src/cfo/api/` | FastAPI app; `api/routes/` — נתיבי API לפי תחום |
+| `src/cfo/services/` | שירותי הלוגיקה. מרכזיים: `ai_chat_service.py` (לולאת מושקו), `ai_chat_tools.py` (קטלוג הכלים), `sumit_request_budget.py` + `sumit_quota.py` (שערי עלות), `israeli_tax_rules.py` (דיני מס — לערוך רק כאן), `kb_loader.py` (מרכזי ידע בזמן ריצה) |
 | `src/cfo/integrations/` | `sumit_integration.py` — העטיפה היחידה ל-SUMIT API (אכיפת מגביל fail-closed בשכבת הרשת) |
 | `src/cfo/models.py` | כל מודלי ה-DB (קובץ יחיד) |
 | `src/cfo/config.py` | `Settings` (pydantic) — נטען מ-`.env` / `.env.local` |
 | `src/cfo/auth.py` | JWT + תפקידים (`super_admin` וכו') |
 | `alembic/` | מיגרציות סכימה — **הדרך היחידה** לשינוי סכימה בפרוד (ראה `docs/GATE0_DEPLOYMENT_RUNBOOK.md`) |
 | `frontend/src/components/` | מסכי React; `MoshkoSystemChat.tsx` — הצ'אט הגלובלי; `/admin-moshko` — דשבורד observability |
-| `tests/` | ‏237 קובצי pytest; חובה ירוק לפני commit |
+| `tests/` | בדיקות pytest; חובה ירוק לפני commit |
 | `scripts/` | כלי תפעול (audit_routes, fix_prod_schema_drift, grant_superadmin_token…) |
 | `docs/` | כל התיעוד — האינדקס: [`docs/README.md`](docs/README.md) |
 | `docs/sumit_help_kb/`, `docs/bookkeeper_kb/` | מרכזי ידע שחולצו (SUMIT + דיני הנה"ח) — נגישים למושקו דרך `kb_lookup` |
@@ -37,7 +37,7 @@
 
 ```bash
 # Backend (מקומי, SQLite/Postgres לפי .env.local)
-python -m uvicorn cfo.api:app --reload --app-dir src
+uv run uvicorn src.cfo.api:app --reload --port 8000
 
 # Frontend
 cd frontend && npm run dev
@@ -54,8 +54,8 @@ make docker-test        # pytest בתוך הקונטיינר
 ## בדיקות ושערי איכות
 
 ```bash
-python -m pytest tests/ -q        # חובה ירוק לפני commit (TDD)
-python scripts/audit_routes.py    # ביקורת routes
+.venv/bin/python -m pytest tests/ -q  # חובה ירוק לפני commit (TDD)
+.venv/bin/python scripts/audit_routes.py
 cd frontend && npm run build && npm run lint
 ```
 
@@ -80,7 +80,7 @@ cd frontend && npm run build && npm run lint
 | רכיב | קובץ |
 | --- | --- |
 | לולאת הצ'אט (LLM + כלים + שערי אישור) | `src/cfo/services/ai_chat_service.py` |
-| קטלוג הכלים (64 כלים, read/write, office) | `src/cfo/services/ai_chat_tools.py` |
+| קטלוג הכלים | `src/cfo/services/ai_chat_tools.py` |
 | רישום ביצועים (audit) | טבלת `moshko_tool_calls` + `moshko_observability.py` |
 | פידבק משתמש | טבלת `moshko_feedback` |
 | זיכרון מושקו | `src/cfo/services/moshko_memory.py` |

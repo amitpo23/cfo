@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-06",
+  "updated_at": "2026-09-23",
   "purpose": "Machine-readable contract connecting Rezef capabilities to knowledge, runtime evidence and safety gates.",
   "status_vocabulary": {
     "implemented": "Implemented and covered locally; production operation is a separate claim.",
@@ -74,7 +74,7 @@
         "owner_approval_for_write"
       ],
       "honest_boundary": "Read synchronization and several document/payment actions exist. Every production SUMIT client now requires a durable database-backed request budget before network access: an atomic global-per-minute ceiling plus an organization-per-day ceiling shared across instances; an unavailable counter fails closed. This was verified offline and on local PostgreSQL, not against the paid provider. Scheduled detail enrichment still claims a separate 20-hour budget, caps paid getdetails calls at 25 per org/day and reuses CustomerName from the list response. OCR stops before SUMIT while disabled; when enabled it claims a separate 20-hour budget and defaults to 10 documents with a hard cap of 25. The official-books createbatch adapter consumes an immutable owner-approved payload, claims execution once, requires BatchURL and records executed_unverified. The versioned OpenAPI exposes neither batch readback nor close, so the adapter creates an open batch only and cannot prove posting/closure; portal verification and owner-only close remain external. Measured 2026-08-05: an organization silently drops out of the daily cron when its IntegrationConnection turns paused/inactive, because both scheduled_sync_sumit and roster_sync_targets select on status=='active' -- org2 was out for 467h and org3 for 762h with no error raised. roster_coverage reports this per source but deliberately does not reactivate anything: reconnecting a client file is an owner decision. Billing/receipt source IDs are namespaced and missing invoice relationships stay explicit because the saved list schemas do not supply them; sync can resolve an explicit later normalized invoice link without payload changes.",
-      "next_gate": "MASTER_EXECUTION_PLAN gate 3: operator-approved createbatch dry-run, portal readback evidence and owner-approved batch close."
+      "next_gate": "The daily sync-sumit cron was removed from vercel.json on 2026-09-10 by owner direction; restoring it requires a separate owner-approved cost and quota plan. MASTER_EXECUTION_PLAN gate 3 still requires operator-approved createbatch dry-run, portal readback evidence and owner-approved batch close."
     },
     {
       "id": "open-finance-ingestion",

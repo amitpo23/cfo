@@ -15,7 +15,8 @@ postgresql+psycopg://neondb_owner:***@ep-round-cloud-aihrzsjw-pooler.c-4.us-east
 This is the database that currently contains the live Rezef client roster and
 financial data.
 
-Current production snapshot, verified on 2026-06-30:
+Historical production snapshot, verified on 2026-06-30. Do not use these counts,
+organization statuses, or this database hostname as a current access inventory:
 
 | Table | Count |
 | --- | ---: |
@@ -136,4 +137,3 @@ docker exec rezef-local-db-1 psql -U cfo -d cfo \
   -c "select count(*) from invoices;" \
   -c "select count(*) from bills;"
 ```
-
