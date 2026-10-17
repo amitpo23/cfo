@@ -1085,6 +1085,8 @@ def get_connection_configuration(db: Session, organization_id: int, preferred_so
     org = db.get(Organization, organization_id)
     if not org:
         raise ValueError(f"Organization {organization_id} not found")
+    if (org.settings or {}).get("provider_calls_allowed") is False:
+        raise ValueError("Provider access is disabled for this import-only organization")
 
     # Check IntegrationConnection first
     conn_query = db.query(IntegrationConnection).filter(

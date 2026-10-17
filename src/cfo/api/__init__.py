@@ -288,6 +288,9 @@ app.include_router(
     sumit_webhooks.router, prefix="/api/sumit", tags=["SUMIT Webhooks"],
 )
 
+from .routes import local_clients
+app.include_router(local_clients.router, prefix="/api", tags=["Local office imports"])
+
 # Accounting-office (multi-company) + cross-source synthesis
 app.include_router(
     office.router, prefix="/api", tags=["Office & Synthesis"],
