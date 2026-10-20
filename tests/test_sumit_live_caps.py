@@ -240,6 +240,78 @@ def test_office_window_is_shared_across_client_files(fresh_org, monkeypatch):
         db.close()
 
 
+def test_inactive_office_link_is_not_the_shared_window(fresh_org):
+    file_org = fresh_org()["org_id"]
+    old_office = fresh_org()["org_id"]
+    new_office = fresh_org()["org_id"]
+    from cfo.models import SumitCompany
+    from cfo.services.sumit_request_budget import resolve_office_organization_id
+
+    db = SessionLocal()
+    try:
+        db.add(SumitCompany(
+            office_organization_id=old_office, company_id="old", name="ישן",
+            target_organization_id=file_org, status="inactive",
+        ))
+        db.add(SumitCompany(
+            office_organization_id=new_office, company_id="new", name="חדש",
+            target_organization_id=file_org, status="active",
+        ))
+        db.commit()
+        assert resolve_office_organization_id(db, file_org) == new_office
+        current = db.query(SumitCompany).filter_by(company_id="new").one()
+        current.status = "inactive"
+        db.commit()
+        assert resolve_office_organization_id(db, file_org) == file_org
+    finally:
+        db.close()
+
+
+def test_office_paid_action_cap_is_ten_across_client_files(fresh_org, monkeypatch):
+    office = fresh_org()["org_id"]
+    first = fresh_org()["org_id"]
+    second = fresh_org()["org_id"]
+    monkeypatch.setattr(settings, "sumit_environment", "live")
+    monkeypatch.setattr(settings, "sumit_document_issuance_enabled", True)
+    monkeypatch.setattr(settings, "sumit_live_monthly_paid_action_limit", 100)
+    monkeypatch.setattr(
+        "cfo.services.sumit_quota.paced_daily_limit",
+        lambda **kwargs: kwargs["configured_daily"],
+    )
+    from cfo.models import SumitCompany
+    db = SessionLocal()
+    try:
+        db.add(SumitCompany(
+            office_organization_id=office, company_id="21", name="א",
+            target_organization_id=first, status="active",
+        ))
+        db.add(SumitCompany(
+            office_organization_id=office, company_id="22", name="ב",
+            target_organization_id=second, status="inactive",
+        ))
+        db.add(SumitCompany(
+            office_organization_id=office, company_id="23", name="ג",
+            target_organization_id=second, status="active",
+        ))
+        db.commit()
+    finally:
+        db.close()
+    measured = datetime.now(timezone.utc)
+
+    def _claim(org_id: int) -> None:
+        assert_paid_action_within_quota(
+            QuotaSnapshot(organization_id=org_id, used=0, limit=50, measured_at=measured),
+            endpoint="/accounting/documents/create/",
+        )
+
+    for _ in range(6):
+        _claim(first)
+    for _ in range(4):
+        _claim(second)
+    with pytest.raises(SumitQuotaExhausted, match="office monthly paid-action"):
+        _claim(first)
+
+
 class _Response:
     status_code = 200
     text = "{}"

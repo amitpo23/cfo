@@ -139,16 +139,20 @@ def _utc_windows(now: datetime) -> tuple[datetime, datetime, datetime]:
 def resolve_office_organization_id(db, organization_id: int) -> int:
     """The office that owns the SUMIT key for this file.
 
-    A client file points at its office through ``SumitCompany``. A file with
-    no roster row is its own office, so the shared window and the per-file
-    window are the same counter size but still both claimed.
+    A client file points at its office through an active ``SumitCompany``
+    row. An inactive link is a file that moved, so it does not keep charging
+    the old office. When several active links exist, the newest one wins.
+    A file with no active roster row is its own office.
     """
     from ..models import SumitCompany
 
     roster = (
         db.query(SumitCompany)
-        .filter(SumitCompany.target_organization_id == organization_id)
-        .order_by(SumitCompany.id)
+        .filter(
+            SumitCompany.target_organization_id == organization_id,
+            SumitCompany.status == "active",
+        )
+        .order_by(SumitCompany.id.desc())
         .first()
     )
     if roster is not None and roster.office_organization_id:
