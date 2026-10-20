@@ -19,6 +19,11 @@ def test_constant_time_equal_matches_full_secret_only():
     assert not constant_time_equal(None, f"Bearer {secret}")
     assert not constant_time_equal("", f"Bearer {secret}")
     assert not constant_time_equal(secret, f"Bearer {secret}")
+    assert not constant_time_equal("", "")
+    assert not constant_time_equal(None, None)
+    assert not constant_time_equal(None, "")
+    assert not constant_time_equal("anything", "")
+    assert not constant_time_equal("anything", None)
 
 
 def test_cron_route_rejects_a_missing_or_partial_bearer(client):
