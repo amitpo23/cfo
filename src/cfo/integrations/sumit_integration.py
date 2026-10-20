@@ -429,9 +429,12 @@ class SumitIntegration(BaseIntegration):
         self.request_limiter.claim(endpoint)
         self._log_request(method, endpoint, data)
 
+        attempted = False
+        outcome = "error"
         try:
             data = self._with_credentials(data)
 
+            attempted = True
             response = await self.client.request(
                 method=method,
                 url=endpoint,
@@ -441,6 +444,7 @@ class SumitIntegration(BaseIntegration):
 
             self._log_response(response.status_code, response.text)
             response.raise_for_status()
+            outcome = "success"
 
             payload = response.json()
             if is_environment_verification:
@@ -448,6 +452,7 @@ class SumitIntegration(BaseIntegration):
             return payload
 
         except httpx.HTTPStatusError as e:
+            outcome = "http_error"
             self._log_error(e, f"HTTP error on {endpoint}")
             if is_environment_verification:
                 raise SumitEnvironmentMismatch(
@@ -461,12 +466,41 @@ class SumitIntegration(BaseIntegration):
         except SumitEnvironmentMismatch:
             raise
         except Exception as e:
+            outcome = "error"
             self._log_error(e, f"Request failed on {endpoint}")
             if is_environment_verification:
                 raise SumitEnvironmentMismatch(
                     "SUMIT company environment could not be verified",
                 ) from e
             raise
+        finally:
+            if attempted:
+                self._record_provider_call(
+                    endpoint,
+                    outcome,
+                    environment_verification=is_environment_verification,
+                )
+
+    def _record_provider_call(
+        self,
+        endpoint: str,
+        outcome: str,
+        *,
+        environment_verification: bool,
+    ) -> None:
+        """Ledger only. Never raises and never calls SUMIT."""
+        try:
+            from ..services.sumit_usage import record_sumit_call
+
+            org_id = getattr(self.request_limiter, "organization_id", None)
+            record_sumit_call(
+                organization_id=org_id if isinstance(org_id, int) else None,
+                endpoint=endpoint,
+                outcome=outcome,
+                environment_verification=environment_verification,
+            )
+        except Exception:
+            logger.warning("SUMIT usage ledger was not recorded", exc_info=True)
 
     @staticmethod
     def _configured_sumit_environment() -> str:

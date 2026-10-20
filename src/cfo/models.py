@@ -947,6 +947,34 @@ class ProviderRequestBudget(Base):
     )
 
 
+class ProviderCallLog(Base):
+    """Append-only ledger of outbound provider calls. No bodies and no keys."""
+
+    __tablename__ = "provider_call_log"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(40), nullable=False)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    office_organization_id = Column(Integer, nullable=True)
+    purpose = Column(String(40), nullable=False)
+    endpoint_class = Column(String(20), nullable=False)
+    endpoint = Column(String(200), nullable=False)
+    outcome = Column(String(40), nullable=False)
+    at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        CheckConstraint(
+            "purpose IN ('sync','filing','quota','ops','webhook_followup','unspecified')",
+            name="ck_provider_call_purpose",
+        ),
+        CheckConstraint(
+            "endpoint_class IN ('free','inferred','paid')",
+            name="ck_provider_call_endpoint_class",
+        ),
+        Index("ix_provider_call_org_at", "provider", "organization_id", "at"),
+    )
+
+
 class SumitQuotaMeasurement(Base):
     """W2.1 — מדידת מכסת הפעולות-בתשלום כפי שנקראה מ-SUMIT (`listquotas`).
 

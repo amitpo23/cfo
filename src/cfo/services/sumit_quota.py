@@ -255,6 +255,10 @@ def _claim_monthly_paid_action(
     """
     if settings.sumit_environment == "test":
         limit_value = settings.sumit_test_monthly_paid_action_limit
+    elif not settings.sumit_document_issuance_enabled:
+        # Live document issuance stays off until the flag is set. A numeric
+        # paid-action limit on its own must not open the gate.
+        limit_value = 0
     else:
         limit_value = settings.sumit_live_monthly_paid_action_limit
     scope_key = f"paid:org:{organization_id}"
