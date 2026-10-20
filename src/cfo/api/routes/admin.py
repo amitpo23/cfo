@@ -142,7 +142,10 @@ async def _assert_registration_allowed(registration_code, checkout_session_id=No
         checkout = None
     if (getenv("VERCEL") or getenv("VERCEL_ENV") in {"production", "preview"}) and not settings.registration_secret:
         raise HTTPException(403, "Self-registration is disabled on public deployments")
-    if settings.registration_secret and registration_code != settings.registration_secret:
+    from ...services.secret_compare import constant_time_equal
+    if settings.registration_secret and not constant_time_equal(
+        registration_code, settings.registration_secret,
+    ):
         raise HTTPException(403, "Registration requires a valid registration code")
     return checkout
 
