@@ -37,8 +37,10 @@ export default function ClientDashboardPage() {
 
   useEffect(() => {
     const slug = slugFromLocation();
-    const url = new URL(window.location.href);
-    const token = url.searchParams.get('k');
+    const token = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('k');
+    if (window.location.hash) {
+      window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}`);
+    }
     let cancelled = false;
 
     async function load() {
@@ -49,8 +51,6 @@ export default function ClientDashboardPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),
         });
-        url.searchParams.delete('k');
-        window.history.replaceState({}, '', `${url.pathname}${url.search}`);
       }
       const response = await fetch(`/api/public/d/${slug}`, { credentials: 'include' });
       const body = (await response.json().catch(() => ({}))) as DashboardView;
