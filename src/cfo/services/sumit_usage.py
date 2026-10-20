@@ -68,7 +68,9 @@ def _month_start(moment: datetime) -> datetime:
     return moment.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-def _has_active_alert(db, organization_id: int, alert_type: str, *, day: str | None) -> bool:
+def _has_active_alert(
+    db, organization_id: int, alert_type: str, *, key_name: str, key: str,
+) -> bool:
     rows = (
         db.query(Alert)
         .filter(
@@ -78,9 +80,7 @@ def _has_active_alert(db, organization_id: int, alert_type: str, *, day: str | N
         )
         .all()
     )
-    if day is None:
-        return bool(rows)
-    return any((row.meta or {}).get("day") == day for row in rows)
+    return any((row.meta or {}).get(key_name) == key for row in rows)
 
 
 def _raise_alert(db, *, organization_id: int, alert_type: str, title: str, message: str, meta: dict) -> None:
@@ -95,25 +95,58 @@ def _raise_alert(db, *, organization_id: int, alert_type: str, title: str, messa
     ))
 
 
-def audit_sumit_usage(db, organization_id: int, *, now: datetime) -> list[str]:
-    """Return the alert types created for this observation. Does not commit."""
+def _count_calls(db, *, organization_id: int | None, office_organization_id: int | None,
+                 start: datetime, end: datetime, end_inclusive: bool) -> int:
+    query = db.query(ProviderCallLog).filter(
+        ProviderCallLog.provider == "sumit",
+        ProviderCallLog.at >= start,
+    )
+    if end_inclusive:
+        query = query.filter(ProviderCallLog.at <= end)
+    else:
+        query = query.filter(ProviderCallLog.at < end)
+    if office_organization_id is not None:
+        query = query.filter(ProviderCallLog.office_organization_id == office_organization_id)
+    else:
+        query = query.filter(ProviderCallLog.organization_id == organization_id)
+    return query.count()
+
+
+def audit_sumit_usage(
+    db, organization_id: int, *, now: datetime, office_organization_id: int | None = None,
+) -> list[str]:
+    """Return the alert types created for this observation. Does not commit.
+
+    The monthly cap alert is keyed by calendar month, so the next month can
+    alert again. A spike is today's count at or above both twice the prior
+    14-day median and 5 calls.
+    """
+    office_id = office_organization_id or organization_id
+    created = _audit_window(
+        db, organization_id, now=now, office_organization_id=None,
+    )
+    if office_id != organization_id:
+        created.extend(_audit_window(
+            db, office_id, now=now, office_organization_id=office_id,
+        ))
+    return created
+
+
+def _audit_window(
+    db, organization_id: int, *, now: datetime, office_organization_id: int | None,
+) -> list[str]:
     created: list[str] = []
     month_start = _month_start(now)
-    month_count = (
-        db.query(ProviderCallLog)
-        .filter(
-            ProviderCallLog.provider == "sumit",
-            ProviderCallLog.organization_id == organization_id,
-            ProviderCallLog.at >= month_start,
-            ProviderCallLog.at <= now,
-        )
-        .count()
+    month_key = month_start.date().isoformat()[:7]
+    month_count = _count_calls(
+        db, organization_id=organization_id, office_organization_id=office_organization_id,
+        start=month_start, end=now, end_inclusive=True,
     )
     limit = _monthly_request_limit()
     if limit > 0:
         threshold = (limit * 7 + 9) // 10
         if month_count >= threshold and not _has_active_alert(
-            db, organization_id, _CAP_ALERT, day=None,
+            db, organization_id, _CAP_ALERT, key_name="month", key=month_key,
         ):
             _raise_alert(
                 db,
@@ -124,60 +157,52 @@ def audit_sumit_usage(db, organization_id: int, *, now: datetime) -> list[str]:
                     f"נרשמו {month_count} קריאות החודש מול תקרה של {limit}. "
                     "אין כאן סכומים או מפתחות."
                 ),
-                meta={"month_count": month_count, "limit": limit, "threshold": threshold},
+                meta={
+                    "month": month_key,
+                    "month_count": month_count,
+                    "limit": limit,
+                    "threshold": threshold,
+                    "scope": "office" if office_organization_id else "org",
+                },
             )
             created.append(_CAP_ALERT)
 
     today = _day_start(now)
     prior_counts = []
-    prior_total = 0
     for offset in range(1, 15):
         start = today - timedelta(days=offset)
         end = start + timedelta(days=1)
-        count = (
-            db.query(ProviderCallLog)
-            .filter(
-                ProviderCallLog.provider == "sumit",
-                ProviderCallLog.organization_id == organization_id,
-                ProviderCallLog.at >= start,
-                ProviderCallLog.at < end,
-            )
-            .count()
-        )
-        prior_counts.append(count)
-        prior_total += count
-    today_count = (
-        db.query(ProviderCallLog)
-        .filter(
-            ProviderCallLog.provider == "sumit",
-            ProviderCallLog.organization_id == organization_id,
-            ProviderCallLog.at >= today,
-            ProviderCallLog.at <= now,
-        )
-        .count()
+        prior_counts.append(_count_calls(
+            db, organization_id=organization_id, office_organization_id=office_organization_id,
+            start=start, end=end, end_inclusive=False,
+        ))
+    today_count = _count_calls(
+        db, organization_id=organization_id, office_organization_id=office_organization_id,
+        start=today, end=now, end_inclusive=True,
     )
-    # No baseline: a brand-new org's first calls are not a spike.
-    if prior_total > 0:
-        median = _median(prior_counts)
-        if today_count > (2 * median):
-            day_key = today.date().isoformat()
-            if not _has_active_alert(db, organization_id, _SPIKE_ALERT, day=day_key):
-                _raise_alert(
-                    db,
-                    organization_id=organization_id,
-                    alert_type=_SPIKE_ALERT,
-                    title="שימוש SUMIT היום גבוה מפי 2 מהחציון של 14 הימים",
-                    message=(
-                        f"היום {today_count} קריאות, חציון 14 הימים {median:.2f}. "
-                        "אין כאן סכומים או מפתחות."
-                    ),
-                    meta={
-                        "day": day_key,
-                        "today_count": today_count,
-                        "median_14d": median,
-                    },
-                )
-                created.append(_SPIKE_ALERT)
+    median = _median(prior_counts)
+    threshold = max(2 * median, 5)
+    if today_count >= threshold:
+        day_key = today.date().isoformat()
+        if not _has_active_alert(db, organization_id, _SPIKE_ALERT, key_name="day", key=day_key):
+            _raise_alert(
+                db,
+                organization_id=organization_id,
+                alert_type=_SPIKE_ALERT,
+                title="שימוש SUMIT היום חורג מפי 2 מהחציון ולפחות 5 קריאות",
+                message=(
+                    f"היום {today_count} קריאות, חציון 14 הימים {median:.2f}, "
+                    f"סף {threshold:.2f}. אין כאן סכומים או מפתחות."
+                ),
+                meta={
+                    "day": day_key,
+                    "today_count": today_count,
+                    "median_14d": median,
+                    "threshold": threshold,
+                    "scope": "office" if office_organization_id else "org",
+                },
+            )
+            created.append(_SPIKE_ALERT)
     return created
 
 
@@ -204,9 +229,12 @@ def record_sumit_call(
     db = SessionLocal()
     try:
         with db.begin():
+            from .sumit_request_budget import resolve_office_organization_id
+            office_id = resolve_office_organization_id(db, organization_id)
             db.add(ProviderCallLog(
                 provider="sumit",
                 organization_id=organization_id,
+                office_organization_id=office_id,
                 purpose=_purpose(purpose, environment_verification=environment_verification),
                 endpoint_class=_endpoint_class(path),
                 endpoint=path,
@@ -214,7 +242,9 @@ def record_sumit_call(
                 at=moment,
             ))
             db.flush()
-            audit_sumit_usage(db, organization_id, now=moment)
+            audit_sumit_usage(
+                db, organization_id, now=moment, office_organization_id=office_id,
+            )
     except SQLAlchemyError:
         logger.warning("SUMIT usage ledger write failed", exc_info=True)
     finally:

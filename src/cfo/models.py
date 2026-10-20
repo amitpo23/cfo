@@ -972,6 +972,7 @@ class ProviderCallLog(Base):
             name="ck_provider_call_endpoint_class",
         ),
         Index("ix_provider_call_org_at", "provider", "organization_id", "at"),
+        Index("ix_provider_call_office_at", "provider", "office_organization_id", "at"),
     )
 
 

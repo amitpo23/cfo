@@ -137,7 +137,7 @@ def test_daily_usage_above_twice_the_14_day_median_alerts_once(fresh_org):
     finally:
         db.close()
 
-    for _ in range(3):
+    for _ in range(5):
         record_sumit_call(
             organization_id=org_id,
             endpoint="/accounting/documents/list/",
@@ -151,24 +151,91 @@ def test_daily_usage_above_twice_the_14_day_median_alerts_once(fresh_org):
             organization_id=org_id, alert_type="sumit_usage_spike",
         ).all()
         assert len(alerts) == 1
-        assert alerts[0].meta["today_count"] == 3
+        assert alerts[0].meta["today_count"] == 5
         assert alerts[0].meta["median_14d"] == 1
+        assert alerts[0].meta["threshold"] == 5
     finally:
         db.close()
 
 
-def test_no_spike_without_a_baseline(fresh_org):
+def test_fewer_than_five_calls_are_not_a_spike(fresh_org):
     org_id = fresh_org()["org_id"]
     now = datetime(2026, 6, 20, 15, tzinfo=timezone.utc)
-    record_sumit_call(
-        organization_id=org_id, endpoint="/accounting/documents/list/",
-        outcome="success", purpose="sync", now=now,
-    )
+    for _ in range(4):
+        record_sumit_call(
+            organization_id=org_id, endpoint="/accounting/documents/list/",
+            outcome="success", purpose="sync", now=now,
+        )
     db = SessionLocal()
     try:
         assert db.query(Alert).filter_by(
             organization_id=org_id, alert_type="sumit_usage_spike",
         ).count() == 0
+    finally:
+        db.close()
+
+
+def test_cap_alert_is_keyed_by_month(fresh_org, monkeypatch):
+    org_id = fresh_org()["org_id"]
+    monkeypatch.setattr(settings, "sumit_environment", "test")
+    monkeypatch.setattr(settings, "sumit_test_monthly_request_limit", 10)
+    june = datetime(2026, 6, 20, 12, tzinfo=timezone.utc)
+    july = datetime(2026, 7, 2, 12, tzinfo=timezone.utc)
+    for moment in (june, july):
+        for _ in range(7):
+            record_sumit_call(
+                organization_id=org_id, endpoint="/accounting/documents/list/",
+                outcome="success", purpose="sync", now=moment,
+            )
+    db = SessionLocal()
+    try:
+        alerts = db.query(Alert).filter_by(
+            organization_id=org_id, alert_type="sumit_usage_cap",
+        ).all()
+        assert {row.meta["month"] for row in alerts} == {"2026-06", "2026-07"}
+    finally:
+        db.close()
+
+
+def test_office_window_is_shared_across_client_files(fresh_org, monkeypatch):
+    office = fresh_org()["org_id"]
+    first = fresh_org()["org_id"]
+    second = fresh_org()["org_id"]
+    monkeypatch.setattr(settings, "sumit_environment", "live")
+    monkeypatch.setattr(settings, "sumit_live_monthly_request_limit", 2)
+    monkeypatch.setattr(settings, "sumit_live_org_daily_request_limit", 10)
+    monkeypatch.setattr(
+        "cfo.services.sumit_request_budget.paced_daily_limit",
+        lambda **kwargs: kwargs["configured_daily"],
+    )
+    from cfo.models import SumitCompany
+    db = SessionLocal()
+    try:
+        db.add(SumitCompany(
+            office_organization_id=office, company_id="11", name="א",
+            target_organization_id=first, status="active",
+        ))
+        db.add(SumitCompany(
+            office_organization_id=office, company_id="12", name="ב",
+            target_organization_id=second, status="active",
+        ))
+        db.commit()
+    finally:
+        db.close()
+    from cfo.services.sumit_request_budget import SumitRequestBudgetExceeded
+    SumitRequestLimiter(first, per_minute_limit=10, daily_limit=10).claim("/one")
+    SumitRequestLimiter(second, per_minute_limit=10, daily_limit=10).claim("/two")
+    with pytest.raises(SumitRequestBudgetExceeded, match="office monthly"):
+        SumitRequestLimiter(first, per_minute_limit=10, daily_limit=10).claim("/three")
+    record_sumit_call(
+        organization_id=first, endpoint="/accounting/documents/list/",
+        outcome="success", purpose="sync",
+        now=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    db = SessionLocal()
+    try:
+        row = db.query(ProviderCallLog).filter_by(organization_id=first).one()
+        assert row.office_organization_id == office
     finally:
         db.close()
 
@@ -219,5 +286,41 @@ async def test_make_request_writes_a_ledger_row_and_no_secret(monkeypatch, fresh
         assert secret not in blob
         assert "APIKey" not in blob
         assert any(row.purpose == "ops" for row in rows)
+        assert all(row.office_organization_id == org_id for row in rows)
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_getpdf_records_a_failed_attempt(monkeypatch, fresh_org):
+    import httpx
+    from cfo.integrations.sumit_integration import SumitAPIError, _SUMIT_ENVIRONMENT_CACHE
+
+    org_id = fresh_org()["org_id"]
+    monkeypatch.setattr(settings, "sumit_environment", "test")
+    client = SumitIntegration(
+        api_key="9f3c1a7e-2b44-4d18-9c6a-7e5b1d0f8a23",
+        company_id="1",
+        request_limiter=SumitRequestLimiter(org_id),
+    )
+    monkeypatch.setattr(client, "_enforce_paid_action_budget", lambda _endpoint: None)
+    _SUMIT_ENVIRONMENT_CACHE[client._environment_cache_key()] = datetime.now(timezone.utc)
+
+    async def fake_post(url, json=None, **_kwargs):
+        request = httpx.Request("POST", "https://api.sumit.co.il" + url)
+        return httpx.Response(404, request=request, text="missing")
+
+    monkeypatch.setattr(client.client, "post", fake_post)
+    with pytest.raises(SumitAPIError):
+        await client._post_binary("/accounting/documents/getpdf/", {})
+    await client.client.aclose()
+
+    db = SessionLocal()
+    try:
+        row = db.query(ProviderCallLog).filter_by(
+            organization_id=org_id, endpoint="/accounting/documents/getpdf/",
+        ).one()
+        assert row.outcome == "http_error"
+        assert row.office_organization_id == org_id
     finally:
         db.close()

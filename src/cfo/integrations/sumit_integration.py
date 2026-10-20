@@ -787,29 +787,47 @@ class SumitIntegration(BaseIntegration):
         # אין בקשה עד שהמשבצת העמידה נרשמה.
         self.request_limiter.claim(endpoint)
         data = self._with_credentials(payload or {})
-        response = await self.client.post(endpoint, json=data)
+        attempted = False
+        outcome = "error"
         try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            self._log_error(e, f"HTTP error on {endpoint}")
-            raise SumitAPIError(
-                f"SUMIT API error {e.response.status_code}: {e.response.text}"
-            )
-        content_type = response.headers.get("content-type", "")
-        if "application/json" in content_type:
-            # An error envelope came back instead of the binary payload.
+            attempted = True
+            response = await self.client.post(endpoint, json=data)
             try:
-                body = response.json()
-            except ValueError:
-                return response.content
-            if isinstance(body, dict) and body.get("Status", 0) not in (0, "0", "Success"):
-                message = (
-                    body.get("UserErrorMessage")
-                    or body.get("TechnicalErrorDetails")
-                    or f"Status={body.get('Status')}"
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                outcome = "http_error"
+                self._log_error(e, f"HTTP error on {endpoint}")
+                raise SumitAPIError(
+                    f"SUMIT API error {e.response.status_code}: {e.response.text}"
                 )
-                raise SumitAPIError(f"SUMIT API error: {message}")
-        return response.content
+            content_type = response.headers.get("content-type", "")
+            if "application/json" in content_type:
+                # An error envelope came back instead of the binary payload.
+                try:
+                    body = response.json()
+                except ValueError:
+                    outcome = "success"
+                    return response.content
+                if isinstance(body, dict) and body.get("Status", 0) not in (0, "0", "Success"):
+                    outcome = "http_error"
+                    message = (
+                        body.get("UserErrorMessage")
+                        or body.get("TechnicalErrorDetails")
+                        or f"Status={body.get('Status')}"
+                    )
+                    raise SumitAPIError(f"SUMIT API error: {message}")
+            outcome = "success"
+            return response.content
+        except SumitAPIError:
+            raise
+        except Exception:
+            outcome = "error"
+            raise
+        finally:
+            if attempted:
+                self._record_provider_call(
+                    endpoint, outcome, environment_verification=False,
+                )
 
     # ==================== Conversion helpers ====================
 

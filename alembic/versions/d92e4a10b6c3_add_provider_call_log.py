@@ -34,8 +34,14 @@ def upgrade():
         "provider_call_log",
         ["provider", "organization_id", "at"],
     )
+    op.create_index(
+        "ix_provider_call_office_at",
+        "provider_call_log",
+        ["provider", "office_organization_id", "at"],
+    )
 
 
 def downgrade():
+    op.drop_index("ix_provider_call_office_at", table_name="provider_call_log")
     op.drop_index("ix_provider_call_org_at", table_name="provider_call_log")
     op.drop_table("provider_call_log")
