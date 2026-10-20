@@ -160,6 +160,75 @@ def test_snapshot_is_idempotent_per_day_and_records_a_pipeline_run(client, fresh
         ).count() == 1
 
 
+def test_public_dashboard_hides_internal_coverage_ids(client, fresh_org):
+    owner = fresh_org()
+    created = _create(client, owner["headers"], owner["org_id"], "public-redact")
+    dashboard_id = created.json()["id"]
+    activated = client.patch(
+        f"/api/dashboards/{dashboard_id}", headers=owner["headers"],
+        json={"status": "active", "access_mode": "public"},
+    )
+    assert activated.status_code == 200, activated.text
+    leaky = {
+        "status": "ready",
+        "cashflow": {
+            "months": [],
+            "coverage": {
+                "organization_id": 514002099,
+                "coverage_id": 9001,
+                "excluded_count": 1,
+                "message": "בנק ••••1662: 100.00 לא נספר (לא מסווג)",
+                "excluded_accounts": [{
+                    "account_id": 424242,
+                    "coverage_id": 9001,
+                    "classified_by_user_id": 77,
+                    "label": "בנק",
+                    "masked_number": "••••1662",
+                    "reason": "UNCLASSIFIED",
+                    "net_amount": -100.0,
+                    "inflow_amount": 0.0,
+                    "outflow_amount": 100.0,
+                }],
+            },
+        },
+        "pnl": {"status": "unknown", "total_revenue": None},
+        "provider_calls": 0,
+        "freshness": {"published": False},
+    }
+    with SessionLocal() as db:
+        from cfo.models import ClientDashboard
+        snap = PublishedSnapshot(
+            dashboard_id=dashboard_id,
+            refreshed_day=date.today(),
+            snapshot_at=datetime.utcnow(),
+            view_model=leaky,
+            freshness={"published": True},
+            content_sha256="a" * 64,
+            provider_calls=0,
+        )
+        db.add(snap)
+        db.flush()
+        row = db.get(ClientDashboard, dashboard_id)
+        row.current_snapshot_id = snap.id
+        db.commit()
+    public = client.get("/api/public/d/public-redact")
+    assert public.status_code == 200, public.text
+    coverage = public.json()["cashflow"]["coverage"]
+    account = coverage["excluded_accounts"][0]
+    assert account == {
+        "label": "בנק",
+        "masked_number": "••••1662",
+        "reason": "UNCLASSIFIED",
+        "net_amount": -100.0,
+        "inflow_amount": 0.0,
+        "outflow_amount": 100.0,
+    }
+    assert coverage["message"].startswith("בנק")
+    blob = public.text
+    for secret in ("account_id", "coverage_id", "organization_id", "classified_by_user_id", "424242", "9001", "514002099"):
+        assert secret not in blob
+
+
 def test_dashboard_package_does_not_import_a_provider():
     root = Path("src/cfo/services/dashboards")
     files = list(root.glob("*.py")) + [Path("src/cfo/api/routes/client_dashboards.py")]

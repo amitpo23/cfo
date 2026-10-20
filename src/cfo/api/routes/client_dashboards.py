@@ -399,13 +399,15 @@ def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get
     if dashboard.current_snapshot_id:
         snapshot = db.get(PublishedSnapshot, dashboard.current_snapshot_id)
     if snapshot is not None:
-        payload = dict(snapshot.view_model or {})
+        payload = view_model.redact_public_view(dict(snapshot.view_model or {}))
         payload["provider_calls"] = 0
         payload["freshness"] = dict(snapshot.freshness or {})
         payload["freshness"]["published"] = True
         payload["source"] = "snapshot"
         return _public_response(payload)
     today = date.today()
-    view = view_model.build_view(db, dashboard.primary_organization_id, date(today.year, 1, 1), today)
+    view = view_model.redact_public_view(
+        view_model.build_view(db, dashboard.primary_organization_id, date(today.year, 1, 1), today)
+    )
     view["source"] = "live"
     return _public_response(view)

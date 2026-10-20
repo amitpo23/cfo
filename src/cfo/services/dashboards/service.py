@@ -9,10 +9,11 @@ from datetime import datetime, timedelta, timezone
 
 from ...models import (
     AuditLog, ClientDashboard, DashboardEntity, DashboardMember, DashboardPlan,
-    DashboardPlanRevision, DashboardShareLink, Organization, SumitCompany, User,
+    DashboardPlanRevision, DashboardShareLink, Organization, User,
     UserRole,
 )
 from ..membership_service import role_in
+from ..office_access import office_manages
 from ..secret_compare import constant_time_equal
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,47}$")
@@ -281,16 +282,7 @@ def _can_access_org(db, user: User, organization_id: int, office_organization_id
 
 
 def _office_manages(db, office_organization_id: int, organization_id: int) -> bool:
-    row = (
-        db.query(SumitCompany)
-        .filter_by(
-            office_organization_id=office_organization_id,
-            target_organization_id=organization_id,
-            status="active",
-        )
-        .first()
-    )
-    return row is not None
+    return office_manages(db, office_organization_id, organization_id)
 
 
 def _summary(row: ClientDashboard) -> dict:

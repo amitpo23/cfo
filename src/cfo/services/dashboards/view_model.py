@@ -10,6 +10,7 @@ import json
 from datetime import date, datetime
 
 from ...models import Bill, Expense, Invoice, PipelineRun
+from ..bank_coverage import redact_public_coverage
 from ..financial_reports_service import FinancialReportsService
 from ..live_cash_flow_service import LiveCashFlowService
 
@@ -37,7 +38,21 @@ def build_view(db, organization_id: int, start: date, end: date) -> dict:
             "published": False,
         },
     }
-    return view
+    return redact_public_view(view)
+
+
+def redact_public_view(view: dict) -> dict:
+    """Remove internal ids from a dashboard view before it is shown on /d/."""
+    if not isinstance(view, dict):
+        return view
+    cashflow = view.get("cashflow")
+    if not isinstance(cashflow, dict) or "coverage" not in cashflow:
+        return view
+    copied = dict(view)
+    cash = dict(cashflow)
+    cash["coverage"] = redact_public_coverage(cash.get("coverage"))
+    copied["cashflow"] = cash
+    return copied
 
 
 def publish_view(db, dashboard, view: dict, *, day: date | None = None) -> dict:
