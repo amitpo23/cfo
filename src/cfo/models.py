@@ -857,6 +857,177 @@ class OfAccountClassification(Base):
     )
 
 
+class ClientDashboard(Base):
+    """Authorization unit for /d/:slug. Reads Books; it does not write them."""
+
+    __tablename__ = "client_dashboards"
+
+    id = Column(Integer, primary_key=True)
+    slug = Column(String(48), nullable=False, unique=True)
+    title = Column(String(255), nullable=False)
+    primary_organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    office_organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    template = Column(String(32), nullable=False, default="generic")
+    access_mode = Column(String(20), nullable=False, default="link")
+    status = Column(String(20), nullable=False, default="draft")
+    current_snapshot_id = Column(Integer, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    primary_organization = relationship("Organization", foreign_keys=[primary_organization_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "access_mode IN ('members','link','public')",
+            name="ck_dashboard_access_mode",
+        ),
+        CheckConstraint(
+            "status IN ('draft','active','paused','archived')",
+            name="ck_dashboard_status",
+        ),
+        CheckConstraint(
+            "template IN ('generic','restaurant','services')",
+            name="ck_dashboard_template",
+        ),
+        Index("ix_dashboard_primary_org", "primary_organization_id"),
+    )
+
+
+class DashboardEntity(Base):
+    __tablename__ = "dashboard_entities"
+
+    id = Column(Integer, primary_key=True)
+    dashboard_id = Column(Integer, ForeignKey("client_dashboards.id"), nullable=False)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    label = Column(String(255), nullable=False)
+    role = Column(String(20), nullable=False, default="primary")
+
+    __table_args__ = (
+        UniqueConstraint("dashboard_id", "organization_id", name="uq_dashboard_entity_org"),
+        CheckConstraint("role IN ('primary','related')", name="ck_dashboard_entity_role"),
+    )
+
+
+class DashboardEntityAccount(Base):
+    __tablename__ = "dashboard_entity_accounts"
+
+    entity_id = Column(Integer, ForeignKey("dashboard_entities.id"), primary_key=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), primary_key=True)
+    display_label = Column(String(255), nullable=True)
+
+
+class DashboardMember(Base):
+    __tablename__ = "dashboard_members"
+
+    dashboard_id = Column(Integer, ForeignKey("client_dashboards.id"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    role = Column(String(32), nullable=False)
+    status = Column(String(20), nullable=False, default="active")
+    expires_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('owner','accountant','client_editor','client_viewer')",
+            name="ck_dashboard_member_role",
+        ),
+        CheckConstraint(
+            "status IN ('invited','active','revoked')",
+            name="ck_dashboard_member_status",
+        ),
+    )
+
+
+class DashboardShareLink(Base):
+    __tablename__ = "dashboard_share_links"
+
+    id = Column(Integer, primary_key=True)
+    dashboard_id = Column(Integer, ForeignKey("client_dashboards.id"), nullable=False)
+    token_sha256 = Column(String(64), nullable=False, unique=True)
+    label = Column(String(255), nullable=True)
+    scope = Column(String(40), nullable=False, default="snapshot_read")
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+    use_count = Column(Integer, nullable=False, default=0)
+
+
+class DashboardPlan(Base):
+    __tablename__ = "dashboard_plans"
+
+    dashboard_id = Column(Integer, ForeignKey("client_dashboards.id"), primary_key=True)
+    version = Column(String(36), nullable=False)
+    schema_version = Column(Integer, nullable=False, default=2)
+    payload = Column(JSON, nullable=False)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+
+class DashboardPlanRevision(Base):
+    __tablename__ = "dashboard_plan_revisions"
+
+    version = Column(String(36), primary_key=True)
+    dashboard_id = Column(Integer, ForeignKey("client_dashboards.id"), nullable=False)
+    previous_version = Column(String(36), nullable=True)
+    payload = Column(JSON, nullable=False)
+    changed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    changed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    change_summary = Column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "dashboard_id", "previous_version",
+            name="uq_dashboard_plan_previous",
+        ),
+    )
+
+
+class PublishedSnapshot(Base):
+    __tablename__ = "published_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    dashboard_id = Column(Integer, ForeignKey("client_dashboards.id"), nullable=False)
+    refreshed_day = Column(Date, nullable=False)
+    snapshot_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    plan_version = Column(String(36), nullable=True)
+    view_model = Column(JSON, nullable=False)
+    freshness = Column(JSON, nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    provider_calls = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint("dashboard_id", "refreshed_day", name="uq_snapshot_dashboard_day"),
+        CheckConstraint("provider_calls = 0", name="ck_snapshot_provider_calls"),
+    )
+
+
+class PipelineRun(Base):
+    __tablename__ = "pipeline_runs"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    run_day = Column(Date, nullable=False)
+    step = Column(String(40), nullable=False)
+    status = Column(String(20), nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    counts = Column(JSON, nullable=True)
+    error_code = Column(String(80), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "run_day", "step",
+            name="uq_pipeline_run_org_day_step",
+        ),
+        CheckConstraint(
+            "status IN ('queued','running','succeeded','failed','skipped','uncertain')",
+            name="ck_pipeline_run_status",
+        ),
+    )
+
+
 class OpenFinancePayment(Base):
     """A payment initiated/tracked through the Open Finance PIS surface.
 

@@ -1,0 +1,361 @@
+"""Client dashboard API. Unknown and forbidden dashboards both return 404.
+
+Public reads set no-referrer and noindex. They do not call SUMIT or Open Finance.
+"""
+from __future__ import annotations
+
+import hashlib
+from datetime import date, datetime, timezone
+
+from fastapi import APIRouter, Depends, Header, Request, Response
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
+
+from ..dependencies import get_current_user
+from ...config import settings
+from ...database import get_db_session
+from ...models import ProviderRequestBudget, PublishedSnapshot, User
+from ...services.dashboards import service, view_model
+from ...services.dashboards.service import READ_ROLES, DashboardError
+
+router = APIRouter()
+public_router = APIRouter()
+
+_COOKIE_SALT = "rezef-dashboard-share"
+_PUBLIC_HEADERS = {
+    "Referrer-Policy": "no-referrer",
+    "X-Robots-Tag": "noindex",
+    "X-Frame-Options": "DENY",
+    "Cache-Control": "private, no-store",
+}
+
+
+class DashboardCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    primary_organization_id: int
+    slug: str = Field(min_length=3, max_length=48)
+    title: str = Field(min_length=1, max_length=255)
+    template: str = "generic"
+    access_mode: str = "link"
+    office_organization_id: int | None = None
+
+
+class DashboardPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = None
+    access_mode: str | None = None
+    status: str | None = None
+
+
+class PlanBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    payload: dict
+
+
+class ShareBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str | None = Field(default=None, max_length=255)
+
+
+class SessionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=1, max_length=200)
+
+
+def _error(exc: DashboardError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status,
+        content={"error": {"code": exc.code, "message_he": exc.message_he}},
+    )
+
+
+def _sign_cookie(payload: dict) -> str:
+    import base64
+    import hmac
+    import json
+    import time
+    body = dict(payload)
+    body["iat"] = int(time.time())
+    raw = base64.urlsafe_b64encode(json.dumps(body, separators=(",", ":")).encode()).decode().rstrip("=")
+    sig = hmac.new(
+        f"{settings.jwt_secret_key}:{_COOKIE_SALT}".encode(), raw.encode(), hashlib.sha256,
+    ).hexdigest()
+    return f"{raw}.{sig}"
+
+
+class _BadCookie(Exception):
+    pass
+
+
+def _read_cookie(value: str, *, max_age: int) -> dict:
+    import base64
+    import hmac
+    import json
+    import time
+    from ...services.secret_compare import constant_time_equal
+    try:
+        raw, sig = value.split(".", 1)
+    except ValueError:
+        raise _BadCookie()
+    expected = hmac.new(
+        f"{settings.jwt_secret_key}:{_COOKIE_SALT}".encode(), raw.encode(), hashlib.sha256,
+    ).hexdigest()
+    if not constant_time_equal(sig, expected):
+        raise _BadCookie()
+    try:
+        data = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+    except (json.JSONDecodeError, ValueError):
+        raise _BadCookie()
+    if int(time.time()) - int(data.get("iat", 0)) > max_age:
+        raise _BadCookie()
+    return data
+
+
+@router.get("/dashboards")
+def list_dashboards(db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    return {"dashboards": service.list_dashboards(db, user), "provider_calls": 0}
+
+
+@router.post("/dashboards", status_code=201)
+def create_dashboard(body: DashboardCreate, db: Session = Depends(get_db_session),
+                     user: User = Depends(get_current_user)):
+    try:
+        row = service.create_dashboard(
+            db, user, organization_id=body.primary_organization_id, slug=body.slug,
+            title=body.title, template=body.template, access_mode=body.access_mode,
+            office_organization_id=body.office_organization_id,
+        )
+    except DashboardError as exc:
+        return _error(exc)
+    return {"id": row.id, "slug": row.slug, "status": row.status, "provider_calls": 0}
+
+
+@router.get("/dashboards/{dashboard_id}")
+def read_dashboard(dashboard_id: int, db: Session = Depends(get_db_session),
+                   user: User = Depends(get_current_user)):
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
+    except DashboardError as exc:
+        return _error(exc)
+    return {"id": row.id, "slug": row.slug, "title": row.title, "status": row.status,
+            "access_mode": row.access_mode, "provider_calls": 0}
+
+
+@router.patch("/dashboards/{dashboard_id}")
+def patch_dashboard(dashboard_id: int, body: DashboardPatch, db: Session = Depends(get_db_session),
+                    user: User = Depends(get_current_user)):
+    try:
+        row = service.update_dashboard(db, user, dashboard_id, body.model_dump(exclude_unset=True))
+    except DashboardError as exc:
+        return _error(exc)
+    return {"id": row.id, "slug": row.slug, "status": row.status, "access_mode": row.access_mode}
+
+
+@router.get("/dashboards/{dashboard_id}/view")
+def dashboard_view(dashboard_id: int, start: date | None = None, end: date | None = None,
+                   db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
+        window_end = end or date.today()
+        window_start = start or date(window_end.year, 1, 1)
+        view = view_model.build_view(db, row.primary_organization_id, window_start, window_end)
+    except DashboardError as exc:
+        return _error(exc)
+    except ValueError as exc:
+        return _error(DashboardError(422, "invalid_range", str(exc)))
+    view["dashboard_id"] = row.id
+    return view
+
+
+@router.post("/dashboards/{dashboard_id}/snapshots", status_code=201)
+def publish_snapshot(dashboard_id: int, db: Session = Depends(get_db_session),
+                     user: User = Depends(get_current_user)):
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed={"owner"})
+        today = date.today()
+        view = view_model.build_view(db, row.primary_organization_id, date(today.year, 1, 1), today)
+        saved = view_model.publish_view(db, row, view, day=today)
+    except DashboardError as exc:
+        return _error(exc)
+    saved["provider_calls"] = 0
+    return saved
+
+
+@router.post("/dashboards/{dashboard_id}/share-links", status_code=201)
+def create_share_link(dashboard_id: int, body: ShareBody, db: Session = Depends(get_db_session),
+                      user: User = Depends(get_current_user)):
+    try:
+        return service.create_share_link(db, user, dashboard_id, label=body.label)
+    except DashboardError as exc:
+        return _error(exc)
+
+
+@router.get("/dashboards/{dashboard_id}/share-links")
+def list_share_links(dashboard_id: int, db: Session = Depends(get_db_session),
+                     user: User = Depends(get_current_user)):
+    try:
+        return {"links": service.list_share_links(db, user, dashboard_id)}
+    except DashboardError as exc:
+        return _error(exc)
+
+
+@router.delete("/dashboards/{dashboard_id}/share-links/{link_id}", status_code=204)
+def revoke_share_link(dashboard_id: int, link_id: int, db: Session = Depends(get_db_session),
+                      user: User = Depends(get_current_user)):
+    try:
+        service.revoke_share_link(db, user, dashboard_id, link_id)
+    except DashboardError as exc:
+        return _error(exc)
+    return Response(status_code=204)
+
+
+@router.get("/dashboards/{dashboard_id}/plan")
+def read_plan(dashboard_id: int, response: Response, db: Session = Depends(get_db_session),
+              user: User = Depends(get_current_user)):
+    try:
+        plan = service.read_plan(db, user, dashboard_id)
+    except DashboardError as exc:
+        return _error(exc)
+    response.headers["ETag"] = f'"{plan["version"]}"' if plan["version"] else "null"
+    return plan
+
+
+@router.put("/dashboards/{dashboard_id}/plan")
+def save_plan(dashboard_id: int, body: PlanBody, db: Session = Depends(get_db_session),
+              user: User = Depends(get_current_user), if_match: str | None = Header(default=None)):
+    try:
+        plan = service.save_plan(db, user, dashboard_id, body.payload, if_match)
+    except DashboardError as exc:
+        return _error(exc)
+    response = JSONResponse(plan)
+    response.headers["ETag"] = f'"{plan["version"]}"'
+    return response
+
+
+def _public_response(payload: dict, status_code: int = 200) -> JSONResponse:
+    response = JSONResponse(status_code=status_code, content=payload)
+    for key, value in _PUBLIC_HEADERS.items():
+        response.headers[key] = value
+    return response
+
+
+def _claim_public_limit(db: Session, request: Request, slug: str) -> JSONResponse | None:
+    host = request.client.host if request.client else "unknown"
+    scope = hashlib.sha256(f"{host}|{slug}".encode()).hexdigest()[:40]
+    window = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    row = (
+        db.query(ProviderRequestBudget)
+        .filter_by(provider="dashboard_public", scope_key=scope, window_kind="minute", window_start=window)
+        .first()
+    )
+    if row is None:
+        db.add(ProviderRequestBudget(
+            provider="dashboard_public", scope_key=scope, window_kind="minute",
+            window_start=window, used=1, limit_value=120,
+        ))
+        db.commit()
+        return None
+    if row.used >= row.limit_value:
+        return _public_response({"error": {"code": "rate_limited", "message_he": "יותר מדי בקשות"}}, 429)
+    row.used += 1
+    db.commit()
+    return None
+
+
+def _claim_failure(db: Session, request: Request, slug: str) -> bool:
+    host = request.client.host if request.client else "unknown"
+    scope = hashlib.sha256(f"fail|{host}|{slug}".encode()).hexdigest()[:40]
+    window = service.failure_window_start()
+    row = (
+        db.query(ProviderRequestBudget)
+        .filter_by(provider="dashboard_public", scope_key=scope, window_kind="quarter_hour", window_start=window)
+        .first()
+    )
+    if row is None:
+        db.add(ProviderRequestBudget(
+            provider="dashboard_public", scope_key=scope, window_kind="quarter_hour",
+            window_start=window, used=1, limit_value=5,
+        ))
+        db.commit()
+        return False
+    if row.used >= 5:
+        return True
+    row.used += 1
+    db.commit()
+    return False
+
+
+def _cookie_dashboard(db: Session, request: Request, dashboard_id: int):
+    raw = request.cookies.get(f"rzd_{dashboard_id}")
+    if not raw:
+        return None
+    try:
+        data = _read_cookie(raw, max_age=30 * 24 * 3600)
+    except _BadCookie:
+        return None
+    from ...models import DashboardShareLink
+    link = db.get(DashboardShareLink, data.get("link_id"))
+    if link is None or link.dashboard_id != dashboard_id or link.revoked_at is not None:
+        return None
+    if link.expires_at and link.expires_at < datetime.utcnow():
+        return None
+    return link
+
+
+@public_router.post("/d/{slug}/session")
+def open_share_session(slug: str, body: SessionBody, request: Request,
+                       db: Session = Depends(get_db_session)):
+    limited = _claim_public_limit(db, request, slug)
+    if limited:
+        return limited
+    try:
+        dashboard, link = service.resolve_share_token(db, slug, body.token)
+    except DashboardError:
+        if _claim_failure(db, request, slug):
+            return _public_response({"error": {"code": "rate_limited", "message_he": "יותר מדי ניסיונות"}}, 429)
+        return _public_response({"error": {"code": "not_found", "message_he": "הדשבורד לא נמצא"}}, 404)
+    service.mark_link_used(db, link)
+    response = _public_response({"ok": True, "provider_calls": 0})
+    secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    response.set_cookie(
+        key=f"rzd_{dashboard.id}",
+        value=_sign_cookie({"link_id": link.id, "dashboard_id": dashboard.id}),
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        max_age=30 * 24 * 3600,
+        path="/",
+    )
+    return response
+
+
+@public_router.get("/d/{slug}")
+def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get_db_session)):
+    limited = _claim_public_limit(db, request, slug)
+    if limited:
+        return limited
+    try:
+        dashboard = service.public_dashboard(db, slug)
+    except DashboardError as exc:
+        return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
+    link = None
+    if dashboard.access_mode != "public":
+        link = _cookie_dashboard(db, request, dashboard.id)
+        if link is None:
+            return _public_response({"error": {"code": "not_found", "message_he": "הדשבורד לא נמצא"}}, 404)
+        service.mark_link_used(db, link)
+    snapshot = None
+    if dashboard.current_snapshot_id:
+        snapshot = db.get(PublishedSnapshot, dashboard.current_snapshot_id)
+    if snapshot is not None:
+        payload = dict(snapshot.view_model or {})
+        payload["provider_calls"] = 0
+        payload["freshness"] = dict(snapshot.freshness or {})
+        payload["freshness"]["published"] = True
+        payload["source"] = "snapshot"
+        return _public_response(payload)
+    today = date.today()
+    view = view_model.build_view(db, dashboard.primary_organization_id, date(today.year, 1, 1), today)
+    view["source"] = "live"
+    return _public_response(view)
