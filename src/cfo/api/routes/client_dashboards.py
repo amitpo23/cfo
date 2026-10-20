@@ -254,13 +254,25 @@ def _public_response(payload: dict, status_code: int = 200) -> JSONResponse:
     return response
 
 
+def _forwarded_client(value: str | None) -> str | None:
+    if not value:
+        return None
+    first = value.split(",")[0].strip()
+    return first or None
+
+
 def _client_address(request: Request) -> str:
-    """Trusted left-most X-Forwarded-For. The platform appends that hop."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
+    """The address the rate limit may trust.
+
+    On Vercel the platform overwrites ``x-vercel-forwarded-for`` with the
+    client address. Off Vercel a caller can set ``X-Forwarded-For``, so the
+    limit uses the socket peer only.
+    """
+    if os.getenv("VERCEL") or os.getenv("VERCEL_ENV"):
+        for header in ("x-vercel-forwarded-for", "x-real-ip", "x-forwarded-for"):
+            client = _forwarded_client(request.headers.get(header))
+            if client:
+                return client
     if request.client and request.client.host:
         return request.client.host
     return "unknown"

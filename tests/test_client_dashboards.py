@@ -268,12 +268,12 @@ def test_office_admin_needs_an_active_management_link(client, fresh_org):
     assert closed.status_code == 404
 
 
-def test_public_rate_limit_uses_its_own_table_and_the_leftmost_forwarded_for(client, fresh_org):
+def test_public_rate_limit_trusts_vercel_and_ignores_spoofed_forwarded_for(client, fresh_org, monkeypatch):
     from starlette.requests import Request
 
     from cfo.api.routes.client_dashboards import _claim_public_limit
 
-    def _request(forwarded: str) -> Request:
+    def _request(peer: str, headers: list[tuple[bytes, bytes]]) -> Request:
         return Request({
             "type": "http",
             "http_version": "1.1",
@@ -282,11 +282,14 @@ def test_public_rate_limit_uses_its_own_table_and_the_leftmost_forwarded_for(cli
             "path": "/",
             "raw_path": b"/",
             "query_string": b"",
-            "headers": [(b"x-forwarded-for", forwarded.encode())],
-            "client": ("10.1.1.1", 1234),
+            "headers": headers,
+            "client": (peer, 1234),
             "server": ("test", 80),
         })
 
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.delenv("VERCEL_ENV", raising=False)
+    spoofed = [(b"x-forwarded-for", b"203.0.113.9, 10.1.1.1")]
     with SessionLocal() as db:
         db.add(DashboardRateLimit(
             scope_key="stale",
@@ -295,15 +298,30 @@ def test_public_rate_limit_uses_its_own_table_and_the_leftmost_forwarded_for(cli
             used=1,
         ))
         db.commit()
-        for _ in range(120):
-            assert _claim_public_limit(db, _request("203.0.113.9, 10.1.1.1"), "rate-slug") is None
-        blocked = _claim_public_limit(db, _request("203.0.113.9, 10.9.9.9"), "rate-slug")
+        for index in range(120):
+            forwarded = f"203.0.113.{index}, 10.1.1.1".encode()
+            assert _claim_public_limit(
+                db, _request("10.1.1.1", [(b"x-forwarded-for", forwarded)]), "rate-slug",
+            ) is None
+        blocked = _claim_public_limit(db, _request("10.1.1.1", spoofed), "rate-slug")
         assert blocked is not None and blocked.status_code == 429
-        other = _claim_public_limit(db, _request("203.0.113.8, 10.1.1.1"), "rate-slug")
-        assert other is None
+        other_peer = _claim_public_limit(
+            db, _request("10.2.2.2", [(b"x-forwarded-for", b"203.0.113.9")]), "rate-slug",
+        )
+        assert other_peer is None
         assert db.query(DashboardRateLimit).filter_by(scope_key="stale").count() == 0
         assert db.query(ProviderRequestBudget).filter_by(provider="dashboard_public").count() == 0
-        assert db.query(DashboardRateLimit).count() >= 1
+
+    monkeypatch.setenv("VERCEL", "1")
+    vercel = [(b"x-vercel-forwarded-for", b"198.51.100.7"), (b"x-forwarded-for", b"203.0.113.9")]
+    rotated = [(b"x-vercel-forwarded-for", b"198.51.100.8"), (b"x-forwarded-for", b"203.0.113.9")]
+    with SessionLocal() as db:
+        for _ in range(120):
+            assert _claim_public_limit(db, _request("10.1.1.1", vercel), "vercel-slug") is None
+        blocked = _claim_public_limit(db, _request("10.9.9.9", vercel), "vercel-slug")
+        assert blocked is not None and blocked.status_code == 429
+        other = _claim_public_limit(db, _request("10.1.1.1", rotated), "vercel-slug")
+        assert other is None
 
 
 def test_vercel_sets_a_secure_share_cookie_and_the_cookie_secret_is_optional(client, fresh_org, monkeypatch):
