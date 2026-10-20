@@ -138,7 +138,7 @@ def _strip_membership_check(path):
 
 
 def test_reconciliation_restores_a_missing_check_before_stamping(fresh_db):
-    """A missing CHECK is repaired before head is stamped."""
+    """A missing allow-listed CHECK is repaired before head is stamped."""
     engine, path = fresh_db
     _strip_membership_check(path)
     stamped = []
@@ -181,3 +181,29 @@ def test_reconciliation_refuses_to_stamp_when_rows_violate_the_check(fresh_db):
         row.get("name")
         for row in sa.inspect(engine).get_check_constraints("organization_memberships")
     }
+
+
+def test_check_repair_skips_names_outside_the_allow_list(fresh_db, monkeypatch):
+    engine, path = fresh_db
+    _strip_membership_check(path)
+    from cfo.services import schema_sync
+
+    monkeypatch.setattr(schema_sync, "CHECK_REPAIR_ALLOW_LIST", frozenset())
+    applied = schema_sync._apply_missing_check_constraints(engine)
+
+    assert applied == {}
+    assert REQUIRED[1] not in {
+        row.get("name")
+        for row in sa.inspect(engine).get_check_constraints("organization_memberships")
+    }
+
+
+def test_postgres_check_repair_does_not_use_not_valid():
+    import inspect
+
+    from cfo.services.schema_sync import _add_postgres_checks
+
+    source = inspect.getsource(_add_postgres_checks)
+    assert "NOT VALID" not in source
+    assert "VALIDATE CONSTRAINT" not in source
+    assert "ADD CONSTRAINT" in source

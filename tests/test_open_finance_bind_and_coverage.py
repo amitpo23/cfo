@@ -281,7 +281,7 @@ def test_unattached_coverage_excludes_provider_rows_before_the_boundary(fresh_or
         provider = Account(
             organization_id=org_id, name="Unlinked 1662", account_type=AccountType.BANK,
             source="open_finance", external_id="of-unlinked", currency="ILS",
-            provider_account_number="99-0000",
+            provider_account_number=None,
         )
         db.add(provider)
         db.flush()
@@ -440,3 +440,205 @@ def test_overlap_is_linked_once_per_sync_page(fresh_org, monkeypatch):
         result = asyncio.run(engine._sync_entity_type("bank_transactions"))
         assert result["created"] == 3
     assert calls["n"] == 1
+
+
+def test_covers_from_that_leaves_a_gap_is_rejected(fresh_org):
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        client = _import_bank(db, office, "514000174")
+        org_id = client["target_organization_id"]
+        account = db.query(Account).filter_by(organization_id=org_id, source=local.SOURCE).one()
+        with pytest.raises(OpenFinanceBindError, match="day after the last reviewed"):
+            bind_existing_connection(
+                db, org_id, connection_id="consent-gap", status="ACTIVE",
+                coverage={"local_account_id": account.id, "covers_from": date(2026, 10, 17),
+                          "bank_account_suffix": "1662"},
+            )
+
+
+def test_gap_days_after_the_local_import_stay_in_the_sum(fresh_org):
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        client = _import_bank(db, office, "514000175")
+        org_id = client["target_organization_id"]
+        local_account = db.query(Account).filter_by(organization_id=org_id, source=local.SOURCE).one()
+        bind_existing_connection(
+            db, org_id, connection_id="consent-gap-sum", status="ACTIVE",
+            coverage={"local_account_id": local_account.id, "covers_from": date(2026, 10, 14),
+                      "bank_account_suffix": "1662"},
+        )
+        coverage = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).one()
+        coverage.covers_from = date(2026, 10, 17)
+        provider = Account(
+            organization_id=org_id, name="Bank 1662", account_type=AccountType.BANK,
+            source="open_finance", external_id="of-gap", currency="ILS",
+            provider_account_number="12-1662",
+        )
+        db.add(provider)
+        db.flush()
+        from cfo.services.bank_coverage import attach_provider_account
+        attach_provider_account(db, provider)
+        db.add(BankTransaction(
+            organization_id=org_id, source="open_finance", external_id="of-1014",
+            account_id=provider.id, transaction_date=date(2026, 10, 14),
+            amount=Decimal("-700.00"), description="Gap day", currency="ILS",
+        ))
+        db.add(BankTransaction(
+            organization_id=org_id, source="open_finance", external_id="of-1018",
+            account_id=provider.id, transaction_date=date(2026, 10, 18),
+            amount=Decimal("-30.00"), description="After coverage", currency="ILS",
+        ))
+        db.commit()
+        report = LiveCashFlowService(db, org_id).monthly_cash_flow(
+            months=6, as_of_date=date(2026, 10, 31),
+        )
+        october = next(m for m in report["months"] if m["month"] == "2026-10")
+        assert october["outflows"] == 6730.0
+        assert report["coverage"]["excluded_count"] == 0
+
+
+def test_unattached_coverage_keeps_a_numbered_second_bank(fresh_org):
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        client = _import_bank(db, office, "514000176")
+        org_id = client["target_organization_id"]
+        local_account = db.query(Account).filter_by(organization_id=org_id, source=local.SOURCE).one()
+        bind_existing_connection(
+            db, org_id, connection_id="consent-other-bank", status="ACTIVE",
+            coverage={"local_account_id": local_account.id, "covers_from": date(2026, 10, 14),
+                      "bank_account_suffix": "1662"},
+        )
+        other = Account(
+            organization_id=org_id, name="Other bank", account_type=AccountType.BANK,
+            source="open_finance", external_id="of-other-bank", currency="ILS",
+            provider_account_number="31-9999",
+        )
+        db.add(other)
+        db.flush()
+        db.add(BankTransaction(
+            organization_id=org_id, source="open_finance", external_id="of-other-1001",
+            account_id=other.id, transaction_date=date(2026, 10, 1),
+            amount=Decimal("-2500.00"), description="Other bank", currency="ILS",
+        ))
+        db.commit()
+        report = LiveCashFlowService(db, org_id).monthly_cash_flow(
+            months=6, as_of_date=date(2026, 10, 31),
+        )
+        october = next(m for m in report["months"] if m["month"] == "2026-10")
+        assert october["outflows"] == 8500.0
+        assert report["coverage"]["provider_account_linked"] is False
+        assert report["coverage"]["excluded_count"] == 0
+
+
+def test_bind_commits_the_unattached_alert_and_a_read_does_not(fresh_org):
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        client = _import_bank(db, office, "514000177")
+        org_id = client["target_organization_id"]
+        local_account = db.query(Account).filter_by(organization_id=org_id, source=local.SOURCE).one()
+        local_id = local_account.id
+        db.add(AccountSourceCoverage(
+            organization_id=org_id, local_account_id=local_id, source=local.SOURCE,
+            covers_from=date(2026, 10, 14), bank_account_suffix="1662",
+        ))
+        db.commit()
+    reader = SessionLocal()
+    try:
+        LiveCashFlowService(reader, org_id).monthly_cash_flow(
+            months=6, as_of_date=date(2026, 10, 31),
+        )
+    finally:
+        reader.close()
+    with SessionLocal() as db:
+        assert db.query(Alert).filter_by(
+            organization_id=org_id, alert_type="coverage_provider_unattached",
+        ).count() == 0
+        bind_existing_connection(
+            db, org_id, connection_id="consent-alert", status="ACTIVE",
+            coverage={"local_account_id": local_id, "covers_from": date(2026, 10, 14),
+                      "bank_account_suffix": "1662"},
+        )
+    with SessionLocal() as db:
+        assert db.query(Alert).filter_by(
+            organization_id=org_id, alert_type="coverage_provider_unattached",
+        ).count() == 1
+
+
+def test_sync_commits_the_unattached_coverage_alert(fresh_org):
+    import asyncio
+
+    from cfo.services.connector_base import FetchResult
+    from cfo.services.sync_engine import SyncEngine
+
+    org_id = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        account = Account(
+            organization_id=org_id, name="Local", account_type=AccountType.BANK,
+            source=local.SOURCE, external_id="local-bank:1662", currency="ILS",
+        )
+        db.add(account)
+        db.flush()
+        db.add(AccountSourceCoverage(
+            organization_id=org_id, local_account_id=account.id, source=local.SOURCE,
+            covers_from=date(2026, 10, 14), bank_account_suffix="1662",
+        ))
+        db.commit()
+
+    class Page:
+        async def fetch_bank_transactions(self, updated_since=None, cursor=None):
+            return FetchResult(items=[])
+
+        def __getattr__(self, _name):
+            async def empty(**_kwargs):
+                return FetchResult()
+            return empty
+
+    with SessionLocal() as db:
+        engine = SyncEngine(db, Page(), org_id, "open_finance")
+        asyncio.run(engine._sync_entity_type("bank_transactions"))
+    with SessionLocal() as db:
+        assert db.query(Alert).filter_by(
+            organization_id=org_id, alert_type="coverage_provider_unattached",
+        ).count() == 1
+
+
+def test_renewed_consent_supersedes_the_previous_active_one(fresh_org, monkeypatch):
+    import asyncio
+
+    org_id = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        bind_existing_connection(db, org_id, connection_id="old-consent", status="ACTIVE")
+        db.add(BankConnection(
+            organization_id=org_id, source="open_finance",
+            connection_id="new-consent", status="INACTIVE",
+        ))
+        db.commit()
+
+    class _Client:
+        async def get_connection(self, connection_id):
+            assert connection_id == "new-consent"
+            return {"status": "ACTIVE", "providerFriendlyId": "leumi"}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "cfo.api.routes.open_finance.get_open_finance_client",
+        lambda *_args, **_kwargs: _Client(),
+    )
+    from cfo.services.open_finance_onboarding import get_connection_status
+
+    async def _run():
+        db = SessionLocal()
+        try:
+            return await get_connection_status(db, org_id, "new-consent")
+        finally:
+            db.close()
+
+    result = asyncio.run(_run())
+    assert result["status"] == "ACTIVE"
+    with SessionLocal() as db:
+        old = db.query(BankConnection).filter_by(connection_id="old-consent").one()
+        new = db.query(BankConnection).filter_by(connection_id="new-consent").one()
+        assert old.status == "SUPERSEDED"
+        assert new.status == "ACTIVE"

@@ -8,7 +8,7 @@ checklist, or set a consent URL.
 from __future__ import annotations
 
 import hashlib
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -126,6 +126,7 @@ def bind_existing_connection(
         coverage_out = None
         if coverage is not None:
             coverage_out = _record_coverage(db, org_id, coverage)
+            record_unattached_coverage_alert(db, org_id)
         if created or coverage_out is not None:
             db.add(AuditLog(
                 user_id=actor_id,
@@ -280,12 +281,12 @@ def cashflow_selection(db, org_id: int, start: date, end: date):
         if cov.superseded_by_account_id is not None
     }
     unattached = [cov for cov in coverages if cov.superseded_by_account_id is None]
-    if unattached:
-        _alert_unattached_provider(db, org_id)
+    cutoffs = {cov.id: _effective_provider_cutoff(db, cov) for cov in coverages}
+    numbered = _accounts_with_digits(db, rows)
     visible = []
     excluded = matched = unmatched = 0
     for row in rows:
-        keep, overlap = _keep_row(row, by_local, by_provider, unattached)
+        keep, overlap = _keep_row(row, by_local, by_provider, unattached, cutoffs, numbered)
         if keep:
             visible.append((row.transaction_date, row.amount))
             continue
@@ -312,8 +313,8 @@ def _coverage_message(excluded: int, unmatched: int, unattached: bool) -> str | 
     parts = []
     if unattached:
         parts.append(
-            "חשבון הבנק של הספק אינו מקושר לשורת הכיסוי, "
-            "ולכן תנועות הבנק שלפני תחילת הכיסוי לא נספרו."
+            "חשבון הבנק של הספק אינו מקושר לשורת הכיסוי. "
+            "רק תנועות בלי מספר חשבון שניתן לזהות, שתאריכן לפני סוף הייבוא המקומי, לא נספרו."
         )
     if excluded:
         parts.append(
@@ -327,8 +328,22 @@ def _coverage_message(excluded: int, unmatched: int, unattached: bool) -> str | 
     return " ".join(parts) if parts else None
 
 
-def _alert_unattached_provider(db, org_id: int) -> None:
-    """One active alert when a coverage row has no provider account. Flush only."""
+def record_unattached_coverage_alert(db, org_id: int) -> None:
+    """Persist one alert when coverage has no provider account.
+
+    Callers commit. A cash-flow read must not write this row: the request
+    session closes without a commit and would roll the alert back.
+    """
+    unattached = (
+        db.query(AccountSourceCoverage)
+        .filter(
+            AccountSourceCoverage.organization_id == org_id,
+            AccountSourceCoverage.superseded_by_account_id.is_(None),
+        )
+        .first()
+    )
+    if unattached is None:
+        return
     existing = (
         db.query(Alert)
         .filter(
@@ -345,14 +360,75 @@ def _alert_unattached_provider(db, org_id: int) -> None:
         alert_type="coverage_provider_unattached",
         severity=AlertSeverity.WARNING,
         title="חשבון הבנק אינו מקושר לכיסוי",
-        message="קיימת שורת כיסוי בלי חשבון ספק. תנועות הבנק שלפני תחילת הכיסוי לא נספרו.",
+        message="קיימת שורת כיסוי בלי חשבון ספק. תנועות בלי מספר חשבון שניתן לזהות לא נספרו.",
         status=AlertStatus.ACTIVE,
         meta={"reason": "coverage_without_provider_account"},
     ))
     db.flush()
 
 
-def _keep_row(row, by_local, by_provider, unattached) -> tuple[bool, bool]:
+def supersede_other_live_consents(db, org_id: int, connection_id: str) -> None:
+    """Retire other live consents so a renewal can become ACTIVE.
+
+    The partial unique index allows one ACTIVE, CONNECTED, or COMPLETED
+    Open Finance row per organization. ``SUPERSEDED`` is outside that list.
+    """
+    rows = (
+        db.query(BankConnection)
+        .filter(
+            BankConnection.organization_id == org_id,
+            BankConnection.source == "open_finance",
+            BankConnection.connection_id != connection_id,
+            BankConnection.status.in_(tuple(SYNCABLE_STATUSES)),
+        )
+        .all()
+    )
+    for other in rows:
+        other.status = "SUPERSEDED"
+
+
+def _effective_provider_cutoff(db, cov) -> date:
+    """First provider-authoritative day that does not leave a gap.
+
+    Stored ``covers_from`` may be later than the day after the local import.
+    Dates in that gap are not covered by a local row, so they stay in the sum.
+    """
+    last_local = (
+        db.query(func.max(BankTransaction.transaction_date))
+        .filter(
+            BankTransaction.organization_id == cov.organization_id,
+            BankTransaction.account_id == cov.local_account_id,
+            BankTransaction.source == LOCAL_SOURCE,
+        )
+        .scalar()
+    )
+    if last_local is None:
+        return cov.covers_from
+    day_after = last_local + timedelta(days=1)
+    if day_after < cov.covers_from:
+        return day_after
+    return cov.covers_from
+
+
+def _accounts_with_digits(db, rows) -> set[int]:
+    ids = {
+        row.account_id for row in rows
+        if row.source == "open_finance" and row.account_id is not None
+    }
+    if not ids:
+        return set()
+    numbered = set()
+    for account_id, number in (
+        db.query(Account.id, Account.provider_account_number)
+        .filter(Account.id.in_(ids))
+        .all()
+    ):
+        if _digit_tail(number):
+            numbered.add(account_id)
+    return numbered
+
+
+def _keep_row(row, by_local, by_provider, unattached, cutoffs, numbered) -> tuple[bool, bool]:
     """Return (include_in_sum, is_coverage_overlap)."""
     if row.superseded_by_id is not None:
         return False, True
@@ -364,12 +440,14 @@ def _keep_row(row, by_local, by_provider, unattached) -> tuple[bool, bool]:
         return True, False
     if source == "open_finance":
         cov = by_provider.get(row.account_id)
-        if cov is not None and row.transaction_date < cov.covers_from:
+        if cov is not None and row.transaction_date < cutoffs[cov.id]:
             return False, True
-        # No provider account on the coverage row: the feed cannot be
-        # attributed, so every provider row before the boundary stays out.
-        if cov is None and unattached and any(
-            row.transaction_date < item.covers_from for item in unattached
+        # An unattached coverage cannot name its bank. Only a feed row with
+        # no parseable account number could still be that bank. A different
+        # numbered account stays in the sum.
+        ambiguous = row.account_id is None or row.account_id not in numbered
+        if cov is None and ambiguous and unattached and any(
+            row.transaction_date < cutoffs[item.id] for item in unattached
         ):
             return False, True
         return True, False
@@ -526,9 +604,9 @@ def _record_coverage(db, org_id: int, coverage: dict) -> dict:
         )
         .scalar()
     )
-    if last_local is not None and covers_from <= last_local:
+    if last_local is not None and covers_from != last_local + timedelta(days=1):
         raise OpenFinanceBindError(
-            "covers_from must be after the last reviewed local transaction"
+            "covers_from must be the day after the last reviewed local transaction"
         )
     if suffix is not None:
         suffix = str(suffix)

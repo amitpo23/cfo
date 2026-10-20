@@ -20,9 +20,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import BankConnection, IntegrationConnection
+from .bank_coverage import SYNCABLE_STATUSES, supersede_other_live_consents
 from .open_finance_client import OpenFinanceError
 from .credentials_vault import decrypt_credentials, encrypt_credentials
 
@@ -269,6 +271,9 @@ async def get_connection_status(db: Session, org_id: int, connection_id: str) ->
             "connection status response missing status",
             payload,
         )
+    normalized = str(status).strip().upper()
+    if normalized in SYNCABLE_STATUSES:
+        supersede_other_live_consents(db, org_id, connection_id)
     row.status = status
     row.provider_id = (
         payload.get("providerFriendlyId")
@@ -282,7 +287,17 @@ async def get_connection_status(db: Session, org_id: int, connection_id: str) ->
     elif isinstance(accounts, int):
         row.accounts_count = accounts
     row.raw_data = payload
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        detail = str(getattr(exc, "orig", exc))
+        if "uq_bankconn_one_active_open_finance" in detail:
+            raise OpenFinanceError(
+                409,
+                "Organization already has an active Open Finance connection",
+            ) from exc
+        raise
 
     result: dict[str, Any] = {
         "status": status,

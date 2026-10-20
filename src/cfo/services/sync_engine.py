@@ -547,6 +547,9 @@ class SyncEngine:
                 if entity_type == "bank_transactions":
                     from .bank_coverage import link_coverage_overlap
                     link_coverage_overlap(self.db, self.org_id)
+                if entity_type in {"bank_transactions", "accounts"}:
+                    from .bank_coverage import record_unattached_coverage_alert
+                    record_unattached_coverage_alert(self.db, self.org_id)
 
                 # Commit a complete page with its continuation cursor. A later
                 # failure must neither lose that checkpoint nor keep half a page.

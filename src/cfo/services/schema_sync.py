@@ -18,6 +18,15 @@ from sqlalchemy.engine import Engine
 from ..database import Base
 
 
+# Repair may add only these named checks. Anything else stays drift and
+# blocks stamp. PostgreSQL adds a validating constraint; a violating row
+# aborts that transaction.
+CHECK_REPAIR_ALLOW_LIST = frozenset({
+    ("bank_transactions", "ck_banktx_source_external_id"),
+    ("organization_memberships", "ck_membership_role_not_super_admin"),
+})
+
+
 _FULL_DRIFT_KEYS = (
     "tables",
     "columns",
@@ -419,9 +428,9 @@ def apply_additive(engine: Engine) -> Dict:
     ובטוחי-נתונים: הידוק NOT NULL כשיש server_default (ראו
     ``_tighten_nullability_with_defaults``), החלפת אינדקס שקיים באותו שם
     אך בחתימה שגויה (למשל non-unique→unique; אם קיימות שורות כפולות —
-    היצירה נכשלת וה-drift נשאר פתוח, fail-closed), והוספת CHECK שהמודל
-    דורש (ראו ``_apply_missing_check_constraints``; שורה שסותרת את
-    האילוץ מפילה את ההוספה והשער נשאר סגור). בטוח להרצה חוזרת
+    היצירה נכשלת וה-drift נשאר פתוח, fail-closed), והוספת CHECK ששמם
+    ב-``CHECK_REPAIR_ALLOW_LIST`` (ראו ``_apply_missing_check_constraints``;
+    שורה שסותרת את האילוץ מפילה את ההוספה והשער נשאר סגור). בטוח להרצה חוזרת
     (idempotent). אילוצי FK ו-unique שנשארו פתוחים נשארים לשער ה-drift.
     """
     from sqlalchemy.schema import CreateColumn
@@ -501,11 +510,10 @@ def apply_additive(engine: Engine) -> Dict:
 def _apply_missing_check_constraints(engine: Engine) -> Dict[str, List[str]]:
     """Add named CHECK constraints the model requires and the live table lacks.
 
-    A check declared only on the ORM is invisible to a database that was
-    repaired by adding columns. SQLite cannot ``ALTER`` a constraint in
-    place, so Alembic batch mode rebuilds that table; PostgreSQL emits
-    ``ADD CONSTRAINT``. A row that already violates the rule makes the
-    statement fail and the drift gate stays closed.
+    Only names in ``CHECK_REPAIR_ALLOW_LIST`` are added. SQLite rebuilds the
+    table through Alembic batch mode. PostgreSQL adds a validating
+    constraint. A row that already violates the rule makes the statement
+    fail and the drift gate stays closed.
     """
     from alembic.migration import MigrationContext
     from alembic.operations import Operations
@@ -515,7 +523,10 @@ def _apply_missing_check_constraints(engine: Engine) -> Dict[str, List[str]]:
         if item.get("inspection_error"):
             continue
         table_name = item["table"]
-        missing_names = list(item["missing_check_constraints"])
+        missing_names = [
+            name for name in item["missing_check_constraints"]
+            if (table_name, name) in CHECK_REPAIR_ALLOW_LIST
+        ]
         table = Base.metadata.tables.get(table_name)
         if table is None or not missing_names:
             continue
@@ -526,14 +537,36 @@ def _apply_missing_check_constraints(engine: Engine) -> Dict[str, List[str]]:
         }
         if not by_name:
             continue
-        with engine.begin() as conn:
-            ctx = MigrationContext.configure(conn)
-            ops = Operations(ctx)
-            with ops.batch_alter_table(table_name) as batch:
-                for name in missing_names:
-                    constraint = by_name.get(name)
-                    if constraint is None:
-                        continue
-                    batch.create_check_constraint(name, str(constraint.sqltext))
+        if engine.dialect.name == "postgresql":
+            _add_postgres_checks(engine, table_name, missing_names, by_name)
+        else:
+            with engine.begin() as conn:
+                ctx = MigrationContext.configure(conn)
+                ops = Operations(ctx)
+                with ops.batch_alter_table(table_name) as batch:
+                    for name in missing_names:
+                        constraint = by_name.get(name)
+                        if constraint is None:
+                            continue
+                        batch.create_check_constraint(name, str(constraint.sqltext))
         applied[table_name] = [name for name in missing_names if name in by_name]
     return applied
+
+
+def _add_postgres_checks(engine: Engine, table_name: str, names: List[str], by_name) -> None:
+    """Add each allow-listed check as a validating constraint.
+
+    A two-step add that postpones validation inside the same transaction
+    holds the lock through the scan and is not used. A violating row aborts
+    this transaction, so the constraint is not left behind.
+    """
+    with engine.begin() as conn:
+        for name in names:
+            constraint = by_name.get(name)
+            if constraint is None or (table_name, name) not in CHECK_REPAIR_ALLOW_LIST:
+                continue
+            expression = str(constraint.sqltext)
+            conn.execute(sa_text(
+                f'ALTER TABLE "{table_name}" ADD CONSTRAINT "{name}" '
+                f"CHECK ({expression})"
+            ))
