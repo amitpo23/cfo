@@ -9,8 +9,10 @@ from datetime import datetime, timedelta, timezone
 
 from ...models import (
     AuditLog, ClientDashboard, DashboardEntity, DashboardMember, DashboardPlan,
-    DashboardPlanRevision, DashboardShareLink, Organization, User, UserRole,
+    DashboardPlanRevision, DashboardShareLink, Organization, SumitCompany, User,
+    UserRole,
 )
+from ..membership_service import role_in
 from ..secret_compare import constant_time_equal
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,47}$")
@@ -41,7 +43,9 @@ def create_dashboard(db, user: User, *, organization_id: int, slug: str, title: 
     if access_mode not in {"members", "link", "public"}:
         raise DashboardError(422, "invalid_access", "מצב הגישה אינו מוכר")
     org = db.get(Organization, organization_id)
-    if org is None or not org.is_active or not _can_admin_org(user, organization_id):
+    if org is None or not org.is_active or not _can_access_org(
+        db, user, organization_id, office_organization_id,
+    ):
         raise not_found()
     if db.query(ClientDashboard).filter_by(slug=slug).first():
         raise DashboardError(409, "slug_taken", "הכתובת כבר בשימוש")
@@ -103,9 +107,7 @@ def update_dashboard(db, user: User, dashboard_id: int, changes: dict) -> Client
 def role_for(db, user: User | None, row: ClientDashboard) -> str | None:
     if user is None:
         return None
-    if user.role == UserRole.SUPER_ADMIN or _can_admin_org(user, row.primary_organization_id):
-        return "owner"
-    if row.office_organization_id and _can_admin_org(user, row.office_organization_id):
+    if _can_access_org(db, user, row.primary_organization_id, row.office_organization_id):
         return "owner"
     member = (
         db.query(DashboardMember)
@@ -256,10 +258,39 @@ def _public_dashboard(db, slug: str) -> ClientDashboard:
     return row
 
 
-def _can_admin_org(user: User, organization_id: int) -> bool:
+def _can_access_org(db, user: User, organization_id: int, office_organization_id: int | None) -> bool:
+    """Active ADMIN membership, or platform SUPER_ADMIN.
+
+    ``User.role`` and ``User.organization_id`` are not an authorization
+    source. An office id is accepted only when that office manages the
+    primary organization and the user is an active admin of the office.
+    """
+    if office_organization_id is not None and not _office_manages(
+        db, office_organization_id, organization_id,
+    ):
+        return False
     if user.role == UserRole.SUPER_ADMIN:
         return True
-    return user.role == UserRole.ADMIN and user.organization_id == organization_id
+    if role_in(db, user.id, organization_id) == UserRole.ADMIN:
+        if office_organization_id is None:
+            return True
+        return role_in(db, user.id, office_organization_id) == UserRole.ADMIN
+    if office_organization_id is None:
+        return False
+    return role_in(db, user.id, office_organization_id) == UserRole.ADMIN
+
+
+def _office_manages(db, office_organization_id: int, organization_id: int) -> bool:
+    row = (
+        db.query(SumitCompany)
+        .filter_by(
+            office_organization_id=office_organization_id,
+            target_organization_id=organization_id,
+            status="active",
+        )
+        .first()
+    )
+    return row is not None
 
 
 def _summary(row: ClientDashboard) -> dict:

@@ -894,6 +894,27 @@ class ClientDashboard(Base):
     )
 
 
+class DashboardRateLimit(Base):
+    """Public /d rate window. Separate from provider request budgets."""
+
+    __tablename__ = "dashboard_rate_limits"
+
+    id = Column(Integer, primary_key=True)
+    scope_key = Column(String(64), nullable=False)
+    window_kind = Column(String(20), nullable=False)
+    window_start = Column(DateTime, nullable=False)
+    used = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_key", "window_kind", "window_start",
+            name="uq_dashboard_rate_window",
+        ),
+        Index("ix_dashboard_rate_window_start", "window_start"),
+    )
+
+
 class DashboardEntity(Base):
     __tablename__ = "dashboard_entities"
 

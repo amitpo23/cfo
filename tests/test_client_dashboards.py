@@ -1,10 +1,16 @@
 """Dashboard access, live view, and share links. No provider calls."""
 import ast
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
+from cfo.auth import create_access_token
 from cfo.database import SessionLocal
-from cfo.models import DashboardMember, PipelineRun, PublishedSnapshot
+from cfo.models import (
+    DashboardMember, DashboardRateLimit, Invoice, OrganizationMembership,
+    PipelineRun, ProviderRequestBudget, PublishedSnapshot, SumitCompany, User,
+    UserRole,
+)
 
 
 def _create(client, headers, org_id, slug="foodgroup-cash"):
@@ -130,13 +136,25 @@ def test_snapshot_is_idempotent_per_day_and_records_a_pipeline_run(client, fresh
     created = _create(client, owner["headers"], owner["org_id"], "snap-dash")
     dashboard_id = created.json()["id"]
     first = client.post(f"/api/dashboards/{dashboard_id}/snapshots", headers=owner["headers"])
-    second = client.post(f"/api/dashboards/{dashboard_id}/snapshots", headers=owner["headers"])
     assert first.status_code == 201, first.text
-    assert second.status_code == 201, second.text
     assert first.json()["provider_calls"] == 0
+    with SessionLocal() as db:
+        db.add(Invoice(
+            organization_id=owner["org_id"],
+            invoice_number="snap-1",
+            issue_date=date.today(),
+            subtotal=Decimal("100.00"),
+            total=Decimal("100.00"),
+        ))
+        db.commit()
+    second = client.post(f"/api/dashboards/{dashboard_id}/snapshots", headers=owner["headers"])
+    assert second.status_code == 201, second.text
     assert first.json()["id"] == second.json()["id"]
+    assert first.json()["content_sha256"] != second.json()["content_sha256"]
     with SessionLocal() as db:
         assert db.query(PublishedSnapshot).filter_by(dashboard_id=dashboard_id).count() == 1
+        stored = db.query(PublishedSnapshot).filter_by(dashboard_id=dashboard_id).one()
+        assert stored.content_sha256 == second.json()["content_sha256"]
         assert db.query(PipelineRun).filter_by(
             organization_id=owner["org_id"], step="snapshot", run_day=date.today(),
         ).count() == 1
@@ -158,6 +176,161 @@ def test_dashboard_package_does_not_import_a_provider():
                     names.extend(alias.name for alias in node.names)
                 blob = " ".join(names)
                 assert not any(word in blob for word in banned), path
+
+
+def test_legacy_admin_role_without_a_live_admin_membership_is_404(client, fresh_org):
+    owner = fresh_org()
+    created = _create(client, owner["headers"], owner["org_id"], "membership-dash")
+    assert created.status_code == 201, created.text
+    dashboard_id = created.json()["id"]
+    with SessionLocal() as db:
+        user = User(
+            organization_id=owner["org_id"],
+            email=f"legacy-admin-{owner['org_id']}@example.com",
+            password_hash="x",
+            full_name="Legacy Admin",
+            role=UserRole.ADMIN,
+            is_active=True,
+            token_version=0,
+        )
+        db.add(user)
+        db.flush()
+        db.add(OrganizationMembership(
+            organization_id=owner["org_id"],
+            user_id=user.id,
+            role=UserRole.VIEWER,
+            status="suspended",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+        user_id = user.id
+    token = create_access_token({"sub": str(user_id)})
+    denied = client.get(
+        f"/api/dashboards/{dashboard_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert denied.status_code == 404
+
+
+def test_office_admin_needs_an_active_management_link(client, fresh_org):
+    office = fresh_org()
+    client_org = fresh_org()
+    refused = _create(client, office["headers"], client_org["org_id"], "office-unlinked")
+    assert refused.status_code == 404
+    with SessionLocal() as db:
+        db.add(SumitCompany(
+            office_organization_id=office["org_id"],
+            company_id="844329067",
+            name="Client file",
+            status="active",
+            target_organization_id=client_org["org_id"],
+        ))
+        db.commit()
+    created = client.post("/api/dashboards", headers=office["headers"], json={
+        "primary_organization_id": client_org["org_id"],
+        "office_organization_id": office["org_id"],
+        "slug": "office-linked",
+        "title": "תיק לקוח",
+    })
+    assert created.status_code == 201, created.text
+    dashboard_id = created.json()["id"]
+    with SessionLocal() as db:
+        accountant = User(
+            organization_id=client_org["org_id"],
+            email=f"office-admin-{office['org_id']}@example.com",
+            password_hash="x",
+            full_name="Office Admin",
+            role=UserRole.ADMIN,
+            is_active=True,
+            token_version=0,
+        )
+        db.add(accountant)
+        db.flush()
+        db.add(OrganizationMembership(
+            organization_id=office["org_id"],
+            user_id=accountant.id,
+            role=UserRole.ADMIN,
+            status="active",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+        accountant_id = accountant.id
+    headers = {"Authorization": f"Bearer {create_access_token({'sub': str(accountant_id)})}"}
+    allowed = client.get(f"/api/dashboards/{dashboard_id}", headers=headers)
+    assert allowed.status_code == 200, allowed.text
+    with SessionLocal() as db:
+        row = db.query(SumitCompany).filter_by(target_organization_id=client_org["org_id"]).one()
+        row.status = "inactive"
+        db.commit()
+    closed = client.get(f"/api/dashboards/{dashboard_id}", headers=headers)
+    assert closed.status_code == 404
+
+
+def test_public_rate_limit_uses_its_own_table_and_the_leftmost_forwarded_for(client, fresh_org):
+    from starlette.requests import Request
+
+    from cfo.api.routes.client_dashboards import _claim_public_limit
+
+    def _request(forwarded: str) -> Request:
+        return Request({
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/",
+            "raw_path": b"/",
+            "query_string": b"",
+            "headers": [(b"x-forwarded-for", forwarded.encode())],
+            "client": ("10.1.1.1", 1234),
+            "server": ("test", 80),
+        })
+
+    with SessionLocal() as db:
+        db.add(DashboardRateLimit(
+            scope_key="stale",
+            window_kind="minute",
+            window_start=datetime.utcnow() - timedelta(days=2),
+            used=1,
+        ))
+        db.commit()
+        for _ in range(120):
+            assert _claim_public_limit(db, _request("203.0.113.9, 10.1.1.1"), "rate-slug") is None
+        blocked = _claim_public_limit(db, _request("203.0.113.9, 10.9.9.9"), "rate-slug")
+        assert blocked is not None and blocked.status_code == 429
+        other = _claim_public_limit(db, _request("203.0.113.8, 10.1.1.1"), "rate-slug")
+        assert other is None
+        assert db.query(DashboardRateLimit).filter_by(scope_key="stale").count() == 0
+        assert db.query(ProviderRequestBudget).filter_by(provider="dashboard_public").count() == 0
+        assert db.query(DashboardRateLimit).count() >= 1
+
+
+def test_vercel_sets_a_secure_share_cookie_and_the_cookie_secret_is_optional(client, fresh_org, monkeypatch):
+    owner = fresh_org()
+    created = _create(client, owner["headers"], owner["org_id"], "cookie-dash")
+    dashboard_id = created.json()["id"]
+    client.patch(
+        f"/api/dashboards/{dashboard_id}", headers=owner["headers"], json={"status": "active"},
+    )
+    minted = client.post(
+        f"/api/dashboards/{dashboard_id}/share-links", headers=owner["headers"], json={},
+    )
+    token = minted.json()["token"]
+    monkeypatch.setenv("VERCEL", "1")
+    opened = client.post("/api/public/d/cookie-dash/session", json={"token": token})
+    assert opened.status_code == 200, opened.text
+    cookie = opened.headers["set-cookie"].lower()
+    assert "secure" in cookie
+    monkeypatch.delenv("VERCEL", raising=False)
+    from cfo.config import settings
+    monkeypatch.setattr(settings, "dashboard_cookie_secret", "dedicated-dashboard-secret")
+    hidden = client.get("/api/public/d/cookie-dash")
+    assert hidden.status_code == 404
+    again = client.post("/api/public/d/cookie-dash/session", json={"token": token})
+    assert again.status_code == 200, again.text
+    visible = client.get("/api/public/d/cookie-dash")
+    assert visible.status_code == 200, visible.text
 
 
 def test_duplicate_slug_is_a_conflict(client, fresh_org):

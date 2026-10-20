@@ -41,7 +41,10 @@ def build_view(db, organization_id: int, start: date, end: date) -> dict:
 
 
 def publish_view(db, dashboard, view: dict, *, day: date | None = None) -> dict:
-    """Store one snapshot per dashboard per day. A second publish is the same row."""
+    """Store one snapshot per dashboard per day.
+
+    A second publish on that day keeps the same row and replaces the view.
+    """
     day = day or date.today()
     encoded = json.dumps(view, sort_keys=True, ensure_ascii=False, default=str)
     digest = hashlib.sha256(encoded.encode()).hexdigest()
@@ -64,6 +67,12 @@ def publish_view(db, dashboard, view: dict, *, day: date | None = None) -> dict:
         )
         db.add(row)
         db.flush()
+    else:
+        row.snapshot_at = datetime.utcnow()
+        row.view_model = view
+        row.freshness = view.get("freshness") or {}
+        row.content_sha256 = digest
+        row.provider_calls = 0
     dashboard.current_snapshot_id = row.id
     _pipeline(db, dashboard.primary_organization_id, day)
     db.commit()

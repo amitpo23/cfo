@@ -5,17 +5,20 @@ Public reads set no-referrer and noindex. They do not call SUMIT or Open Finance
 from __future__ import annotations
 
 import hashlib
-from datetime import date, datetime, timezone
+import os
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from ..dependencies import get_current_user
 from ...config import settings
 from ...database import get_db_session
-from ...models import ProviderRequestBudget, PublishedSnapshot, User
+from ...models import DashboardRateLimit, PublishedSnapshot, User
 from ...services.dashboards import service, view_model
 from ...services.dashboards.service import READ_ROLES, DashboardError
 
@@ -70,6 +73,17 @@ def _error(exc: DashboardError) -> JSONResponse:
     )
 
 
+def _cookie_secret() -> str:
+    return settings.dashboard_cookie_secret or settings.jwt_secret_key
+
+
+def _cookie_secure(request: Request) -> bool:
+    if os.getenv("VERCEL") or os.getenv("VERCEL_ENV"):
+        return True
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    return proto == "https"
+
+
 def _sign_cookie(payload: dict) -> str:
     import base64
     import hmac
@@ -79,7 +93,7 @@ def _sign_cookie(payload: dict) -> str:
     body["iat"] = int(time.time())
     raw = base64.urlsafe_b64encode(json.dumps(body, separators=(",", ":")).encode()).decode().rstrip("=")
     sig = hmac.new(
-        f"{settings.jwt_secret_key}:{_COOKIE_SALT}".encode(), raw.encode(), hashlib.sha256,
+        f"{_cookie_secret()}:{_COOKIE_SALT}".encode(), raw.encode(), hashlib.sha256,
     ).hexdigest()
     return f"{raw}.{sig}"
 
@@ -99,7 +113,7 @@ def _read_cookie(value: str, *, max_age: int) -> dict:
     except ValueError:
         raise _BadCookie()
     expected = hmac.new(
-        f"{settings.jwt_secret_key}:{_COOKIE_SALT}".encode(), raw.encode(), hashlib.sha256,
+        f"{_cookie_secret()}:{_COOKIE_SALT}".encode(), raw.encode(), hashlib.sha256,
     ).hexdigest()
     if not constant_time_equal(sig, expected):
         raise _BadCookie()
@@ -240,50 +254,74 @@ def _public_response(payload: dict, status_code: int = 200) -> JSONResponse:
     return response
 
 
+def _client_address(request: Request) -> str:
+    """Trusted left-most X-Forwarded-For. The platform appends that hop."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _naive_utc(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _purge_rate_limits(db: Session) -> None:
+    cutoff = datetime.utcnow() - timedelta(days=1)
+    db.query(DashboardRateLimit).filter(DashboardRateLimit.window_start < cutoff).delete(
+        synchronize_session=False,
+    )
+
+
+def _bump_rate_limit(db: Session, scope_key: str, window_kind: str, window_start: datetime, limit: int) -> bool:
+    """Atomically increment a window. False when the window is already full."""
+    _purge_rate_limits(db)
+    table = DashboardRateLimit.__table__
+    values = {
+        "scope_key": scope_key,
+        "window_kind": window_kind,
+        "window_start": _naive_utc(window_start),
+        "used": 1,
+        "created_at": datetime.utcnow(),
+    }
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        statement = pg_insert(table).values(**values)
+    elif dialect == "sqlite":
+        statement = sqlite_insert(table).values(**values)
+    else:
+        db.rollback()
+        return False
+    statement = statement.on_conflict_do_update(
+        index_elements=["scope_key", "window_kind", "window_start"],
+        set_={"used": table.c.used + 1},
+        where=table.c.used < limit,
+    ).returning(table.c.used)
+    allowed = db.execute(statement).scalar_one_or_none() is not None
+    db.commit()
+    return allowed
+
+
 def _claim_public_limit(db: Session, request: Request, slug: str) -> JSONResponse | None:
-    host = request.client.host if request.client else "unknown"
+    host = _client_address(request)
     scope = hashlib.sha256(f"{host}|{slug}".encode()).hexdigest()[:40]
     window = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    row = (
-        db.query(ProviderRequestBudget)
-        .filter_by(provider="dashboard_public", scope_key=scope, window_kind="minute", window_start=window)
-        .first()
-    )
-    if row is None:
-        db.add(ProviderRequestBudget(
-            provider="dashboard_public", scope_key=scope, window_kind="minute",
-            window_start=window, used=1, limit_value=120,
-        ))
-        db.commit()
+    if _bump_rate_limit(db, scope, "minute", window, 120):
         return None
-    if row.used >= row.limit_value:
-        return _public_response({"error": {"code": "rate_limited", "message_he": "יותר מדי בקשות"}}, 429)
-    row.used += 1
-    db.commit()
-    return None
+    return _public_response({"error": {"code": "rate_limited", "message_he": "יותר מדי בקשות"}}, 429)
 
 
 def _claim_failure(db: Session, request: Request, slug: str) -> bool:
-    host = request.client.host if request.client else "unknown"
+    host = _client_address(request)
     scope = hashlib.sha256(f"fail|{host}|{slug}".encode()).hexdigest()[:40]
     window = service.failure_window_start()
-    row = (
-        db.query(ProviderRequestBudget)
-        .filter_by(provider="dashboard_public", scope_key=scope, window_kind="quarter_hour", window_start=window)
-        .first()
-    )
-    if row is None:
-        db.add(ProviderRequestBudget(
-            provider="dashboard_public", scope_key=scope, window_kind="quarter_hour",
-            window_start=window, used=1, limit_value=5,
-        ))
-        db.commit()
-        return False
-    if row.used >= 5:
-        return True
-    row.used += 1
-    db.commit()
-    return False
+    return not _bump_rate_limit(db, scope, "quarter_hour", window, 5)
 
 
 def _cookie_dashboard(db: Session, request: Request, dashboard_id: int):
@@ -317,7 +355,7 @@ def open_share_session(slug: str, body: SessionBody, request: Request,
         return _public_response({"error": {"code": "not_found", "message_he": "הדשבורד לא נמצא"}}, 404)
     service.mark_link_used(db, link)
     response = _public_response({"ok": True, "provider_calls": 0})
-    secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    secure = _cookie_secure(request)
     response.set_cookie(
         key=f"rzd_{dashboard.id}",
         value=_sign_cookie({"link_id": link.id, "dashboard_id": dashboard.id}),
