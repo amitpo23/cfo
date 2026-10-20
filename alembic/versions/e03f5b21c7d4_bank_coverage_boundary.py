@@ -1,6 +1,8 @@
-"""Coverage boundary and one-connection-per-org for bank feeds.
+"""Coverage boundary and one active Open Finance connection per org.
 
 Not applied to production. Gate 0 still requires an owner-approved repair.
+SQLite cannot ALTER a foreign key, so superseded_by_id is an audit pointer
+with no database constraint. The external-id check is added in batch mode.
 """
 from alembic import op
 import sqlalchemy as sa
@@ -10,29 +12,17 @@ down_revision = "d92e4a10b6c3"
 branch_labels = None
 depends_on = None
 
+_ACTIVE_OF = "source = 'open_finance' AND status IN ('ACTIVE', 'CONNECTED', 'COMPLETED')"
+
 
 def upgrade():
-    op.add_column(
-        "bank_transactions",
-        sa.Column("superseded_by_id", sa.Integer(), nullable=True),
-    )
-    op.add_column(
-        "bank_transactions",
-        sa.Column("content_fingerprint", sa.String(length=64), nullable=True),
-    )
-    op.create_foreign_key(
-        "fk_banktx_superseded_by",
-        "bank_transactions",
-        "bank_transactions",
-        ["superseded_by_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
-    op.create_check_constraint(
-        "ck_banktx_source_external_id",
-        "bank_transactions",
-        "source = 'manual' OR external_id IS NOT NULL",
-    )
+    with op.batch_alter_table("bank_transactions") as batch:
+        batch.add_column(sa.Column("superseded_by_id", sa.Integer(), nullable=True))
+        batch.add_column(sa.Column("content_fingerprint", sa.String(length=64), nullable=True))
+        batch.create_check_constraint(
+            "ck_banktx_source_external_id",
+            "source = 'manual' OR external_id IS NOT NULL",
+        )
     op.create_index(
         "uq_bankconn_source_connection_id",
         "bank_connections",
@@ -40,6 +30,14 @@ def upgrade():
         unique=True,
         postgresql_where=sa.text("connection_id IS NOT NULL"),
         sqlite_where=sa.text("connection_id IS NOT NULL"),
+    )
+    op.create_index(
+        "uq_bankconn_one_active_open_finance",
+        "bank_connections",
+        ["organization_id"],
+        unique=True,
+        postgresql_where=sa.text(_ACTIVE_OF),
+        sqlite_where=sa.text(_ACTIVE_OF),
     )
     op.create_table(
         "account_source_coverage",
@@ -66,8 +64,9 @@ def upgrade():
 def downgrade():
     op.drop_index("ix_account_source_coverage_org", table_name="account_source_coverage")
     op.drop_table("account_source_coverage")
+    op.drop_index("uq_bankconn_one_active_open_finance", table_name="bank_connections")
     op.drop_index("uq_bankconn_source_connection_id", table_name="bank_connections")
-    op.drop_constraint("ck_banktx_source_external_id", "bank_transactions", type_="check")
-    op.drop_constraint("fk_banktx_superseded_by", "bank_transactions", type_="foreignkey")
-    op.drop_column("bank_transactions", "content_fingerprint")
-    op.drop_column("bank_transactions", "superseded_by_id")
+    with op.batch_alter_table("bank_transactions") as batch:
+        batch.drop_constraint("ck_banktx_source_external_id", type_="check")
+        batch.drop_column("content_fingerprint")
+        batch.drop_column("superseded_by_id")

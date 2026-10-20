@@ -752,6 +752,19 @@ class BankConnection(Base):
             sqlite_where=text("connection_id IS NOT NULL"),
             postgresql_where=text("connection_id IS NOT NULL"),
         ),
+        # One live consent per organization. A second bank stays a separate
+        # row only after the first consent is no longer ACTIVE/CONNECTED/COMPLETED.
+        Index(
+            "uq_bankconn_one_active_open_finance",
+            "organization_id",
+            unique=True,
+            sqlite_where=text(
+                "source = 'open_finance' AND status IN ('ACTIVE', 'CONNECTED', 'COMPLETED')"
+            ),
+            postgresql_where=text(
+                "source = 'open_finance' AND status IN ('ACTIVE', 'CONNECTED', 'COMPLETED')"
+            ),
+        ),
     )
 
 
@@ -1851,7 +1864,9 @@ class BankTransaction(Base):
     payload_hash = Column(String(64), nullable=True)
     # Set when this row is the duplicate side of a coverage overlap. The
     # surviving row is never deleted and is not itself marked.
-    superseded_by_id = Column(Integer, ForeignKey("bank_transactions.id"), nullable=True)
+    # No database foreign key: SQLite batch migrations cannot add a
+    # self-referential constraint, and the column is only an audit pointer.
+    superseded_by_id = Column(Integer, nullable=True)
     # sha256 of date|amount|normalized description. Account id is excluded:
     # the local import and the provider feed are different account rows.
     content_fingerprint = Column(String(64), nullable=True)
@@ -1860,7 +1875,6 @@ class BankTransaction(Base):
     organization = relationship("Organization")
     account = relationship("Account")
     category = relationship("Category")
-    superseded_by = relationship("BankTransaction", remote_side="BankTransaction.id")
 
     __table_args__ = (
         Index("ix_banktx_org_ext", "organization_id", "external_id", "source", unique=True),

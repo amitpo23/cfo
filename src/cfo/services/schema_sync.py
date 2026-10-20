@@ -414,14 +414,15 @@ def _tighten_nullability_with_defaults(engine: Engine) -> Dict[str, List[str]]:
 def apply_additive(engine: Engine) -> Dict:
     """משלים את הסכמה החיה למודלים — additive בלבד.
 
-    יוצר טבלאות, עמודות ואינדקסים חסרים; לעולם לא מוחק נתונים ולא משנה
-    טיפוס של עמודה קיימת. שני חריגים דטרמיניסטיים ובטוחי-נתונים:
-    הידוק NOT NULL כשיש server_default (ראו
-    ``_tighten_nullability_with_defaults``), והחלפת אינדקס שקיים באותו שם
+    יוצר טבלאות, עמודות, אינדקסים ואילוצי CHECK חסרים; לעולם לא מוחק
+    נתונים ולא משנה טיפוס של עמודה קיימת. חריגים דטרמיניסטיים
+    ובטוחי-נתונים: הידוק NOT NULL כשיש server_default (ראו
+    ``_tighten_nullability_with_defaults``), החלפת אינדקס שקיים באותו שם
     אך בחתימה שגויה (למשל non-unique→unique; אם קיימות שורות כפולות —
-    היצירה נכשלת וה-drift נשאר פתוח, fail-closed). בטוח להרצה חוזרת
-    (idempotent). כל שאר האילוצים נשארים לשער ה-drift ולמיגרציית Alembic
-    מפורשת.
+    היצירה נכשלת וה-drift נשאר פתוח, fail-closed), והוספת CHECK שהמודל
+    דורש (ראו ``_apply_missing_check_constraints``; שורה שסותרת את
+    האילוץ מפילה את ההוספה והשער נשאר סגור). בטוח להרצה חוזרת
+    (idempotent). אילוצי FK ו-unique שנשארו פתוחים נשארים לשער ה-drift.
     """
     from sqlalchemy.schema import CreateColumn
 
@@ -490,4 +491,49 @@ def apply_additive(engine: Engine) -> Dict:
     if tightened:
         missing["nullability_tightened"] = tightened
 
+    added_checks = _apply_missing_check_constraints(engine)
+    if added_checks:
+        missing["check_constraints"] = added_checks
+
     return missing
+
+
+def _apply_missing_check_constraints(engine: Engine) -> Dict[str, List[str]]:
+    """Add named CHECK constraints the model requires and the live table lacks.
+
+    A check declared only on the ORM is invisible to a database that was
+    repaired by adding columns. SQLite cannot ``ALTER`` a constraint in
+    place, so Alembic batch mode rebuilds that table; PostgreSQL emits
+    ``ADD CONSTRAINT``. A row that already violates the rule makes the
+    statement fail and the drift gate stays closed.
+    """
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    applied: Dict[str, List[str]] = {}
+    for item in compute_check_constraint_drift(engine):
+        if item.get("inspection_error"):
+            continue
+        table_name = item["table"]
+        missing_names = list(item["missing_check_constraints"])
+        table = Base.metadata.tables.get(table_name)
+        if table is None or not missing_names:
+            continue
+        by_name = {
+            constraint.name: constraint
+            for constraint in table.constraints
+            if isinstance(constraint, CheckConstraint) and constraint.name in missing_names
+        }
+        if not by_name:
+            continue
+        with engine.begin() as conn:
+            ctx = MigrationContext.configure(conn)
+            ops = Operations(ctx)
+            with ops.batch_alter_table(table_name) as batch:
+                for name in missing_names:
+                    constraint = by_name.get(name)
+                    if constraint is None:
+                        continue
+                    batch.create_check_constraint(name, str(constraint.sqltext))
+        applied[table_name] = [name for name in missing_names if name in by_name]
+    return applied

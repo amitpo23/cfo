@@ -11,12 +11,16 @@ import hashlib
 from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.attributes import flag_modified
 
 from ..models import (
     Account,
     AccountSourceCoverage,
+    Alert,
+    AlertSeverity,
+    AlertStatus,
     AuditLog,
     BankConnection,
     BankTransaction,
@@ -96,6 +100,7 @@ def bind_existing_connection(
         other = [row for row in existing if row.organization_id != org_id]
         if other:
             raise OpenFinanceBindError("Open Finance connection is already attached to another organization")
+        _refuse_second_active_open_finance(db, org_id, connection_id)
         row = existing[0] if existing else None
         created = row is None
         if row is None:
@@ -143,6 +148,11 @@ def bind_existing_connection(
         raise
     except IntegrityError as exc:
         db.rollback()
+        detail = str(getattr(exc, "orig", exc))
+        if "uq_bankconn_one_active_open_finance" in detail:
+            raise OpenFinanceBindError(
+                "Organization already has an active Open Finance connection"
+            ) from exc
         raise OpenFinanceBindError(
             "Open Finance connection is already attached to another organization"
         ) from exc
@@ -174,9 +184,17 @@ def bind_existing_connection(
     }
 
 
+def _digit_tail(value) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
 def attach_provider_account(db, account: Account) -> None:
-    """Point a coverage row at the provider account with the same bank suffix."""
-    number = str(account.provider_account_number or "").strip()
+    """Point a coverage row at the provider account with the same bank suffix.
+
+    The match is the digit tail, so ``local-bank:1662`` and a provider
+    number such as ``12-1662`` both resolve to the suffix ``1662``.
+    """
+    number = _digit_tail(account.provider_account_number)
     if account.source != "open_finance" or not number:
         return
     if account.id is None:
@@ -190,7 +208,7 @@ def attach_provider_account(db, account: Account) -> None:
         .all()
     )
     for row in rows:
-        suffix = row.bank_account_suffix or ""
+        suffix = _digit_tail(row.bank_account_suffix)
         if suffix and number.endswith(suffix):
             row.superseded_by_account_id = account.id
 
@@ -261,10 +279,13 @@ def cashflow_selection(db, org_id: int, start: date, end: date):
         for cov in coverages
         if cov.superseded_by_account_id is not None
     }
+    unattached = [cov for cov in coverages if cov.superseded_by_account_id is None]
+    if unattached:
+        _alert_unattached_provider(db, org_id)
     visible = []
     excluded = matched = unmatched = 0
     for row in rows:
-        keep, overlap = _keep_row(row, by_local, by_provider)
+        keep, overlap = _keep_row(row, by_local, by_provider, unattached)
         if keep:
             visible.append((row.transaction_date, row.amount))
             continue
@@ -280,17 +301,58 @@ def cashflow_selection(db, org_id: int, start: date, end: date):
         "excluded_count": excluded,
         "matched_count": matched,
         "unmatched_count": unmatched,
-        "message": None,
+        "provider_account_linked": not unattached,
+        "message": _coverage_message(excluded, unmatched, bool(unattached)),
     }
-    if unmatched:
-        note["message"] = (
-            f"{unmatched} תנועות בחלון החפיפה בין הייבוא המקומי לבנק "
-            "לא הותאמו ולכן לא נכללו בסכום."
-        )
     return visible, note
 
 
-def _keep_row(row, by_local, by_provider) -> tuple[bool, bool]:
+def _coverage_message(excluded: int, unmatched: int, unattached: bool) -> str | None:
+    """Explain exclusion by the coverage date. A zero unmatched count is not a gate."""
+    parts = []
+    if unattached:
+        parts.append(
+            "חשבון הבנק של הספק אינו מקושר לשורת הכיסוי, "
+            "ולכן תנועות הבנק שלפני תחילת הכיסוי לא נספרו."
+        )
+    if excluded:
+        parts.append(
+            f"{excluded} תנועות לא נכנסו לסכום כי התאריך שלהן שייך למקור האחר."
+        )
+    if unmatched:
+        parts.append(
+            f"{unmatched} תנועות בחלון החפיפה לא הותאמו לתנועה במקור האחר; "
+            "ההחרגה אינה תלויה במספר הזה."
+        )
+    return " ".join(parts) if parts else None
+
+
+def _alert_unattached_provider(db, org_id: int) -> None:
+    """One active alert when a coverage row has no provider account. Flush only."""
+    existing = (
+        db.query(Alert)
+        .filter(
+            Alert.organization_id == org_id,
+            Alert.alert_type == "coverage_provider_unattached",
+            Alert.status == AlertStatus.ACTIVE,
+        )
+        .first()
+    )
+    if existing is not None:
+        return
+    db.add(Alert(
+        organization_id=org_id,
+        alert_type="coverage_provider_unattached",
+        severity=AlertSeverity.WARNING,
+        title="חשבון הבנק אינו מקושר לכיסוי",
+        message="קיימת שורת כיסוי בלי חשבון ספק. תנועות הבנק שלפני תחילת הכיסוי לא נספרו.",
+        status=AlertStatus.ACTIVE,
+        meta={"reason": "coverage_without_provider_account"},
+    ))
+    db.flush()
+
+
+def _keep_row(row, by_local, by_provider, unattached) -> tuple[bool, bool]:
     """Return (include_in_sum, is_coverage_overlap)."""
     if row.superseded_by_id is not None:
         return False, True
@@ -303,6 +365,12 @@ def _keep_row(row, by_local, by_provider) -> tuple[bool, bool]:
     if source == "open_finance":
         cov = by_provider.get(row.account_id)
         if cov is not None and row.transaction_date < cov.covers_from:
+            return False, True
+        # No provider account on the coverage row: the feed cannot be
+        # attributed, so every provider row before the boundary stays out.
+        if cov is None and unattached and any(
+            row.transaction_date < item.covers_from for item in unattached
+        ):
             return False, True
         return True, False
     return True, False
@@ -337,6 +405,23 @@ def _fingerprint_of(row: BankTransaction) -> str:
     digest = content_fingerprint(row.transaction_date, row.amount, row.description)
     row.content_fingerprint = digest
     return digest
+
+
+def _refuse_second_active_open_finance(db, org_id: int, connection_id: str) -> None:
+    """One live Open Finance consent per organization."""
+    rows = (
+        db.query(BankConnection)
+        .filter(
+            BankConnection.organization_id == org_id,
+            BankConnection.source == "open_finance",
+            BankConnection.status.in_(tuple(SYNCABLE_STATUSES)),
+        )
+        .all()
+    )
+    if any(row.connection_id != connection_id for row in rows):
+        raise OpenFinanceBindError(
+            "Organization already has an active Open Finance connection"
+        )
 
 
 def _refuse_conflicting_provider(db, org: Organization) -> None:
@@ -432,6 +517,19 @@ def _record_coverage(db, org_id: int, coverage: dict) -> dict:
         raise OpenFinanceBindError("Coverage account is not in this organization")
     if account.source != LOCAL_SOURCE:
         raise OpenFinanceBindError("Coverage boundary applies to a reviewed local import")
+    last_local = (
+        db.query(func.max(BankTransaction.transaction_date))
+        .filter(
+            BankTransaction.organization_id == org_id,
+            BankTransaction.account_id == account.id,
+            BankTransaction.source == LOCAL_SOURCE,
+        )
+        .scalar()
+    )
+    if last_local is not None and covers_from <= last_local:
+        raise OpenFinanceBindError(
+            "covers_from must be after the last reviewed local transaction"
+        )
     if suffix is not None:
         suffix = str(suffix)
         if account.external_id and not str(account.external_id).endswith(suffix):

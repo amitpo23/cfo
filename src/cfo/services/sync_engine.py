@@ -543,6 +543,11 @@ class SyncEngine:
                     else:
                         skipped += 1
 
+                # Pair coverage overlap once per committed page, not per row.
+                if entity_type == "bank_transactions":
+                    from .bank_coverage import link_coverage_overlap
+                    link_coverage_overlap(self.db, self.org_id)
+
                 # Commit a complete page with its continuation cursor. A later
                 # failure must neither lose that checkpoint nor keep half a page.
                 cp.cursor = result.next_cursor if result.has_more else None
@@ -1021,8 +1026,6 @@ class SyncEngine:
             if account_id:
                 existing.account_id = account_id
             if payload_hash and existing.payload_hash == payload_hash:
-                from .bank_coverage import link_coverage_overlap
-                link_coverage_overlap(self.db, self.org_id)
                 return "skipped"
             existing.transaction_date = item.transaction_date or existing.transaction_date
             existing.description = item.description
@@ -1030,15 +1033,14 @@ class SyncEngine:
             existing.currency = item.currency
             existing.raw_data = item.raw_data
             existing.payload_hash = payload_hash
-            from .bank_coverage import content_fingerprint, link_coverage_overlap
+            from .bank_coverage import content_fingerprint
             if existing.transaction_date is not None:
                 existing.content_fingerprint = content_fingerprint(
                     existing.transaction_date, existing.amount, existing.description,
                 )
-            link_coverage_overlap(self.db, self.org_id)
             return "updated"
 
-        from .bank_coverage import content_fingerprint, link_coverage_overlap
+        from .bank_coverage import content_fingerprint
         fingerprint = None
         if item.transaction_date is not None:
             fingerprint = content_fingerprint(item.transaction_date, item.amount, item.description)
@@ -1057,7 +1059,6 @@ class SyncEngine:
             is_provisional=(self.source == "open_finance"),
         )
         self.db.add(bank_tx)
-        link_coverage_overlap(self.db, self.org_id)
         return "created"
 
     def _upsert_journal_entry(self, item: NormalizedJournalEntry) -> str:
