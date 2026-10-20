@@ -366,21 +366,30 @@ def test_provider_account_matches_the_1662_digit_suffix(fresh_org):
             source="open_finance", external_id="of-suffix", currency="ILS",
             provider_account_number="IL-12-1662",
         )
-        other = Account(
-            organization_id=org_id, name="Different tail", account_type=AccountType.BANK,
-            source="open_finance", external_id="of-other-tail", currency="ILS",
+        embedded = Account(
+            organization_id=org_id, name="Suffix inside a longer number", account_type=AccountType.BANK,
+            source="open_finance", external_id="of-embedded-tail", currency="ILS",
             provider_account_number="IL-12-16620",
         )
-        db.add_all([provider, other])
+        unrelated = Account(
+            organization_id=org_id, name="Different bank", account_type=AccountType.BANK,
+            source="open_finance", external_id="of-other-bank-tail", currency="ILS",
+            provider_account_number="31-9999",
+        )
+        db.add_all([provider, embedded, unrelated])
         db.flush()
         from cfo.services.bank_coverage import attach_provider_account
-        attach_provider_account(db, other)
+        attach_provider_account(db, unrelated)
         coverage = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).one()
         assert coverage.superseded_by_account_id is None
+        attach_provider_account(db, embedded)
+        db.flush()
+        db.refresh(coverage)
+        assert coverage.superseded_by_account_id == embedded.id
         attach_provider_account(db, provider)
         db.flush()
         db.refresh(coverage)
-        assert coverage.superseded_by_account_id == provider.id
+        assert coverage.superseded_by_account_id == embedded.id
 
 
 def test_second_active_open_finance_connection_is_refused(fresh_org):
@@ -642,3 +651,236 @@ def test_renewed_consent_supersedes_the_previous_active_one(fresh_org, monkeypat
         new = db.query(BankConnection).filter_by(connection_id="new-consent").one()
         assert old.status == "SUPERSEDED"
         assert new.status == "ACTIVE"
+
+
+def _provider_account(db, org_id, external_id, number):
+    from cfo.services.bank_coverage import attach_provider_account
+
+    account = Account(
+        organization_id=org_id, name=external_id, account_type=AccountType.BANK,
+        source="open_finance", external_id=external_id, currency="ILS",
+        provider_account_number=number,
+    )
+    db.add(account)
+    db.flush()
+    attach_provider_account(db, account)
+    return account
+
+
+def _provider_tx(db, org_id, account, external_id, day, amount, description="Supplier payment"):
+    db.add(BankTransaction(
+        organization_id=org_id, source="open_finance", external_id=external_id,
+        account_id=account.id, transaction_date=day, amount=Decimal(amount),
+        description=description, currency="ILS",
+    ))
+
+
+def _october_outflows(db, org_id):
+    report = LiveCashFlowService(db, org_id).monthly_cash_flow(
+        months=6, as_of_date=date(2026, 10, 31),
+    )
+    october = next(month for month in report["months"] if month["month"] == "2026-10")
+    return october["outflows"], report
+
+
+def _bind_covered_import(db, office_id, tax_id, connection_id):
+    client = _import_bank(db, office_id, tax_id)
+    org_id = client["target_organization_id"]
+    account = db.query(Account).filter_by(organization_id=org_id, source=local.SOURCE).one()
+    bind_existing_connection(
+        db, org_id, connection_id=connection_id, status="ACTIVE",
+        coverage={"local_account_id": account.id, "covers_from": date(2026, 10, 14),
+                  "bank_account_suffix": "1662"},
+    )
+    db.commit()
+    return org_id
+
+
+def test_renewed_account_row_with_the_same_number_is_not_counted_twice(fresh_org):
+    """A new consent creates a second Account row for the same bank number.
+
+    The coverage is already bound to the first row, so the new row must still
+    use that coverage's cutoff. The local import's -6,000 is the only October
+    outflow.
+    """
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office, "514001005", "renew-row")
+        _provider_account(db, org_id, "of-acct-consent1", "12-1662")
+        second = _provider_account(db, org_id, "of-acct-consent2", "12-1662")
+        _provider_tx(db, org_id, second, "c2-1013", date(2026, 10, 13), "-6000.00")
+        db.commit()
+        outflows, report = _october_outflows(db, org_id)
+        assert outflows == 6000.0
+        assert report["coverage"]["excluded_count"] >= 1
+
+
+def test_suffix_contained_before_a_sub_account_is_not_counted_twice(fresh_org):
+    """``1662-01`` contains the suffix even though it does not end with it."""
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office, "514001006", "suffix-inside")
+        feed = _provider_account(db, org_id, "of-1662-01", "1662-01")
+        _provider_tx(db, org_id, feed, "f-1013", date(2026, 10, 13), "-6000.00")
+        db.commit()
+        outflows, report = _october_outflows(db, org_id)
+        assert outflows == 6000.0
+        assert report["coverage"]["excluded_count"] >= 1
+
+
+def test_longer_number_that_contains_the_suffix_stays_out_of_the_sum(fresh_org):
+    """Over-match fails closed: ``31-16629999`` contains ``1662``."""
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office, "514001007", "over-match")
+        feed = _provider_account(db, org_id, "of-embedded", "31-16629999")
+        _provider_tx(db, org_id, feed, "e-1013", date(2026, 10, 13), "-6000.00")
+        db.commit()
+        outflows, report = _october_outflows(db, org_id)
+        assert outflows == 6000.0
+        assert report["coverage"]["message"]
+
+
+def test_coverage_suffix_must_be_exactly_four_digits(fresh_org):
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        client = _import_bank(db, office, "514001008")
+        org_id = client["target_organization_id"]
+        account = db.query(Account).filter_by(organization_id=org_id, source=local.SOURCE).one()
+        for suffix in (None, "", "166", "16620", "16-62"):
+            with pytest.raises(OpenFinanceBindError, match="exactly 4 digits"):
+                bind_existing_connection(
+                    db, org_id, connection_id=f"suffix-{suffix}", status="ACTIVE",
+                    coverage={"local_account_id": account.id, "covers_from": date(2026, 10, 14),
+                              "bank_account_suffix": suffix},
+                )
+
+
+def test_status_refresh_stores_uppercase(fresh_org, monkeypatch):
+    import asyncio
+
+    org_id = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        bind_existing_connection(db, org_id, connection_id="old-lower", status="ACTIVE")
+        db.add(BankConnection(
+            organization_id=org_id, source="open_finance",
+            connection_id="new-lower", status="INACTIVE",
+        ))
+        db.commit()
+
+    class _Client:
+        async def get_connection(self, connection_id):
+            return {"status": "active", "providerFriendlyId": "leumi"}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "cfo.api.routes.open_finance.get_open_finance_client",
+        lambda *_args, **_kwargs: _Client(),
+    )
+    from cfo.services.open_finance_onboarding import get_connection_status
+
+    async def _run():
+        db = SessionLocal()
+        try:
+            return await get_connection_status(db, org_id, "new-lower")
+        finally:
+            db.close()
+
+    result = asyncio.run(_run())
+    assert result["status"] == "ACTIVE"
+    with SessionLocal() as db:
+        old = db.query(BankConnection).filter_by(connection_id="old-lower").one()
+        new = db.query(BankConnection).filter_by(connection_id="new-lower").one()
+        assert old.status == "SUPERSEDED"
+        assert new.status == "ACTIVE"
+
+
+def test_concurrent_consent_refresh_one_wins_and_one_is_409(fresh_org, monkeypatch):
+    """Two refreshes overlap. One consent becomes ACTIVE; the other stays INACTIVE."""
+    import asyncio
+    import threading
+    import time
+
+    from cfo.services.open_finance_onboarding import OpenFinanceError, get_connection_status
+
+    org_id = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        bind_existing_connection(db, org_id, connection_id="race-old", status="ACTIVE")
+        db.add(BankConnection(
+            organization_id=org_id, source="open_finance",
+            connection_id="race-a", status="INACTIVE",
+        ))
+        db.add(BankConnection(
+            organization_id=org_id, source="open_finance",
+            connection_id="race-b", status="INACTIVE",
+        ))
+        db.commit()
+
+    class _Client:
+        async def get_connection(self, _connection_id):
+            return {"status": "ACTIVE"}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "cfo.api.routes.open_finance.get_open_finance_client",
+        lambda *_args, **_kwargs: _Client(),
+    )
+    start = threading.Barrier(2, timeout=10)
+    real_supersede = __import__(
+        "cfo.services.open_finance_onboarding", fromlist=["supersede_other_live_consents"],
+    ).supersede_other_live_consents
+
+    def _overlap(db, organization_id, connection_id):
+        start.wait()
+        real_supersede(db, organization_id, connection_id)
+        time.sleep(0.4)
+
+    monkeypatch.setattr(
+        "cfo.services.open_finance_onboarding.supersede_other_live_consents",
+        _overlap,
+    )
+
+    outcomes = {}
+
+    def _refresh(connection_id):
+        async def _run():
+            db = SessionLocal()
+            try:
+                return await get_connection_status(db, org_id, connection_id)
+            finally:
+                db.close()
+
+        try:
+            outcomes[connection_id] = ("ok", asyncio.run(_run()))
+        except OpenFinanceError as exc:
+            outcomes[connection_id] = ("error", exc.status_code, str(exc))
+        except Exception as exc:
+            outcomes[connection_id] = ("unexpected", type(exc).__name__, str(exc))
+
+    threads = [
+        threading.Thread(target=_refresh, args=("race-a",)),
+        threading.Thread(target=_refresh, args=("race-b",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert set(outcomes) == {"race-a", "race-b"}
+    kinds = sorted(item[0] for item in outcomes.values())
+    assert kinds == ["error", "ok"], outcomes
+    error = next(item for item in outcomes.values() if item[0] == "error")
+    assert error[1] == 409
+    assert "active Open Finance" in error[2]
+    with SessionLocal() as db:
+        statuses = {
+            row.connection_id: row.status
+            for row in db.query(BankConnection).filter_by(organization_id=org_id)
+        }
+    assert statuses["race-old"] == "SUPERSEDED"
+    live = {statuses["race-a"], statuses["race-b"]}
+    assert live == {"ACTIVE", "INACTIVE"}

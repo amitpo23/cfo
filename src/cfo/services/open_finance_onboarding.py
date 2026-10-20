@@ -42,6 +42,20 @@ def _org_user_id(org_id: int) -> str:
     return f"rezef-org-{org_id}"
 
 
+def _lost_active_consent_race(exc: IntegrityError) -> bool:
+    """True when the one-live-consent index rejected this commit.
+
+    Postgres names ``uq_bankconn_one_active_open_finance``. SQLite reports
+    the indexed column only, and a composite unique failure also lists
+    ``connection_id``.
+    """
+    detail = " ".join(str(getattr(exc, "orig", exc)).split())
+    if "uq_bankconn_one_active_open_finance" in detail:
+        return True
+    marker = "UNIQUE constraint failed: bank_connections.organization_id"
+    return marker in detail and f"{marker}," not in detail
+
+
 def ensure_of_identity(db: Session, org_id: int) -> IntegrationConnection:
     """Idempotently ensure an active open_finance IntegrationConnection for
     org_id whose stored credentials carry a `user_id`.
@@ -274,7 +288,7 @@ async def get_connection_status(db: Session, org_id: int, connection_id: str) ->
     normalized = str(status).strip().upper()
     if normalized in SYNCABLE_STATUSES:
         supersede_other_live_consents(db, org_id, connection_id)
-    row.status = status
+    row.status = normalized
     row.provider_id = (
         payload.get("providerFriendlyId")
         or payload.get("providerId")
@@ -291,8 +305,7 @@ async def get_connection_status(db: Session, org_id: int, connection_id: str) ->
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        detail = str(getattr(exc, "orig", exc))
-        if "uq_bankconn_one_active_open_finance" in detail:
+        if _lost_active_consent_race(exc):
             raise OpenFinanceError(
                 409,
                 "Organization already has an active Open Finance connection",
@@ -300,13 +313,13 @@ async def get_connection_status(db: Session, org_id: int, connection_id: str) ->
         raise
 
     result: dict[str, Any] = {
-        "status": status,
+        "status": normalized,
         "provider": payload.get("providerFriendlyId") or payload.get("provider") or payload.get("bankName"),
         "expiry": payload.get("expiryDate") or payload.get("expiry"),
         "accounts": payload.get("accounts"),
         "last_fetched": payload.get("lastFetched") or payload.get("lastRefreshAt") or payload.get("updatedAt"),
     }
-    explanation = _STATUS_EXPLANATIONS.get(status)
+    explanation = _STATUS_EXPLANATIONS.get(normalized)
     if explanation:
         result["explanation"] = explanation
     return result

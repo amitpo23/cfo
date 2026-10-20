@@ -189,11 +189,21 @@ def _digit_tail(value) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit())
 
 
-def attach_provider_account(db, account: Account) -> None:
-    """Point a coverage row at the provider account with the same bank suffix.
+def _four_digit_suffix(value) -> str:
+    token = _digit_tail(value)
+    if len(token) == 4 and str(value).strip() == token:
+        return token
+    return ""
 
-    The match is the digit tail, so ``local-bank:1662`` and a provider
-    number such as ``12-1662`` both resolve to the suffix ``1662``.
+
+def attach_provider_account(db, account: Account) -> None:
+    """Point an unbound coverage row at a provider account that contains its suffix.
+
+    ``1662`` matches ``12-1662`` and also ``1662-01``. A number that merely
+    embeds the suffix, such as ``31-16629999``, matches too: that over-match
+    fails closed on the cash-flow read. A second account row does not move
+    the pointer once a coverage is already bound; the read path still applies
+    the cutoff to every account whose digits contain the suffix.
     """
     number = _digit_tail(account.provider_account_number)
     if account.source != "open_finance" or not number:
@@ -209,8 +219,8 @@ def attach_provider_account(db, account: Account) -> None:
         .all()
     )
     for row in rows:
-        suffix = _digit_tail(row.bank_account_suffix)
-        if suffix and number.endswith(suffix):
+        suffix = _four_digit_suffix(row.bank_account_suffix)
+        if suffix and suffix in number:
             row.superseded_by_account_id = account.id
 
 
@@ -282,11 +292,18 @@ def cashflow_selection(db, org_id: int, start: date, end: date):
     }
     unattached = [cov for cov in coverages if cov.superseded_by_account_id is None]
     cutoffs = {cov.id: _effective_provider_cutoff(db, cov) for cov in coverages}
-    numbered = _accounts_with_digits(db, rows)
+    account_digits = _account_digits(db, rows)
+    coverage_suffixes = [
+        (cov, suffix)
+        for cov in coverages
+        if (suffix := _four_digit_suffix(cov.bank_account_suffix))
+    ]
     visible = []
     excluded = matched = unmatched = 0
     for row in rows:
-        keep, overlap = _keep_row(row, by_local, by_provider, unattached, cutoffs, numbered)
+        keep, overlap = _keep_row(
+            row, by_local, by_provider, unattached, cutoffs, account_digits, coverage_suffixes,
+        )
         if keep:
             visible.append((row.transaction_date, row.amount))
             continue
@@ -410,25 +427,26 @@ def _effective_provider_cutoff(db, cov) -> date:
     return cov.covers_from
 
 
-def _accounts_with_digits(db, rows) -> set[int]:
+def _account_digits(db, rows) -> dict[int, str]:
     ids = {
         row.account_id for row in rows
         if row.source == "open_finance" and row.account_id is not None
     }
     if not ids:
-        return set()
-    numbered = set()
-    for account_id, number in (
-        db.query(Account.id, Account.provider_account_number)
-        .filter(Account.id.in_(ids))
-        .all()
-    ):
-        if _digit_tail(number):
-            numbered.add(account_id)
-    return numbered
+        return {}
+    return {
+        account_id: _digit_tail(number)
+        for account_id, number in (
+            db.query(Account.id, Account.provider_account_number)
+            .filter(Account.id.in_(ids))
+            .all()
+        )
+    }
 
 
-def _keep_row(row, by_local, by_provider, unattached, cutoffs, numbered) -> tuple[bool, bool]:
+def _keep_row(
+    row, by_local, by_provider, unattached, cutoffs, account_digits, coverage_suffixes,
+) -> tuple[bool, bool]:
     """Return (include_in_sum, is_coverage_overlap)."""
     if row.superseded_by_id is not None:
         return False, True
@@ -439,14 +457,17 @@ def _keep_row(row, by_local, by_provider, unattached, cutoffs, numbered) -> tupl
             return False, True
         return True, False
     if source == "open_finance":
-        cov = by_provider.get(row.account_id)
-        if cov is not None and row.transaction_date < cutoffs[cov.id]:
+        digits = account_digits.get(row.account_id, "") if row.account_id is not None else ""
+        # A suffix anywhere in the digits is this coverage's bank, including a
+        # second Account row and a number such as ``1662-01``. An account
+        # whose digits contain no coverage suffix is a different bank.
+        matched = [cov for cov, suffix in coverage_suffixes if digits and suffix in digits]
+        bound = by_provider.get(row.account_id)
+        if bound is not None and all(item.id != bound.id for item in matched):
+            matched.append(bound)
+        if matched and any(row.transaction_date < cutoffs[cov.id] for cov in matched):
             return False, True
-        # An unattached coverage cannot name its bank. Only a feed row with
-        # no parseable account number could still be that bank. A different
-        # numbered account stays in the sum.
-        ambiguous = row.account_id is None or row.account_id not in numbered
-        if cov is None and ambiguous and unattached and any(
+        if not digits and unattached and any(
             row.transaction_date < cutoffs[item.id] for item in unattached
         ):
             return False, True
@@ -608,10 +629,11 @@ def _record_coverage(db, org_id: int, coverage: dict) -> dict:
         raise OpenFinanceBindError(
             "covers_from must be the day after the last reviewed local transaction"
         )
-    if suffix is not None:
-        suffix = str(suffix)
-        if account.external_id and not str(account.external_id).endswith(suffix):
-            raise OpenFinanceBindError("Coverage suffix does not match the local account")
+    suffix = _four_digit_suffix(suffix)
+    if not suffix:
+        raise OpenFinanceBindError("Coverage suffix must be exactly 4 digits")
+    if account.external_id and not str(account.external_id).endswith(suffix):
+        raise OpenFinanceBindError("Coverage suffix does not match the local account")
     row = (
         db.query(AccountSourceCoverage)
         .filter_by(organization_id=org_id, local_account_id=account.id, source=LOCAL_SOURCE)
