@@ -14,7 +14,8 @@ from cfo.auth import create_access_token
 from cfo.database import SessionLocal
 from cfo.models import (
     Account, AccountSourceCoverage, AccountType, Alert, BankConnection,
-    BankTransaction, IntegrationConnection, OnboardingTask, Organization,
+    BankTransaction, IntegrationConnection, OfAccountClassification,
+    OnboardingTask, Organization, OrganizationMembership, SumitCompany,
     SyncCheckpoint, SyncRun, User, UserRole,
 )
 from cfo.services import local_client_service as local
@@ -206,7 +207,13 @@ def test_provider_rows_inside_local_coverage_are_not_double_counted(fresh_org):
         assert report["coverage"]["matched_count"] == 1
         assert report["coverage"]["unmatched_count"] == 0
         assert "Bank 1662" in report["coverage"]["message"]
-        assert "before covers_from" in report["coverage"]["message"]
+        assert "לפני תחילת כיסוי" in report["coverage"]["message"]
+        from cfo.services.bank_coverage import refresh_coverage_alert
+        refresh_coverage_alert(db, org_id)
+        db.commit()
+        assert db.query(Alert).filter_by(
+            organization_id=org_id, alert_type="coverage_accounts_withheld", status="active",
+        ).count() == 0
         assert "לא הותאמו" not in report["coverage"]["message"]
         assert "ולכן לא נכללו" not in report["coverage"]["message"]
         assert db.query(BankTransaction).filter_by(organization_id=org_id).count() == 7
@@ -306,13 +313,14 @@ def test_unattached_coverage_excludes_provider_rows_before_the_boundary(fresh_or
         assert october["outflows"] == 6015.0
         assert report["coverage"]["provider_account_linked"] is False
         assert "Unlinked 1662" in report["coverage"]["message"]
-        assert "UNCLASSIFIED" in report["coverage"]["message"]
+        assert "לא מסווג" in report["coverage"]["message"]
+        assert report["coverage"]["excluded_accounts"][0]["reason"] == "UNCLASSIFIED"
         assert "אינו מקושר" not in report["coverage"]["message"]
         alert = db.query(Alert).filter_by(
             organization_id=org_id, alert_type="coverage_accounts_withheld",
         ).one()
         assert str(alert.status.value if hasattr(alert.status, "value") else alert.status) == "active"
-        assert "Unlinked 1662" in alert.message and "UNCLASSIFIED" in alert.message
+        assert "Unlinked 1662" in alert.message and "לא מסווג" in alert.message
         assert db.query(Alert).filter_by(
             organization_id=org_id, alert_type="coverage_provider_unattached",
             status="active",
@@ -552,7 +560,7 @@ def test_unclassified_numbered_account_is_excluded_until_declared_independent(fr
         october = next(m for m in report["months"] if m["month"] == "2026-10")
         assert october["outflows"] == 6000.0
         assert "Other bank" in report["coverage"]["message"]
-        assert "UNCLASSIFIED" in report["coverage"]["message"]
+        assert "לא מסווג" in report["coverage"]["message"]
         assert "9999" in report["coverage"]["message"]
         assert report["coverage"]["unmatched_count"] == 0
 
@@ -970,7 +978,7 @@ def test_second_account_without_a_number_is_not_counted_twice(fresh_org):
         outflows, report = _october_outflows(db, org_id)
         assert outflows == 6000.0
         message = report["coverage"]["message"]
-        assert "Leumi" in message and "1662" in message and "UNCLASSIFIED" in message
+        assert "Leumi" in message and "1662" in message and "לא מסווג" in message
         assert report["coverage"]["unmatched_count"] == 0
 
 
@@ -997,7 +1005,7 @@ def test_second_local_import_without_coverage_is_not_counted_twice(fresh_org):
         db.commit()
         outflows, report = _october_outflows(db, org_id)
         assert outflows == 6400.0
-        assert "UNCLASSIFIED" in report["coverage"]["message"]
+        assert "לא מסווג" in report["coverage"]["message"]
         assert "5555" in report["coverage"]["message"]
 
 
@@ -1022,7 +1030,7 @@ def test_overmatch_names_the_excluded_account_in_the_note_and_the_alert(fresh_or
         outflows, report = _october_outflows(db, org_id)
         assert outflows == 6000.0
         message = report["coverage"]["message"]
-        assert "9999" in message and "Discount" in message and "UNCLASSIFIED" in message
+        assert "9999" in message and "Discount" in message and "לא מסווג" in message
         assert report["coverage"]["unmatched_count"] == 0
         alert = db.query(Alert).filter_by(
             organization_id=org_id, alert_type="coverage_accounts_withheld",
@@ -1070,7 +1078,7 @@ def test_two_coverages_keep_only_the_post_cutoff_feed(fresh_org):
         assert outflows == 6450.0
 
 
-def test_independent_account_counts_fully_and_resolves_the_alert(fresh_org):
+def test_independent_account_counts_fully_and_is_named_in_the_alert(fresh_org):
     office = fresh_org()
     with SessionLocal() as db:
         user = db.query(User).filter_by(organization_id=office["org_id"]).one()
@@ -1101,18 +1109,25 @@ def test_independent_account_counts_fully_and_resolves_the_alert(fresh_org):
         actor_id = user.id
         outflows, report = _october_outflows(db, org_id)
         assert outflows == 6000.0
-        assert "UNCLASSIFIED" in report["coverage"]["message"]
+        assert "לא מסווג" in report["coverage"]["message"]
         classify_open_finance_account(
             db, org_id, account_id, state="INDEPENDENT", coverage_id=None, actor_id=actor_id,
         )
     with SessionLocal() as db:
         outflows, report = _october_outflows(db, org_id)
         assert outflows == 8500.0
-        assert report["coverage"]["message"] is None or "UNCLASSIFIED" not in (report["coverage"]["message"] or "")
+        message = report["coverage"]["message"]
+        assert "לא מסווג" not in message
+        assert "נספר במלואו" in message and "עצמאי" in message and "Iso" in message
+        assert "classified_by_user_id" not in message
+        line = report["coverage"]["excluded_accounts"][0]
+        assert line["reason"] == "INDEPENDENT"
+        assert "כניסות" in message and "יציאות" in message
         alert = db.query(Alert).filter_by(
             organization_id=org_id, alert_type="coverage_accounts_withheld",
         ).one()
-        assert _status_value(alert) == "resolved"
+        assert _status_value(alert) == "active"
+        assert "עצמאי" in alert.message and "Iso" in alert.message
         from cfo.models import AuditLog
         audit = db.query(AuditLog).filter_by(
             organization_id=org_id, action="CLASSIFY_OPEN_FINANCE_ACCOUNT",
@@ -1183,3 +1198,323 @@ def test_non_admin_cannot_classify_an_open_finance_account(client, fresh_org):
             organization_id=org_id, action="CLASSIFY_OPEN_FINANCE_ACCOUNT",
         ).one()
         assert audit.details["coverage_id"] == coverage_id
+
+
+def _headers_for(user, role):
+    return {"Authorization": "Bearer " + create_access_token(
+        data={"sub": str(user.id), "role": role.value, "org_id": user.organization_id},
+    )}
+
+
+def test_independent_is_refused_when_the_number_ends_with_a_local_suffix(fresh_org):
+    office = fresh_org()
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office["org_id"], "514002011", "class-p1")
+        account = _provider_account(db, org_id, "of-1662", "12-1662")
+        _provider_tx(db, org_id, account, "p1-1013", date(2026, 10, 13), "-6000.00")
+        db.commit()
+        from cfo.services.bank_coverage import classify_open_finance_account
+        actor = db.query(User).filter_by(organization_id=office["org_id"]).one()
+        with pytest.raises(OpenFinanceBindError, match="INDEPENDENT is refused"):
+            classify_open_finance_account(
+                db, org_id, account.id, state="INDEPENDENT", coverage_id=None, actor_id=actor.id,
+            )
+        state = db.query(OfAccountClassification).filter_by(account_id=account.id).one()
+        assert state.state == "BOUND"
+        outflows, _report = _october_outflows(db, org_id)
+        assert outflows == 6000.0
+
+
+def test_independent_route_refuses_a_covered_account_with_409(client, fresh_org):
+    office = fresh_org()
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office["org_id"], "514002012", "class-p1-route")
+        account = _provider_account(db, org_id, "of-1662", "12-1662")
+        db.commit()
+        account_id = account.id
+    response = client.post(
+        f"/api/admin/organizations/{org_id}/open-finance/accounts/{account_id}/classification",
+        headers=office["headers"],
+        json={"state": "INDEPENDENT"},
+    )
+    assert response.status_code == 409, response.text
+    assert "INDEPENDENT is refused" in response.text
+    with SessionLocal() as db:
+        state = db.query(OfAccountClassification).filter_by(account_id=account_id).one()
+        assert state.state == "BOUND"
+
+
+def test_second_bound_to_the_same_coverage_is_refused(fresh_org):
+    office = fresh_org()
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office["org_id"], "514002013", "class-p1b")
+        first = _provider_account(db, org_id, "of-a", "12-1662")
+        second = _provider_account(db, org_id, "of-b", "12-1662")
+        for account, external in ((first, "a"), (second, "b")):
+            _provider_tx(db, org_id, account, f"{external}-1015", date(2026, 10, 15), "-700.00", "Post cutoff")
+        db.commit()
+        coverage = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).one()
+        actor = db.query(User).filter_by(organization_id=office["org_id"]).one()
+        from cfo.services.bank_coverage import classify_open_finance_account
+        classify_open_finance_account(
+            db, org_id, first.id, state="BOUND", coverage_id=coverage.id, actor_id=actor.id,
+        )
+        with pytest.raises(OpenFinanceBindError, match="already bound"):
+            classify_open_finance_account(
+                db, org_id, second.id, state="BOUND", coverage_id=coverage.id, actor_id=actor.id,
+            )
+        outflows, report = _october_outflows(db, org_id)
+        assert outflows == 6700.0
+        assert "כפול" in report["coverage"]["message"]
+        assert "1662" in report["coverage"]["message"]
+        duplicate = next(item for item in report["coverage"]["excluded_accounts"] if item["reason"] == "duplicate")
+        assert duplicate["reason"] == "duplicate"
+
+
+def test_database_rejects_a_second_bound_row_for_one_coverage(fresh_org):
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office, "514002014", "class-unique")
+        coverage = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).one()
+        first = _provider_account(db, org_id, "of-a", "12-1662")
+        second = _provider_account(db, org_id, "of-b", "31-8888")
+        assert db.query(OfAccountClassification).filter_by(account_id=first.id, state="BOUND").count() == 1
+        db.add(OfAccountClassification(
+            organization_id=org_id, account_id=second.id, state="BOUND", coverage_id=coverage.id,
+        ))
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+
+
+@pytest.mark.parametrize("admin_bound", [False, True])
+def test_duplicate_digit_rows_count_one_account(fresh_org, admin_bound):
+    office = fresh_org()
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(
+            db, office["org_id"],
+            "514002015" if admin_bound else "514002016",
+            f"class-p3-{admin_bound}",
+        )
+        old = _provider_account(db, org_id, "of-old", "12-1662")
+        _provider_tx(db, org_id, old, "o-1013", date(2026, 10, 13), "-6000.00")
+        _provider_tx(db, org_id, old, "o-1015", date(2026, 10, 15), "-700.00", "Post cutoff")
+        db.commit()
+        if admin_bound:
+            coverage = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).one()
+            actor = db.query(User).filter_by(organization_id=office["org_id"]).one()
+            from cfo.services.bank_coverage import classify_open_finance_account
+            classify_open_finance_account(
+                db, org_id, old.id, state="BOUND", coverage_id=coverage.id, actor_id=actor.id,
+            )
+        new = _provider_account(db, org_id, "of-new", "12-1662")
+        _provider_tx(db, org_id, new, "n-1013", date(2026, 10, 13), "-6000.00")
+        _provider_tx(db, org_id, new, "n-1015", date(2026, 10, 15), "-700.00", "Post cutoff")
+        db.commit()
+        outflows, report = _october_outflows(db, org_id)
+        assert outflows == 6700.0
+        assert "כפול" in report["coverage"]["message"]
+        assert "••••1662" in report["coverage"]["message"]
+        assert any(item["reason"] == "duplicate" for item in report["coverage"]["excluded_accounts"])
+
+
+def test_renewal_carries_bound_onto_the_new_consent_row(fresh_org):
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office, "514002017", "carry-old")
+        actor = db.query(User).filter_by(organization_id=office).one()
+        old = Account(
+            organization_id=org_id, name="old", account_type=AccountType.BANK,
+            source="open_finance", external_id="of-old", currency="ILS",
+            provider_account_number="12-1662", open_finance_connection_id="carry-old",
+        )
+        db.add(old)
+        db.flush()
+        from cfo.services.bank_coverage import attach_provider_account, classify_open_finance_account
+        attach_provider_account(db, old)
+        coverage = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).one()
+        classify_open_finance_account(
+            db, org_id, old.id, state="BOUND", coverage_id=coverage.id, actor_id=actor.id,
+        )
+        db.add(BankConnection(
+            organization_id=org_id, source="open_finance",
+            connection_id="carry-new", status="INACTIVE",
+        ))
+        new = Account(
+            organization_id=org_id, name="new", account_type=AccountType.BANK,
+            source="open_finance", external_id="of-new", currency="ILS",
+            provider_account_number="12-1662", open_finance_connection_id="carry-new",
+        )
+        db.add(new)
+        db.flush()
+        attach_provider_account(db, new)
+        _provider_tx(db, org_id, old, "o-1015", date(2026, 10, 15), "-700.00", "Post cutoff")
+        _provider_tx(db, org_id, new, "n-1015", date(2026, 10, 15), "-700.00", "Post cutoff")
+        from cfo.services.bank_coverage import supersede_other_live_consents
+        supersede_other_live_consents(db, org_id, "carry-new")
+        new_conn = db.query(BankConnection).filter_by(connection_id="carry-new").one()
+        new_conn.status = "ACTIVE"
+        db.commit()
+        moved = db.query(OfAccountClassification).filter_by(account_id=new.id).one()
+        assert moved.state == "BOUND"
+        assert moved.coverage_id == coverage.id
+        assert moved.classified_by_user_id == actor.id
+        assert db.query(OfAccountClassification).filter_by(account_id=old.id).count() == 0
+        outflows, report = _october_outflows(db, org_id)
+        assert outflows == 6700.0
+        assert "כפול" in report["coverage"]["message"]
+
+
+def test_numberless_account_stays_unclassified(fresh_org):
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office, "514002018", "class-empty")
+        blank = Account(
+            organization_id=org_id, name="No number", account_type=AccountType.BANK,
+            source="open_finance", external_id="of-blank", currency="ILS",
+            provider_account_number=None,
+        )
+        db.add(blank)
+        db.flush()
+        from cfo.services.bank_coverage import attach_provider_account
+        attach_provider_account(db, blank)
+        db.commit()
+        assert db.query(OfAccountClassification).filter_by(account_id=blank.id).count() == 0
+
+
+def test_withheld_amount_is_net_plus_inflow_and_outflow(fresh_org):
+    office = fresh_org()["org_id"]
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office, "514002019", "class-net")
+        other = Account(
+            organization_id=org_id, name="Other bank", account_type=AccountType.BANK,
+            source="open_finance", external_id="of-net", currency="ILS",
+            provider_account_number="31-9999",
+        )
+        db.add(other)
+        db.flush()
+        _provider_tx(db, org_id, other, "net-in", date(2026, 10, 1), "1000.00", "In")
+        _provider_tx(db, org_id, other, "net-out", date(2026, 10, 2), "-1000.00", "Out")
+        from cfo.services.bank_coverage import record_unattached_coverage_alert
+        record_unattached_coverage_alert(db, org_id)
+        db.commit()
+        _outflows, report = _october_outflows(db, org_id)
+        line = next(item for item in report["coverage"]["excluded_accounts"] if item["reason"] == "UNCLASSIFIED")
+        assert line["net_amount"] == 0.0
+        assert line["inflow_amount"] == 1000.0
+        assert line["outflow_amount"] == 1000.0
+        assert "2000" not in report["coverage"]["message"]
+        assert "כניסות 1000.00" in report["coverage"]["message"]
+        assert "יציאות 1000.00" in report["coverage"]["message"]
+
+
+def test_public_coverage_note_hides_internal_ids():
+    from cfo.services.bank_coverage import redact_public_coverage
+    note = redact_public_coverage({
+        "excluded_count": 1,
+        "organization_id": 9,
+        "message": "Other bank ••••9999: -10.00 (כניסות 0.00, יציאות 10.00) לא נספר (לא מסווג)",
+        "excluded_accounts": [{
+            "account_id": 41,
+            "coverage_id": 8,
+            "organization_id": 9,
+            "classified_by_user_id": 3,
+            "label": "Other bank",
+            "masked_number": "••••9999",
+            "reason": "UNCLASSIFIED",
+            "net_amount": -10.0,
+            "inflow_amount": 0.0,
+            "outflow_amount": 10.0,
+        }],
+    })
+    assert "organization_id" not in note
+    account = note["excluded_accounts"][0]
+    assert account["label"] == "Other bank"
+    assert account["masked_number"] == "••••9999"
+    assert account["reason"] == "UNCLASSIFIED"
+    for key in ("account_id", "coverage_id", "organization_id", "classified_by_user_id"):
+        assert key not in account
+    assert "41" not in note["message"]
+
+
+def test_local_import_and_deletion_recompute_the_alert(fresh_org):
+    office = fresh_org()
+    with SessionLocal() as db:
+        client = _import_bank(db, office["org_id"], "514002020")
+        org_id = client["target_organization_id"]
+        account = db.query(Account).filter_by(organization_id=org_id, source=local.SOURCE).one()
+        bind_existing_connection(
+            db, org_id, connection_id="class-p4", status="ACTIVE",
+            coverage={"local_account_id": account.id, "covers_from": date(2026, 10, 14),
+                      "bank_account_suffix": "1662"},
+        )
+        other = Account(
+            organization_id=org_id, name="Other bank", account_type=AccountType.BANK,
+            source="open_finance", external_id="of-p4", currency="ILS",
+            provider_account_number="31-9999",
+        )
+        db.add(other)
+        db.flush()
+        _provider_tx(db, org_id, other, "p4-1001", date(2026, 10, 1), "-2500.00", "Other")
+        from cfo.services.bank_coverage import record_unattached_coverage_alert
+        record_unattached_coverage_alert(db, org_id)
+        db.commit()
+        assert _status_value(db.query(Alert).filter_by(
+            organization_id=org_id, alert_type="coverage_accounts_withheld",
+        ).one()) == "active"
+        db.query(BankTransaction).filter_by(
+            organization_id=org_id, source=local.SOURCE, transaction_date=date(2026, 10, 13),
+        ).delete()
+        db.commit()
+        assert _status_value(db.query(Alert).filter_by(
+            organization_id=org_id, alert_type="coverage_accounts_withheld",
+        ).one()) == "resolved"
+        local.import_reviewed_source(db, office["org_id"], client["id"], {
+            "kind": "bank", "source_name": "reviewed-later.json", "source_sha256": "e" * 64,
+            "observed_at": "2026-10-20T12:00:00Z", "bank_account_suffix": "1662",
+            "rows": [{"external_id": "local-1018", "date": "2026-10-18", "amount": "-10.00",
+                      "description": "late local", "currency": "ILS"}],
+        })
+        alert = db.query(Alert).filter_by(
+            organization_id=org_id, alert_type="coverage_accounts_withheld",
+        ).one()
+        assert _status_value(alert) == "active"
+        assert "לא מסווג" in alert.message
+
+
+def test_classification_requires_office_admin_of_a_different_office(client, fresh_org):
+    office = fresh_org()
+    client_home = fresh_org()
+    super_home = fresh_org()
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office["org_id"], "514002021", "class-authz")
+        other = Account(
+            organization_id=org_id, name="Other bank", account_type=AccountType.BANK,
+            source="open_finance", external_id="of-authz", currency="ILS",
+            provider_account_number="31-9999",
+        )
+        db.add(other)
+        db.flush()
+        client_user = db.query(User).filter_by(organization_id=client_home["org_id"]).one()
+        db.add(OrganizationMembership(
+            organization_id=org_id, user_id=client_user.id, role=UserRole.ADMIN, status="active",
+        ))
+        super_user = db.query(User).filter_by(organization_id=super_home["org_id"]).one()
+        super_user.role = UserRole.SUPER_ADMIN
+        db.commit()
+        account_id = other.id
+        client_headers = _headers_for(client_user, UserRole.ADMIN)
+        super_headers = _headers_for(super_user, UserRole.SUPER_ADMIN)
+    url = f"/api/admin/organizations/{org_id}/open-finance/accounts/{account_id}/classification"
+    body = {"state": "INDEPENDENT"}
+    assert client.post(url, headers=client_headers, json=body).status_code == 403
+    assert client.post(url, headers=super_headers, json=body).status_code == 403
+    assert client.post(url, headers=office["headers"], json=body).status_code == 200
+    with SessionLocal() as db:
+        for row in db.query(SumitCompany).filter_by(target_organization_id=org_id):
+            row.status = "inactive"
+        db.query(OfAccountClassification).filter_by(account_id=account_id).delete()
+        db.commit()
+    assert client.post(url, headers=client_headers, json=body).status_code == 403
+    assert client.post(url, headers=super_headers, json=body).status_code == 403
+    assert client.post(url, headers=office["headers"], json=body).status_code == 403

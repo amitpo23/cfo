@@ -20,7 +20,7 @@ from ...services.bank_coverage import (
     classify_open_finance_account,
 )
 from ...services.membership_service import role_in
-from ...services.sumit_request_budget import resolve_office_organization_id
+from ...services.office_access import classifying_office_id
 
 router = APIRouter()
 
@@ -71,10 +71,14 @@ class ClassificationBody(BaseModel):
 
 
 def _require_office_admin(db: Session, user: User, org_id: int) -> None:
-    if user.role == UserRole.SUPER_ADMIN:
-        return
-    office_id = resolve_office_organization_id(db, org_id)
-    if role_in(db, user.id, office_id) != UserRole.ADMIN:
+    """Active link to a different office, plus an active admin membership there.
+
+    Super-admin does not bypass this. A client admin of the file itself does
+    not either, including when the roster link is inactive and the file would
+    otherwise resolve as its own office.
+    """
+    office_id = classifying_office_id(db, org_id)
+    if office_id is None or role_in(db, user.id, office_id) != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Office admin required")
 
 
@@ -98,4 +102,4 @@ def classify_open_finance_account_route(
             actor_id=current_user.id,
         )
     except OpenFinanceBindError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

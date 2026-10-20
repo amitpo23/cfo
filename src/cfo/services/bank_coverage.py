@@ -31,6 +31,7 @@ from ..models import (
     SumitCompany,
     SyncCheckpoint,
     SyncRun,
+    User,
 )
 from .credentials_vault import decrypt_credentials, encrypt_credentials
 
@@ -42,8 +43,27 @@ STATE_BOUND = "BOUND"
 STATE_INDEPENDENT = "INDEPENDENT"
 STATE_UNCLASSIFIED = "UNCLASSIFIED"
 REASON_BEFORE_COVERAGE = "before covers_from"
+REASON_DUPLICATE = "duplicate"
 ALERT_WITHHELD = "coverage_accounts_withheld"
 ALERT_UNATTACHED = "coverage_provider_unattached"
+ALERT_REASONS = frozenset({STATE_UNCLASSIFIED, REASON_DUPLICATE, STATE_INDEPENDENT})
+_REASON_HEBREW = {
+    STATE_UNCLASSIFIED: "לא מסווג",
+    REASON_BEFORE_COVERAGE: "לפני תחילת כיסוי",
+    REASON_DUPLICATE: "כפול",
+    STATE_INDEPENDENT: "עצמאי",
+}
+_PUBLIC_LINE_KEYS = (
+    "label",
+    "masked_number",
+    "reason",
+    "net_amount",
+    "inflow_amount",
+    "outflow_amount",
+    "keeper_mask",
+    "actor_name",
+    "classified_on",
+)
 
 
 class OpenFinanceBindError(ValueError):
@@ -215,7 +235,9 @@ def attach_provider_account(db, account: Account) -> None:
         return
     if account.id is None:
         db.flush()
+    snaps = _bound_snapshots(db, account.organization_id)
     suggest_account_states(db, account.organization_id)
+    _carry_bound_to_live_row(db, account.organization_id, None, snaps)
     record_unattached_coverage_alert(db, account.organization_id)
 
 
@@ -303,6 +325,221 @@ def _masked_number(account: Account | None) -> str:
     return "••••"
 
 
+def _flush_session(db) -> None:
+    """Flush unless a hook called us from inside a flush.
+
+    ``commit`` flushes again when ``after_flush`` left new alert rows, so
+    skipping here avoids ``Session is already flushing``.
+    """
+    if getattr(db, "_flushing", False):
+        return
+    db.flush()
+
+
+def _money(value: Decimal) -> float:
+    return float(Decimal(value).quantize(Decimal("0.01")))
+
+
+def _add_amount(bucket: dict, amount: Decimal) -> None:
+    bucket["net"] += amount
+    if amount > 0:
+        bucket["inflow"] += amount
+    elif amount < 0:
+        bucket["outflow"] += -amount
+
+
+def _actor_name(user: User | None) -> str:
+    if user is None:
+        return "משרד"
+    name = (user.full_name or "").strip()
+    if name:
+        return name
+    return (user.email or "").strip() or "משרד"
+
+
+def _blocked_suffixes(db, org_id: int) -> set[str]:
+    """Coverage suffixes and reviewed local ``local-bank:NNNN`` suffixes."""
+    suffixes: set[str] = set()
+    for cov in db.query(AccountSourceCoverage).filter_by(organization_id=org_id).all():
+        token = _four_digit_suffix(cov.bank_account_suffix)
+        if token:
+            suffixes.add(token)
+    for account in db.query(Account).filter(
+        Account.organization_id == org_id, Account.source == LOCAL_SOURCE,
+    ).all():
+        external = account.external_id or ""
+        token = external.split(":", 1)[1] if external.startswith("local-bank:") else ""
+        digits = _digit_tail(token)
+        if len(digits) >= 4:
+            suffixes.add(digits[-4:])
+    return suffixes
+
+
+def _digits_end_with_blocked_suffix(db, org_id: int, account: Account) -> bool:
+    digits = _digit_tail(account.provider_account_number)
+    if not digits:
+        return False
+    return any(suffix and digits.endswith(suffix) for suffix in _blocked_suffixes(db, org_id))
+
+
+def _coverage_unique_violation(exc: IntegrityError) -> bool:
+    message = str(getattr(exc, "orig", exc)).lower()
+    return "uq_of_class_coverage" in message or "of_account_classifications.coverage_id" in message
+
+
+def _live_connection_ids(db, org_id: int, survivor_connection_id: str | None = None) -> set[str]:
+    rows = (
+        db.query(BankConnection.connection_id, BankConnection.status)
+        .filter(
+            BankConnection.organization_id == org_id,
+            BankConnection.source == "open_finance",
+        )
+        .all()
+    )
+    live = {cid for cid, status in rows if cid and status in SYNCABLE_STATUSES}
+    if survivor_connection_id:
+        live.add(survivor_connection_id)
+    return live
+
+
+def _connection_statuses(db, org_id: int) -> dict[str, str]:
+    rows = (
+        db.query(BankConnection.connection_id, BankConnection.status)
+        .filter(
+            BankConnection.organization_id == org_id,
+            BankConnection.source == "open_finance",
+        )
+        .all()
+    )
+    return {cid: status for cid, status in rows if cid}
+
+
+def _of_accounts(db, org_id: int) -> list[Account]:
+    return (
+        db.query(Account)
+        .filter(Account.organization_id == org_id, Account.source == "open_finance")
+        .all()
+    )
+
+
+def _digit_groups(accounts: list[Account]) -> dict[str, list[Account]]:
+    """Group numbered accounts. Empty digit strings are not a group."""
+    groups: dict[str, list[Account]] = {}
+    for account in accounts:
+        digits = _digit_tail(account.provider_account_number)
+        if not digits:
+            continue
+        groups.setdefault(digits, []).append(account)
+    return groups
+
+
+def _bound_snapshots(db, org_id: int) -> list[dict]:
+    accounts = {row.id: row for row in _of_accounts(db, org_id)}
+    snaps = []
+    rows = (
+        db.query(OfAccountClassification)
+        .filter_by(organization_id=org_id, state=STATE_BOUND)
+        .all()
+    )
+    for row in rows:
+        account = accounts.get(row.account_id)
+        snaps.append({
+            "account_id": row.account_id,
+            "digits": _digit_tail(account.provider_account_number) if account is not None else "",
+            "coverage_id": row.coverage_id,
+            "classified_by_user_id": row.classified_by_user_id,
+            "classified_at": row.classified_at,
+        })
+    return snaps
+
+
+def _carry_bound_to_live_row(db, org_id: int, survivor_connection_id: str | None, snaps: list[dict]) -> None:
+    """Move BOUND onto the single live-consent row that shares the digit string.
+
+    The donor row is deleted in this same transaction so the coverage unique
+    index still holds. An admin decision already on the target is left as written
+    when it is a different coverage.
+    """
+    if not snaps:
+        return
+    live_ids = _live_connection_ids(db, org_id, survivor_connection_id)
+    if not live_ids:
+        return
+    groups = _digit_groups(_of_accounts(db, org_id))
+    classes = {
+        row.account_id: row
+        for row in db.query(OfAccountClassification).filter_by(organization_id=org_id).all()
+    }
+    for snap in snaps:
+        digits = snap["digits"]
+        if not digits or snap["coverage_id"] is None:
+            continue
+        live_rows = [
+            account for account in groups.get(digits, [])
+            if account.open_finance_connection_id and account.open_finance_connection_id in live_ids
+        ]
+        if len(live_rows) != 1:
+            continue
+        target = live_rows[0]
+        if target.id == snap["account_id"]:
+            continue
+        existing = classes.get(target.id)
+        if (
+            existing is not None
+            and existing.classified_by_user_id is not None
+            and not (existing.state == STATE_BOUND and existing.coverage_id == snap["coverage_id"])
+        ):
+            continue
+        holders = [
+            row for row in list(classes.values())
+            if row.state == STATE_BOUND and row.coverage_id == snap["coverage_id"]
+        ]
+        for row in holders:
+            db.delete(row)
+            classes.pop(row.account_id, None)
+        if existing is not None and existing.account_id in classes:
+            db.delete(existing)
+            classes.pop(target.id, None)
+        _flush_session(db)
+        moved = OfAccountClassification(
+            organization_id=org_id,
+            account_id=target.id,
+            state=STATE_BOUND,
+            coverage_id=snap["coverage_id"],
+            classified_by_user_id=snap["classified_by_user_id"],
+            classified_at=snap["classified_at"],
+        )
+        db.add(moved)
+        _flush_session(db)
+        classes[target.id] = moved
+    _sync_coverage_pointers(db, org_id)
+
+
+def _duplicate_index(db, org_id: int, classes: dict) -> dict[int, dict]:
+    """One keeper per digit group. Prefer the ACTIVE consent, then BOUND, then newest."""
+    statuses = _connection_statuses(db, org_id)
+    index: dict[int, dict] = {}
+    for group in _digit_groups(_of_accounts(db, org_id)).values():
+        if len(group) < 2:
+            continue
+
+        def rank(account: Account):
+            status = statuses.get(account.open_finance_connection_id or "")
+            live = 2 if status == "ACTIVE" else 1 if status in SYNCABLE_STATUSES else 0
+            klass = classes.get(account.id)
+            bound = 1 if klass is not None and klass.state == STATE_BOUND else 0
+            return (live, bound, account.id or 0)
+
+        keeper = max(group, key=rank)
+        mask = _masked_number(keeper)
+        for account in group:
+            index[account.id] = {
+                "duplicate": account.id != keeper.id,
+                "keeper_mask": mask,
+            }
+    return index
+
+
 def suggest_account_states(db, org_id: int) -> None:
     """Auto-bind the one Open Finance account that ends with one coverage suffix.
 
@@ -345,6 +582,16 @@ def suggest_account_states(db, org_id: int) -> None:
         if existing is not None and existing.classified_by_user_id is not None:
             continue
         chosen[account.id] = covs[0]
+    taken = {
+        row.coverage_id: row.account_id
+        for row in classes.values()
+        if row.state == STATE_BOUND and row.coverage_id is not None
+    }
+    chosen = {
+        account_id: cov
+        for account_id, cov in chosen.items()
+        if taken.get(cov.id) in (None, account_id)
+    }
     for account in accounts:
         existing = classes.get(account.id)
         if existing is not None and existing.classified_by_user_id is not None:
@@ -410,6 +657,22 @@ def classify_open_finance_account(
             raise OpenFinanceBindError("BOUND requires a coverage in this organization")
     elif coverage_id is not None:
         raise OpenFinanceBindError("INDEPENDENT does not take a coverage")
+    if state == STATE_INDEPENDENT and _digits_end_with_blocked_suffix(db, org_id, account):
+        raise OpenFinanceBindError(
+            "INDEPENDENT is refused because this account number ends with a reviewed local import or coverage suffix"
+        )
+    if state == STATE_BOUND and coverage is not None:
+        other = (
+            db.query(OfAccountClassification)
+            .filter(
+                OfAccountClassification.coverage_id == coverage.id,
+                OfAccountClassification.state == STATE_BOUND,
+                OfAccountClassification.account_id != account.id,
+            )
+            .first()
+        )
+        if other is not None:
+            raise OpenFinanceBindError("This coverage is already bound to an Open Finance account")
     try:
         row = db.query(OfAccountClassification).filter_by(account_id=account.id).first()
         now = datetime.utcnow()
@@ -447,6 +710,13 @@ def classify_open_finance_account(
         db.commit()
     except OpenFinanceBindError:
         db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        if _coverage_unique_violation(exc):
+            raise OpenFinanceBindError(
+                "This coverage is already bound to an Open Finance account"
+            ) from exc
         raise
     except Exception:
         db.rollback()
@@ -499,8 +769,14 @@ def _classification_context(db, org_id: int) -> dict:
         for row in db.query(OfAccountClassification).filter_by(organization_id=org_id).all()
     }
     bound_ids = {row.coverage_id for row in classes.values() if row.state == STATE_BOUND}
+    actor_ids = {row.classified_by_user_id for row in classes.values() if row.classified_by_user_id}
+    users = {}
+    if actor_ids:
+        users = {user.id: user for user in db.query(User).filter(User.id.in_(actor_ids)).all()}
     return {
         "classes": classes,
+        "users": users,
+        "duplicates": _duplicate_index(db, org_id, classes),
         "cutoffs": {cov.id: _effective_provider_cutoff(db, cov) for cov in coverages},
         "by_local": {cov.local_account_id: cov for cov in coverages},
         "last_end": _latest_local_end(db, org_id),
@@ -512,10 +788,15 @@ def _decision(row, ctx) -> tuple[bool, str | None, bool]:
     """Return (include, open-finance reason, fingerprint-matched).
 
     Local overlap is excluded without an account line and without counting
-    as unmatched. ``INDEPENDENT`` counts on every date. ``BOUND`` counts
+    as unmatched. A duplicate digit-group row is excluded on every date.
+    ``INDEPENDENT`` counts on every date and is still named. ``BOUND`` counts
     from the effective coverage cutoff. ``UNCLASSIFIED`` counts only after
     the latest reviewed local import in the organization.
     """
+    if row.source == "open_finance":
+        duplicate = ctx["duplicates"].get(row.account_id)
+        if duplicate and duplicate["duplicate"]:
+            return False, REASON_DUPLICATE, False
     if row.superseded_by_id is not None:
         reason = REASON_BEFORE_COVERAGE if row.source == "open_finance" else None
         return False, reason, True
@@ -529,7 +810,7 @@ def _decision(row, ctx) -> tuple[bool, str | None, bool]:
     klass = ctx["classes"].get(row.account_id)
     state = klass.state if klass is not None else STATE_UNCLASSIFIED
     if state == STATE_INDEPENDENT:
-        return True, None, False
+        return True, STATE_INDEPENDENT, False
     if state == STATE_BOUND and klass is not None and klass.coverage_id in ctx["cutoffs"]:
         if row.transaction_date < ctx["cutoffs"][klass.coverage_id]:
             return False, REASON_BEFORE_COVERAGE, False
@@ -543,20 +824,37 @@ def _decision(row, ctx) -> tuple[bool, str | None, bool]:
 def _lines_from(db, rows, ctx) -> tuple[list, int, int, list]:
     visible = []
     excluded = matched = 0
-    buckets: dict[tuple[int, str], Decimal] = {}
+    buckets: dict[tuple[int, str], dict] = {}
+
+    def bucket_for(account_id: int, reason: str) -> dict:
+        key = (account_id, reason)
+        found = buckets.get(key)
+        if found is None:
+            found = {"net": Decimal("0"), "inflow": Decimal("0"), "outflow": Decimal("0")}
+            buckets[key] = found
+        return found
+
     for row in rows:
         include, reason, is_matched = _decision(row, ctx)
+        amount = row.amount if isinstance(row.amount, Decimal) else Decimal(str(row.amount or 0))
         if include:
             visible.append((row.transaction_date, row.amount))
+            if reason == STATE_INDEPENDENT and row.account_id is not None:
+                _add_amount(bucket_for(row.account_id, STATE_INDEPENDENT), amount)
             continue
         excluded += 1
         if is_matched:
             matched += 1
         if reason is None or row.account_id is None:
             continue
-        amount = row.amount if isinstance(row.amount, Decimal) else Decimal(str(row.amount))
-        key = (row.account_id, reason)
-        buckets[key] = buckets.get(key, Decimal("0")) + abs(amount)
+        _add_amount(bucket_for(row.account_id, reason), amount)
+    for account_id, klass in ctx["classes"].items():
+        if klass.state != STATE_INDEPENDENT:
+            continue
+        duplicate = ctx["duplicates"].get(account_id)
+        if duplicate and duplicate["duplicate"]:
+            continue
+        bucket_for(account_id, STATE_INDEPENDENT)
     account_ids = {account_id for account_id, _reason in buckets}
     accounts = {}
     if account_ids:
@@ -567,28 +865,78 @@ def _lines_from(db, rows, ctx) -> tuple[list, int, int, list]:
     lines = []
     for (account_id, reason) in sorted(buckets):
         account = accounts.get(account_id)
-        amount = buckets[(account_id, reason)].quantize(Decimal("0.01"))
-        lines.append({
+        amounts = buckets[(account_id, reason)]
+        klass = ctx["classes"].get(account_id)
+        duplicate = ctx["duplicates"].get(account_id) or {}
+        line = {
             "account_id": account_id,
             "label": account.name if account is not None and account.name else "חשבון בנק",
             "masked_number": _masked_number(account),
-            "excluded_amount": float(amount),
+            "net_amount": _money(amounts["net"]),
+            "inflow_amount": _money(amounts["inflow"]),
+            "outflow_amount": _money(amounts["outflow"]),
             "reason": reason,
-        })
+        }
+        if reason == REASON_DUPLICATE:
+            line["keeper_mask"] = duplicate.get("keeper_mask") or line["masked_number"]
+        if reason == STATE_INDEPENDENT:
+            user = ctx["users"].get(klass.classified_by_user_id) if klass is not None else None
+            line["actor_name"] = _actor_name(user)
+            line["classified_on"] = (
+                klass.classified_at.date().isoformat()
+                if klass is not None and klass.classified_at is not None else ""
+            )
+        lines.append(line)
     return visible, excluded, matched, lines
 
 
 def _coverage_message(lines: list, excluded: int) -> str | None:
-    parts = [
-        (
-            f"{item['label']} {item['masked_number']}: "
-            f"{item['excluded_amount']:.2f} לא נספר ({item['reason']})"
+    parts = []
+    for item in lines:
+        amounts = (
+            f"{item['net_amount']:.2f} "
+            f"(כניסות {item['inflow_amount']:.2f}, יציאות {item['outflow_amount']:.2f})"
         )
-        for item in lines
-    ]
+        label = f"{item['label']} {item['masked_number']}"
+        reason = item["reason"]
+        if reason == STATE_INDEPENDENT:
+            parts.append(
+                f"{label}: {amounts} נספר במלואו "
+                f"(עצמאי, נקבע על ידי {item.get('actor_name') or 'משרד'} ב-{item.get('classified_on') or ''})"
+            )
+            continue
+        if reason == REASON_DUPLICATE:
+            parts.append(
+                f"{label}: {amounts} כפול של {item.get('keeper_mask') or item['masked_number']}, לא נספר"
+            )
+            continue
+        hebrew = _REASON_HEBREW.get(reason, reason)
+        parts.append(f"{label}: {amounts} לא נספר ({hebrew})")
     if excluded and not parts:
         parts.append("תנועות מקומיות אחרי תחילת הכיסוי לא נספרו.")
     return " ".join(parts) if parts else None
+
+
+def redact_public_coverage(note):
+    """Drop internal ids from a coverage note before it is published on /d/."""
+    if not isinstance(note, dict):
+        return note
+    cleaned = {}
+    for key, value in note.items():
+        if key == "excluded_accounts" or key.endswith("_id"):
+            continue
+        cleaned[key] = value
+    accounts = []
+    for item in note.get("excluded_accounts") or []:
+        if not isinstance(item, dict):
+            continue
+        accounts.append({
+            key: item[key]
+            for key in _PUBLIC_LINE_KEYS
+            if key in item and item[key] is not None
+        })
+    cleaned["excluded_accounts"] = accounts
+    return cleaned
 
 
 def _resolve_active_alerts(db, org_id: int, alert_type: str) -> None:
@@ -610,14 +958,17 @@ def _resolve_active_alerts(db, org_id: int, alert_type: str) -> None:
 def refresh_coverage_alert(db, org_id: int) -> None:
     """One org alert naming every withheld Open Finance account.
 
-    Callers commit. A cash-flow read must not call this. An empty list
-    resolves the alert. A stale unattached alert is resolved on every refresh.
+    Callers commit. A cash-flow read must not call this. The alert names
+    UNCLASSIFIED accounts, duplicate rows, and INDEPENDENT decisions.
+    ``before covers_from`` stays in the note and does not keep the alert
+    active. An empty alert list resolves it. A stale unattached alert is
+    resolved on every refresh.
     """
-    db.flush()
+    _flush_session(db)
     _resolve_active_alerts(db, org_id, ALERT_UNATTACHED)
     if not _org_has_reviewed_local_import(db, org_id):
         _resolve_active_alerts(db, org_id, ALERT_WITHHELD)
-        db.flush()
+        _flush_session(db)
         return
     rows = (
         db.query(BankTransaction)
@@ -628,6 +979,7 @@ def refresh_coverage_alert(db, org_id: int) -> None:
         .all()
     )
     _visible, _excluded, _matched, lines = _lines_from(db, rows, _classification_context(db, org_id))
+    lines = [line for line in lines if line["reason"] in ALERT_REASONS]
     existing = (
         db.query(Alert)
         .filter(Alert.organization_id == org_id, Alert.alert_type == ALERT_WITHHELD)
@@ -640,7 +992,7 @@ def refresh_coverage_alert(db, org_id: int) -> None:
             existing.status = AlertStatus.RESOLVED
             existing.resolved_at = datetime.utcnow()
             existing.meta = {"accounts": []}
-        db.flush()
+        _flush_session(db)
         return
     payload = {"accounts": lines}
     if existing is None:
@@ -648,7 +1000,7 @@ def refresh_coverage_alert(db, org_id: int) -> None:
             organization_id=org_id,
             alert_type=ALERT_WITHHELD,
             severity=AlertSeverity.WARNING,
-            title="תנועות בנק שלא נספרו",
+            title="סיווג חשבונות בנק",
             message=message,
             status=AlertStatus.ACTIVE,
             meta=payload,
@@ -656,10 +1008,10 @@ def refresh_coverage_alert(db, org_id: int) -> None:
     else:
         existing.status = AlertStatus.ACTIVE
         existing.resolved_at = None
-        existing.title = "תנועות בנק שלא נספרו"
+        existing.title = "סיווג חשבונות בנק"
         existing.message = message
         existing.meta = payload
-    db.flush()
+    _flush_session(db)
 
 
 def record_unattached_coverage_alert(db, org_id: int) -> None:
@@ -672,7 +1024,10 @@ def supersede_other_live_consents(db, org_id: int, connection_id: str) -> None:
 
     The partial unique index allows one ACTIVE, CONNECTED, or COMPLETED
     Open Finance row per organization. ``SUPERSEDED`` is outside that list.
+    BOUND state for the same account number moves onto the surviving consent
+    in this transaction, before the new row can fall back to UNCLASSIFIED.
     """
+    snaps = _bound_snapshots(db, org_id)
     rows = (
         db.query(BankConnection)
         .filter(
@@ -685,6 +1040,8 @@ def supersede_other_live_consents(db, org_id: int, connection_id: str) -> None:
     )
     for other in rows:
         other.status = "SUPERSEDED"
+    _flush_session(db)
+    _carry_bound_to_live_row(db, org_id, connection_id, snaps)
 
 
 def _effective_provider_cutoff(db, cov) -> date:
@@ -893,3 +1250,8 @@ def _record_coverage(db, org_id: int, coverage: dict) -> dict:
         "covers_from": covers_from.isoformat(),
         "bank_account_suffix": row.bank_account_suffix,
     }
+
+
+from .coverage_alert_hooks import install as _install_coverage_alert_hooks
+
+_install_coverage_alert_hooks()

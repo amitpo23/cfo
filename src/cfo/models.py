@@ -845,6 +845,15 @@ class OfAccountClassification(Base):
             "state <> 'INDEPENDENT' OR classified_by_user_id IS NOT NULL",
             name="ck_of_class_independent_actor",
         ),
+        # One coverage has one BOUND account. INDEPENDENT rows leave coverage_id
+        # null, and the partial predicate keeps those rows out of the unique index.
+        Index(
+            "uq_of_class_coverage",
+            "coverage_id",
+            unique=True,
+            sqlite_where=text("state = 'BOUND'"),
+            postgresql_where=text("state = 'BOUND'"),
+        ),
     )
 
 
