@@ -804,6 +804,50 @@ class AccountSourceCoverage(Base):
     )
 
 
+class OfAccountClassification(Base):
+    """Explicit state of one Open Finance account against reviewed local imports.
+
+    ``UNCLASSIFIED`` is the default: the row is absent. ``BOUND`` points at
+    one coverage. ``INDEPENDENT`` is an office-admin declaration that this
+    account has no local import history, with who and when. Digit matching
+    may only suggest ``BOUND``, and only when one account ends with one
+    coverage suffix. It never writes ``INDEPENDENT``.
+    """
+
+    __tablename__ = "of_account_classifications"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    state = Column(String(20), nullable=False)
+    coverage_id = Column(Integer, ForeignKey("account_source_coverage.id"), nullable=True)
+    classified_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    classified_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+    account = relationship("Account", foreign_keys=[account_id])
+    coverage = relationship("AccountSourceCoverage", foreign_keys=[coverage_id])
+    classified_by = relationship("User", foreign_keys=[classified_by_user_id])
+
+    __table_args__ = (
+        UniqueConstraint("account_id", name="uq_of_class_account"),
+        Index("ix_of_class_org", "organization_id"),
+        CheckConstraint(
+            "state IN ('BOUND', 'INDEPENDENT', 'UNCLASSIFIED')",
+            name="ck_of_class_state",
+        ),
+        CheckConstraint(
+            "(state = 'BOUND') = (coverage_id IS NOT NULL)",
+            name="ck_of_class_bound_coverage",
+        ),
+        CheckConstraint(
+            "state <> 'INDEPENDENT' OR classified_by_user_id IS NOT NULL",
+            name="ck_of_class_independent_actor",
+        ),
+    )
+
+
 class OpenFinancePayment(Base):
     """A payment initiated/tracked through the Open Finance PIS surface.
 

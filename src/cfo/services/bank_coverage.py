@@ -8,7 +8,7 @@ checklist, or set a consent URL.
 from __future__ import annotations
 
 import hashlib
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -19,6 +19,7 @@ from ..models import (
     Account,
     AccountSourceCoverage,
     Alert,
+    OfAccountClassification,
     AlertSeverity,
     AlertStatus,
     AuditLog,
@@ -37,6 +38,12 @@ LOCAL_SOURCE = "reviewed_local_import"
 HYBRID_MODE = "hybrid"
 IMPORT_ONLY_MODE = "import_only"
 SYNCABLE_STATUSES = frozenset({"ACTIVE", "CONNECTED", "COMPLETED"})
+STATE_BOUND = "BOUND"
+STATE_INDEPENDENT = "INDEPENDENT"
+STATE_UNCLASSIFIED = "UNCLASSIFIED"
+REASON_BEFORE_COVERAGE = "before covers_from"
+ALERT_WITHHELD = "coverage_accounts_withheld"
+ALERT_UNATTACHED = "coverage_provider_unattached"
 
 
 class OpenFinanceBindError(ValueError):
@@ -126,7 +133,8 @@ def bind_existing_connection(
         coverage_out = None
         if coverage is not None:
             coverage_out = _record_coverage(db, org_id, coverage)
-            record_unattached_coverage_alert(db, org_id)
+        suggest_account_states(db, org_id)
+        record_unattached_coverage_alert(db, org_id)
         if created or coverage_out is not None:
             db.add(AuditLog(
                 user_id=actor_id,
@@ -197,31 +205,18 @@ def _four_digit_suffix(value) -> str:
 
 
 def attach_provider_account(db, account: Account) -> None:
-    """Point an unbound coverage row at a provider account that contains its suffix.
+    """Suggest BOUND when this account is the one unambiguous suffix match.
 
-    ``1662`` matches ``12-1662`` and also ``1662-01``. A number that merely
-    embeds the suffix, such as ``31-16629999``, matches too: that over-match
-    fails closed on the cash-flow read. A second account row does not move
-    the pointer once a coverage is already bound; the read path still applies
-    the cutoff to every account whose digits contain the suffix.
+    The suggestion is the digit tail ending in exactly one coverage suffix,
+    and exactly one Open Finance account ending in that suffix. Anything else
+    stays UNCLASSIFIED. Callers commit. This does not write INDEPENDENT.
     """
-    number = _digit_tail(account.provider_account_number)
-    if account.source != "open_finance" or not number:
+    if account.source != "open_finance":
         return
     if account.id is None:
         db.flush()
-    rows = (
-        db.query(AccountSourceCoverage)
-        .filter(
-            AccountSourceCoverage.organization_id == account.organization_id,
-            AccountSourceCoverage.superseded_by_account_id.is_(None),
-        )
-        .all()
-    )
-    for row in rows:
-        suffix = _four_digit_suffix(row.bank_account_suffix)
-        if suffix and suffix in number:
-            row.superseded_by_account_id = account.id
+    suggest_account_states(db, account.organization_id)
+    record_unattached_coverage_alert(db, account.organization_id)
 
 
 def link_coverage_overlap(db, org_id: int) -> dict:
@@ -265,11 +260,213 @@ def link_coverage_overlap(db, org_id: int) -> dict:
     return {"matched": matched}
 
 
-def cashflow_selection(db, org_id: int, start: date, end: date):
-    """Rows that may be summed, plus an honest overlap report.
+def _org_has_reviewed_local_import(db, org_id: int) -> bool:
+    account = (
+        db.query(Account.id)
+        .filter(Account.organization_id == org_id, Account.source == LOCAL_SOURCE)
+        .first()
+    )
+    if account is not None:
+        return True
+    return (
+        db.query(BankTransaction.id)
+        .filter(
+            BankTransaction.organization_id == org_id,
+            BankTransaction.source == LOCAL_SOURCE,
+        )
+        .first()
+    ) is not None
 
-    A missing coverage row leaves every row in the window unchanged. NULL
-    source is not treated as a reviewed import.
+
+def _latest_local_end(db, org_id: int):
+    """Last reviewed local movement in the org, including banks with no coverage."""
+    return (
+        db.query(func.max(BankTransaction.transaction_date))
+        .filter(
+            BankTransaction.organization_id == org_id,
+            BankTransaction.source == LOCAL_SOURCE,
+        )
+        .scalar()
+    )
+
+
+def _masked_number(account: Account | None) -> str:
+    """Last four digits for display. The name is display-only, never a match key."""
+    if account is None:
+        return "••••"
+    digits = _digit_tail(account.provider_account_number)
+    if len(digits) >= 4:
+        return "••••" + digits[-4:]
+    name_digits = _digit_tail(account.name)
+    if len(name_digits) >= 4:
+        return "••••" + name_digits[-4:]
+    return "••••"
+
+
+def suggest_account_states(db, org_id: int) -> None:
+    """Auto-bind the one Open Finance account that ends with one coverage suffix.
+
+    Admin classifications (``classified_by_user_id`` set) are left as written.
+    A second account with the same ending removes the automatic bind. This
+    never writes ``INDEPENDENT``.
+    """
+    if not _org_has_reviewed_local_import(db, org_id):
+        return
+    coverages = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).all()
+    by_suffix: dict[str, list] = {}
+    for cov in coverages:
+        suffix = _four_digit_suffix(cov.bank_account_suffix)
+        if suffix:
+            by_suffix.setdefault(suffix, []).append(cov)
+    accounts = (
+        db.query(Account)
+        .filter(Account.organization_id == org_id, Account.source == "open_finance")
+        .all()
+    )
+    classes = {
+        row.account_id: row
+        for row in db.query(OfAccountClassification).filter_by(organization_id=org_id).all()
+    }
+    ending: dict[str, list[Account]] = {suffix: [] for suffix in by_suffix}
+    for account in accounts:
+        digits = _digit_tail(account.provider_account_number)
+        if not digits:
+            continue
+        for suffix in by_suffix:
+            if digits.endswith(suffix):
+                ending[suffix].append(account)
+    chosen: dict[int, AccountSourceCoverage] = {}
+    for suffix, owners in ending.items():
+        covs = by_suffix[suffix]
+        if len(covs) != 1 or len(owners) != 1:
+            continue
+        account = owners[0]
+        existing = classes.get(account.id)
+        if existing is not None and existing.classified_by_user_id is not None:
+            continue
+        chosen[account.id] = covs[0]
+    for account in accounts:
+        existing = classes.get(account.id)
+        if existing is not None and existing.classified_by_user_id is not None:
+            continue
+        target = chosen.get(account.id)
+        if target is None:
+            if existing is not None:
+                db.delete(existing)
+            continue
+        if existing is None:
+            db.add(OfAccountClassification(
+                organization_id=org_id,
+                account_id=account.id,
+                state=STATE_BOUND,
+                coverage_id=target.id,
+            ))
+        else:
+            existing.state = STATE_BOUND
+            existing.coverage_id = target.id
+    db.flush()
+    _sync_coverage_pointers(db, org_id)
+
+
+def _sync_coverage_pointers(db, org_id: int) -> None:
+    """Point each coverage at its single BOUND account, preferring an admin bind."""
+    coverages = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).all()
+    bound = (
+        db.query(OfAccountClassification)
+        .filter(
+            OfAccountClassification.organization_id == org_id,
+            OfAccountClassification.state == STATE_BOUND,
+        )
+        .all()
+    )
+    for cov in coverages:
+        owners = [row for row in bound if row.coverage_id == cov.id]
+        admin = [row for row in owners if row.classified_by_user_id is not None]
+        owner_ids = {row.account_id for row in owners}
+        if len(admin) == 1:
+            cov.superseded_by_account_id = admin[0].account_id
+        elif len(owners) == 1:
+            cov.superseded_by_account_id = owners[0].account_id
+        elif cov.superseded_by_account_id not in owner_ids:
+            cov.superseded_by_account_id = None
+    db.flush()
+
+
+def classify_open_finance_account(
+    db, org_id: int, account_id: int, *, state: str, coverage_id: int | None, actor_id: int,
+) -> dict:
+    """Record an office-admin BOUND or INDEPENDENT decision and commit the audit row."""
+    if actor_id is None:
+        raise OpenFinanceBindError("An office admin must classify the account")
+    if state not in (STATE_BOUND, STATE_INDEPENDENT):
+        raise OpenFinanceBindError("State must be BOUND or INDEPENDENT")
+    account = db.get(Account, account_id)
+    if account is None or account.organization_id != org_id or account.source != "open_finance":
+        raise OpenFinanceBindError("Open Finance account required")
+    coverage = None
+    if state == STATE_BOUND:
+        coverage = db.get(AccountSourceCoverage, coverage_id) if coverage_id is not None else None
+        if coverage is None or coverage.organization_id != org_id:
+            raise OpenFinanceBindError("BOUND requires a coverage in this organization")
+    elif coverage_id is not None:
+        raise OpenFinanceBindError("INDEPENDENT does not take a coverage")
+    try:
+        row = db.query(OfAccountClassification).filter_by(account_id=account.id).first()
+        now = datetime.utcnow()
+        if row is None:
+            row = OfAccountClassification(
+                organization_id=org_id,
+                account_id=account.id,
+                state=state,
+                coverage_id=coverage.id if coverage else None,
+                classified_by_user_id=actor_id,
+                classified_at=now,
+            )
+            db.add(row)
+        else:
+            row.organization_id = org_id
+            row.state = state
+            row.coverage_id = coverage.id if coverage else None
+            row.classified_by_user_id = actor_id
+            row.classified_at = now
+        db.flush()
+        suggest_account_states(db, org_id)
+        refresh_coverage_alert(db, org_id)
+        db.add(AuditLog(
+            user_id=actor_id,
+            organization_id=org_id,
+            action="CLASSIFY_OPEN_FINANCE_ACCOUNT",
+            entity_type="Account",
+            entity_id=account.id,
+            details={
+                "state": state,
+                "coverage_id": coverage.id if coverage else None,
+                "account_id": account.id,
+            },
+        ))
+        db.commit()
+    except OpenFinanceBindError:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    return {
+        "organization_id": org_id,
+        "account_id": account.id,
+        "state": state,
+        "coverage_id": coverage.id if coverage else None,
+        "classified_by_user_id": actor_id,
+    }
+
+
+def cashflow_selection(db, org_id: int, start: date, end: date):
+    """Rows that may be summed, plus the accounts withheld from that window.
+
+    An organization with no reviewed local import is unchanged: every row
+    counts and there is no coverage note. Otherwise each Open Finance
+    account is BOUND, INDEPENDENT, or UNCLASSIFIED. This read does not
+    write alerts.
     """
     rows = (
         db.query(BankTransaction)
@@ -280,108 +477,194 @@ def cashflow_selection(db, org_id: int, start: date, end: date):
         )
         .all()
     )
-    coverages = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).all()
-    if not coverages:
+    if not _org_has_reviewed_local_import(db, org_id):
         return [(row.transaction_date, row.amount) for row in rows], None
-
-    by_local = {cov.local_account_id: cov for cov in coverages}
-    by_provider = {
-        cov.superseded_by_account_id: cov
-        for cov in coverages
-        if cov.superseded_by_account_id is not None
-    }
-    unattached = [cov for cov in coverages if cov.superseded_by_account_id is None]
-    cutoffs = {cov.id: _effective_provider_cutoff(db, cov) for cov in coverages}
-    account_digits = _account_digits(db, rows)
-    coverage_suffixes = [
-        (cov, suffix)
-        for cov in coverages
-        if (suffix := _four_digit_suffix(cov.bank_account_suffix))
-    ]
-    visible = []
-    excluded = matched = unmatched = 0
-    for row in rows:
-        keep, overlap = _keep_row(
-            row, by_local, by_provider, unattached, cutoffs, account_digits, coverage_suffixes,
-        )
-        if keep:
-            visible.append((row.transaction_date, row.amount))
-            continue
-        if not overlap:
-            visible.append((row.transaction_date, row.amount))
-            continue
-        excluded += 1
-        if row.superseded_by_id is not None:
-            matched += 1
-        else:
-            unmatched += 1
+    ctx = _classification_context(db, org_id)
+    visible, excluded, matched, lines = _lines_from(db, rows, ctx)
     note = {
         "excluded_count": excluded,
         "matched_count": matched,
-        "unmatched_count": unmatched,
-        "provider_account_linked": not unattached,
-        "message": _coverage_message(excluded, unmatched, bool(unattached)),
+        "unmatched_count": 0,
+        "provider_account_linked": ctx["linked"],
+        "excluded_accounts": lines,
+        "message": _coverage_message(lines, excluded),
     }
     return visible, note
 
 
-def _coverage_message(excluded: int, unmatched: int, unattached: bool) -> str | None:
-    """Explain exclusion by the coverage date. A zero unmatched count is not a gate."""
-    parts = []
-    if unattached:
-        parts.append(
-            "חשבון הבנק של הספק אינו מקושר לשורת הכיסוי. "
-            "רק תנועות בלי מספר חשבון שניתן לזהות, שתאריכן לפני סוף הייבוא המקומי, לא נספרו."
+def _classification_context(db, org_id: int) -> dict:
+    coverages = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).all()
+    classes = {
+        row.account_id: row
+        for row in db.query(OfAccountClassification).filter_by(organization_id=org_id).all()
+    }
+    bound_ids = {row.coverage_id for row in classes.values() if row.state == STATE_BOUND}
+    return {
+        "classes": classes,
+        "cutoffs": {cov.id: _effective_provider_cutoff(db, cov) for cov in coverages},
+        "by_local": {cov.local_account_id: cov for cov in coverages},
+        "last_end": _latest_local_end(db, org_id),
+        "linked": all(cov.id in bound_ids for cov in coverages) if coverages else True,
+    }
+
+
+def _decision(row, ctx) -> tuple[bool, str | None, bool]:
+    """Return (include, open-finance reason, fingerprint-matched).
+
+    Local overlap is excluded without an account line and without counting
+    as unmatched. ``INDEPENDENT`` counts on every date. ``BOUND`` counts
+    from the effective coverage cutoff. ``UNCLASSIFIED`` counts only after
+    the latest reviewed local import in the organization.
+    """
+    if row.superseded_by_id is not None:
+        reason = REASON_BEFORE_COVERAGE if row.source == "open_finance" else None
+        return False, reason, True
+    if row.source == LOCAL_SOURCE:
+        cov = ctx["by_local"].get(row.account_id)
+        if cov is not None and row.transaction_date >= cov.covers_from:
+            return False, None, False
+        return True, None, False
+    if row.source != "open_finance":
+        return True, None, False
+    klass = ctx["classes"].get(row.account_id)
+    state = klass.state if klass is not None else STATE_UNCLASSIFIED
+    if state == STATE_INDEPENDENT:
+        return True, None, False
+    if state == STATE_BOUND and klass is not None and klass.coverage_id in ctx["cutoffs"]:
+        if row.transaction_date < ctx["cutoffs"][klass.coverage_id]:
+            return False, REASON_BEFORE_COVERAGE, False
+        return True, None, False
+    last_end = ctx["last_end"]
+    if last_end is None or row.transaction_date <= last_end:
+        return False, STATE_UNCLASSIFIED, False
+    return True, None, False
+
+
+def _lines_from(db, rows, ctx) -> tuple[list, int, int, list]:
+    visible = []
+    excluded = matched = 0
+    buckets: dict[tuple[int, str], Decimal] = {}
+    for row in rows:
+        include, reason, is_matched = _decision(row, ctx)
+        if include:
+            visible.append((row.transaction_date, row.amount))
+            continue
+        excluded += 1
+        if is_matched:
+            matched += 1
+        if reason is None or row.account_id is None:
+            continue
+        amount = row.amount if isinstance(row.amount, Decimal) else Decimal(str(row.amount))
+        key = (row.account_id, reason)
+        buckets[key] = buckets.get(key, Decimal("0")) + abs(amount)
+    account_ids = {account_id for account_id, _reason in buckets}
+    accounts = {}
+    if account_ids:
+        accounts = {
+            account.id: account
+            for account in db.query(Account).filter(Account.id.in_(account_ids)).all()
+        }
+    lines = []
+    for (account_id, reason) in sorted(buckets):
+        account = accounts.get(account_id)
+        amount = buckets[(account_id, reason)].quantize(Decimal("0.01"))
+        lines.append({
+            "account_id": account_id,
+            "label": account.name if account is not None and account.name else "חשבון בנק",
+            "masked_number": _masked_number(account),
+            "excluded_amount": float(amount),
+            "reason": reason,
+        })
+    return visible, excluded, matched, lines
+
+
+def _coverage_message(lines: list, excluded: int) -> str | None:
+    parts = [
+        (
+            f"{item['label']} {item['masked_number']}: "
+            f"{item['excluded_amount']:.2f} לא נספר ({item['reason']})"
         )
-    if excluded:
-        parts.append(
-            f"{excluded} תנועות לא נכנסו לסכום כי התאריך שלהן שייך למקור האחר."
-        )
-    if unmatched:
-        parts.append(
-            f"{unmatched} תנועות בחלון החפיפה לא הותאמו לתנועה במקור האחר; "
-            "ההחרגה אינה תלויה במספר הזה."
-        )
+        for item in lines
+    ]
+    if excluded and not parts:
+        parts.append("תנועות מקומיות אחרי תחילת הכיסוי לא נספרו.")
     return " ".join(parts) if parts else None
 
 
-def record_unattached_coverage_alert(db, org_id: int) -> None:
-    """Persist one alert when coverage has no provider account.
-
-    Callers commit. A cash-flow read must not write this row: the request
-    session closes without a commit and would roll the alert back.
-    """
-    unattached = (
-        db.query(AccountSourceCoverage)
-        .filter(
-            AccountSourceCoverage.organization_id == org_id,
-            AccountSourceCoverage.superseded_by_account_id.is_(None),
-        )
-        .first()
-    )
-    if unattached is None:
-        return
-    existing = (
+def _resolve_active_alerts(db, org_id: int, alert_type: str) -> None:
+    now = datetime.utcnow()
+    rows = (
         db.query(Alert)
         .filter(
             Alert.organization_id == org_id,
-            Alert.alert_type == "coverage_provider_unattached",
+            Alert.alert_type == alert_type,
             Alert.status == AlertStatus.ACTIVE,
         )
+        .all()
+    )
+    for row in rows:
+        row.status = AlertStatus.RESOLVED
+        row.resolved_at = now
+
+
+def refresh_coverage_alert(db, org_id: int) -> None:
+    """One org alert naming every withheld Open Finance account.
+
+    Callers commit. A cash-flow read must not call this. An empty list
+    resolves the alert. A stale unattached alert is resolved on every refresh.
+    """
+    db.flush()
+    _resolve_active_alerts(db, org_id, ALERT_UNATTACHED)
+    if not _org_has_reviewed_local_import(db, org_id):
+        _resolve_active_alerts(db, org_id, ALERT_WITHHELD)
+        db.flush()
+        return
+    rows = (
+        db.query(BankTransaction)
+        .filter(
+            BankTransaction.organization_id == org_id,
+            BankTransaction.source == "open_finance",
+        )
+        .all()
+    )
+    _visible, _excluded, _matched, lines = _lines_from(db, rows, _classification_context(db, org_id))
+    existing = (
+        db.query(Alert)
+        .filter(Alert.organization_id == org_id, Alert.alert_type == ALERT_WITHHELD)
+        .order_by(Alert.id.desc())
         .first()
     )
-    if existing is not None:
+    message = _coverage_message(lines, 0)
+    if not lines:
+        if existing is not None and existing.status == AlertStatus.ACTIVE:
+            existing.status = AlertStatus.RESOLVED
+            existing.resolved_at = datetime.utcnow()
+            existing.meta = {"accounts": []}
+        db.flush()
         return
-    db.add(Alert(
-        organization_id=org_id,
-        alert_type="coverage_provider_unattached",
-        severity=AlertSeverity.WARNING,
-        title="חשבון הבנק אינו מקושר לכיסוי",
-        message="קיימת שורת כיסוי בלי חשבון ספק. תנועות בלי מספר חשבון שניתן לזהות לא נספרו.",
-        status=AlertStatus.ACTIVE,
-        meta={"reason": "coverage_without_provider_account"},
-    ))
+    payload = {"accounts": lines}
+    if existing is None:
+        db.add(Alert(
+            organization_id=org_id,
+            alert_type=ALERT_WITHHELD,
+            severity=AlertSeverity.WARNING,
+            title="תנועות בנק שלא נספרו",
+            message=message,
+            status=AlertStatus.ACTIVE,
+            meta=payload,
+        ))
+    else:
+        existing.status = AlertStatus.ACTIVE
+        existing.resolved_at = None
+        existing.title = "תנועות בנק שלא נספרו"
+        existing.message = message
+        existing.meta = payload
     db.flush()
+
+
+def record_unattached_coverage_alert(db, org_id: int) -> None:
+    """Refresh the withheld-account alert and retire a stale unattached alert."""
+    refresh_coverage_alert(db, org_id)
 
 
 def supersede_other_live_consents(db, org_id: int, connection_id: str) -> None:
@@ -425,54 +708,6 @@ def _effective_provider_cutoff(db, cov) -> date:
     if day_after < cov.covers_from:
         return day_after
     return cov.covers_from
-
-
-def _account_digits(db, rows) -> dict[int, str]:
-    ids = {
-        row.account_id for row in rows
-        if row.source == "open_finance" and row.account_id is not None
-    }
-    if not ids:
-        return {}
-    return {
-        account_id: _digit_tail(number)
-        for account_id, number in (
-            db.query(Account.id, Account.provider_account_number)
-            .filter(Account.id.in_(ids))
-            .all()
-        )
-    }
-
-
-def _keep_row(
-    row, by_local, by_provider, unattached, cutoffs, account_digits, coverage_suffixes,
-) -> tuple[bool, bool]:
-    """Return (include_in_sum, is_coverage_overlap)."""
-    if row.superseded_by_id is not None:
-        return False, True
-    source = row.source
-    if source == LOCAL_SOURCE:
-        cov = by_local.get(row.account_id)
-        if cov is not None and row.transaction_date >= cov.covers_from:
-            return False, True
-        return True, False
-    if source == "open_finance":
-        digits = account_digits.get(row.account_id, "") if row.account_id is not None else ""
-        # A suffix anywhere in the digits is this coverage's bank, including a
-        # second Account row and a number such as ``1662-01``. An account
-        # whose digits contain no coverage suffix is a different bank.
-        matched = [cov for cov, suffix in coverage_suffixes if digits and suffix in digits]
-        bound = by_provider.get(row.account_id)
-        if bound is not None and all(item.id != bound.id for item in matched):
-            matched.append(bound)
-        if matched and any(row.transaction_date < cutoffs[cov.id] for cov in matched):
-            return False, True
-        if not digits and unattached and any(
-            row.transaction_date < cutoffs[item.id] for item in unattached
-        ):
-            return False, True
-        return True, False
-    return True, False
 
 
 def _pair(duplicates, survivors) -> int:

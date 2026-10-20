@@ -11,10 +11,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from ..dependencies import get_super_admin
+from ..dependencies import get_current_user, get_super_admin
 from ...database import get_db_session
-from ...models import User
-from ...services.bank_coverage import OpenFinanceBindError, bind_existing_connection
+from ...models import User, UserRole
+from ...services.bank_coverage import (
+    OpenFinanceBindError,
+    bind_existing_connection,
+    classify_open_finance_account,
+)
+from ...services.membership_service import role_in
+from ...services.sumit_request_budget import resolve_office_organization_id
 
 router = APIRouter()
 
@@ -56,3 +62,40 @@ def bind_open_finance_connection(
         )
     except OpenFinanceBindError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+class ClassificationBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    state: Literal["BOUND", "INDEPENDENT"]
+    coverage_id: Optional[int] = None
+
+
+def _require_office_admin(db: Session, user: User, org_id: int) -> None:
+    if user.role == UserRole.SUPER_ADMIN:
+        return
+    office_id = resolve_office_organization_id(db, org_id)
+    if role_in(db, user.id, office_id) != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Office admin required")
+
+
+@router.post("/organizations/{org_id}/open-finance/accounts/{account_id}/classification")
+def classify_open_finance_account_route(
+    org_id: int,
+    account_id: int,
+    body: ClassificationBody,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Office admin sets BOUND or INDEPENDENT. Not part of the public dashboard."""
+    _require_office_admin(db, current_user, org_id)
+    try:
+        return classify_open_finance_account(
+            db,
+            org_id,
+            account_id,
+            state=body.state,
+            coverage_id=body.coverage_id,
+            actor_id=current_user.id,
+        )
+    except OpenFinanceBindError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
