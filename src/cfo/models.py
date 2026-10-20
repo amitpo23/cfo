@@ -741,6 +741,53 @@ class BankConnection(Base):
     __table_args__ = (
         Index("ix_bankconn_org_conn", "organization_id", "connection_id", unique=True),
         Index("ix_bankconn_org_status", "organization_id", "status"),
+        # One provider consent cannot be attached to two organizations.
+        # NULL connection ids (a journey that has not returned an id) stay
+        # unconstrained; Postgres treats NULLs as distinct anyway.
+        Index(
+            "uq_bankconn_source_connection_id",
+            "source",
+            "connection_id",
+            unique=True,
+            sqlite_where=text("connection_id IS NOT NULL"),
+            postgresql_where=text("connection_id IS NOT NULL"),
+        ),
+    )
+
+
+class AccountSourceCoverage(Base):
+    """Boundary between a reviewed local import and a later bank feed.
+
+    ``covers_from`` is the first date the provider feed is authoritative.
+    Local rows dated before that stay in the books. Provider rows dated
+    before that, and local rows dated on or after it, are overlap: they are
+    excluded from sums and linked by fingerprint when they are the same
+    movement. Rows are never deleted.
+    """
+
+    __tablename__ = "account_source_coverage"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    local_account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    source = Column(String(50), nullable=False)
+    covers_from = Column(Date, nullable=False)
+    bank_account_suffix = Column(String(20), nullable=True)
+    superseded_by_account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    organization = relationship("Organization")
+    local_account = relationship("Account", foreign_keys=[local_account_id])
+    provider_account = relationship("Account", foreign_keys=[superseded_by_account_id])
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "local_account_id",
+            "source",
+            name="uq_account_source_coverage",
+        ),
+        Index("ix_account_source_coverage_org", "organization_id"),
     )
 
 
@@ -1802,15 +1849,26 @@ class BankTransaction(Base):
     reconciliation_error = Column(Text, nullable=True)
     raw_data = Column(JSON, nullable=True)
     payload_hash = Column(String(64), nullable=True)
+    # Set when this row is the duplicate side of a coverage overlap. The
+    # surviving row is never deleted and is not itself marked.
+    superseded_by_id = Column(Integer, ForeignKey("bank_transactions.id"), nullable=True)
+    # sha256 of date|amount|normalized description. Account id is excluded:
+    # the local import and the provider feed are different account rows.
+    content_fingerprint = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     organization = relationship("Organization")
     account = relationship("Account")
     category = relationship("Category")
+    superseded_by = relationship("BankTransaction", remote_side="BankTransaction.id")
 
     __table_args__ = (
         Index("ix_banktx_org_ext", "organization_id", "external_id", "source", unique=True),
         Index("ix_banktx_date", "organization_id", "transaction_date"),
+        CheckConstraint(
+            "source = 'manual' OR external_id IS NOT NULL",
+            name="ck_banktx_source_external_id",
+        ),
     )
 
 

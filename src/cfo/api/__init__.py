@@ -288,8 +288,9 @@ app.include_router(
     sumit_webhooks.router, prefix="/api/sumit", tags=["SUMIT Webhooks"],
 )
 
-from .routes import local_clients
+from .routes import local_clients, open_finance_bind
 app.include_router(local_clients.router, prefix="/api", tags=["Local office imports"])
+app.include_router(open_finance_bind.router, prefix="/api/admin", tags=["Open Finance bind"])
 
 # Accounting-office (multi-company) + cross-source synthesis
 app.include_router(

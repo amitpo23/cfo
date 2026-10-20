@@ -39,13 +39,17 @@ def _lock(db, key):
 
 def _local_client(db, office_id, client_id):
     row = db.query(SumitCompany).filter_by(id=client_id, office_organization_id=office_id).first()
-    if not row or not row.target_organization_id or (row.raw_data or {}).get("mode") != MODE:
+    mode = (row.raw_data or {}).get("mode") if row else None
+    if not row or not row.target_organization_id or mode not in (MODE, "hybrid"):
         raise ValueError("Import-only client not found in this office")
     org = db.get(Organization, row.target_organization_id)
     if not org or not org.is_active or (org.settings or {}).get("provider_calls_allowed") is not False:
         raise ValueError("Import-only client identity or mode changed")
-    if db.query(IntegrationConnection).filter_by(organization_id=org.id, status="active").first():
+    active = db.query(IntegrationConnection).filter_by(organization_id=org.id, status="active").all()
+    if mode == MODE and active:
         raise ValueError("Import-only client has an active provider connection")
+    if mode == "hybrid" and (len(active) != 1 or active[0].source != "open_finance"):
+        raise ValueError("Hybrid client requires exactly one active Open Finance connection")
     return row, org
 
 
@@ -220,11 +224,14 @@ def import_reviewed_source(db, office_id, client_id, payload, *, actor_id=None):
                                    entry_date=date.fromisoformat(row["date"]), memo=row["description"],
                                    lines=lines, raw_data=evidence, payload_hash=digest)
             else:
+                tx_date = date.fromisoformat(row["date"])
+                from .bank_coverage import content_fingerprint
                 new = BankTransaction(organization_id=org.id, source=SOURCE, external_id=external_id,
-                                      account_id=account.id, transaction_date=date.fromisoformat(row["date"]),
+                                      account_id=account.id, transaction_date=tx_date,
                                       amount=Decimal(row["amount"]), description=row["description"],
                                       currency="ILS", is_provisional=True, is_reconciled=False,
-                                      raw_data=evidence, payload_hash=digest)
+                                      raw_data=evidence, payload_hash=digest,
+                                      content_fingerprint=content_fingerprint(tx_date, row["amount"], row["description"]))
             db.add(new)
             inserted += 1
         if inserted:
@@ -265,7 +272,7 @@ def local_client_coverage(db, office_id):
                          str(getattr(latest.status, "value", latest.status)).lower() == "completed" and
                          age is not None and 0 <= age <= 36)
             status = "current" if fresh else ("stale" if conn and conn.status == "active" else
-                     ("disabled" if source == "sumit" and mode == MODE else "not_connected"))
+                     ("disabled" if source == "sumit" and mode in (MODE, "hybrid") else "not_connected"))
             sources[source] = {"status": status, "last_run_at": finished, "connection_status": conn.status if conn else None}
         snapshot = db.query(DailySnapshot).filter_by(organization_id=org.id).order_by(DailySnapshot.snapshot_date.desc()).first()
         imports = db.query(AuditLog).filter_by(organization_id=org.id, action="IMPORT_REVIEWED_SOURCE").order_by(AuditLog.id.desc()).all()
@@ -275,5 +282,8 @@ def local_client_coverage(db, office_id):
                                           "date": snapshot.snapshot_date.isoformat() if snapshot else None,
                                           "result": snapshot.cycle_status if snapshot else None},
                         "reviewed_imports": [r.details for r in imports[:20]],
-                        "financial_coverage": "reviewed_sources_only" if mode == MODE else "provider_sources"})
+                        "financial_coverage": (
+                            "reviewed_sources_only" if mode == MODE
+                            else "reviewed_local_plus_open_finance" if mode == "hybrid"
+                            else "provider_sources")})
     return {"checked_at": now.isoformat(), "clients": clients, "provider_calls": 0}

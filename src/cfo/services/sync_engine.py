@@ -617,6 +617,8 @@ class SyncEngine:
             if item.provider_account_number is not None:
                 existing.provider_account_number = item.provider_account_number
             existing.updated_at = datetime.now(timezone.utc)
+            from .bank_coverage import attach_provider_account
+            attach_provider_account(self.db, existing)
             return "updated"
 
         account = Account(
@@ -636,6 +638,8 @@ class SyncEngine:
             provider_account_number=item.provider_account_number,
         )
         self.db.add(account)
+        from .bank_coverage import attach_provider_account
+        attach_provider_account(self.db, account)
         return "created"
 
     def _upsert_customer(self, item: NormalizedContact) -> str:
@@ -1017,6 +1021,8 @@ class SyncEngine:
             if account_id:
                 existing.account_id = account_id
             if payload_hash and existing.payload_hash == payload_hash:
+                from .bank_coverage import link_coverage_overlap
+                link_coverage_overlap(self.db, self.org_id)
                 return "skipped"
             existing.transaction_date = item.transaction_date or existing.transaction_date
             existing.description = item.description
@@ -1024,8 +1030,18 @@ class SyncEngine:
             existing.currency = item.currency
             existing.raw_data = item.raw_data
             existing.payload_hash = payload_hash
+            from .bank_coverage import content_fingerprint, link_coverage_overlap
+            if existing.transaction_date is not None:
+                existing.content_fingerprint = content_fingerprint(
+                    existing.transaction_date, existing.amount, existing.description,
+                )
+            link_coverage_overlap(self.db, self.org_id)
             return "updated"
 
+        from .bank_coverage import content_fingerprint, link_coverage_overlap
+        fingerprint = None
+        if item.transaction_date is not None:
+            fingerprint = content_fingerprint(item.transaction_date, item.amount, item.description)
         bank_tx = BankTransaction(
             organization_id=self.org_id,
             external_id=item.external_id,
@@ -1037,9 +1053,11 @@ class SyncEngine:
             currency=item.currency,
             raw_data=item.raw_data,
             payload_hash=payload_hash,
+            content_fingerprint=fingerprint,
             is_provisional=(self.source == "open_finance"),
         )
         self.db.add(bank_tx)
+        link_coverage_overlap(self.db, self.org_id)
         return "created"
 
     def _upsert_journal_entry(self, item: NormalizedJournalEntry) -> str:
@@ -1075,6 +1093,27 @@ class SyncEngine:
         return "created"
 
 
+def _assert_provider_access(db: Session, org, preferred_source: Optional[str]) -> None:
+    """Import-only tenants stay dark. Hybrid tenants may sync one Open Finance feed.
+
+    SUMIT and every other provider stay blocked while provider_calls_allowed
+    is false. The nightly Open Finance job passes preferred_source explicitly,
+    so this is the gate it has to clear — the 20h interval and the two-attempt
+    budget still run before a connector is built.
+    """
+    settings = org.settings or {}
+    if settings.get("provider_calls_allowed") is not False:
+        return
+    if settings.get("mode") == "hybrid" and preferred_source in (None, "open_finance"):
+        active = db.query(IntegrationConnection).filter_by(
+            organization_id=org.id, status="active",
+        ).all()
+        if len(active) == 1 and active[0].source == "open_finance":
+            return
+        raise ValueError("Hybrid organizations require exactly one active Open Finance connection")
+    raise ValueError("Provider access is disabled for this import-only organization")
+
+
 def get_connection_configuration(db: Session, organization_id: int, preferred_source: Optional[str] = None):
     """Resolve saved org connection configuration without opening a provider client.
 
@@ -1085,8 +1124,7 @@ def get_connection_configuration(db: Session, organization_id: int, preferred_so
     org = db.get(Organization, organization_id)
     if not org:
         raise ValueError(f"Organization {organization_id} not found")
-    if (org.settings or {}).get("provider_calls_allowed") is False:
-        raise ValueError("Provider access is disabled for this import-only organization")
+    _assert_provider_access(db, org, preferred_source)
 
     # Check IntegrationConnection first
     conn_query = db.query(IntegrationConnection).filter(
