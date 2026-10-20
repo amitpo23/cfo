@@ -74,6 +74,9 @@ export default function ClientDashboardPage() {
 
   const months = view?.cashflow?.months ?? [];
   const pnl = view?.pnl;
+  const coverageNote = view?.cashflow?.coverage?.message || '';
+  const emptyPeriodNote = view?.cashflow?.message || 'אין תנועות בנק בתקופה.';
+  const emptyPeriodRepeatsCoverage = coverageNote !== '' && emptyPeriodNote === coverageNote;
 
   return (
     <main dir="rtl" className="min-h-screen bg-stone-50 text-stone-900">
@@ -111,7 +114,9 @@ export default function ClientDashboardPage() {
             <section className="rounded-xl bg-white p-5 shadow-sm">
               <h2 className="text-lg font-medium">תזרים</h2>
               {months.length === 0 ? (
-                <p className="mt-3 text-stone-600">{view.cashflow?.message || 'אין תנועות בנק בתקופה.'}</p>
+                emptyPeriodRepeatsCoverage ? null : (
+                  <p className="mt-3 text-stone-600">{emptyPeriodNote}</p>
+                )
               ) : (
                 <table className="mt-4 w-full text-sm">
                   <thead>
@@ -134,8 +139,8 @@ export default function ClientDashboardPage() {
                   </tbody>
                 </table>
               )}
-              {view.cashflow?.coverage?.message ? (
-                <p className="mt-3 text-sm text-stone-600">{view.cashflow.coverage.message}</p>
+              {coverageNote ? (
+                <p className="mt-3 text-sm text-stone-600">{coverageNote}</p>
               ) : null}
             </section>
           </div>
