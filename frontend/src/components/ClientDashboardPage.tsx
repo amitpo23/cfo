@@ -10,7 +10,11 @@ type CashMonth = {
 type DashboardView = {
   source?: string;
   provider_calls?: number;
-  cashflow?: { months?: CashMonth[]; message?: string | null };
+  cashflow?: {
+    months?: CashMonth[];
+    message?: string | null;
+    coverage?: { message?: string | null } | null;
+  };
   pnl?: {
     status?: string;
     total_revenue?: number | null;
@@ -130,6 +134,9 @@ export default function ClientDashboardPage() {
                   </tbody>
                 </table>
               )}
+              {view.cashflow?.coverage?.message ? (
+                <p className="mt-3 text-sm text-stone-600">{view.cashflow.coverage.message}</p>
+              ) : null}
             </section>
           </div>
         ) : null}
