@@ -42,7 +42,7 @@ def build_view(db, organization_id: int, start: date, end: date) -> dict:
 
 
 def redact_public_view(view: dict) -> dict:
-    """Remove internal ids from a dashboard view before it is shown on /d/."""
+    """Remove internal ids and staff identity from a dashboard view before it is shown on /d/."""
     if not isinstance(view, dict):
         return view
     cashflow = view.get("cashflow")
@@ -50,7 +50,13 @@ def redact_public_view(view: dict) -> dict:
         return view
     copied = dict(view)
     cash = dict(cashflow)
-    cash["coverage"] = redact_public_coverage(cash.get("coverage"))
+    original = cash.get("coverage")
+    cash["coverage"] = redact_public_coverage(original)
+    if (
+        isinstance(original, dict) and isinstance(cash["coverage"], dict)
+        and original.get("message") and cash.get("message") == original.get("message")
+    ):
+        cash["message"] = cash["coverage"].get("message")
     copied["cashflow"] = cash
     return copied
 
