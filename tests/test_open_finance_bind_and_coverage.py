@@ -1518,3 +1518,120 @@ def test_classification_requires_office_admin_of_a_different_office(client, fres
     assert client.post(url, headers=client_headers, json=body).status_code == 403
     assert client.post(url, headers=super_headers, json=body).status_code == 403
     assert client.post(url, headers=office["headers"], json=body).status_code == 403
+
+
+def _strings_and_keys(value):
+    """Every string value and dict key in a JSON payload, recursively."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from _strings_and_keys(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _strings_and_keys(item)
+    elif isinstance(value, str):
+        yield value
+
+
+def _assert_no_staff_identity(payload, secrets):
+    for text in _strings_and_keys(payload):
+        for secret in secrets:
+            assert secret.casefold() not in text.casefold(), (secret, text)
+        assert "user_id" not in text and "actor" not in text, text
+
+
+@pytest.mark.parametrize("full_name, tax_id", [
+    ("Zerubavel Quintanilla-Staffer", "514002301"),
+    ("", "514002302"),
+])
+def test_public_dashboard_never_names_the_staff_member_behind_independent(client, fresh_org, full_name, tax_id):
+    from cfo.models import AuditLog, ClientDashboard, PublishedSnapshot
+    from cfo.services.bank_coverage import classify_open_finance_account
+    from cfo.services.dashboards import view_model
+
+    office = fresh_org()
+    local_part = f"quintanilla.staffer{tax_id}"
+    email = f"{local_part}@privacy-example.co.il"
+    slug = f"privacy-{tax_id}"
+    with SessionLocal() as db:
+        org_id = _bind_covered_import(db, office["org_id"], tax_id, f"priv-{tax_id}")
+        staff = User(
+            organization_id=office["org_id"], email=email, password_hash="x",
+            full_name=full_name, role=UserRole.ADMIN, is_active=True, token_version=0,
+        )
+        db.add(staff)
+        other = _provider_account(db, org_id, f"of-priv-{tax_id}", "31-9999")
+        _provider_tx(db, org_id, other, f"of-priv-tx-{tax_id}", date(2026, 10, 1), "-2500.00")
+        db.commit()
+        staff_id = staff.id
+        account_id = other.id
+        classify_open_finance_account(
+            db, org_id, account_id, state="INDEPENDENT", coverage_id=None, actor_id=staff_id,
+        )
+        dashboard = ClientDashboard(
+            slug=slug, title="פרטיות", primary_organization_id=org_id,
+            template="generic", access_mode="public", status="active",
+        )
+        db.add(dashboard)
+        db.commit()
+        dashboard_id = dashboard.id
+
+        # Internal views and the audit trail keep the full identity.
+        shown = full_name or email
+        note = LiveCashFlowService(db, org_id).monthly_cash_flow(
+            months=10, as_of_date=date.today(),
+        )["coverage"]
+        assert shown in note["message"]
+        assert note["excluded_accounts"][0]["actor_name"] == shown
+        alert = db.query(Alert).filter_by(
+            organization_id=org_id, alert_type="coverage_accounts_withheld",
+        ).one()
+        assert shown in alert.message
+        assert alert.meta["accounts"][0]["actor_name"] == shown
+        audit = db.query(AuditLog).filter_by(
+            organization_id=org_id, action="CLASSIFY_OPEN_FINANCE_ACCOUNT",
+        ).one()
+        assert audit.user_id == staff_id
+        klass = db.query(OfAccountClassification).filter_by(account_id=account_id).one()
+        assert klass.classified_by_user_id == staff_id
+
+    secrets = [email, local_part] + ([full_name] + full_name.split() if full_name else [])
+    label = "נקבע על ידי משרד הנהלת החשבונות ב-"
+
+    live = client.get(f"/api/public/d/{slug}")
+    assert live.status_code == 200, live.text
+    assert live.json()["source"] == "live"
+    _assert_no_staff_identity(live.json(), secrets)
+    assert label in live.json()["cashflow"]["coverage"]["message"]
+
+    with SessionLocal() as db:
+        row = db.get(ClientDashboard, dashboard_id)
+        view_model.publish_view(db, row, view_model.build_view(
+            db, org_id, date(date.today().year, 1, 1), date.today(),
+        ))
+    published = client.get(f"/api/public/d/{slug}")
+    assert published.status_code == 200, published.text
+    assert published.json()["source"] == "snapshot"
+    _assert_no_staff_identity(published.json(), secrets)
+    assert label in published.json()["cashflow"]["coverage"]["message"]
+
+    # A snapshot stored before this redaction existed still carries the name.
+    with SessionLocal() as db:
+        cashflow = LiveCashFlowService(db, org_id).monthly_cash_flow(
+            months=10, as_of_date=date.today(),
+        )
+        cashflow["message"] = cashflow["coverage"]["message"]
+        assert shown in cashflow["message"]
+        snapshot_id = db.get(ClientDashboard, dashboard_id).current_snapshot_id
+        snap = db.get(PublishedSnapshot, snapshot_id)
+        snap.view_model = {
+            "status": "ready", "cashflow": cashflow,
+            "pnl": {"status": "unknown"}, "provider_calls": 0,
+        }
+        db.commit()
+    legacy = client.get(f"/api/public/d/{slug}")
+    assert legacy.status_code == 200, legacy.text
+    _assert_no_staff_identity(legacy.json(), secrets)
+    cash = legacy.json()["cashflow"]
+    assert label in cash["coverage"]["message"]
+    assert cash["message"] == cash["coverage"]["message"]

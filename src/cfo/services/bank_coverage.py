@@ -61,9 +61,10 @@ _PUBLIC_LINE_KEYS = (
     "inflow_amount",
     "outflow_amount",
     "keeper_mask",
-    "actor_name",
     "classified_on",
 )
+# /d/ is public: an INDEPENDENT decision is attributed to the office, never to a staff member.
+PUBLIC_ACTOR_LABEL = "משרד הנהלת החשבונות"
 
 
 class OpenFinanceBindError(ValueError):
@@ -890,7 +891,7 @@ def _lines_from(db, rows, ctx) -> tuple[list, int, int, list]:
     return visible, excluded, matched, lines
 
 
-def _coverage_message(lines: list, excluded: int) -> str | None:
+def _coverage_message(lines: list, excluded: int, *, public: bool = False) -> str | None:
     parts = []
     for item in lines:
         amounts = (
@@ -900,9 +901,10 @@ def _coverage_message(lines: list, excluded: int) -> str | None:
         label = f"{item['label']} {item['masked_number']}"
         reason = item["reason"]
         if reason == STATE_INDEPENDENT:
+            actor = PUBLIC_ACTOR_LABEL if public else (item.get("actor_name") or "משרד")
             parts.append(
                 f"{label}: {amounts} נספר במלואו "
-                f"(עצמאי, נקבע על ידי {item.get('actor_name') or 'משרד'} ב-{item.get('classified_on') or ''})"
+                f"(עצמאי, נקבע על ידי {actor} ב-{item.get('classified_on') or ''})"
             )
             continue
         if reason == REASON_DUPLICATE:
@@ -918,7 +920,11 @@ def _coverage_message(lines: list, excluded: int) -> str | None:
 
 
 def redact_public_coverage(note):
-    """Drop internal ids from a coverage note before it is published on /d/."""
+    """Drop internal ids and staff identity from a coverage note before it is published on /d/.
+
+    The message names the classifying user on INDEPENDENT lines, so it is
+    rebuilt with the office label. Stored snapshots pass through here too.
+    """
     if not isinstance(note, dict):
         return note
     cleaned = {}
@@ -936,6 +942,9 @@ def redact_public_coverage(note):
             if key in item and item[key] is not None
         })
     cleaned["excluded_accounts"] = accounts
+    lines = [item for item in note.get("excluded_accounts") or [] if isinstance(item, dict)]
+    if cleaned.get("message") and any(item.get("reason") == STATE_INDEPENDENT for item in lines):
+        cleaned["message"] = _coverage_message(lines, note.get("excluded_count") or 0, public=True)
     return cleaned
 
 
