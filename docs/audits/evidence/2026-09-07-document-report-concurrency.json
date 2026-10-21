@@ -1,0 +1,11 @@
+{
+  "status": "passed",
+  "synthetic_only": true,
+  "provider_requests": 0,
+  "checks": [
+    "concurrent same-content intake creates one source and preserves both channel observations",
+    "concurrent due report workers create one occurrence, one file and one execution",
+    "repeated worker invocation does not rerun the occurrence"
+  ],
+  "official_books_verified": false
+}

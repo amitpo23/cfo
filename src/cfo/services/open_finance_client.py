@@ -52,10 +52,16 @@ class OpenFinanceClient:
         v3_loans_base: Optional[str] = None,
         timeout: float = 30.0,
         token_skew_seconds: float = 30.0,
+        provider_product: str = 'open_finance',
+        provider_plan: str | None = None,
+        connected_account_numbers=(),
     ):
         self.client_id = client_id
         self.client_secret = client_secret
         self.user_id = user_id
+        self.provider_product = provider_product
+        self.provider_plan = provider_plan
+        self.connected_account_numbers = frozenset(connected_account_numbers)
         self.oauth_url = oauth_url or self.DEFAULT_OAUTH_URL
         host = f"https://{api_prefix}.open-finance.ai"
         self.v2_base = (v2_base or f"{host}/v2").rstrip("/")
@@ -107,6 +113,12 @@ class OpenFinanceClient:
         json: Optional[Any] = None,
         extra_headers: Optional[dict[str, str]] = None,
     ) -> Any:
+        from .open_finance_product_policy import product_access_error
+        refused = product_access_error(product=self.provider_product, plan=self.provider_plan,
+            method=method, path=path, body=json, connected_accounts=self.connected_account_numbers,
+            loans=base == self.v3_loans_base)
+        if refused:
+            raise OpenFinanceError(409, refused)
         url = f"{base}{path}"
         clean_params = _clean(params)
 
@@ -121,7 +133,7 @@ class OpenFinanceClient:
             )
 
         resp = await _do()
-        if resp.status_code == 401:
+        if resp.status_code == 401 and method == 'GET' and 'refresh' not in path:
             # Token may have expired mid-flight; refresh once and retry.
             await self._get_token(force=True)
             resp = await _do()

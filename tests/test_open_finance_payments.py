@@ -11,6 +11,13 @@ import pytest
 _of_user_counter = {"n": 0}
 
 
+@pytest.fixture(autouse=True)
+def authenticated_callback(client, monkeypatch):
+    from cfo.config import settings
+    monkeypatch.setattr(settings, 'open_finance_webhook_secret', 'synthetic-callback-secret')
+    monkeypatch.setitem(client.headers, 'X-Webhook-Secret', 'synthetic-callback-secret')
+
+
 @pytest.fixture
 def of_org(fresh_org):
     """An isolated org with an Open Finance IntegrationConnection (carrying a
@@ -102,10 +109,8 @@ def test_payment_webhook_is_idempotent_and_updates_status(client, of_org):
     assert rows[0].status == "ACCC"
 
 
-def test_payment_webhook_resolves_org_via_connection_id_fallback(client, fresh_org):
-    # Payment events normally omit connectionId, but if one is present and maps
-    # to a known BankConnection, the payment is attributed to that org even with
-    # no matching OF user_id.
+def test_payment_webhook_rejects_connection_fallback_with_unmatched_user(client, fresh_org):
+    # A connection identifier must not override conflicting user attribution.
     from cfo.database import SessionLocal
     from cfo.models import BankConnection
 
@@ -128,8 +133,8 @@ def test_payment_webhook_resolves_org_via_connection_id_fallback(client, fresh_o
     assert r.status_code == 200, r.text
 
     rows = _payment_rows(org_id, "of-pay-via-conn")
-    assert len(rows) == 1
-    assert rows[0].status == "ACSC"
+    assert rows == []
+    assert r.json()['delta_sync']['reason'] == 'unresolvable_org'
 
 
 def test_payment_webhook_unresolvable_org_is_tolerated(client, of_org):

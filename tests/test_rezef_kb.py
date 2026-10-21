@@ -112,7 +112,7 @@ def test_screen_api_path_exists_in_live_route_table(screen):
     """Every /api/... path cited in the KB overview must be a real,
     currently-registered FastAPI route — keeps the KB from rotting into
     fiction as routes get renamed or removed."""
-    live_paths = {r.path for r in app.routes if hasattr(r, "path")}
+    live_paths = set(app.openapi()["paths"])
     assert screen.api_path in live_paths, (
         f"KB screen {screen.path!r} cites {screen.api_path!r}, which is not "
         f"a registered FastAPI route"

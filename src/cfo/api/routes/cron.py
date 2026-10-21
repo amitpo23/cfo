@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta
 
 from ...config import settings
 from ...database import get_db_session
+from ...services.secret_compare import constant_time_equal
 from ...models import (
     BankConnection,
     IntegrationConnection,
@@ -64,7 +65,7 @@ _OF_SYNCABLE_CONNECTION_STATUSES = frozenset({
 def _verify_cron_secret(authorization: str = Header(None)):
     if not settings.cron_secret:
         raise HTTPException(status_code=503, detail="CRON_SECRET is not configured")
-    if authorization != f"Bearer {settings.cron_secret}":
+    if not constant_time_equal(authorization, f"Bearer {settings.cron_secret}"):
         raise HTTPException(status_code=401, detail="Invalid cron credentials")
 
 

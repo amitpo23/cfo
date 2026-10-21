@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-08-24",
+  "updated_at": "2026-09-23",
   "purpose": "Machine-readable contract connecting Rezef capabilities to knowledge, runtime evidence and safety gates.",
   "status_vocabulary": {
     "implemented": "Implemented and covered locally; production operation is a separate claim.",
@@ -16,7 +16,8 @@
     "code_agent_rules": [
       "AGENTS.md",
       "CLAUDE.md"
-    ]
+    ],
+    "provider_business_evidence": "docs/provider_business_evidence.json"
   },
   "daily_workflow": [
     "acquire_org_lock_and_enforce_budget",
@@ -38,7 +39,7 @@
       "knowledge": [
         "docs/SUMIT_KNOWLEDGE_BASE.md",
         "docs/SUMIT_API_REFERENCE.md",
-        "docs/sumit_swagger_v1_2026-07-10.json"
+        "docs/sumit_swagger_v1_2026-08-19.json"
       ],
       "runtime": [
         "src/cfo/config.py",
@@ -61,7 +62,8 @@
         "tests/test_expense_ocr_pipeline.py",
         "tests/test_vercel_cron_contract.py",
         "tests/test_roster_coverage.py",
-        "tests/test_w3_wave2_readonly_tools.py"
+        "tests/test_w3_wave2_readonly_tools.py",
+        "tests/test_payment_source_lineage.py"
       ],
       "gates": [
         "organization_scope",
@@ -71,8 +73,8 @@
         "verify_first",
         "owner_approval_for_write"
       ],
-      "honest_boundary": "Read synchronization and several document/payment actions exist. Every production SUMIT client now requires a durable database-backed request budget before network access: an atomic global-per-minute ceiling plus an organization-per-day ceiling shared across instances; an unavailable counter fails closed. This was verified offline and on local PostgreSQL, not against the paid provider. Scheduled detail enrichment still claims a separate 20-hour budget, caps paid getdetails calls at 25 per org/day and reuses CustomerName from the list response. OCR stops before SUMIT while disabled; when enabled it claims a separate 20-hour budget and defaults to 10 documents with a hard cap of 25. The official-books createbatch adapter consumes an immutable owner-approved payload, claims execution once, requires BatchURL and records executed_unverified. The versioned OpenAPI exposes neither batch readback nor close, so the adapter creates an open batch only and cannot prove posting/closure; portal verification and owner-only close remain external. Measured 2026-08-05: an organization silently drops out of the daily cron when its IntegrationConnection turns paused/inactive, because both scheduled_sync_sumit and roster_sync_targets select on status=='active' -- org2 was out for 467h and org3 for 762h with no error raised. roster_coverage reports this per source but deliberately does not reactivate anything: reconnecting a client file is an owner decision.",
-      "next_gate": "MASTER_EXECUTION_PLAN gate 3: operator-approved createbatch dry-run, portal readback evidence and owner-approved batch close."
+      "honest_boundary": "Read synchronization and several document/payment actions exist. Every production SUMIT client now requires a durable database-backed request budget before network access: an atomic global-per-minute ceiling plus an organization-per-day ceiling shared across instances; an unavailable counter fails closed. This was verified offline and on local PostgreSQL, not against the paid provider. Scheduled detail enrichment still claims a separate 20-hour budget, caps paid getdetails calls at 25 per org/day and reuses CustomerName from the list response. OCR stops before SUMIT while disabled; when enabled it claims a separate 20-hour budget and defaults to 10 documents with a hard cap of 25. The official-books createbatch adapter consumes an immutable owner-approved payload, claims execution once, requires BatchURL and records executed_unverified. The versioned OpenAPI exposes neither batch readback nor close, so the adapter creates an open batch only and cannot prove posting/closure; portal verification and owner-only close remain external. Measured 2026-08-05: an organization silently drops out of the daily cron when its IntegrationConnection turns paused/inactive, because both scheduled_sync_sumit and roster_sync_targets select on status=='active' -- org2 was out for 467h and org3 for 762h with no error raised. roster_coverage reports this per source but deliberately does not reactivate anything: reconnecting a client file is an owner decision. Billing/receipt source IDs are namespaced and missing invoice relationships stay explicit because the saved list schemas do not supply them; sync can resolve an explicit later normalized invoice link without payload changes.",
+      "next_gate": "The daily sync-sumit cron was removed from vercel.json on 2026-09-10 by owner direction; restoring it requires a separate owner-approved cost and quota plan. MASTER_EXECUTION_PLAN gate 3 still requires operator-approved createbatch dry-run, portal readback evidence and owner-approved batch close."
     },
     {
       "id": "open-finance-ingestion",
@@ -91,7 +93,9 @@
         "src/cfo/services/open_finance_connector.py",
         "src/cfo/services/open_finance_onboarding.py",
         "src/cfo/services/sync_engine.py",
-        "alembic/versions/05c6d7e8f9a0_add_of_account_connection.py"
+        "alembic/versions/05c6d7e8f9a0_add_of_account_connection.py",
+        "src/cfo/services/provider_event_service.py",
+        "src/cfo/services/open_finance_product_policy.py"
       ],
       "tests": [
         "tests/test_open_finance_client.py",
@@ -100,7 +104,11 @@
         "tests/test_open_finance_routes.py",
         "tests/test_of_snapshot_cache.py",
         "tests/test_credit_line_persistence.py",
-        "tests/test_sync_call_protection.py"
+        "tests/test_sync_call_protection.py",
+        "tests/test_provider_event_integrity.py",
+        "tests/test_open_finance_product_boundaries.py",
+        "tests/test_sync_evidence_integrity.py",
+        "tests/test_sync_late_relationships.py"
       ],
       "gates": [
         "organization_scope",
@@ -171,12 +179,31 @@
       "runtime": [
         "src/cfo/services/expense_ocr_pipeline.py",
         "src/cfo/services/expense_filing_service.py",
-        "src/cfo/services/israeli_tax_rules.py"
+        "src/cfo/services/israeli_tax_rules.py",
+        "src/cfo/services/document_intake.py",
+        "src/cfo/services/expense_intake_email.py",
+        "src/cfo/services/chat_expense_intake.py",
+        "frontend/src/components/DocumentIntakePanel.tsx",
+        "src/cfo/services/document_derivation.py",
+        "frontend/src/components/DocumentDerivationForm.tsx",
+        "src/cfo/services/expense_filing_workflow.py",
+        "frontend/src/components/ExpenseFilingWorkbench.tsx",
+        "frontend/src/components/DocumentSourcePreview.tsx"
       ],
       "tests": [
         "tests/test_expense_ocr_pipeline.py",
         "tests/test_expense_filing.py",
-        "tests/test_israeli_tax_rules.py"
+        "tests/test_israeli_tax_rules.py",
+        "tests/test_document_intake.py",
+        "tests/test_chat_expense_intake.py",
+        "tests/browser_offline/document_intake.py",
+        "tests/browser_offline/document_intake_connected.py",
+        "tests/test_document_source_review.py",
+        "tests/test_document_derivation.py",
+        "tests/postgres_offline/verify_document_derivation_concurrency.py",
+        "tests/test_expense_filing_workflow.py",
+        "tests/postgres_offline/verify_expense_filing_concurrency.py",
+        "tests/test_document_preview.py"
       ],
       "gates": [
         "organization_scope",
@@ -185,7 +212,7 @@
         "honest_null",
         "human_decision_queue"
       ],
-      "honest_boundary": "Classification and filing paths exist, but ambiguous documents, missing vehicle profiles and unsupported evidence must remain in review rather than be auto-filed. Measured in production 2026-08-05: 415 of the pending SUMIT drafts carry total=0 (org1 243, org2 16, org5 156) because the API returns an empty draft envelope -- the readable receipt lives behind the app.sumit.co.il session, so no key-based pipeline can extract them. Only the 41 'sumit_fileexpense' rows for org5 (ILS 211,107.98) carry real amounts. 1,200 of 1,491 expenses have no supplier_tax_id, which blocks registry verification and a correct PCN874 base.",
+      "honest_boundary": "Classification and filing paths exist, but ambiguous documents, missing vehicle profiles and unsupported evidence must remain in review rather than be auto-filed. Measured in production 2026-08-05: 415 of the pending SUMIT drafts carry total=0 (org1 243, org2 16, org5 156) because the API returns an empty draft envelope -- the readable receipt lives behind the app.sumit.co.il session, so no key-based pipeline can extract them. Only the 41 'sumit_fileexpense' rows for org5 (ILS 211,107.98) carry real amounts. 1,200 of 1,491 expenses have no supplier_tax_id, which blocks registry verification and a correct PCN874 base. September 7 local extension: email/upload/chat sources use a durable organization/content identity before expense creation. Supported PDF/PNG/JPEG/WebP/TIFF attachments are retained independently; no zero expense is created at intake. Extraction is explicit and cost-gated; unreadable, missing, inconsistent, non-accounting and unsupported-currency sources remain visible without invented financial values. Versioned manual source correction preserves original bytes, reviewer/reason/history and the existing business duplicate gate; both the RTL screen and confirmed Moshko write use the same service. Explicit PDF split/merge preserves every source page exactly once, durable page recipes and source hashes, blocks separate parent processing, and survives replay. Local PostgreSQL tests cover overlapping recipes, processing claims, and user/membership revocation during generation. The image-only OCR fallback refuses multipage PDFs rather than dropping later pages. Interrupted extraction claims still require recovery; journal approval and official-book linkage remain open; this is not the full intake-to-close journey. The source filing extension binds reviewed fields, original hash and destination SUMIT company/connection to an immutable signing approval. HTTP, RTL workbench and confirmed Moshko writes share the service. It requests IsDraft=true, preserves DocumentID as submitted rather than filed/verified, blocks replay after unknown outcomes, and queues source drift without losing the acknowledgement. A signer may withdraw an unexecuted approval with a reason; execution and withdrawal cannot both win. Later list sync recognizes the exact saved acknowledgement without recreating the expense. Tests use fake providers only. Strict independent document readback, final journal classification and official books remain open. Source previews now render explicit pages as local PNG images (PDF and supported image formats, including multi-frame TIFF), with original downloads and SHA-256 integrity checks. Previews neither extract financial fields nor mutate source state; documents over 100 pages or unsupported renderings remain visible as preview failures. Moshko retains uncertain filing outcomes as unknown and cannot reconfirm them.",
       "next_gate": "MASTER_EXECUTION_PLAN gates 1-2: complete intake coverage and 20 consecutive correctly filed documents. Blocked on a browser-session route for the 415 blank envelopes; the API route cannot reach them."
     },
     {
@@ -232,12 +259,17 @@
       "runtime": [
         "src/cfo/services/bank_reconciliation.py",
         "src/cfo/services/manual_reconciliation.py",
-        "src/cfo/services/bank_expense_gap.py"
+        "src/cfo/services/bank_expense_gap.py",
+        "src/cfo/services/collection_settlement.py",
+        "src/cfo/services/collection_allocation_service.py"
       ],
       "tests": [
         "tests/test_bank_reconciliation.py",
         "tests/test_manual_reconciliation.py",
-        "tests/test_bank_expense_gap.py"
+        "tests/test_bank_expense_gap.py",
+        "tests/test_collection_settlement.py",
+        "tests/test_collection_allocations.py",
+        "tests/test_collection_migration_preservation.py"
       ],
       "gates": [
         "organization_scope",
@@ -246,7 +278,7 @@
         "human_decision_queue",
         "audit_trail"
       ],
-      "honest_boundary": "Matching and gap detection exist, but completeness depends on fresh bank and document sources; unsupported writeback must stay visible.",
+      "honest_boundary": "Matching and gap detection exist, but completeness depends on fresh bank and document sources; unsupported writeback must stay visible. Offline September slice: amount/date/name scores are review candidates, including Payment observations; provisional movements cannot be finalized. Reviewed invoice-receipt-bank allocations persist actor, source evidence and amounts. Local reconciliation is never SUMIT writeback; missing operations remain unsupported.",
       "next_gate": "MASTER_EXECUTION_PLAN gate 4: zero prior-day unexplained movements for seven consecutive pilot days."
     },
     {
@@ -262,12 +294,30 @@
       "runtime": [
         "src/cfo/services/ar_service.py",
         "src/cfo/services/ap_service.py",
-        "src/cfo/services/collection_service.py"
+        "src/cfo/services/collection_service.py",
+        "src/cfo/services/collection_settlement.py",
+        "src/cfo/services/financial_synthesis.py",
+        "src/cfo/services/payment_evidence.py",
+        "src/cfo/services/collection_workbench.py",
+        "src/cfo/services/collection_allocation_service.py",
+        "frontend/src/components/CollectionWorkbench.tsx",
+        "src/cfo/services/payable_settlement.py",
+        "src/cfo/services/payable_workbench.py",
+        "frontend/src/components/PayableWorkbench.tsx"
       ],
       "tests": [
         "tests/test_ar_real_values.py",
         "tests/test_ap_service_honest_values.py",
-        "tests/test_collection_cases.py"
+        "tests/test_collection_cases.py",
+        "tests/test_collection_settlement.py",
+        "tests/test_collection_allocations.py",
+        "tests/test_legacy_payment_retirement.py",
+        "tests/browser_offline/collection_workbench.py",
+        "tests/test_payable_settlement.py",
+        "tests/browser_offline/payable_workbench.py",
+        "tests/postgres_offline/verify_collection_concurrency.py",
+        "tests/postgres_offline/verify_payable_concurrency.py",
+        "tests/postgres_offline/verify_payable_sync_concurrency.py"
       ],
       "gates": [
         "organization_scope",
@@ -276,7 +326,7 @@
         "owner_approval_for_escalation",
         "audit_trail"
       ],
-      "honest_boundary": "Aging and collection workflows exist; legal escalation, payment execution and any communication without verified opt-in are outside autonomous operation.",
+      "honest_boundary": "Aging and collection workflows exist; legal escalation, payment execution and any communication without verified opt-in are outside autonomous operation. An offline HTTP slice now links a final SUMIT tax invoice in ILS to an immutable approved collection request, an existing final receipt and a booked bank movement, preserving partial balances and idempotency. Missing provider relationships require explicit human evidence review. Missing receipts remain pending; many-to-many, FX/fees and reversals are not supported by this slice. Daily payment linking no longer persists similarity guesses; bank worklists request evidence review and billing observations, including identifiable legacy records, are not counted again as accounting receipts. Reviewed balances retain receipts linked before the new allocation workflow. Legacy SUMIT HTTP/chat payment links also require the linked durable approval.",
       "next_gate": "Prove invoice-to-payment matching, action ownership and collections outcomes on the pilot month."
     },
     {
@@ -323,12 +373,21 @@
       "runtime": [
         "src/cfo/services/daily_reports_service.py",
         "src/cfo/services/bank_report_service.py",
-        "src/cfo/services/ledger_service.py"
+        "src/cfo/services/ledger_service.py",
+        "src/cfo/services/financial_reports_service.py",
+        "src/cfo/services/report_builder_service.py",
+        "src/cfo/services/report_storage.py",
+        "frontend/src/components/SavedReportsPanel.tsx"
       ],
       "tests": [
         "tests/test_daily_reports.py",
         "tests/test_kpi_insights_bank_report.py",
-        "tests/test_balance_sheet_derived.py"
+        "tests/test_balance_sheet_derived.py",
+        "tests/test_report_consistency.py",
+        "tests/test_projection_boundary.py",
+        "tests/test_report_persistence.py",
+        "tests/test_report_builder_real.py",
+        "tests/browser_offline/saved_reports.py"
       ],
       "gates": [
         "organization_scope",
@@ -337,7 +396,7 @@
         "derived_label",
         "reconciliation_status"
       ],
-      "honest_boundary": "Several reports are real and derived; legacy transaction-backed screens and forecasts cannot be promoted as current until their data plane is unified.",
+      "honest_boundary": "Several reports are real and derived; legacy transaction-backed screens and forecasts cannot be promoted as current until their data plane is unified. September 7 local extension: saved-report definitions, schedule versions, occurrence claims, execution history and file/hash evidence are organization-scoped database records. Explicit local runs and authorized downloads are connected to the reports screen; Moshko reads metadata only. Unsupported delivery, format and source failures remain explicit. No external delivery or background scheduler activation is proved. This does not complete period close, official parity or report-wide data-source unification.",
       "next_gate": "Make one canonical trial-balance-backed P&L, balance sheet and cash-flow package with freshness and reconciliation evidence."
     },
     {
@@ -358,7 +417,9 @@
       "tests": [
         "tests/test_financial_control_overdue_status.py",
         "tests/test_financial_synthesis.py",
-        "tests/test_morning_brief.py"
+        "tests/test_morning_brief.py",
+        "tests/test_readiness_boundary.py",
+        "tests/test_organization_picker.py"
       ],
       "gates": [
         "organization_scope",
@@ -396,7 +457,10 @@
         "src/cfo/services/payment_orchestration.py",
         "src/cfo/services/filing_verification.py",
         "frontend/src/components/PolicyManagementDashboard.tsx",
-        "alembic/versions/e3f4a5b6c7d8_add_policy_enforcement.py"
+        "alembic/versions/e3f4a5b6c7d8_add_policy_enforcement.py",
+        "src/cfo/api/approved_actions.py",
+        "src/cfo/services/collection_settlement.py",
+        "src/cfo/services/payable_settlement.py"
       ],
       "tests": [
         "tests/test_irreversible_action_workflow.py",
@@ -407,7 +471,11 @@
         "tests/test_ai_chat_routes.py",
         "tests/test_open_finance_payments.py",
         "tests/test_filing_verification.py",
-        "tests/test_policy_persistence_and_enforcement.py"
+        "tests/test_policy_persistence_and_enforcement.py",
+        "tests/test_legacy_action_approvals.py",
+        "tests/test_registration_boundary.py",
+        "tests/test_collection_settlement.py",
+        "tests/test_payable_settlement.py"
       ],
       "gates": [
         "organization_scope",
@@ -417,7 +485,7 @@
         "post_action_verification",
         "policy_recheck_at_proposal_approval_execution"
       ],
-      "honest_boundary": "Owner/signatory authority is separate from RBAC, scoped per action and cannot be bypassed by super-admin. Organization policy is now persisted and audited with subject, amount/day/month ceilings, channels, step-up, reason, approval count and separation-of-duties; it is re-evaluated at proposal, approval and execution, so revocation or role changes stop an in-flight action. A super-admin may configure non-signing policy only inside an explicitly selected organization; that does not create owner/signatory authority. Open Moshko ChatMessage proposals now have an organization-scoped discovery endpoint and web approval queue: only a distinct active signer whose action_types include the policy-mapped irreversible scope sees an item, while a non-signer receives an honest empty list; approval still reuses the existing confirm gate and a matching signer may reject through the existing cancel transition. The Open Finance create-payment adapter consumes the persisted payload, claims once and stores readback in offline tests. The SUMIT createbatch adapter follows the same immutable-intent and execute-once control plane but stops honestly at executed_unverified because SUMIT exposes no batch readback/close API. No live provider behavior is claimed, proactive Telegram/WhatsApp routing to additional signers is not wired, and refund, cancellation, mandate, filing and close adapters are not yet wired.",
+      "honest_boundary": "Owner/signatory authority is separate from RBAC, scoped per action and cannot be bypassed by super-admin. Organization policy is now persisted and audited with subject, amount/day/month ceilings, channels, step-up, reason, approval count and separation-of-duties; it is re-evaluated at proposal, approval and execution, so revocation or role changes stop an in-flight action. A super-admin may configure non-signing policy only inside an explicitly selected organization; that does not create owner/signatory authority. Open Moshko ChatMessage proposals now have an organization-scoped discovery endpoint and web approval queue: only a distinct active signer whose action_types include the policy-mapped irreversible scope sees an item, while a non-signer receives an honest empty list; approval still reuses the existing confirm gate and a matching signer may reject through the existing cancel transition. The Open Finance create-payment adapter consumes the persisted payload, claims once and stores readback in offline tests. The SUMIT createbatch adapter follows the same immutable-intent and execute-once control plane but stops honestly at executed_unverified because SUMIT exposes no batch readback/close API. No live provider behavior is claimed, proactive Telegram/WhatsApp routing to additional signers is not wired, and refund, cancellation, mandate, filing and close adapters are not yet wired. For payment creation, verified explicitly means payment_request readback, not money received. Separate provider/money states preserve PENDING, failure and cancellation. The linked collection adapter changes AR only after reviewed receipt/bank evidence; no live behavior is claimed.",
       "next_gate": "Bootstrap an explicitly verified owner for each existing organization, then wire and prove the remaining irreversible action types one by one."
     },
     {

@@ -41,6 +41,7 @@ from .policy_service import PolicyService
 from . import policy_engine
 from .irreversible_action_service import (
     ActionAuthorizationError,
+    ActionOutcomeUnknownError,
     IrreversibleActionService,
 )
 
@@ -946,6 +947,11 @@ class AIChatService:
                 propagate=True,
             )
         except ValueError as exc:
+            if isinstance(exc, ActionOutcomeUnknownError):
+                self.db.rollback()
+                self._set_action_state(message_id, status=_ACTION_UNKNOWN, error=str(exc),
+                    completed_at=datetime.now(timezone.utc))
+                raise ChatConfirmationError('תוצאת הפעולה אינה ידועה; נדרש אימות ידני לפני ניסיון נוסף') from exc
             # Never fake success: a business-validation failure (e.g.
             # register_office_client with no SUMIT key configured) must
             # surface as an honest refusal — msg.executed stays False and no

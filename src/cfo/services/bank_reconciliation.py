@@ -3,13 +3,13 @@ Bank reconciliation — match bank/card transactions to accounting documents.
 
 Inflow transactions (money in) are matched to **invoices** (AR); outflow
 transactions (money out) are matched to **bills** (AP) and **expenses**. Matching
-scores amount equality, date proximity and name-token overlap, then greedily
-assigns the best unique match per bank transaction.
+scores amount equality, date proximity and name-token overlap as review
+candidates. None of these heuristics is a confirmed business relationship.
 
 `reconcile()` is a pure function over lightweight records so it is trivially
 testable. `reconcile_organization()` wraps it: it loads ORM rows for an org,
-runs the matcher, and writes `matched_entity_type` / `matched_entity_id` /
-`is_reconciled` back onto the `BankTransaction` rows.
+runs the matcher and returns candidates. Only explicit reviewed decisions can
+set a local reconciliation; local reconciliation never proves SUMIT writeback.
 """
 from __future__ import annotations
 
@@ -56,51 +56,41 @@ def reconcile(
     date_window: int = 7,
     min_score: float = 0.5,
 ) -> dict[str, Any]:
-    """Return {matches, unmatched_txns, unmatched_docs}."""
+    """Return candidates; heuristic similarity is never a confirmed match."""
     inflow_pool = list(invoices)
     outflow_pool = list(bills) + list(expenses or [])
-    used: set[tuple[str, Any]] = set()
     matches: list[Match] = []
-    unmatched_txns: list[Any] = []
 
     # Process larger amounts first — they are the least ambiguous.
     for txn in sorted(bank_txns, key=lambda t: abs(t.amount), reverse=True):
         pool = inflow_pool if txn.amount > 0 else outflow_pool
-        best: Optional[tuple[float, DocLite]] = None
         for doc in pool:
-            if (doc.entity_type, doc.id) in used:
-                continue
             score = _score(txn, doc, amount_tol=amount_tol, date_window=date_window)
             if score is None:
                 continue
-            if best is None or score > best[0]:
-                best = (score, doc)
-        if best and best[0] >= min_score:
-            score, doc = best
-            used.add((doc.entity_type, doc.id))
-            matches.append(Match(txn.id, doc.entity_type, doc.id, round(score, 3), abs(txn.amount)))
-        else:
-            unmatched_txns.append(txn.id)
+            if score >= min_score:
+                matches.append(Match(txn.id, doc.entity_type, doc.id, round(score, 3), abs(txn.amount)))
 
     unmatched_docs = [
         {"entity_type": d.entity_type, "entity_id": d.id, "amount": d.amount}
         for d in (inflow_pool + outflow_pool)
-        if (d.entity_type, d.id) not in used
     ]
     txn_by_id = {t.id: t for t in bank_txns}
     return {
-        "matches": [m.__dict__ for m in matches],
-        "unmatched_txns": unmatched_txns,
+        "matches": [],
+        "candidates": [{**m.__dict__, "status": "candidate", "reason": "provisional_bank" if txn_by_id[m.bank_txn_id].is_provisional else "identity_review_required"} for m in matches],
+        "unmatched_txns": [t.id for t in bank_txns],
         # Additive alongside unmatched_txns (kept as a bare list[int] for
         # existing consumers — financial_synthesis.py, BankInsightsDashboard.tsx's
         # number[] typing). Carries is_provisional so the UI can flag Open
         # Finance data as unverified without a breaking shape change.
         "unmatched_txn_details": [
             {"id": tid, "is_provisional": txn_by_id[tid].is_provisional}
-            for tid in unmatched_txns
+            for tid in [t.id for t in bank_txns]
         ],
         "unmatched_docs": unmatched_docs,
-        "matched_count": len(matches),
+        "matched_count": 0,
+        "candidate_count": len(matches),
         "txn_count": len(bank_txns),
     }
 
@@ -128,7 +118,7 @@ def _score(txn: BankTxnLite, doc: DocLite, *, amount_tol: float, date_window: in
     # Name-token overlap contributes up to 0.3.
     name_score = 0.3 * _token_overlap(txn.description, doc.name)
 
-    return max(0.0, min(1.0, 0.4 * amount_score + date_score + name_score + 0.3))
+    return max(0.0, min(1.0, 0.4 * amount_score + date_score + name_score))
 
 
 def _token_overlap(a: str, b: str) -> float:
@@ -177,7 +167,7 @@ def load_docs_for_org(db, organization_id: int) -> tuple[list[DocLite], list[Doc
 
 def reconcile_organization(db, organization_id: int, *, persist: bool = True) -> dict[str, Any]:
     """Load org rows, reconcile, and (optionally) persist matches."""
-    from ..models import BankTransaction
+    from ..models import BankTransaction, Payment
 
     bank_rows = (
         db.query(BankTransaction)
@@ -190,22 +180,27 @@ def reconcile_organization(db, organization_id: int, *, persist: bool = True) ->
             description=r.description or "", is_provisional=bool(r.is_provisional),
         )
         for r in bank_rows
-        if r.transaction_date is not None
+        if r.transaction_date is not None and not r.is_reconciled
     ]
 
     invoices, bills, expenses = load_docs_for_org(db, organization_id)
 
-    result = reconcile(bank_txns, invoices, bills, expenses)
+    # Existing receipt observations are candidates too, so a partial receipt
+    # can be reviewed against its actual amount rather than the invoice total.
+    payments = [DocLite(id=p.id, entity_type="payment", amount=float(p.amount),
+                       date=p.payment_date, name="")
+                for p in db.query(Payment).filter(Payment.organization_id == organization_id,
+                                                 Payment.bill_id.is_(None)).all()]
+    result = reconcile(bank_txns, invoices + payments, bills, expenses)
+    # Preserve explicit/manual decisions; rerunning the heuristic must not
+    # overwrite them. No provider call and no mutation in this read computation.
+    result["matches"] = [{"bank_txn_id":r.id,"entity_type":r.matched_entity_type,
+                          "entity_id":r.matched_entity_id,"score":None,"amount":abs(float(r.amount)),
+                          "status":"confirmed_local"}
+                         for r in bank_rows if r.is_reconciled and not r.is_provisional]
+    result["matched_count"] = len(result["matches"])
+    result["txn_count"] = len(bank_rows)
 
-    if persist and result["matches"]:
-        by_id = {r.id: r for r in bank_rows}
-        for m in result["matches"]:
-            row = by_id.get(m["bank_txn_id"])
-            if row is not None:
-                row.matched_entity_type = m["entity_type"]
-                row.matched_entity_id = m["entity_id"]
-                row.is_reconciled = True
-        db.commit()
     return result
 
 

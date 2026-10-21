@@ -1,0 +1,145 @@
+{
+  "date": "2026-09-06",
+  "status": "passed",
+  "scope": "offline implementation; production and official-book gates remain open",
+  "backend": {
+    "command": "python -m pytest tests/ -q",
+    "passed": 2668,
+    "warnings": 38751,
+    "elapsed_seconds": 1044.7
+  },
+  "qa": {
+    "local_checks_passed": 9,
+    "checks": [
+      {
+        "name": "1. Full test suite",
+        "status": "pass"
+      },
+      {
+        "name": "2. Route audit",
+        "status": "pass"
+      },
+      {
+        "name": "3a. Schema drift (local)",
+        "status": "pass"
+      },
+      {
+        "name": "3b. Schema drift (Neon)",
+        "status": "skip"
+      },
+      {
+        "name": "3c. Capability/skill control-plane drift",
+        "status": "pass"
+      },
+      {
+        "name": "4a. Frontend lint",
+        "status": "pass"
+      },
+      {
+        "name": "4b. Frontend tsc",
+        "status": "pass"
+      },
+      {
+        "name": "4c. Frontend build",
+        "status": "pass"
+      },
+      {
+        "name": "5. Colscan (phantom column references)",
+        "status": "pass"
+      },
+      {
+        "name": "6. Tenancy-focused tests",
+        "status": "pass"
+      }
+    ],
+    "note": "QA included 2666 backend tests; after two final legacy-balance fixes, the full backend suite was rerun with 2668 passing tests."
+  },
+  "focused_final": {
+    "passed": 55,
+    "warnings": 630,
+    "elapsed_seconds": 15.97
+  },
+  "route_audit": {
+    "audited_routes": 262,
+    "ok": 172,
+    "expected_4xx": 50,
+    "configuration_gates": 40,
+    "failures": 0
+  },
+  "browser": {
+    "passed": true,
+    "synthetic_only": true,
+    "checks": [
+      "screen open does not sync",
+      "candidate/confirmed distinction",
+      "provisional disclosure",
+      "no JavaScript errors"
+    ],
+    "provider_requests": 0
+  },
+  "postgres_restore": {
+    "status": "passed",
+    "synthetic_only": true,
+    "elapsed_seconds": 2.17,
+    "tables": 69,
+    "row_count": 5,
+    "checks": [
+      "fresh migrations",
+      "schema parity",
+      "encrypted round trip",
+      "all-table row hashes",
+      "foreign keys",
+      "checkout uniqueness"
+    ],
+    "production_backup_verified": false
+  },
+  "allocation_constraints": {
+    "status": "passed",
+    "synthetic_only": true,
+    "checks": [
+      "request_uniqueness",
+      "payment_uniqueness",
+      "bank_uniqueness"
+    ],
+    "migration": "62b80d39f715"
+  },
+  "local_sqlite": {
+    "revision": "62b80d39f715",
+    "structural_drift": false,
+    "documented_fk_dialect_exemptions": 3,
+    "backup": "/private/tmp/rezef-before-collection-62b80d39f715.sqlite3"
+  },
+  "capability_statuses_changed": false,
+  "live_provider_calls": 0,
+  "production_changed": false,
+  "implementation_sha256": {
+    ".github/workflows/ci.yml": "4840fb3e2e4206edb08332056c37693127ab1c1ad53526e71840ab072a4b4d67",
+    "alembic/versions/62b80d39f715_collection_payment_allocations.py": "8e8558def5e144910f38eaa7cf9a63b01376c8513f49d10b1efacbb35ff823c9",
+    "frontend/src/components/BankInsightsDashboard.tsx": "92e0eeb9c5a8c12072093221a68447630d363e04d57e32a7f6e86eade719b44e",
+    "src/cfo/api/routes/financial_management.py": "03d3502b0c750fc7ee49b9c11f528c2089ac8e97423d18da52dd96da0f7828ac",
+    "src/cfo/api/routes/financial_operations.py": "71b435887621a02ee691b4f750cf312de13804d87ba0f0e124b72a38a0fff120",
+    "src/cfo/api/routes/open_finance.py": "94b7a1c9523019f4093458039099c368cc426bccb33b0795415122966867638f",
+    "src/cfo/integrations/sumit_integration.py": "41afa94e496e168cc565ec4411317cda6893967fda4789a3635ef8f3d63f9fb6",
+    "src/cfo/models.py": "fa8945cf2e5bf4459b0c4b243e2554274ca4863fce35db2bd50859d951881b4b",
+    "src/cfo/services/ai_chat_tools.py": "3b2b7985a275c3415744cabef5221761a450062a235cd8db02691fc653fac45a",
+    "src/cfo/services/bank_reconciliation.py": "2a9455063ea1c51025152badcfbb211842d157b04a55ca036ef292529b80815c",
+    "src/cfo/services/collection_settlement.py": "3005e4eb6230532078e3fc250aebf22f23865249c9cd0fe39103dedb65d8f717",
+    "src/cfo/services/document_issuance_service.py": "57e888b3398537157b2cfd422c9faacae7441556a83891d4cb66eac28d4c1793",
+    "src/cfo/services/financial_synthesis.py": "e174b25fae99d86e5f97c1cbdc5c1bf7f4dd31a9df27f4c99baf28dd73c7333f",
+    "src/cfo/services/ledger_service.py": "3d93f0527570db8b740466e92c15188f2e259839b9b2901f609b33e2697bade1",
+    "src/cfo/services/manual_reconciliation.py": "8c1413df246ba8e62ac703fb3513f23c2a40b1b4a69bb45458700e5a2dcd6e57",
+    "src/cfo/services/payment_evidence.py": "743a2ed0076e76cc1db7e416acea25ee6597f0cd7594474ef3427398db5c2ad2",
+    "src/cfo/services/reconciliation_dispatch.py": "a75f2b4e75b6a40b21ebcbe60355ac42bf159e226ed20b4f1ad58c96be4593c8",
+    "src/cfo/services/sumit_connector.py": "0d30d484b845122ce9c9b1d3927eacbc6af0e4c3293c7967c7adb6d1e0800fb8",
+    "src/cfo/services/sync_engine.py": "2a89ae9b6a805cfc15107c96e276d61e5f84a600d03c1933814f9b1e13ecc0f9",
+    "tests/browser_offline/collection_candidates.py": "991848dcb50141d1922eab2e9e35e96f4b5562e69539f79944bb47cf6897edb2",
+    "tests/test_ai_chat_service.py": "ccf9be03db7bbb309df16a7361857b722ea4d1c32a1370b0693d19c8ed7ba442",
+    "tests/test_ai_chat_tools.py": "6a340f6350d9b10afcafe78e8063ea617d4c75c7a5f1235c467019041471ea35",
+    "tests/test_bank_reconciliation.py": "3075d0022f11e3572dd7fabf9d9096074dd12164fe84371d7fa38a6fbfe1a38b",
+    "tests/test_collection_settlement.py": "8a40d9f753fb540f20f9b208cef21f9c9689aac09cafd2db5aeafee36f8544c8",
+    "tests/test_document_issuance_step8.py": "b7c50424886baadc18b4003b770240adca9c4cb099a18042b1da4840fe13bdd4",
+    "tests/test_financial_synthesis.py": "faaef8af4b7c466e132eec421960e67cf6ba60902e26b52c44fc65ae3aea7ab0",
+    "tests/test_payment_source_lineage.py": "e761f28550ed1d1e502cb29202696bca3af2e75fa268a3b8aed07ecf6f8722ae",
+    "tests/test_reconciliation_dispatch.py": "93d457e3143f85b84a25c6620ee51c2113cad667e6cf326df6cedf40a85a4870"
+  }
+}

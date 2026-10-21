@@ -44,6 +44,7 @@ def _mk_of_account(db, org_id, *, balance, balance_as_of, name="עו\"ש ראש�
 def _mk_bank_txn(db, org_id, *, amount, txn_date, account_id=None):
     t = BankTransaction(
         organization_id=org_id, source="open_finance",
+        external_id=f"parity:{org_id}:{txn_date.isoformat()}:{amount}",
         transaction_date=txn_date, amount=Decimal(str(amount)),
         description="test", account_id=account_id,
     )

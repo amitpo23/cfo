@@ -86,6 +86,8 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
   const [ofClientId, setOfClientId] = React.useState('');
   const [ofClientSecret, setOfClientSecret] = React.useState('');
   const [ofUserId, setOfUserId] = React.useState('');
+  const [ofProduct, setOfProduct] = React.useState('unverified');
+  const [ofPlan, setOfPlan] = React.useState('');
 
   const sumitConfigMutation = useMutation({
     mutationFn: () =>
@@ -106,6 +108,8 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
         client_id: ofClientId,
         client_secret: ofClientSecret,
         user_id: ofUserId,
+        provider_product: ofProduct,
+        provider_plan: ofProduct === 'financy' && ofPlan ? ofPlan : null,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['integration-status'] });
@@ -321,6 +325,16 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
               placeholder="Client ID"
               className={inputClass}
             />
+            <label className="block text-sm">Provider product
+              <select className={inputClass} value={ofProduct} onChange={e => setOfProduct(e.target.value)}>
+                <option value="unverified">Not yet verified</option><option value="open_finance">Open Finance platform</option><option value="financy">Financy</option>
+              </select>
+            </label>
+            {ofProduct === 'financy' && <label className="block text-sm">Financy plan
+              <select className={inputClass} value={ofPlan} onChange={e => setOfPlan(e.target.value)}>
+                <option value="">Choose verified plan</option><option value="free">Free (API unavailable)</option><option value="starter">Starter</option><option value="pro">Pro</option><option value="ultra">Ultra</option>
+              </select><span className="text-xs">Bank connections must be created in Financy. Payments require a connected party account. Provider permissions remain subject to verification.</span>
+            </label>}
             <input
               type="password"
               value={ofClientSecret}

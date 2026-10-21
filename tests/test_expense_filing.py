@@ -152,11 +152,11 @@ def test_file_to_sumit_without_connection(client, acc):
     eid = r.json()["data"]["id"]
     # ללא חיבור SUMIT -> 400 ברור, לא 500
     f = client.post(f"/api/expenses/{eid}/file", headers=acc["headers"])
-    assert f.status_code == 400, f.text
+    assert f.status_code == 409, f.text
 
 
-def test_file_to_sumit_with_stubbed_connector(client, acc, monkeypatch):
-    """תיוק מוצלח עם connector מזויף — מאמת שהמצב נשמר ל-DB."""
+def test_unsigned_filing_cannot_use_a_stubbed_connector(client, acc, monkeypatch):
+    """A connector does not authorize provider creation; the reviewed workflow is tested separately."""
     import cfo.services.expense_filing_service as efs
 
     class FakeConnector:
@@ -177,18 +177,13 @@ def test_file_to_sumit_with_stubbed_connector(client, acc, monkeypatch):
     eid = r.json()["data"]["id"]
 
     f = client.post(f"/api/expenses/{eid}/file", headers=acc["headers"])
-    assert f.status_code == 200, f.text
-    data = f.json()["data"]
-    assert data["status"] == "filed"
-    assert data["sumit_expense_id"] == "SUMIT-999"
-
-    # נשמר ל-DB: רשימת filed כוללת אותה
+    assert f.status_code == 409, f.text
     filed = client.get("/api/expenses?status=filed", headers=acc["headers"]).json()["data"]
-    assert any(e["id"] == eid for e in filed)
+    assert not any(e["id"] == eid for e in filed)
 
 
-def test_file_sumit_draft_replaces_with_category(client, acc, monkeypatch):
-    """טיוטת SUMIT: נוצרת הוצאה חדשה עם הקטגוריה שלנו, והטיוטה המקורית מבוטלת (ללא כפילות)."""
+def test_sumit_draft_is_not_replaced_or_cancelled_without_a_separate_review(client, acc, monkeypatch):
+    """An existing provider document must be retained; category edits cannot authorize cancellation."""
     from cfo.database import SessionLocal
     from cfo.models import Expense
     from datetime import date
@@ -225,12 +220,11 @@ def test_file_sumit_draft_replaces_with_category(client, acc, monkeypatch):
                         lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
 
     f = client.post(f"/api/expenses/{eid}/file", headers=acc["headers"])
-    assert f.status_code == 200, f.text
-    data = f.json()["data"]
-    assert data["status"] == "filed"
-    assert data["sumit_expense_id"] == "NEW-777"       # מסמך חדש עם הקטגוריה
-    assert calls["created_category"] == "professional"  # הסיווג נכנס ל-SUMIT
-    assert calls["canceled"] == "DOC-555"              # הטיוטה המקורית בוטלה
+    assert f.status_code == 409, f.text
+    assert calls == {"created_category": None, "canceled": None}
+    with SessionLocal() as db:
+        assert db.get(Expense, eid).external_id == "DOC-555"
+        assert db.get(Expense, eid).sumit_expense_id is None
 
 
 def test_update_expense_amount_and_category(client, acc):
@@ -362,11 +356,15 @@ def test_filing_high_duplicate_is_skipped_not_filed(client, fresh_org, monkeypat
                         lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
 
     f = client.post(f"/api/expenses/{eid}/file", headers=org["headers"])
-    assert f.status_code == 200, f.text
-    data = f.json()["data"]
-    assert data["status"] == "duplicate"
-    assert calls["added"] == 0  # add_expense never called — no wasted SUMIT API call
-    assert data.get("duplicate_check", {}).get("confidence") == "HIGH"
+    assert f.status_code == 409, f.text  # Signing boundary precedes provider resolution.
+    assert calls["added"] == 0
+    from cfo.services.duplicate_gate import find_duplicate_candidates
+    with SessionLocal() as db:
+        row = db.get(Expense, eid)
+        candidates = find_duplicate_candidates(db, org['org_id'], supplier_tax_id=row.supplier_tax_id,
+            reference=row.invoice_number, amount=row.total, doc_date=row.expense_date,
+            exclude_id=eid, exclude_source='expense')
+        assert any(candidate['confidence'] == 'HIGH' for candidate in candidates)
 
 
 def test_filing_suspect_duplicate_held_for_review(client, fresh_org, monkeypatch):
@@ -406,15 +404,19 @@ def test_filing_suspect_duplicate_held_for_review(client, fresh_org, monkeypatch
                         lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
 
     f = client.post(f"/api/expenses/{eid}/file", headers=org["headers"])
-    assert f.status_code == 200, f.text
-    data = f.json()["data"]
-    assert data["status"] == "review"
+    assert f.status_code == 409, f.text  # Signing boundary precedes provider resolution.
     assert calls["added"] == 0
-    assert data.get("duplicate_check", {}).get("confidence") == "SUSPECT"
+    from cfo.services.duplicate_gate import find_duplicate_candidates
+    with SessionLocal() as db:
+        row = db.get(Expense, eid)
+        candidates = find_duplicate_candidates(db, org['org_id'], supplier_tax_id=row.supplier_tax_id,
+            reference=row.invoice_number, amount=row.total, doc_date=row.expense_date,
+            exclude_id=eid, exclude_source='expense')
+        assert any(candidate['confidence'] == 'SUSPECT' for candidate in candidates)
 
 
-def test_filing_clean_expense_still_files_normally(client, fresh_org, monkeypatch):
-    """ודא שהשער לא חוסם תיוק לגיטימי כשאין כפילות."""
+def test_clean_expense_still_requires_reviewed_source_and_signing(client, fresh_org, monkeypatch):
+    """Clean evidence alone does not grant signing authority; the approved happy path has dedicated tests."""
     org = fresh_org()
     r = client.post("/api/expenses", json={
         "supplier_name": "ספק נקי", "amount": 321, "vat_amount": 0,
@@ -431,13 +433,10 @@ def test_filing_clean_expense_still_files_normally(client, fresh_org, monkeypatc
                         lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
 
     f = client.post(f"/api/expenses/{eid}/file", headers=org["headers"])
-    assert f.status_code == 200, f.text
-    data = f.json()["data"]
-    assert data["status"] == "filed"
-    assert data["sumit_expense_id"] == "OK-1"
+    assert f.status_code == 409, f.text
 
 
-def test_filing_external_id_twin_bill_does_not_block_filing(client, fresh_org, monkeypatch):
+def test_external_id_twin_bill_does_not_authorize_a_replacement(client, fresh_org, monkeypatch):
     """תאום סנכרון: אותו מסמך SUMIT קיים גם כ-Bill עם אותו external_id
     (התבנית הסטנדרטית של ה-sync) — אסור שהשער יחסום את התיוק כ-review/duplicate."""
     org = fresh_org()
@@ -476,10 +475,10 @@ def test_filing_external_id_twin_bill_does_not_block_filing(client, fresh_org, m
                         lambda db, org_id, preferred_source=None: (FakeConnector(), None, "sumit"))
 
     f = client.post(f"/api/expenses/{eid}/file", headers=org["headers"])
-    assert f.status_code == 200, f.text
-    data = f.json()["data"]
-    assert data["status"] == "filed", data
-    assert data["sumit_expense_id"] == "TWIN-OK"
+    assert f.status_code == 409, f.text
+    with SessionLocal() as db:
+        assert db.get(Expense, eid).sumit_expense_id is None
+        assert db.get(Expense, eid).external_id == "SUMIT-TWIN-77"
 
 
 def test_file_all_pending_does_not_count_duplicates_as_filed(client, fresh_org, monkeypatch):
@@ -539,10 +538,11 @@ def test_file_all_pending_does_not_count_duplicates_as_filed(client, fresh_org, 
     finally:
         db.close()
 
-    assert outcome["filed"] == 1
-    assert outcome["duplicate"] == 1
+    # Neither an unsigned duplicate nor an unsigned clean expense is filed.
+    assert outcome["filed"] == 0
+    assert outcome["duplicate"] == 0
     assert outcome["review"] == 0
-    assert outcome["failed"] == 0
+    assert outcome["failed"] == 2
 
 
 def test_pcn874_readiness(client, acc):

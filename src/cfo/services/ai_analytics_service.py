@@ -244,7 +244,8 @@ class AdvancedAIService:
         
         # 3. סיכון תזרים מזומנים
         cashflow_data = self._assess_cashflow_risk()
-        if cashflow_data['deficit_months'] > 0:
+        self.unavailable_assessments = [] if cashflow_data['available'] else ['cashflow: opening balance is unavailable']
+        if cashflow_data['available'] and cashflow_data['deficit_months'] > 0:
             risks.append(FinancialRisk(
                 risk_id='RISK-CF-001',
                 risk_type='cashflow',
@@ -452,8 +453,8 @@ class AdvancedAIService:
                 "ניתוח AI דורש נתונים פיננסיים אמיתיים של הארגון; לא סופקו"
             )
 
-        from openai import OpenAI
-        client = OpenAI(api_key=settings.openai_api_key)
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
 
         prompt = f"""
 אתה יועץ פיננסי מומחה למערכות ניהול כספים בישראל.
@@ -469,11 +470,18 @@ class AdvancedAIService:
 3. סיכונים שיש לקחת בחשבון
 """
 
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=1000
+        )
+
+        from .moshko_observability import record_llm_usage_best_effort
+        record_llm_usage_best_effort(
+            self.db, organization_id=self.organization_id, user_id=None,
+            session_id=None, provider="openai", model="gpt-4",
+            usage=getattr(response, "usage", None), purpose="ai_analytics.get_ai_analysis",
         )
 
         return response.choices[0].message.content
@@ -639,6 +647,8 @@ class AdvancedAIService:
         projection = FinancialReportsService(self.db).generate_cash_flow_projection(
             self.organization_id, months=6
         )
+        if not projection.projections or any(p.closing_balance is None for p in projection.projections):
+            return {'available':False, 'deficit_months':None, 'total_deficit':None}
         deficit_months = sum(
             1 for p in projection.projections if p.closing_balance < 0
         )
@@ -646,6 +656,7 @@ class AdvancedAIService:
             -p.closing_balance for p in projection.projections if p.closing_balance < 0
         ))
         return {
+            'available': True,
             'deficit_months': deficit_months,
             'total_deficit': total_deficit,
         }

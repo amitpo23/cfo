@@ -1,0 +1,9 @@
+{
+  "synthetic": true,
+  "external_requests_blocked": true,
+  "journey": "multiple uploads, replay, explicit extraction, missing evidence, versioned source correction, draft link, split PDF, lineage navigation, retired source cannot be reviewed, reload, Hebrew RTL mobile",
+  "documents": 4,
+  "writes": 6,
+  "javascript_errors": [],
+  "passed": true
+}

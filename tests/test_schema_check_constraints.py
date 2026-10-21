@@ -8,7 +8,9 @@
 `apply_additive`, ואם ה-CHECK אינו נבדק — המסד מסומן `head` בעוד
 ההגנה אינה קיימת בו בפועל.
 
-הכלל: אילוץ CHECK חסר הוא drift, ו-drift חוסם את החתימה.
+הכלל: אילוץ CHECK חסר הוא drift. תיקון additive מחזיר אילוץ שאין
+שורות שסותרות אותו, ואז מותר לחתום. שורה שסותרת את האילוץ משאירה
+את השער סגור.
 """
 import sqlite3
 import subprocess
@@ -100,12 +102,7 @@ def test_a_missing_check_constraint_is_reported_as_drift(fresh_db):
     assert has_schema_drift(full_drift)
 
 
-def test_reconciliation_refuses_to_stamp_when_the_constraint_is_missing(fresh_db):
-    """הליבה: בלי האילוץ אין `stamp`.
-
-    מסד מסומן `head` הוא הצהרה שההגנות של הגרסה קיימות בו. אם
-    `ck_membership_role_not_super_admin` חסר, ההצהרה שקרית."""
-    engine, path = fresh_db
+def _strip_membership_check(path):
     conn = sqlite3.connect(path)
     try:
         conn.executescript("""
@@ -139,12 +136,74 @@ def test_reconciliation_refuses_to_stamp_when_the_constraint_is_missing(fresh_db
     finally:
         conn.close()
 
+
+def test_reconciliation_restores_a_missing_check_before_stamping(fresh_db):
+    """A missing allow-listed CHECK is repaired before head is stamped."""
+    engine, path = fresh_db
+    _strip_membership_check(path)
     stamped = []
 
-    with pytest.raises(SchemaDeploymentError) as err:
+    reconcile_schema_to_head(
+        engine, alembic_config=object(), upgrade=lambda *a: None,
+        stamp=lambda cfg, rev: stamped.append(rev))
+
+    assert stamped == ["head"]
+    present = {
+        row.get("name")
+        for row in sa.inspect(engine).get_check_constraints("organization_memberships")
+    }
+    assert REQUIRED[1] in present
+
+
+def test_reconciliation_refuses_to_stamp_when_rows_violate_the_check(fresh_db):
+    """A row that already breaks the rule blocks the stamp."""
+    engine, path = fresh_db
+    _strip_membership_check(path)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            "INSERT INTO organization_memberships "
+            "(id, organization_id, user_id, role, status, created_at, updated_at) "
+            "VALUES (1, 1, 1, 'SUPER_ADMIN', 'active', '2026-01-01', '2026-01-01')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    stamped = []
+    with pytest.raises(Exception):
         reconcile_schema_to_head(
             engine, alembic_config=object(), upgrade=lambda *a: None,
             stamp=lambda cfg, rev: stamped.append(rev))
 
-    assert not stamped, "head נחתם למרות שאילוץ ה-CHECK חסר"
-    assert "check" in str(err.value).lower()
+    assert not stamped
+    assert REQUIRED[1] not in {
+        row.get("name")
+        for row in sa.inspect(engine).get_check_constraints("organization_memberships")
+    }
+
+
+def test_check_repair_skips_names_outside_the_allow_list(fresh_db, monkeypatch):
+    engine, path = fresh_db
+    _strip_membership_check(path)
+    from cfo.services import schema_sync
+
+    monkeypatch.setattr(schema_sync, "CHECK_REPAIR_ALLOW_LIST", frozenset())
+    applied = schema_sync._apply_missing_check_constraints(engine)
+
+    assert applied == {}
+    assert REQUIRED[1] not in {
+        row.get("name")
+        for row in sa.inspect(engine).get_check_constraints("organization_memberships")
+    }
+
+
+def test_postgres_check_repair_does_not_use_not_valid():
+    import inspect
+
+    from cfo.services.schema_sync import _add_postgres_checks
+
+    source = inspect.getsource(_add_postgres_checks)
+    assert "NOT VALID" not in source
+    assert "VALIDATE CONSTRAINT" not in source
+    assert "ADD CONSTRAINT" in source

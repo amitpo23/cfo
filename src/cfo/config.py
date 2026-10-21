@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     
     # Security
     jwt_secret_key: str = "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING"
+    # Optional dedicated key for public dashboard share cookies. When unset,
+    # the cookie signer falls back to jwt_secret_key.
+    dashboard_cookie_secret: Optional[str] = None
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440  # 24 hours
     # When set, /auth/register requires this code — keeps open registration
@@ -78,10 +81,17 @@ class Settings(BaseSettings):
     # בחודש. התקרות כאן הן תקציב עלות פנימי, לא מכסת ספק, ומוצמדות
     # לתקרה קשיחה בקוד (ראה enforce_cost_protection_floors).
     # 25/08/2026 (הנחיית בעלים): 200/חודש קשיח **גם ב-live**, לא רק
-    # test — אין סיבה לפער-פי-10 בין הסביבות; 3 ארגונים על מפתח משרד
-    # אחד לא צריכים יותר מזה גם בעולם אמיתי.
-    sumit_live_monthly_request_limit: int = 200
-    sumit_live_monthly_paid_action_limit: int = 90
+    # test. 20/10/2026 (הנחיית בעלים, מסלול פטור של SUMIT — 10 פעולות
+    # כלולות בחודש, כ-50 קריאות API): ב-live התקרה יורדת ל-50 קריאות
+    # לארגון, 0 פעולות בתשלום אלא אם הנפקת מסמכים הופעלה במפורש, 10
+    # ליום ו-10 לדקה. מעבר ל-live אסור להרים תקרות בשקט.
+    sumit_live_monthly_request_limit: int = 50
+    sumit_live_monthly_paid_action_limit: int = 0
+    sumit_live_org_daily_request_limit: int = 10
+    sumit_live_requests_per_minute: int = 10
+    # הנפקת מסמכים (פעולה בתשלום) כבויה ב-live עד שזה מופעל במפורש.
+    # מספר ב-env לבדו אינו מפעיל אותה.
+    sumit_document_issuance_enabled: bool = False
     # P0-A תיקון 3 (סקירת קודקס 23/08/2026): endpoints "inferred free"
     # אינם מאומתים ישירות — ההגנה היחידה הייתה התרעת 80%. בכל רענון
     # מכסה, delta-השימוש האמיתי מושווה מול מה שהמערכת תבעה. פער העולה
@@ -151,6 +161,7 @@ class Settings(BaseSettings):
     # SaaS billing / checkout. Stripe Checkout enables Apple Pay and Google Pay
     # when the Stripe account, domain, and payment methods are configured.
     stripe_secret_key: Optional[str] = None
+    stripe_webhook_secret: Optional[str] = None
     stripe_price_company_up_to_2_5m: Optional[str] = None
     stripe_price_company_above_2_5m: Optional[str] = None
     stripe_price_office: Optional[str] = None
@@ -310,10 +321,18 @@ class Settings(BaseSettings):
             200, max(0, self.sumit_test_monthly_request_limit),
         )
         self.sumit_live_monthly_request_limit = min(
-            200, max(0, self.sumit_live_monthly_request_limit),
+            50, max(0, self.sumit_live_monthly_request_limit),
         )
+        # 10 is the exempt-plan included action count. A higher env value
+        # is clamped down; it is never a way to buy overage from config.
         self.sumit_live_monthly_paid_action_limit = min(
-            90, max(0, self.sumit_live_monthly_paid_action_limit),
+            10, max(0, self.sumit_live_monthly_paid_action_limit),
+        )
+        self.sumit_live_org_daily_request_limit = min(
+            10, max(0, self.sumit_live_org_daily_request_limit),
+        )
+        self.sumit_live_requests_per_minute = min(
+            10, max(0, self.sumit_live_requests_per_minute),
         )
         self.sumit_test_monthly_paid_action_limit = min(
             90, max(0, self.sumit_test_monthly_paid_action_limit),
@@ -338,6 +357,20 @@ class Settings(BaseSettings):
                 self.sumit_global_requests_per_minute,
                 self.sumit_test_requests_per_minute,
             )
+        else:
+            # Live must not inherit the test-mode ceilings (20/day, 10/min)
+            # or the historical live ceilings (300/day, 80/min). The exempt
+            # plan caps bind here even when the shared env vars are higher.
+            self.sumit_org_daily_request_limit = min(
+                self.sumit_org_daily_request_limit,
+                self.sumit_live_org_daily_request_limit,
+            )
+            self.sumit_global_requests_per_minute = min(
+                self.sumit_global_requests_per_minute,
+                self.sumit_live_requests_per_minute,
+            )
+            if not self.sumit_document_issuance_enabled:
+                self.sumit_live_monthly_paid_action_limit = 0
         self.sumit_enrichment_daily_action_limit = min(
             25,
             max(0, self.sumit_enrichment_daily_action_limit),
@@ -364,10 +397,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_settings(self):
-        if not os.getenv("VERCEL"):
+        public_deployment = bool(os.getenv("VERCEL")) or os.getenv("VERCEL_ENV") in {"production", "preview"}
+        if not public_deployment:
             return self
 
         errors = []
+        if self.auth_bypass_enabled:
+            errors.append("AUTH_BYPASS_ENABLED must be false on public deployments")
         if not self.database_url or self.database_url.startswith("sqlite:"):
             errors.append("DATABASE_URL must point to a persistent production database")
         if (

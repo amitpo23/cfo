@@ -125,68 +125,25 @@ class _WebhookDailyBudgetExhausted(Exception):
 
 
 def _resolve_of_org(db: Session, payload: dict) -> Optional[int]:
-    """Resolve a local organization_id for an Open Finance webhook payload.
-
-    Match the OF ``userId`` against the ``user_id`` stored in an org's
-    open_finance IntegrationConnection credentials (mirrors
-    ``_resolve_org_from_of_user`` in api/routes/open_finance.py). Falls back
-    to organization 1 (this integration's default org) when there's no
-    userId or no match — deliberately NOT "the first configured open_finance
-    connection": routing an unattributable event to an arbitrary tenant would
-    silently run a sync against the wrong org's data.
-    """
-    of_user_id = payload.get("userId") or payload.get("UserId")
-    if not of_user_id:
-        # W2.4: אירוע בלי מזהה אינו משויך לאף דייר — נדחה. הנפילה
-        # ההיסטורית ל-org 1 שרפה את התקציב שלו על אירועים זרים.
-        return None
-    rows = db.query(IntegrationConnection).filter(
-        IntegrationConnection.source == "open_finance",
-    ).all()
-    for conn in rows:
-        creds = decrypt_credentials(conn.credentials_encrypted) or {}
-        if creds.get("user_id") and str(creds["user_id"]) == str(of_user_id):
-            return conn.organization_id
-    from ..config import settings
-    if settings.open_finance_user_id and str(of_user_id) == str(settings.open_finance_user_id):
-        # org 1 מוגדר דרך משתני סביבה בלי IntegrationConnection.
-        return 1
-    return None
+    from .provider_event_service import resolve_provider_organization
+    return resolve_provider_organization(db, "open_finance", payload.get("userId") or payload.get("UserId"))
 
 
 def _resolve_sumit_org(db: Session, payload: dict) -> Optional[int]:
-    """Resolve a local organization_id for a SUMIT trigger payload.
-
-    SUMIT trigger deliveries don't carry our organization_id; the only
-    cross-reference available is the SUMIT company id, if the payload
-    carries one, matched against the org's stored SUMIT credentials. Falls
-    back to organization 1 when there's no company id or no match —
-    deliberately NOT "the first configured sumit connection" (see
-    _resolve_of_org for why an arbitrary-tenant fallback is unsafe).
-    """
-    company_id = (
-        payload.get("CompanyID") or payload.get("companyId") or payload.get("company_id")
-    )
-    if not company_id:
-        # W2.4: אירוע בלי CompanyID אינו משויך — נדחה, לא נופל ל-org 1.
-        return None
-    rows = db.query(IntegrationConnection).filter(
-        IntegrationConnection.source == "sumit",
-    ).all()
-    for conn in rows:
-        creds = decrypt_credentials(conn.credentials_encrypted) or {}
-        if creds.get("company_id") and str(creds["company_id"]) == str(company_id):
-            return conn.organization_id
-    from ..config import settings
-    if settings.sumit_company_id and str(company_id) == str(settings.sumit_company_id):
-        # org 1 מוגדר דרך משתני סביבה בלי IntegrationConnection.
-        return 1
-    return None
+    from .provider_event_service import resolve_provider_organization
+    return resolve_provider_organization(db, "sumit",
+        payload.get("CompanyID") or payload.get("companyId") or payload.get("company_id"))
 
 
 async def _run_targeted_sync(
     db: Session, org_id: int, source: str, entity_types: list[str],
 ) -> dict:
+    from ..api.routes.cron import _daily_budget_gate, _per_key_daily_gate
+    refused = _daily_budget_gate(db, org_id, source)
+    if refused is None and source == "sumit":
+        refused = _per_key_daily_gate(db, org_id)
+    if refused:
+        return {"sync_run_id": None, "status": "skipped", **refused}
     connector, connection_id, resolved_source = get_connector_for_org(
         db, org_id, preferred_source=source,
     )
@@ -204,25 +161,9 @@ def _record_payment_event(db: Session, org_id: int, payment_id: str, payload: di
     """Merge a payment-status webhook event into a matching Payment or
     BankTransaction's raw_data (matched by external_id == payment_id, scoped
     to the org). Returns True if a match was found and updated."""
-    row = (
-        db.query(Payment)
-        .filter(Payment.organization_id == org_id, Payment.external_id == str(payment_id))
-        .first()
-    )
-    if row is None:
-        row = (
-            db.query(BankTransaction)
-            .filter(
-                BankTransaction.organization_id == org_id,
-                BankTransaction.external_id == str(payment_id),
-            )
-            .first()
-        )
-    if row is None:
-        return False
-    row.raw_data = {**(row.raw_data or {}), "webhook_event": payload}
-    db.commit()
-    return True
+    # Provider payment IDs are not normalized receipt/transaction IDs. Preserve
+    # this helper for callers without fabricating a relationship between planes.
+    return False
 
 
 async def handle_open_finance_event(db: Session, payload: dict) -> dict:

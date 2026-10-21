@@ -100,3 +100,13 @@ neondb-pre-migrate-*.sql
 .env.*.local
 docker-compose.override.yml
 tmp/
+
+# פלטי עבודה מקומיים — עלולים להכיל נתוני לקוח אמיתיים (חשבוניות/VAT/readback).
+# נמדד 22/09/2026: outputs/ (34MB, 199 קבצים) לא היה מוגן — סיכון דליפה
+# להיסטוריית git אם מישהו ירוץ `git add -A`.
+outputs/
+
+# פרויקטים לא-קשורים לרצף שיושבים בתוך תיקיית הריפו (כל אחד עם .git נפרד
+# משלו). נמדד 22/09/2026: sites/ (1.4GB, moshko-builders + moshko-investors)
+# לא היה מוגן — אותו סיכון git add -A, ובנוסף מאט אינדוקס/grep על הריפו.
+sites/

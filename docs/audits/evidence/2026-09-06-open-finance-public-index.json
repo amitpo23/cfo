@@ -1,0 +1,808 @@
+[
+  {
+    "product": "open_finance",
+    "source": "https://docs.open-finance.ai/llms.txt",
+    "checked_on": "2026-09-06",
+    "sha256": "c175785309626623b3302ae723b0801185af44408d0c36e9e067834fdd1282e3",
+    "entries": [
+      {
+        "title": "Getting Started with Open Finance",
+        "url": "https://docs.open-finance.ai/docs/getting-started.md"
+      },
+      {
+        "title": "Overview",
+        "url": "https://docs.open-finance.ai/docs/overview-1.md"
+      },
+      {
+        "title": "Overview",
+        "url": "https://docs.open-finance.ai/docs/overview2.md"
+      },
+      {
+        "title": "Payment Initialization Documentation",
+        "url": "https://docs.open-finance.ai/docs/payment-initialization-documentation.md"
+      },
+      {
+        "title": "Payment creation (Using open-finance UI)",
+        "url": "https://docs.open-finance.ai/docs/payment-creation-using-open-finance-ui2.md"
+      },
+      {
+        "title": "Payment Statuses",
+        "url": "https://docs.open-finance.ai/docs/payment-statuses-2.md"
+      },
+      {
+        "title": " Q&A Open Banking Payment Initiation",
+        "url": "https://docs.open-finance.ai/docs/qa-open-banking-payment-initiation.md"
+      },
+      {
+        "title": "Periodic Payment Initialization",
+        "url": "https://docs.open-finance.ai/docs/periodic-payment-initialization.md"
+      },
+      {
+        "title": "Bulk Payment Initialization",
+        "url": "https://docs.open-finance.ai/docs/bulk-payment-initialization.md"
+      },
+      {
+        "title": "Testing with fake bank data",
+        "url": "https://docs.open-finance.ai/docs/testing-with-fake-bank-data.md"
+      },
+      {
+        "title": "Periodic Payments Sandbox",
+        "url": "https://docs.open-finance.ai/docs/periodic-payments-sandbox.md"
+      },
+      {
+        "title": "Account Balance Types",
+        "url": "https://docs.open-finance.ai/docs/account-balance-types.md"
+      },
+      {
+        "title": "Transaction Categories",
+        "url": "https://docs.open-finance.ai/docs/transaction-categories.md"
+      },
+      {
+        "title": "Overview",
+        "url": "https://docs.open-finance.ai/docs/decision.md"
+      },
+      {
+        "title": "Implement Connection/Payment Journey",
+        "url": "https://docs.open-finance.ai/docs/implement-consent-journey-sdk.md"
+      },
+      {
+        "title": "Iframe Support",
+        "url": "https://docs.open-finance.ai/docs/iframe-support.md"
+      },
+      {
+        "title": "Overview",
+        "url": "https://docs.open-finance.ai/docs/overview.md"
+      },
+      {
+        "title": "Event Types",
+        "url": "https://docs.open-finance.ai/docs/webhooks-event-types.md"
+      },
+      {
+        "title": "Salesforce Oauth2",
+        "url": "https://docs.open-finance.ai/docs/salesforce-oauth2.md"
+      },
+      {
+        "title": "Get financial report",
+        "url": "https://docs.open-finance.ai/docs/get-financial-report.md"
+      },
+      {
+        "title": "Create access token",
+        "url": "https://docs.open-finance.ai/reference/post_token.md"
+      },
+      {
+        "title": "Get a user's open banking report",
+        "url": "https://docs.open-finance.ai/reference/get_data-monthly-report-userid.md"
+      },
+      {
+        "title": "Get a user's open banking report",
+        "url": "https://docs.open-finance.ai/reference/get_data-monthly-report-userid-1.md"
+      },
+      {
+        "title": "Get all providers",
+        "url": "https://docs.open-finance.ai/reference/get_providers.md"
+      },
+      {
+        "title": "Get all providers",
+        "url": "https://docs.open-finance.ai/reference/get_providers-1.md"
+      },
+      {
+        "title": "Get all bank branches",
+        "url": "https://docs.open-finance.ai/reference/get_bank-branches.md"
+      },
+      {
+        "title": "Get all bank branches",
+        "url": "https://docs.open-finance.ai/reference/get_bank-branches-1.md"
+      },
+      {
+        "title": "Check if a certain account is restricted",
+        "url": "https://docs.open-finance.ai/reference/post_account-number-verification.md"
+      },
+      {
+        "title": "Check if a certain account is restricted",
+        "url": "https://docs.open-finance.ai/reference/post_account-number-verification-1.md"
+      },
+      {
+        "title": "Refund a payment",
+        "url": "https://docs.open-finance.ai/reference/post_payments-paymentid-refund.md"
+      },
+      {
+        "title": "Refund a payment",
+        "url": "https://docs.open-finance.ai/reference/post_payments-paymentid-refund-1.md"
+      },
+      {
+        "title": "Get users by ids",
+        "url": "https://docs.open-finance.ai/reference/post_aggregations.md"
+      },
+      {
+        "title": "Get users by ids",
+        "url": "https://docs.open-finance.ai/reference/post_aggregations-1.md"
+      },
+      {
+        "title": "Send financial data by email",
+        "url": "https://docs.open-finance.ai/reference/post_aggregate-financial-data-email.md"
+      },
+      {
+        "title": "Send financial data by email",
+        "url": "https://docs.open-finance.ai/reference/post_aggregate-financial-data-email-1.md"
+      },
+      {
+        "title": "Send a link via whatsapp message",
+        "url": "https://docs.open-finance.ai/reference/post_completion-wh-incoming.md"
+      },
+      {
+        "title": "Send a link via whatsapp message",
+        "url": "https://docs.open-finance.ai/reference/post_completion-wh-incoming-1.md"
+      },
+      {
+        "title": "Initiate a connection to open banking",
+        "url": "https://docs.open-finance.ai/reference/post_connect-open-banking-init.md"
+      },
+      {
+        "title": "Initiate a connection to open banking",
+        "url": "https://docs.open-finance.ai/reference/post_connect-open-banking-init-1.md"
+      },
+      {
+        "title": "Finalize a connection to open banking",
+        "url": "https://docs.open-finance.ai/reference/get_connect-open-banking-finalize.md"
+      },
+      {
+        "title": "Finalize a connection to open banking",
+        "url": "https://docs.open-finance.ai/reference/get_connect-open-banking-finalize-1.md"
+      },
+      {
+        "title": "Create payment",
+        "url": "https://docs.open-finance.ai/reference/post_payments.md"
+      },
+      {
+        "title": "Get payments by user",
+        "url": "https://docs.open-finance.ai/reference/get_payments-1.md"
+      },
+      {
+        "title": "Update sandbox payment status",
+        "url": "https://docs.open-finance.ai/reference/patch_payments-sandbox-paymentid.md"
+      },
+      {
+        "title": "Update sandbox payment status",
+        "url": "https://docs.open-finance.ai/reference/patch_payments-sandbox-paymentid-1.md"
+      },
+      {
+        "title": "Get payment by ID",
+        "url": "https://docs.open-finance.ai/reference/get_payments-paymentid-1.md"
+      },
+      {
+        "title": "Get the list of positions and orders with extra information",
+        "url": "https://docs.open-finance.ai/reference/get_data-extended-securities.md"
+      },
+      {
+        "title": "Get the list of positions and orders with extra information",
+        "url": "https://docs.open-finance.ai/reference/get_data-extended-securities-1.md"
+      },
+      {
+        "title": "Get payment status",
+        "url": "https://docs.open-finance.ai/reference/get_payments-paymentid-status-1.md"
+      },
+      {
+        "title": "Initiate a payment with a provider",
+        "url": "https://docs.open-finance.ai/reference/post_pay-open-banking-init-1.md"
+      },
+      {
+        "title": "Get ATM code status for a payment",
+        "url": "https://docs.open-finance.ai/reference/get_atm-code-paymentid.md"
+      },
+      {
+        "title": "Get ATM code status for a payment",
+        "url": "https://docs.open-finance.ai/reference/get_atm-code-paymentid-1.md"
+      },
+      {
+        "title": "Verifies an ATM code",
+        "url": "https://docs.open-finance.ai/reference/post_atm-verify.md"
+      },
+      {
+        "title": "Verifies an ATM code",
+        "url": "https://docs.open-finance.ai/reference/post_atm-verify-1.md"
+      },
+      {
+        "title": "Create a financial report to a customer",
+        "url": "https://docs.open-finance.ai/reference/post_financial-report-customerid.md"
+      },
+      {
+        "title": "Create a financial report to a customer",
+        "url": "https://docs.open-finance.ai/reference/post_financial-report-customerid-1.md"
+      },
+      {
+        "title": "Get a financial report by jobId",
+        "url": "https://docs.open-finance.ai/reference/get_financial-report-jobid.md"
+      },
+      {
+        "title": "Get a financial report by jobId",
+        "url": "https://docs.open-finance.ai/reference/get_financial-report-jobid-1.md"
+      },
+      {
+        "title": "Create a decision report to a customer",
+        "url": "https://docs.open-finance.ai/reference/post_decision-customerid.md"
+      },
+      {
+        "title": "Create a decision report to a customer",
+        "url": "https://docs.open-finance.ai/reference/post_decision-customerid-1.md"
+      },
+      {
+        "title": "Get decision by jobId",
+        "url": "https://docs.open-finance.ai/reference/get_decision-jobid.md"
+      },
+      {
+        "title": "Get decision by jobId",
+        "url": "https://docs.open-finance.ai/reference/get_decision-jobid-1.md"
+      },
+      {
+        "title": "Create a decision report to a customer",
+        "url": "https://docs.open-finance.ai/reference/post_decision-extended-customerid.md"
+      },
+      {
+        "title": "Create a decision report to a customer",
+        "url": "https://docs.open-finance.ai/reference/post_decision-extended-customerid-1.md"
+      },
+      {
+        "title": "Get decision by jobId",
+        "url": "https://docs.open-finance.ai/reference/get_decision-extended-jobid.md"
+      },
+      {
+        "title": "Get decision by jobId",
+        "url": "https://docs.open-finance.ai/reference/get_decision-extended-jobid-1.md"
+      },
+      {
+        "title": "Create connection",
+        "url": "https://docs.open-finance.ai/reference/post_connections.md"
+      },
+      {
+        "title": "Get connections by user",
+        "url": "https://docs.open-finance.ai/reference/get_connections.md"
+      },
+      {
+        "title": "Create connection",
+        "url": "https://docs.open-finance.ai/reference/post_connections-1.md"
+      },
+      {
+        "title": "Get connections by user",
+        "url": "https://docs.open-finance.ai/reference/get_connections-1.md"
+      },
+      {
+        "title": "Get connection by ID",
+        "url": "https://docs.open-finance.ai/reference/get_connections-connectionid.md"
+      },
+      {
+        "title": "Delete connection by ID (user scope)",
+        "url": "https://docs.open-finance.ai/reference/delete_connections-connectionid.md"
+      },
+      {
+        "title": "Get connection by ID",
+        "url": "https://docs.open-finance.ai/reference/get_connections-connectionid-1.md"
+      },
+      {
+        "title": "Delete connection by ID (user scope)",
+        "url": "https://docs.open-finance.ai/reference/delete_connections-connectionid-1.md"
+      },
+      {
+        "title": "Refresh all connections data by user ID",
+        "url": "https://docs.open-finance.ai/reference/get_connections-userid-refresh.md"
+      },
+      {
+        "title": "Refresh all connections data by user ID",
+        "url": "https://docs.open-finance.ai/reference/get_connections-userid-refresh-1.md"
+      },
+      {
+        "title": "Refresh a connection by its id",
+        "url": "https://docs.open-finance.ai/reference/get_connections-refresh-connectionid.md"
+      },
+      {
+        "title": "Refresh a connection by its id",
+        "url": "https://docs.open-finance.ai/reference/get_connections-refresh-connectionid-1.md"
+      },
+      {
+        "title": "Get accounts by user",
+        "url": "https://docs.open-finance.ai/reference/get_data-accounts.md"
+      },
+      {
+        "title": "Get accounts by user",
+        "url": "https://docs.open-finance.ai/reference/get_data-accounts-1.md"
+      },
+      {
+        "title": "Get account by ID",
+        "url": "https://docs.open-finance.ai/reference/get_data-accounts-accountid.md"
+      },
+      {
+        "title": "Get account by ID",
+        "url": "https://docs.open-finance.ai/reference/get_data-accounts-accountid-1.md"
+      },
+      {
+        "title": "Get transactions by user",
+        "url": "https://docs.open-finance.ai/reference/get_data-transactions.md"
+      },
+      {
+        "title": "Get transactions by user",
+        "url": "https://docs.open-finance.ai/reference/get_data-transactions-1.md"
+      },
+      {
+        "title": "Get transactions by ID",
+        "url": "https://docs.open-finance.ai/reference/get_data-transactions-sk.md"
+      },
+      {
+        "title": "Update a transaction by ID",
+        "url": "https://docs.open-finance.ai/reference/patch_data-transactions-sk.md"
+      },
+      {
+        "title": "Get transactions by ID",
+        "url": "https://docs.open-finance.ai/reference/get_data-transactions-sk-1.md"
+      },
+      {
+        "title": "Update a transaction by ID",
+        "url": "https://docs.open-finance.ai/reference/patch_data-transactions-sk-1.md"
+      },
+      {
+        "title": "Get all merchants",
+        "url": "https://docs.open-finance.ai/reference/get_merchants.md"
+      },
+      {
+        "title": "Create a merchant",
+        "url": "https://docs.open-finance.ai/reference/post_merchants.md"
+      },
+      {
+        "title": "Get all merchants",
+        "url": "https://docs.open-finance.ai/reference/get_merchants-1.md"
+      },
+      {
+        "title": "Create a merchant",
+        "url": "https://docs.open-finance.ai/reference/post_merchants-1.md"
+      },
+      {
+        "title": "Update a merchant",
+        "url": "https://docs.open-finance.ai/reference/put_merchants-merchantid.md"
+      },
+      {
+        "title": "Get merchant by id",
+        "url": "https://docs.open-finance.ai/reference/get_merchants-merchantid.md"
+      },
+      {
+        "title": "Delete merchant by ID",
+        "url": "https://docs.open-finance.ai/reference/delete_merchants-merchantid.md"
+      },
+      {
+        "title": "Update a merchant",
+        "url": "https://docs.open-finance.ai/reference/put_merchants-merchantid-1.md"
+      },
+      {
+        "title": "Get merchant by id",
+        "url": "https://docs.open-finance.ai/reference/get_merchants-merchantid-1.md"
+      },
+      {
+        "title": "Delete merchant by ID",
+        "url": "https://docs.open-finance.ai/reference/delete_merchants-merchantid-1.md"
+      },
+      {
+        "title": "Create a mandate resource",
+        "url": "https://docs.open-finance.ai/reference/post_v2-mandates.md"
+      },
+      {
+        "title": "Create a mandate resource",
+        "url": "https://docs.open-finance.ai/reference/post_v2-mandates-1.md"
+      },
+      {
+        "title": "Get mandate by resource ID",
+        "url": "https://docs.open-finance.ai/reference/get_v2-mandates-resourceid.md"
+      },
+      {
+        "title": "Cancel/Delete a mandate",
+        "url": "https://docs.open-finance.ai/reference/delete_v2-mandates-resourceid.md"
+      },
+      {
+        "title": "Get mandate by resource ID",
+        "url": "https://docs.open-finance.ai/reference/get_v2-mandates-resourceid-1.md"
+      },
+      {
+        "title": "Cancel/Delete a mandate",
+        "url": "https://docs.open-finance.ai/reference/delete_v2-mandates-resourceid-1.md"
+      },
+      {
+        "title": "Get mandate status",
+        "url": "https://docs.open-finance.ai/reference/get_v2-mandates-resourceid-status.md"
+      },
+      {
+        "title": "Get mandate status",
+        "url": "https://docs.open-finance.ai/reference/get_v2-mandates-resourceid-status-1.md"
+      },
+      {
+        "title": "Create a private scoring job for a customer",
+        "url": "https://docs.open-finance.ai/reference/post_private-scoring-customerid.md"
+      },
+      {
+        "title": "Create a private scoring job for a customer",
+        "url": "https://docs.open-finance.ai/reference/post_private-scoring-customerid-1.md"
+      },
+      {
+        "title": "Get private scoring results by jobId",
+        "url": "https://docs.open-finance.ai/reference/get_private-scoring-jobid.md"
+      },
+      {
+        "title": "Get private scoring results by jobId",
+        "url": "https://docs.open-finance.ai/reference/get_private-scoring-jobid-1.md"
+      },
+      {
+        "title": "Cancel a payment",
+        "url": "https://docs.open-finance.ai/reference/delete_payments-paymentid.md"
+      },
+      {
+        "title": "Get payment by ID",
+        "url": "https://docs.open-finance.ai/reference/get_payments-paymentid.md"
+      },
+      {
+        "title": "Cancel a payment",
+        "url": "https://docs.open-finance.ai/reference/delete_payments-paymentid-1.md"
+      },
+      {
+        "title": "Get daily balance history for a checking account",
+        "url": "https://docs.open-finance.ai/reference/get_data-accounts-accountid-balances-history.md"
+      },
+      {
+        "title": "Get the transaction category taxonomy",
+        "url": "https://docs.open-finance.ai/reference/get_data-transaction-categories.md"
+      },
+      {
+        "title": "Create payment",
+        "url": "https://docs.open-finance.ai/reference/post_payments-1.md"
+      },
+      {
+        "title": "Get payments by user",
+        "url": "https://docs.open-finance.ai/reference/get_payments.md"
+      },
+      {
+        "title": "Get payment status",
+        "url": "https://docs.open-finance.ai/reference/get_payments-paymentid-status.md"
+      },
+      {
+        "title": "Initiate a payment with a provider",
+        "url": "https://docs.open-finance.ai/reference/post_pay-open-banking-init.md"
+      },
+      {
+        "title": "Create a decision-with-input job",
+        "url": "https://docs.open-finance.ai/reference/createdecisionwithinputjob.md"
+      },
+      {
+        "title": "Get a decision-with-input result",
+        "url": "https://docs.open-finance.ai/reference/getdecisionwithinputresult.md"
+      },
+      {
+        "title": "Create a customer",
+        "url": "https://docs.open-finance.ai/reference/post_customers.md"
+      },
+      {
+        "title": "Get customers",
+        "url": "https://docs.open-finance.ai/reference/get_customers.md"
+      },
+      {
+        "title": "Get customer by ID",
+        "url": "https://docs.open-finance.ai/reference/get_customers-id.md"
+      },
+      {
+        "title": "Update a customer",
+        "url": "https://docs.open-finance.ai/reference/patch_customers-id.md"
+      },
+      {
+        "title": "Delete customer by ID",
+        "url": "https://docs.open-finance.ai/reference/delete_customers-id.md"
+      },
+      {
+        "title": "Update Customer OSH Transactions",
+        "url": "https://docs.open-finance.ai/reference/patch_customers-osh-transactions.md"
+      },
+      {
+        "title": "Update OSH Account",
+        "url": "https://docs.open-finance.ai/reference/patch_customers-osh-accounts.md"
+      },
+      {
+        "title": "Get OSH Transactions for Customer Account",
+        "url": "https://docs.open-finance.ai/reference/get_customers-customer-id-osh-accounts-account-id.md"
+      },
+      {
+        "title": "Get OSH Accounts for Customer",
+        "url": "https://docs.open-finance.ai/reference/get_customers-id-osh-accounts.md"
+      },
+      {
+        "title": "Upload \"checking account\" file to customer",
+        "url": "https://docs.open-finance.ai/reference/post_customers-id-files-checking-account.md"
+      },
+      {
+        "title": "Delete OSH account and related transactions for a customer",
+        "url": "https://docs.open-finance.ai/reference/delete_customers-customerid-osh-accounts-accountid.md"
+      },
+      {
+        "title": "Get customer account balances",
+        "url": "https://docs.open-finance.ai/reference/get_customers-id-files-balances.md"
+      },
+      {
+        "title": "Get financial relations for a customer",
+        "url": "https://docs.open-finance.ai/reference/get_customers-id-files-financial-relations.md"
+      },
+      {
+        "title": "Get invoices for a customer",
+        "url": "https://docs.open-finance.ai/reference/get_customers-id-files-invoices.md"
+      },
+      {
+        "title": "Upload 'other' files to customer",
+        "url": "https://docs.open-finance.ai/reference/post_customers-id-files-other.md"
+      },
+      {
+        "title": "Get \"other\" file links of customer",
+        "url": "https://docs.open-finance.ai/reference/get_customers-id-files-other.md"
+      },
+      {
+        "title": "Upload '6111' file to customer",
+        "url": "https://docs.open-finance.ai/reference/post_customers-id-files-financial-report.md"
+      },
+      {
+        "title": "Upload 'PCN' file to customer",
+        "url": "https://docs.open-finance.ai/reference/post_customers-id-files-invoice.md"
+      },
+      {
+        "title": "Delete a specific 'PCN' file for a customer",
+        "url": "https://docs.open-finance.ai/reference/delete_customers-customerid-files-invoice-pcnid.md"
+      },
+      {
+        "title": "Share financial report with an agent",
+        "url": "https://docs.open-finance.ai/reference/post_customers-id-files-financial-report-share-with-agent.md"
+      },
+      {
+        "title": "Get a contact by customerId and contactId",
+        "url": "https://docs.open-finance.ai/reference/getcontactbycustomerandcontactid.md"
+      },
+      {
+        "title": "Create a credit request",
+        "url": "https://docs.open-finance.ai/reference/post_credit-sessions.md"
+      },
+      {
+        "title": "Create a credit request with agent contact linked",
+        "url": "https://docs.open-finance.ai/reference/post_credit-sessions-create-with-agent.md"
+      },
+      {
+        "title": "Get credit leads by ID",
+        "url": "https://docs.open-finance.ai/reference/get_credit-sessions-lead-id.md"
+      },
+      {
+        "title": "Delete credit leads by ID",
+        "url": "https://docs.open-finance.ai/reference/delete_credit-sessions-lead-id.md"
+      },
+      {
+        "title": "Get credit leads of a user",
+        "url": "https://docs.open-finance.ai/reference/get_credit-sessions-lead-user.md"
+      },
+      {
+        "title": "Get credit leads of an advisor",
+        "url": "https://docs.open-finance.ai/reference/get_credit-sessions-lead-advisor.md"
+      },
+      {
+        "title": "Get credit leads of an organization",
+        "url": "https://docs.open-finance.ai/reference/get_credit-sessions-lead-org.md"
+      },
+      {
+        "title": "Get credit requests by ID",
+        "url": "https://docs.open-finance.ai/reference/get_credit-sessions-converted-id.md"
+      },
+      {
+        "title": "Delete credit leads by ID",
+        "url": "https://docs.open-finance.ai/reference/delete_credit-sessions-converted-id.md"
+      },
+      {
+        "title": "Get credit requests of a user",
+        "url": "https://docs.open-finance.ai/reference/get_credit-sessions-converted-user.md"
+      },
+      {
+        "title": "Get credit requests of an advisor",
+        "url": "https://docs.open-finance.ai/reference/get_credit-sessions-converted-advisor.md"
+      },
+      {
+        "title": "Get credit requests of an organization",
+        "url": "https://docs.open-finance.ai/reference/get_credit-sessions-converted-org.md"
+      },
+      {
+        "title": "Upload \"other\" files to credit lead",
+        "url": "https://docs.open-finance.ai/reference/post_credit-sessions-lead-id-files-other.md"
+      },
+      {
+        "title": "Get \"other\" file links of credit lead",
+        "url": "https://docs.open-finance.ai/reference/get_credit-sessions-lead-id-files-other.md"
+      },
+      {
+        "title": "Upload \"other\" files to credit request",
+        "url": "https://docs.open-finance.ai/reference/post_credit-sessions-converted-id-files-other.md"
+      },
+      {
+        "title": "Get \"other\" file links of credit request",
+        "url": "https://docs.open-finance.ai/reference/get_credit-sessions-converted-id-files-other.md"
+      },
+      {
+        "title": "Get dnb company info pdf",
+        "url": "https://docs.open-finance.ai/reference/post_credit-sessions-id-dnb-company-info-pdf.md"
+      },
+      {
+        "title": "Welcome to Open Finance",
+        "url": "https://docs.open-finance.ai/changelog/welcome-to-open-finance.md"
+      }
+    ],
+    "reference_entry_count": 139
+  },
+  {
+    "product": "financy",
+    "source": "https://docs-financy.open-finance.ai/llms.txt",
+    "checked_on": "2026-09-06",
+    "sha256": "63a953c4bd971e78ea4c7cb2be0da1516b01da96b01ada7ac869b431b64e1766",
+    "entries": [
+      {
+        "title": "Getting Started",
+        "url": "https://docs-financy.open-finance.ai/docs/getting-started.md"
+      },
+      {
+        "title": "Core Concepts",
+        "url": "https://docs-financy.open-finance.ai/docs/core-concepts.md"
+      },
+      {
+        "title": "Errors",
+        "url": "https://docs-financy.open-finance.ai/docs/errors.md"
+      },
+      {
+        "title": "CLI & AI Agents",
+        "url": "https://docs-financy.open-finance.ai/docs/cli.md"
+      },
+      {
+        "title": "Connect ChatGPT and Claude",
+        "url": "https://docs-financy.open-finance.ai/docs/mcp-chatgpt-claude.md"
+      },
+      {
+        "title": "Authentication",
+        "url": "https://docs-financy.open-finance.ai/docs/authentication.md"
+      },
+      {
+        "title": "Providers & Branches",
+        "url": "https://docs-financy.open-finance.ai/docs/providers-branches.md"
+      },
+      {
+        "title": "Create a Payment",
+        "url": "https://docs-financy.open-finance.ai/docs/create-a-payment.md"
+      },
+      {
+        "title": "Initiate a Payment (Direct)",
+        "url": "https://docs-financy.open-finance.ai/docs/initiate-a-payment.md"
+      },
+      {
+        "title": "Payment Status",
+        "url": "https://docs-financy.open-finance.ai/docs/payment-status.md"
+      },
+      {
+        "title": "Payment Statuses & FAQ",
+        "url": "https://docs-financy.open-finance.ai/docs/payment-statuses.md"
+      },
+      {
+        "title": "Payment Webhooks",
+        "url": "https://docs-financy.open-finance.ai/docs/payment-webhooks.md"
+      },
+      {
+        "title": "Merchants (Payees)",
+        "url": "https://docs-financy.open-finance.ai/docs/merchants.md"
+      },
+      {
+        "title": "Initiate a Payment (Direct)",
+        "url": "https://docs-financy.open-finance.ai/docs/initiate-a-payment-1.md"
+      },
+      {
+        "title": "Connections",
+        "url": "https://docs-financy.open-finance.ai/docs/connections.md"
+      },
+      {
+        "title": "Accounts & Balances",
+        "url": "https://docs-financy.open-finance.ai/docs/accounts-balances.md"
+      },
+      {
+        "title": "Transactions",
+        "url": "https://docs-financy.open-finance.ai/docs/transactions.md"
+      },
+      {
+        "title": "Get payments by user",
+        "url": "https://docs-financy.open-finance.ai/reference/getpayments.md"
+      },
+      {
+        "title": "Create payment",
+        "url": "https://docs-financy.open-finance.ai/reference/createpayment.md"
+      },
+      {
+        "title": "Get payment by ID",
+        "url": "https://docs-financy.open-finance.ai/reference/getpaymentbyid.md"
+      },
+      {
+        "title": "Get payment status",
+        "url": "https://docs-financy.open-finance.ai/reference/getpaymentstatus.md"
+      },
+      {
+        "title": "Initiate a payment with a provider",
+        "url": "https://docs-financy.open-finance.ai/reference/initiatepayment.md"
+      },
+      {
+        "title": "Get connections by user",
+        "url": "https://docs-financy.open-finance.ai/reference/getconnections.md"
+      },
+      {
+        "title": "Get connection by ID",
+        "url": "https://docs-financy.open-finance.ai/reference/getconnectionbyid.md"
+      },
+      {
+        "title": "Delete connection by ID (user scope)",
+        "url": "https://docs-financy.open-finance.ai/reference/deleteconnection.md"
+      },
+      {
+        "title": "Trigger an on-demand refresh of the user's connections",
+        "url": "https://docs-financy.open-finance.ai/reference/refreshconnections.md"
+      },
+      {
+        "title": "Get accounts by user",
+        "url": "https://docs-financy.open-finance.ai/reference/getaccounts.md"
+      },
+      {
+        "title": "Get account by ID",
+        "url": "https://docs-financy.open-finance.ai/reference/getaccountbyid.md"
+      },
+      {
+        "title": "Get transactions by user",
+        "url": "https://docs-financy.open-finance.ai/reference/gettransactions.md"
+      },
+      {
+        "title": "Get transactions by ID",
+        "url": "https://docs-financy.open-finance.ai/reference/gettransactionbyid.md"
+      },
+      {
+        "title": "Create a merchant",
+        "url": "https://docs-financy.open-finance.ai/reference/createmerchant.md"
+      },
+      {
+        "title": "Get all merchants",
+        "url": "https://docs-financy.open-finance.ai/reference/getmerchants.md"
+      },
+      {
+        "title": "Get merchant by id",
+        "url": "https://docs-financy.open-finance.ai/reference/getmerchantbyid.md"
+      },
+      {
+        "title": "Delete merchant by ID",
+        "url": "https://docs-financy.open-finance.ai/reference/deletemerchant.md"
+      },
+      {
+        "title": "Get all providers",
+        "url": "https://docs-financy.open-finance.ai/reference/getproviders.md"
+      },
+      {
+        "title": "Get all bank branches",
+        "url": "https://docs-financy.open-finance.ai/reference/getbankbranches.md"
+      },
+      {
+        "title": "Create access token",
+        "url": "https://docs-financy.open-finance.ai/reference/createtoken.md"
+      }
+    ],
+    "reference_entry_count": 20
+  }
+]

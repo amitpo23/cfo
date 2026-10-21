@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "synthetic_only": true,
+  "provider_requests": 0,
+  "checks": [
+    "concurrent identical page recipes replay one durable outcome",
+    "conflicting recipes preserve the first decision",
+    "processing claim excludes transformation",
+    "authority revoked during PDF generation rolls back parent retirement and derived outputs",
+    "cached membership cannot retain revoked authority during native PDF generation"
+  ],
+  "official_books_verified": false
+}

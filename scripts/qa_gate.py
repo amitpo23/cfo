@@ -19,24 +19,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 RunFn = Callable[[list], "subprocess.CompletedProcess"]
 
-# scripts/audit_routes.py marks any non-200/401/403/404/422 status as "FAIL"
-# — including environment-gated 400/503 responses, which in this codebase are
-# correct and intentional
-# response for "integration not configured" (SumitNotConfiguredError,
-# AIChatNotConfiguredError, etc.), not a bug. docs/audits/2026-07-03-route-
-# audit.md investigated 39 of these individually and confirmed they're
-# expected env-gated 400s; a 40th was added deliberately (2026-07-04):
-# /api/financial/ai/predict/{metric} used to return 200 with fabricated
-# random-noise data when unconfigured — now raises AIAnalyticsNotConfiguredError
-# for a clean 400 instead, trading a silently-wrong 200 for an honest failure.
-# The real qa_gate criterion (per the Step 10 plan) is "zero NEW undocumented
-# failures", not "script exit code == 0" — so we compare the reported count
-# against this documented baseline instead.
-# עודכן 2026-07-25: עד כה הסף היה 40, כי audit_routes ספר מוגדרי-סביבה כ"כשל".
-# מאז ההפרדה לדליים (scripts/route_audit_report.py) הכשלים נספרים נקי, ונשאר אחד
-# בלבד: /api/financial/ai/predict/revenue מחזיר 400 "דורש היסטוריית נתונים אמיתית"
-# — תשובת honest-null נכונה, לא תקלה. כל כשל נוסף מעבר לו = רגרסיה.
-ROUTE_AUDIT_BASELINE_FAILURES = 1
+# Known configuration gates are classified by exact endpoint and response in
+# route_audit_report.py. Any unclassified failure is a regression.
+ROUTE_AUDIT_BASELINE_FAILURES = 0
 
 
 def _default_run(cmd: list, cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
@@ -80,7 +65,7 @@ def run_gate(
 
     print("\n=== 2. Route audit ===")
     route_audit_result = run([sys.executable, "scripts/audit_routes.py"])
-    ok = route_audit_within_baseline(getattr(route_audit_result, "stdout", "") or "")
+    ok = route_audit_result.returncode == 0 and route_audit_within_baseline(getattr(route_audit_result, "stdout", "") or "")
     print(f"{'PASS' if ok else 'FAIL'} — 2. Route audit (baseline: {ROUTE_AUDIT_BASELINE_FAILURES} known honest-null failures)")
     results["2. Route audit"] = ok
     check("3a. Schema drift (local)", [sys.executable, "scripts/schema_drift_check.py"])

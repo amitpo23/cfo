@@ -1,5 +1,12 @@
 # מרכז הידע SUMIT — מסמך-העל
 
+**Current evidence, 6 September 2026:** use the latest saved contract
+`sumit_swagger_v1_2026-08-19.json` and the
+[public contract review](audits/2026-09-06-provider-contract-review.md).
+Historical collection counts below do not establish present business coverage.
+The [business matrix](provider_business_evidence.json) retains official posting,
+representative-side and missing public-article gaps under the master plan.
+
 **נבנה:** 2026-07-13, מקריאה מלאה של **כל מרכז העזרה הרשמי** (help.sumit.co.il —
 609 מאמרים, 6 קטגוריות) ע"י 6 סוכני קריאה. אפס קריאות API של SUMIT (אתר ציבורי).
 זהו האינדקס וספר-החוקים המרוכז; הידע המלא פר-מאמר בקבצי `docs/sumit_help_kb/`.

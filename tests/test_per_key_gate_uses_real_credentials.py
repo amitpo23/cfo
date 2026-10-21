@@ -37,10 +37,20 @@ def test_the_gate_reads_the_encrypted_connection_credentials():
 
 def test_the_gate_and_the_sync_share_the_same_source():
     """שני המסלולים חייבים לקרוא מאותה טבלה. אם הם מתפצלים, השער תובע
-    חלון על מפתח אחד בזמן שהריצה שולחת באחר."""
-    gate = inspect.getsource(cron._resolve_sumit_key)
-    runner = inspect.getsource(sync_engine.get_connector_for_org)
+    חלון על מפתח אחד בזמן שהריצה שולחת באחר.
 
+    `get_connector_for_org` האציל את קריאת-האישורים החוצה ל-
+    `get_connection_configuration` (ריפקטור חילוץ לגיטימי) — בודקים כאן
+    את הפונקציה שבפועל מכילה את הלוגיקה, לא רק את ה-factory שעוטף אותה.
+    """
+    gate = inspect.getsource(cron._resolve_sumit_key)
+    runner = inspect.getsource(sync_engine.get_connection_configuration)
+    factory = inspect.getsource(sync_engine.get_connector_for_org)
+
+    assert "get_connection_configuration" in factory, (
+        "get_connector_for_org כבר לא קורא ל-get_connection_configuration — "
+        "יש לעדכן את הטסט הזה למקור האמיתי של קריאת האישורים"
+    )
     for marker in ("IntegrationConnection", "decrypt_credentials"):
         assert marker in gate, f"{marker} חסר בשער"
         assert marker in runner, f"{marker} חסר בנתיב הסנכרון"

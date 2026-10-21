@@ -1,0 +1,8 @@
+{
+  "synthetic": true,
+  "external_requests_blocked": true,
+  "journey": "save template, reload, generate, save schedule, revoked permission, download, RTL mobile",
+  "writes": 4,
+  "javascript_errors": [],
+  "passed": true
+}

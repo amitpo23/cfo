@@ -40,6 +40,8 @@ from ...services.irreversible_action_service import (
 )
 
 logger = logging.getLogger(__name__)
+from ..approved_actions import approved_provider_action, require_durable_adapter
+
 router = APIRouter()
 
 # Insight types produced by the bank-intelligence engine (for listing).
@@ -136,11 +138,12 @@ def get_open_finance_client(db: Session, org_id: int) -> OpenFinanceClient:
         .filter(
             IntegrationConnection.organization_id == org_id,
             IntegrationConnection.source == "open_finance",
-            IntegrationConnection.status == "active",
         )
         .first()
     )
     creds: dict[str, Any] = {}
+    if conn and conn.status != 'active':
+        raise HTTPException(409, 'Open Finance integration is inactive; owner reconnection is required')
     if conn and conn.credentials_encrypted:
         creds = decrypt_credentials(conn.credentials_encrypted) or {}
 
@@ -168,7 +171,30 @@ def get_open_finance_client(db: Session, org_id: int) -> OpenFinanceClient:
         client_id, client_secret, user_id,
         oauth_url=creds.get("oauth_url") or settings.open_finance_oauth_url,
         v2_base=v2_base, v3_loans_base=v3_loans_base,
+        provider_product=(conn.config or {}).get('provider_product', 'unverified') if conn else 'unverified',
+        provider_plan=(conn.config or {}).get('provider_plan') if conn else None,
+        connected_account_numbers=_active_connected_account_numbers(db, org_id),
     )
+
+
+def _active_connected_account_numbers(db, org_id):
+    from ...models import Account
+    rows = db.query(Account, BankConnection).join(BankConnection,
+        (BankConnection.organization_id == Account.organization_id) &
+        (BankConnection.connection_id == Account.open_finance_connection_id)).filter(
+            Account.organization_id == org_id, Account.source == 'open_finance',
+            BankConnection.source == 'open_finance',
+            BankConnection.status.in_(['ACTIVE', 'COMPLETED'])).all()
+    numbers = set()
+    now = datetime.now(timezone.utc)
+    for account, connection in rows:
+        expiry = connection.expiry_date
+        if expiry and (expiry.replace(tzinfo=timezone.utc) if expiry.tzinfo is None else expiry) <= now:
+            continue
+        number = account.provider_account_number
+        if isinstance(number, str) and number:
+            numbers.add(number)
+    return numbers
 
 
 async def _call(coro):
@@ -958,13 +984,16 @@ async def create_payment(
                     status_code=502,
                     detail="Open Finance payment readback reference mismatch",
                 )
+            from ...services.payment_evidence import payment_outcome
+            outcome = payment_outcome(readback)
             action_service.mark_verified(
                 approval_id,
-                verification_evidence=readback,
+                verification_evidence={**readback, **outcome},
             )
             return {
                 "approval_request_id": approval_id,
                 "approval_status": "verified",
+                **outcome,
                 "provider_reference": reference,
                 "payment": created,
                 "readback": readback,
@@ -1004,6 +1033,7 @@ async def get_payment(payment_id: str, org_id: int = Depends(get_current_org_id)
 
 
 @router.delete("/payments/{payment_id}")
+@approved_provider_action('payment', 'open_finance.cancel_payment', target_key='payment_id')
 async def cancel_payment(
     payment_id: str,
     org_id: int = Depends(get_current_org_id),
@@ -1018,6 +1048,7 @@ async def cancel_payment(
 
 
 @router.post("/payments/{payment_id}/refund")
+@approved_provider_action('refund', 'open_finance.refund_payment')
 async def refund_payment(
     payment_id: str,
     body: dict = Body(...),
@@ -1046,6 +1077,7 @@ async def payment_status(payment_id: str, org_id: int = Depends(get_current_org_
 
 
 @router.post("/payments/init")
+@approved_provider_action('payment', 'open_finance.init_payment')
 async def init_payment(
     body: dict = Body(...),
     org_id: int = Depends(get_current_org_id),
@@ -1061,6 +1093,7 @@ async def init_payment(
 
 # ---- Mandates ---- #
 @router.post("/mandates")
+@approved_provider_action('mandate', 'open_finance.create_mandate')
 async def create_mandate(
     body: dict = Body(...),
     org_id: int = Depends(get_current_org_id),
@@ -1084,6 +1117,7 @@ async def get_mandate(resource_id: str, org_id: int = Depends(get_current_org_id
 
 
 @router.delete("/mandates/{resource_id}")
+@approved_provider_action('mandate', 'open_finance.delete_mandate', target_key='resource_id')
 async def delete_mandate(
     resource_id: str,
     org_id: int = Depends(get_current_org_id),
@@ -1406,134 +1440,26 @@ async def webhook(
     db: Session = Depends(get_db_session),
 ):
     """Receive Connection/Payment/Session events and update local state."""
-    if settings.open_finance_webhook_secret and not secrets.compare_digest(
-        x_webhook_secret or "",
-        settings.open_finance_webhook_secret,
-    ):
+    if not settings.open_finance_webhook_secret:
+        raise HTTPException(503, "Webhook authentication is not configured")
+    if not secrets.compare_digest(x_webhook_secret or "", settings.open_finance_webhook_secret):
         raise HTTPException(401, "invalid webhook credentials")
-
     try:
         event = await request.json()
-    except Exception:  # noqa: BLE001
+    except Exception:
         raise HTTPException(400, "invalid JSON")
-
-    # --- Connection Status Change: {connectionId, connectionStatus, bankName, ...}
-    connection_id = event.get("connectionId")
-    if connection_id:
-        row = db.query(BankConnection).filter(
-            BankConnection.connection_id == connection_id,
-        ).first()
-        if row:
-            if event.get("connectionStatus"):
-                row.status = event["connectionStatus"]
-            if event.get("bankName"):
-                row.bank_name = event["bankName"]
-            err = event.get("connectionError")
-            if isinstance(err, dict) and err.get("message"):
-                row.last_error = err["message"]
-            row.last_refresh_at = datetime.now(timezone.utc)
-            db.commit()
-
-    # --- Payment Status Change: {paymentId, paymentStatus, userId, orgId, ...}
-    # No connectionId on payment events; the org is resolved via the OF user_id
-    # stored in the org's IntegrationConnection credentials (env fallback = org 1).
-    payment_id = event.get("paymentId")
-    if payment_id:
-        org_id = _resolve_org_from_of_user(db, event.get("userId"))
-        # Fallback: if the event also carries a connectionId mapping to a known
-        # BankConnection, use that org (defensive — payment events normally omit
-        # connectionId, but this honours a richer/legacy payload shape).
-        if org_id is None and connection_id:
-            conn = db.query(BankConnection).filter(
-                BankConnection.connection_id == connection_id,
-            ).first()
-            if conn:
-                org_id = conn.organization_id
-        if org_id is None:
-            logger.info(
-                "Open Finance payment webhook unattributable (paymentId=%s, userId=%s) — skipping",
-                payment_id, event.get("userId"),
-            )
-        else:
-            _upsert_open_finance_payment(db, org_id, payment_id, event)
-
-    # M1b — bidirectional webhooks: also feed the event into the targeted
-    # delta-sync service (SyncEngine, scoped entity types) so a completed
-    # bank connection or payment update is reflected without waiting for the
-    # next cron poll. Never allowed to affect the ack below.
-    from ...services.webhook_delta_sync import handle_open_finance_event
-    delta_sync_result = await handle_open_finance_event(db, event)
-
-    logger.info("Open Finance webhook received: keys=%s", list(event.keys()))
-    return {"received": True, "delta_sync": delta_sync_result}
+    if not isinstance(event, dict) or not event:
+        raise HTTPException(400, "An event object is required")
+    from ...services.provider_event_service import record_open_finance_event
+    result = record_open_finance_event(db, event)
+    # Callback observations are persisted immediately. The existing scheduled
+    # sync owns provider reads, budget/consent checks and authoritative readback.
+    return {"received": True, "delta_sync": result}
 
 
 # ---------------------------------------------------------------------- #
 # helpers
 # ---------------------------------------------------------------------- #
-def _resolve_org_from_of_user(db: Session, of_user_id: Optional[str]) -> Optional[int]:
-    """Map an Open Finance ``userId`` to a local organization_id.
-
-    The OF ``orgId`` in the webhook is Open Finance's own tenant id (a different
-    namespace from our ``Organization.id``) and must NOT be used as a FK. The
-    linking key the rest of the integration uses is the OF ``user_id`` stored in
-    the org's IntegrationConnection credentials. For org 1 we also honour the
-    env-configured user id, mirroring ``get_open_finance_client``.
-    """
-    if not of_user_id:
-        return None
-    rows = (
-        db.query(IntegrationConnection)
-        .filter(IntegrationConnection.source == "open_finance")
-        .all()
-    )
-    for conn in rows:
-        creds = decrypt_credentials(conn.credentials_encrypted) or {}
-        cred_user = creds.get("user_id")
-        if not cred_user and conn.organization_id == 1:
-            cred_user = settings.open_finance_user_id
-        if cred_user and str(cred_user) == str(of_user_id):
-            return conn.organization_id
-    return None
-
-
-def _upsert_open_finance_payment(db: Session, org_id: int, payment_id: str, event: dict) -> None:
-    """Idempotently upsert an OpenFinancePayment from a webhook event.
-
-    Only fields actually present in the event are written, so a status-only
-    delivery never clobbers an amount/currency populated from a status poll.
-    """
-    row = (
-        db.query(OpenFinancePayment)
-        .filter(
-            OpenFinancePayment.organization_id == org_id,
-            OpenFinancePayment.external_payment_id == payment_id,
-        )
-        .first()
-    )
-    if row is None:
-        row = OpenFinancePayment(
-            organization_id=org_id, external_payment_id=payment_id,
-        )
-        db.add(row)
-
-    status = event.get("paymentStatus") or event.get("status")
-    if status is not None:
-        row.status = status
-    # amount/currency are not in the standard Payment Status Change webhook, but
-    # honour them if a richer payload ever carries them.
-    amount = event.get("amount")
-    if amount is not None:
-        try:
-            row.amount = Decimal(str(amount))
-        except (InvalidOperation, ValueError):
-            logger.info("OF payment %s: unparseable amount %r", payment_id, amount)
-    currency = event.get("currency")
-    if currency is not None:
-        row.currency = currency
-    row.raw_data = event
-    db.commit()
-
 
 def _upsert_insights(db: Session, org_id: int, insights: list[dict]) -> tuple[int, int]:
     created = updated = 0

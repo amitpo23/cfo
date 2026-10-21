@@ -1,0 +1,19 @@
+{
+  "status": "passed",
+  "synthetic_only": true,
+  "tables": 74,
+  "intake_rows": 12,
+  "report_rows": 3,
+  "derivation_rows": 2,
+  "filing_acknowledgements": 2,
+  "checks": [
+    "populated encrypted restore",
+    "all-table row hash parity",
+    "source bytes and provenance",
+    "saved report file integrity",
+    "source-bound filing and provider destination identity",
+    "derived pages and retired parent identity",
+    "schema parity"
+  ],
+  "production_backup_verified": false
+}

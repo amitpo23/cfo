@@ -336,6 +336,11 @@ class ExpenseOCRPipeline:
         self.db.commit()
 
         if auto_file:
+            # auto_file חסום-לתמיד: file_to_sumit דורש approval_id מאושר-אנושי
+            # (irreversible_action_service, שער מ-7/9), וכאן אין מסלול שמזרים
+            # אחד — עקבי עם "אפס אוטונומיה בבלתי-הפיך" (CLAUDE.md). הקריאה
+            # תמיד תרים ActionConflictError (ValueError) -> 400 בשכבת ה-route.
+            # החילוץ/הסיווג/ה-VAT שחושבו למעלה כבר נשמרו ל-DB (commit לעיל).
             from .expense_filing_service import ExpenseFilingService
 
             filing = ExpenseFilingService(self.db, organization_id=self.organization_id)

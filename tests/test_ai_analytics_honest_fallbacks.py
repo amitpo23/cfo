@@ -86,29 +86,42 @@ def test_get_ai_analysis_uses_real_context_when_provided(fresh_org, monkeypatch)
         class _FakeChoice:
             message = _FakeMessage()
 
+        class _FakeUsage:
+            prompt_tokens = 120
+            completion_tokens = 40
+
         class _FakeResponse:
             choices = [_FakeChoice()]
+            usage = _FakeUsage()
 
         class _FakeCompletions:
-            def create(self, model, messages, **kwargs):
+            # חייב להיות async — get_ai_analysis מריץ await על הקליינט,
+            # לא קליינט סינכרוני חוסם (D1: תוקן bug של event-loop blocking).
+            async def create(self, model, messages, **kwargs):
                 seen_context["prompt"] = messages[0]["content"]
                 return _FakeResponse()
 
         class _FakeChat:
             completions = _FakeCompletions()
 
-        class _FakeOpenAI:
+        class _FakeAsyncOpenAI:
             def __init__(self, api_key):
                 self.chat = _FakeChat()
 
         import openai
-        monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
+        monkeypatch.setattr(openai, "AsyncOpenAI", _FakeAsyncOpenAI)
 
         real_context = {"revenue_mtd": 12345.0}
         result = asyncio.run(svc.get_ai_analysis("מה מצב התזרים שלי?", context=real_context))
 
         assert result == "ניתוח אמיתי"
         assert "12345" in seen_context["prompt"]
+
+        from cfo.models import LLMUsage
+        row = db.query(LLMUsage).filter_by(
+            organization_id=org_id, purpose="ai_analytics.get_ai_analysis",
+        ).first()
+        assert row is not None and row.input_tokens == 120
     finally:
         db.close()
 

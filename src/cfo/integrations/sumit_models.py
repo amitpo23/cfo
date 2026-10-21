@@ -151,6 +151,10 @@ class ExpenseRequest(BaseModel):
     category: Optional[str] = None
     notes: Optional[str] = None
     receipt_file: Optional[str] = None  # Base64 encoded
+    invoice_number: Optional[str] = None
+    supplier_tax_id: Optional[str] = None
+    receipt_filename: Optional[str] = None
+    is_draft: Optional[bool] = None
 
 
 class DebtReportRequest(BaseModel):

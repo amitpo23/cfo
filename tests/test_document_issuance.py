@@ -69,13 +69,34 @@ def test_create_document_sumit_failure_leaves_no_false_success_invoice(client, m
         lambda _db, _org, preferred_source=None: (FakeConnector(), 1, "sumit"),
     )
 
-    resp = client.post("/api/financial/documents", headers=org["headers"], json={
+    body = {
         "document_type": "invoice",
         "customer_id": "לקוח שלא-קיים",
         "customer_name": "לקוח שלא-קיים",
         "send_to_sumit": True,
         "items": [{"description": "שירות", "quantity": 1, "unit_price": 100, "vat_rate": 18}],
-    })
+    }
+    from cfo.api.routes.financial_operations import CreateDocumentRequest
+    from cfo.models import User, UserRole
+    from cfo.services import membership_service
+    from cfo.services.irreversible_action_service import IrreversibleActionService
+    with SessionLocal() as approvals:
+        owner = approvals.query(User).filter_by(organization_id=org['org_id']).one()
+        proposer = User(organization_id=org['org_id'], email='document-proposer@example.com',
+                        password_hash='unused', full_name='Proposer', role=UserRole.ADMIN)
+        approvals.add(proposer); approvals.flush()
+        membership_service.grant(approvals, organization_id=org['org_id'], user_id=proposer.id,
+                                 role=UserRole.ADMIN, granted_by_user_id=owner.id)
+        approvals.commit()
+        service = IrreversibleActionService(approvals, org['org_id'])
+        action = service.propose(proposed_by=proposer, action_type='document_issue',
+                                 payload={'operation':'financial_operations.create_document',
+                                          'arguments':{'request':CreateDocumentRequest.model_validate(body).model_dump(mode='json')}},
+                                 idempotency_key='document-failure-atomicity')
+        service.approve(action.id, approved_by=owner)
+        approval_id = action.id
+    resp = client.post('/api/financial/documents', json=body,
+                       headers={**org['headers'], 'X-Rezef-Approval-Id':str(approval_id)})
     assert resp.status_code == 502, resp.text
 
     db = SessionLocal()

@@ -9,10 +9,13 @@ import os
 import sys
 import tempfile
 from collections import defaultdict
+from offline_guard import isolate_offline_audit
+
+isolate_offline_audit()
 
 os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.mkdtemp(prefix='audit_')}/a.db"
 os.environ["CRON_SECRET"] = "audit-cron"
-os.environ.pop("REGISTRATION_SECRET", None)
+os.environ["REGISTRATION_SECRET"] = ""
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -84,9 +87,8 @@ def main():
 
         results = defaultdict(list)
         seen = set()
-        for route in app.routes:
-            path = getattr(route, "path", "")
-            methods = getattr(route, "methods", set()) or set()
+        for path, operations in app.openapi()["paths"].items():
+            methods = {method.upper() for method in operations}
             if "GET" not in methods or not path.startswith("/api/"):
                 continue
             url = path
@@ -126,7 +128,7 @@ def main():
             print(f"\n## {group}")
             for url, code, detail in sorted(results[group], key=lambda t: t[0]):
                 total += 1
-                kind = classify(code, detail)
+                kind = classify(code, detail, path=url)
                 counters[kind] += 1
                 suffix = f"  ({detail[:60]})" if kind in ("CONFIG", "FAIL") and detail else ""
                 print(f"  [{marks[kind]}] {code} {url}{suffix}")
@@ -136,6 +138,9 @@ def main():
         print(summary_line(total=total, ok=ok, warn=warn, config=config, bad=bad))
         print("CONF = תשובת not-configured בסביבת האודיט — התנהגות נכונה, לא ממצא.")
         print("=" * 70)
+        if total < 200:
+            print("FAIL: route inventory unexpectedly small; audit is incomplete")
+            return max(bad, 1)
         return bad
 
 

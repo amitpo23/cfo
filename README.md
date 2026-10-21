@@ -31,6 +31,7 @@ the local SQLite file.
 
 ## Documentation and Agent Instructions
 
+- [`docs/NEW_DEVELOPER_START_HERE.md`](docs/NEW_DEVELOPER_START_HERE.md) — current developer handoff and access boundaries.
 - [`docs/README.md`](docs/README.md) — documentation index: what to load for
   which kind of work. Start here.
 - [`CLAUDE.md`](CLAUDE.md) — binding doctrines (verify-first, triple
@@ -43,26 +44,11 @@ the local SQLite file.
 - [`docs/archive/`](docs/archive/) holds historical status snapshots. They are
   not a source of truth for the current state.
 
-## Production Status
+## Current status
 
-The current production deployment has:
-
-- Persistent PostgreSQL `DATABASE_URL` configured and reachable.
-- Security secrets configured.
-- SUMIT credentials configured and pinging successfully.
-- Five active organizations in production.
-- Core tables present, including organizations, users, integration connections,
-  invoices, bills, expenses, transactions, bank connections, bank transactions,
-  sync runs, and Alembic metadata.
-
-Known gated items:
-
-- Open Finance is intentionally blocked until `OPEN_FINANCE_USER_ID` is added.
-  Client ID, client secret, and webhook secret are already present.
-- Google Sign-In is hidden until `GOOGLE_CLIENT_ID` and
-  `VITE_GOOGLE_CLIENT_ID` are configured.
-- PCN874 export/reporting still requires final validation against the official
-  VAT file format before it should be treated as production-ready.
+The active status board is [`docs/MASTER_EXECUTION_PLAN.md`](docs/MASTER_EXECUTION_PLAN.md),
+with evidence and honest boundaries in [`docs/rezef_capabilities.json`](docs/rezef_capabilities.json).
+Do not infer live readiness from the feature list below or from a passing local test.
 
 ## Main Capabilities
 
@@ -135,7 +121,7 @@ Install Python and Node dependencies:
 ```bash
 uv sync
 cd frontend
-npm install
+npm ci
 ```
 
 Run backend tests:
@@ -192,39 +178,15 @@ rezef-local-frontend:latest
 
 ## Production Readiness Check
 
-The read-only readiness script validates env, DB connectivity, core tables, and
-optional integration pings. It pings SUMIT and Open Finance live, so it is
-owner-run only — automated agents must not run it (see
-[`AGENTS.md`](AGENTS.md)):
-
-```bash
-vercel env pull /tmp/rezef-prod.env --environment=production
-PYTHONPATH=. uv run python scripts/production_readiness_check.py \
-  --env-file /tmp/rezef-prod.env \
-  --require-postgres
-rm -f /tmp/rezef-prod.env
-```
-
-Expected current result:
-
-- DB and SUMIT pass.
-- Open Finance fails only because `OPEN_FINANCE_USER_ID` is not configured yet.
-- Google client IDs are optional until Google Sign-In is enabled.
+`scripts/production_readiness_check.py` calls SUMIT and Open Finance live.
+It is owner-run only and must not be used as a routine development check.
+Use the offline commands in [`AGENTS.md`](AGENTS.md) for development QA.
 
 ## Deployment
 
-Deploy production through Vercel CLI:
-
-```bash
-vercel --prod --yes
-```
-
-Verify:
-
-```bash
-curl -fsS https://cfo-2.vercel.app/api/health
-vercel inspect https://cfo-2.vercel.app
-```
+Production releases require an approved PR and the owner-controlled
+[`docs/GATE0_DEPLOYMENT_RUNBOOK.md`](docs/GATE0_DEPLOYMENT_RUNBOOK.md).
+Do not deploy directly from a developer checkout.
 
 Release notes and QA evidence are tracked in
 [`docs/RELEASE_0.2.0.md`](docs/RELEASE_0.2.0.md).

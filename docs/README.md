@@ -5,6 +5,8 @@
 
 ## חובה לפני עבודה
 
+מפתח חדש מתחיל ב־[`NEW_DEVELOPER_START_HERE.md`](NEW_DEVELOPER_START_HERE.md) — סדר קריאה, סביבת פיתוח וגבולות גישה.
+
 | מתי | מה לטעון |
 | --- | --- |
 | כל משימת מוצר/יכולת | [`REZEF_OPERATING_SYSTEM.md`](REZEF_OPERATING_SYSTEM.md) — חוזה יציב; [`rezef_capabilities.json`](rezef_capabilities.json) — סטטוס וראיות ברי-בדיקה |
@@ -24,6 +26,8 @@
 - [`SUMIT_KNOWLEDGE_BASE.md`](SUMIT_KNOWLEDGE_BASE.md) · [`SUMIT_API_REFERENCE.md`](SUMIT_API_REFERENCE.md) · [`sumit_swagger_v1_2026-07-10.json`](sumit_swagger_v1_2026-07-10.json) · [`sumit_help_kb/`](sumit_help_kb/)
 - [`SUMIT_INTEGRATION_GUIDE.md`](SUMIT_INTEGRATION_GUIDE.md) · [`SUMIT_BOOKS_BATCH_UNIFICATION_PLAYBOOK.md`](SUMIT_BOOKS_BATCH_UNIFICATION_PLAYBOOK.md) (סגירת מנה = רישום בלתי-הפיך)
 - [`OPEN_FINANCE_KNOWLEDGE_BASE.md`](OPEN_FINANCE_KNOWLEDGE_BASE.md) · [`OPEN_FINANCE_API_REFERENCE.md`](OPEN_FINANCE_API_REFERENCE.md) · [`OPEN_FINANCE_PROVIDER_COVERAGE.md`](OPEN_FINANCE_PROVIDER_COVERAGE.md)
+
+חומר לימוד משלים: [סוכני AI ובנקאות פתוחה — פרק 183 והשלכות לרצף](OPEN_FINANCE_AI_PODCAST_LEARNING_2026-09-06.md). כולל מיקומים בפרק, מיפוי לקוד והמלצות לבדיקה; אינו משנה את חוזה הספק או את סטטוס היכולות.
 
 ## ארכיטקטורה ותפעול
 

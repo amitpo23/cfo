@@ -1,0 +1,11 @@
+{
+  "status": "passed",
+  "synthetic_only": true,
+  "provider_requests": 0,
+  "checks": [
+    "concurrent capacity: one 600 allocation accepted, second blocked against 1000 receipt/bank",
+    "reviewed reversal preserves history and restores balance",
+    "concurrent same-key replay creates one 500 allocation"
+  ],
+  "official_books_verified": false
+}

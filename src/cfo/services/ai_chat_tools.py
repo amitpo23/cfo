@@ -292,6 +292,73 @@ async def _get_annual_report_draft(
     return {"error": f"טופס לא מוכר: {form!r} — נתמכים רק 1301 (יחיד/עוסק) ו-1214 (חברה)"}
 
 
+async def _get_collection_workbench(db, org_id: int, limit: int = 100, offset: int = 0, **_kwargs) -> dict:
+    from .collection_workbench import collection_workbench
+    return collection_workbench(db, org_id, limit=limit, offset=offset)
+
+
+async def _get_payable_workbench(db, org_id: int, limit: int = 100, offset: int = 0, **_kwargs) -> dict:
+    from .payable_workbench import payable_workbench
+    return payable_workbench(db, org_id, limit=limit, offset=offset)
+
+
+async def _propose_payable_request(db, org_id: int, *, _user_id=None, _channel='web', **kwargs) -> dict:
+    from ..models import User
+    from .payable_settlement import PayableSettlementService
+    actor = db.query(User).filter_by(id=_user_id).first()
+    service = PayableSettlementService(db, org_id)
+    request = service.propose(**kwargs, proposed_by=actor, channel=_channel)
+    return service.status(request.id)
+
+
+async def _execute_payable_request(db, org_id: int, *, request_id, _user_id=None, **_kwargs) -> dict:
+    from ..models import User
+    from .payable_settlement import PayableSettlementService
+    service = PayableSettlementService(db, org_id)
+    service._lock(db.query(User).filter_by(id=_user_id).first())
+    return await service.execute(request_id)
+
+
+async def _settle_payable_request(db, org_id: int, *, request_id, bank_transaction_id, reason,
+        _user_id=None, _channel='web', **_kwargs) -> dict:
+    from ..models import User
+    from .payable_settlement import PayableSettlementService
+    return PayableSettlementService(db, org_id).settle(request_id, bank_transaction_id=bank_transaction_id,
+        reason=reason, decided_by=db.query(User).filter_by(id=_user_id).first(), channel=_channel)
+
+
+async def _reverse_payable_settlement(db, org_id: int, *, request_id, bank_transaction_id, reason,
+        _user_id=None, _channel='web', **_kwargs) -> dict:
+    from ..models import User
+    from .payable_settlement import PayableSettlementService
+    return PayableSettlementService(db, org_id).reverse(request_id, bank_transaction_id=bank_transaction_id,
+        reason=reason, decided_by=db.query(User).filter_by(id=_user_id).first(), channel=_channel)
+
+
+async def _propose_collection_request(db, org_id: int, *, _user_id=None, _channel='web', **kwargs) -> dict:
+    from ..models import User
+    from .collection_settlement import CollectionSettlementService
+    actor = db.query(User).filter_by(id=_user_id).first()
+    service = CollectionSettlementService(db, org_id)
+    request = service.propose(**kwargs, proposed_by=actor, origin_channel=_channel)
+    return service.status(request.id)
+
+
+async def _allocate_collection_receipt(db, org_id: int, *, _user_id=None, _channel='web', **kwargs) -> dict:
+    from ..models import User
+    from .collection_settlement import CollectionSettlementService
+    actor = db.query(User).filter_by(id=_user_id).first()
+    return CollectionSettlementService(db, org_id).allocate_existing(**kwargs, decided_by=actor, channel=_channel)
+
+
+async def _reverse_collection_allocation(db, org_id: int, *, allocation_id, reason, _user_id=None, _channel='web', **_kwargs) -> dict:
+    from ..models import User
+    from .collection_settlement import CollectionSettlementService
+    actor = db.query(User).filter_by(id=_user_id).first()
+    return CollectionSettlementService(db, org_id).reverse_allocation(allocation_id,
+        decided_by=actor, reason=reason, channel=_channel)
+
+
 async def _get_collection_cases(db, org_id: int, status: str | None = None, **_kwargs) -> dict:
     from . import collection_case_service as svc
     cases = svc.list_cases(db, org_id, status=status)
@@ -1058,44 +1125,29 @@ async def _get_engine_status(db, org_id: int, **_kwargs) -> dict:
     return result
 
 
-async def _create_payment_link(db, org_id: int, *, invoice_id: int, **_kwargs) -> dict:
-    from .document_issuance_service import DocumentIssuanceService
-    service = DocumentIssuanceService(db, org_id)
-    return await service.create_payment_link(invoice_id)
+async def _create_payment_link(db, org_id: int, *, invoice_id: int, approval_id: int | None = None, **_kwargs) -> dict:
+    from .collection_settlement import CollectionSettlementService
+    if approval_id is None:
+        raise ValueError("Create and approve an invoice-linked collection request first")
+    service = CollectionSettlementService(db, org_id)
+    request = service._request(approval_id)
+    if request.payload['invoice_id'] != invoice_id or request.payload['payment_channel'] != 'sumit':
+        raise ValueError("Approval is for a different invoice or payment channel")
+    return await service.execute(approval_id)
 
 
 async def _create_bank_payment_request(
-    db,
-    org_id: int,
-    *,
-    amount: float,
-    description: str,
-    creditor_name: str,
-    creditor_account_number: str,
-    creditor_account_type: str = "bban",
-    **_kwargs,
+    db, org_id: int, *, invoice_id: int | None = None,
+    approval_id: int | None = None, **_kwargs,
 ) -> dict:
-    from ..api.routes.open_finance import get_open_finance_client
-
-    client = get_open_finance_client(db, org_id)
-    try:
-        payload = await client.create_payment({
-            "paymentInformation": {
-                "amount": amount,
-                "currency": "ILS",
-                "description": description,
-                "creditorName": creditor_name,
-                "creditorAccountNumber": creditor_account_number,
-                "creditorAccountType": creditor_account_type,
-            },
-        })
-    finally:
-        await client.close()
-    return {
-        "payment_id": payload.get("id") or payload.get("paymentId"),
-        "pay_url": payload.get("payUrl"),
-        "note": "קישור התשלום נוצר; המשלם מאשר את ההעברה מול הבנק שלו דרך הקישור.",
-    }
+    from .collection_settlement import CollectionSettlementService
+    if invoice_id is None or approval_id is None:
+        raise ValueError("Create and approve an invoice-linked collection request first")
+    service = CollectionSettlementService(db, org_id)
+    request = service._request(approval_id)
+    if request.payload['invoice_id'] != invoice_id or request.payload['payment_channel'] != 'open_finance':
+        raise ValueError("Approval is for a different invoice or payment channel")
+    return await service.execute(approval_id)
 
 
 async def _connect_bank_account(
@@ -1253,13 +1305,43 @@ async def _classify_pending_expenses(db, org_id: int, **_kwargs) -> dict:
     return ExpenseFilingService(db, organization_id=org_id).classify_pending()
 
 
-async def _file_expense(db, org_id: int, *, expense_id: int, **_kwargs) -> dict:
-    """תיוק הוצאה בפועל ב-SUMIT — עוטף ExpenseFilingService.file_to_sumit
-    הקיים (כולל שער הכפילויות שכבר בתוכו). פעולה בלתי-הפיכה (יוצרת מסמך
-    אמיתי ב-SUMIT) — לכן category="write" למטה."""
+async def _propose_expense_filing(db, org_id: int, *, expense_id, reason, _user_id=None, _channel='web', **_kwargs) -> dict:
+    from .expense_filing_workflow import ExpenseFilingWorkflow
+    return ExpenseFilingWorkflow(db, org_id).propose(expense_id, actor_id=_user_id, reason=reason, channel=_channel)
+
+
+async def _file_expense(db, org_id: int, *, expense_id: int, approval_id=None, _user_id=None, **_kwargs) -> dict:
+    """Execute a signed immutable source proposal; never equate acknowledgement with books."""
     from .expense_filing_service import ExpenseFilingService
     service = ExpenseFilingService(db, organization_id=org_id)
-    return await service.file_to_sumit(expense_id)
+    return await service.file_to_sumit(expense_id, approval_id=approval_id, actor_id=_user_id)
+
+
+async def _get_saved_reports(db, org_id: int, **_kwargs) -> dict:
+    from .report_builder_service import ReportBuilderService
+    service = ReportBuilderService(db, org_id)
+    return {'organization_id': org_id, 'sync_triggered': False,
+        'templates': [{'template_id': t.template_id, 'name': t.name, 'report_type': t.report_type,
+            'version': t.version} for t in service.get_templates()[:100]],
+        'schedules': [{'schedule_id': s.schedule_id, 'name': s.name, 'next_run': s.next_run,
+            'is_active': s.is_active, 'delivery_method': s.delivery_method} for s in service.get_schedules()[:100]],
+        'history': [{'execution_id': r.execution_id, 'status': r.status, 'started_at': r.started_at,
+            'error_message': r.error_message, 'report_id': r.result.report_id if r.result else None}
+            for r in service.get_execution_history(limit=20)],
+        'official_books_verified': False, 'source_completeness': 'not_verified'}
+
+
+async def _review_document_source(db, org_id: int, *, document_id, version, fields, reason,
+                                  _user_id=None, **_kwargs) -> dict:
+    from .document_intake import DocumentIntakeService
+    return DocumentIntakeService(db, org_id).review(document_id, expected_version=version,
+        fields=fields, reason=reason, actor_id=_user_id)
+
+
+async def _derive_document_sources(db, org_id: int, *, parents, outputs, reason, _user_id=None, **_kwargs) -> dict:
+    from .document_derivation import DocumentDerivationService
+    return DocumentDerivationService(db, org_id).derive(parents=parents, outputs=outputs,
+        reason=reason, actor_id=_user_id)
 
 
 async def _get_expense_intake_status(db, org_id: int, **_kwargs) -> dict:
@@ -1268,6 +1350,7 @@ async def _get_expense_intake_status(db, org_id: int, **_kwargs) -> dict:
     from ..config import settings
     from ..models import Expense
     from .chat_expense_intake import count_receipts_today
+    from .document_intake import DocumentIntakeService
 
     intake_today = count_receipts_today(db, org_id, "telegram")
     pending_filing = (
@@ -1280,6 +1363,7 @@ async def _get_expense_intake_status(db, org_id: int, **_kwargs) -> dict:
         "daily_limit": settings.chat_receipt_daily_limit,
         "intake_enabled": settings.chat_receipt_intake_enabled,
         "pending_filing": pending_filing,
+        "source_documents": DocumentIntakeService(db, org_id).list_documents(limit=20),
     }
 
 
@@ -2069,6 +2153,69 @@ async def _update_task(
 
 
 TOOLS: dict[str, ChatTool] = {
+    'get_saved_reports': ChatTool(name='get_saved_reports', category='read',
+        description='דוחות ותזמונים שמורים והיסטוריית הרצות בארגון הפעיל. קריאה מקומית בלבד; אין הרצה, משלוח או סנכרון.',
+        input_schema={'type': 'object', 'properties': {}}, fn=_get_saved_reports),
+    'get_payable_workbench': ChatTool(name='get_payable_workbench', category='read',
+        description='Read saved supplier bills, reviewed payment requests, bank settlement and remaining balances. No synchronization.',
+        input_schema={'type': 'object', 'properties': {'limit': {'type': 'integer', 'minimum': 1, 'maximum': 200},
+            'offset': {'type': 'integer', 'minimum': 0}}}, fn=_get_payable_workbench),
+    'propose_payable_request': ChatTool(name='propose_payable_request', category='write', needs_user=True,
+        policy_action='bank_payment.propose',
+        description='Prepare an ILS supplier-bill payment proposal using owner-provided beneficiary and withholding evidence. Requires separate signing approval; no provider call.',
+        input_schema={'type': 'object', 'additionalProperties': False, 'properties': {
+            'bill_id': {'type': 'integer'}, 'amount': {'type': 'string'}, 'idempotency_key': {'type': 'string'},
+            'creditor': {'type': 'object', 'properties': {'name': {'type': 'string'}, 'account_number': {'type': 'string'},
+                'account_type': {'type': 'string', 'enum': ['iban', 'bban']}}},
+            'beneficiary_evidence': {'type': 'string', 'minLength': 20},
+            'withholding_decision': {'type': 'string', 'enum': ['not_required', 'valid_exemption']},
+            'withholding_evidence': {'type': 'string', 'minLength': 20},
+            'funding_account_id': {'type': 'integer'}, 'funding_account_type': {'type': 'string', 'enum': ['iban', 'bban']}},
+            'required': ['bill_id', 'amount', 'idempotency_key', 'creditor', 'beneficiary_evidence', 'withholding_decision', 'withholding_evidence']}, fn=_propose_payable_request),
+    'execute_payable_request': ChatTool(name='execute_payable_request', category='write', needs_user=True,
+        policy_action='bank_payment.propose',
+        description='Submit a previously signed supplier payment request once. Bank authorization and money settlement remain separate.',
+        input_schema={'type': 'object', 'additionalProperties': False, 'properties': {'request_id': {'type': 'integer'}},
+            'required': ['request_id']}, fn=_execute_payable_request),
+    'settle_payable_request': ChatTool(name='settle_payable_request', category='write', needs_user=True,
+        policy_action='reconciliation.approve',
+        description='Link an explicitly reviewed booked bank outflow to a supplier request and update its local bill balance. Does not post to SUMIT.',
+        input_schema={'type': 'object', 'additionalProperties': False, 'properties': {
+            'request_id': {'type': 'integer'}, 'bank_transaction_id': {'type': 'integer'}, 'reason': {'type': 'string', 'minLength': 20}},
+            'required': ['request_id', 'bank_transaction_id', 'reason']}, fn=_settle_payable_request),
+    'reverse_payable_settlement': ChatTool(name='reverse_payable_settlement', category='write', needs_user=True,
+        policy_action='reconciliation.approve',
+        description='Reverse a reviewed local supplier-bank relationship with immutable history. Does not return money or alter official documents.',
+        input_schema={'type': 'object', 'additionalProperties': False, 'properties': {
+            'request_id': {'type': 'integer'}, 'bank_transaction_id': {'type': 'integer'}, 'reason': {'type': 'string', 'minLength': 20}},
+            'required': ['request_id', 'bank_transaction_id', 'reason']}, fn=_reverse_payable_settlement),
+    'get_collection_workbench': ChatTool(name='get_collection_workbench', category='read',
+        description='Read invoice balances, collection requests, receipt/bank allocations, excess and event conflicts from Rezef only. Never synchronizes.',
+        input_schema={'type': 'object', 'properties': {'limit': {'type': 'integer', 'minimum': 1, 'maximum': 200},
+            'offset': {'type': 'integer', 'minimum': 0}}}, fn=_get_collection_workbench),
+    'propose_collection_request': ChatTool(name='propose_collection_request', category='write', needs_user=True,
+        policy_action='bank_payment.propose',
+        description='Prepare an invoice-linked collection proposal for signing approval. This does not create a provider request or collect money.',
+        input_schema={'type': 'object', 'additionalProperties': False, 'properties': {
+            'invoice_id': {'type': 'integer'}, 'amount': {'type': 'string'},
+            'channel': {'type': 'string', 'enum': ['sumit', 'open_finance']}, 'idempotency_key': {'type': 'string'},
+            'creditor': {'type': 'object', 'properties': {'name': {'type': 'string'},
+                'account_number': {'type': 'string'}, 'account_type': {'type': 'string', 'enum': ['iban', 'bban']}}}},
+            'required': ['invoice_id', 'amount', 'channel', 'idempotency_key']}, fn=_propose_collection_request),
+    'allocate_collection_receipt': ChatTool(name='allocate_collection_receipt', category='write', needs_user=True,
+        policy_action='reconciliation.approve',
+        description='Record an explicitly reviewed amount linking an existing SUMIT receipt, invoice and booked inflow. Identity evidence is mandatory. Changes local balances only.',
+        input_schema={'type': 'object', 'additionalProperties': False, 'properties': {
+            'invoice_id': {'type': 'integer'}, 'payment_id': {'type': 'integer'}, 'bank_transaction_id': {'type': 'integer'},
+            'request_id': {'type': 'integer'}, 'amount': {'type': 'string'}, 'idempotency_key': {'type': 'string'},
+            'reason': {'type': 'string', 'minLength': 10}},
+            'required': ['invoice_id', 'payment_id', 'bank_transaction_id', 'amount', 'idempotency_key', 'reason']}, fn=_allocate_collection_receipt),
+    'reverse_collection_allocation': ChatTool(name='reverse_collection_allocation', category='write', needs_user=True,
+        policy_action='reconciliation.approve',
+        description='Reverse a reviewed local allocation with a reason while retaining its history. Does not refund money, cancel receipts or change SUMIT books.',
+        input_schema={'type': 'object', 'additionalProperties': False, 'properties': {
+            'allocation_id': {'type': 'integer'}, 'reason': {'type': 'string', 'minLength': 10}},
+            'required': ['allocation_id', 'reason']}, fn=_reverse_collection_allocation),
     "find_capability": ChatTool(
         name="find_capability",
         description=(
@@ -3205,12 +3352,12 @@ TOOLS: dict[str, ChatTool] = {
         name="create_payment_link",
         description=(
             "יצירת קישור תשלום מאובטח (עמוד תשלום מאוחסן ב-SUMIT) עבור היתרה הפתוחה "
-            "בחשבונית. פעולת כתיבה אמיתית מול SUMIT — דורשת אישור מפורש של המשתמש לפני ביצוע."
+            "בחשבונית, באמצעות בקשת גבייה מקושרת שכבר אושרה. חובה למסור approval_id; קישור אינו תשלום שהושלם."
         ),
         input_schema={
             "type": "object",
-            "properties": {"invoice_id": {"type": "integer", "description": "מזהה החשבונית"}},
-            "required": ["invoice_id"],
+            "properties": {"invoice_id": {"type": "integer"}, "approval_id": {"type": "integer"}},
+            "required": ["invoice_id", "approval_id"],
         },
         category="write",
         policy_action="payment_link.create",
@@ -3218,33 +3365,11 @@ TOOLS: dict[str, ChatTool] = {
     ),
     "create_bank_payment_request": ChatTool(
         name="create_bank_payment_request",
-        description=(
-            "יצירת בקשת תשלום בהעברה בנקאית דרך Open Finance (בנקאות פתוחה): מחזירה "
-            "קישור תשלום (payUrl) שנשלח למשלם, והמשלם מאשר את ההעברה ישירות מול הבנק "
-            "שלו. פעולת כתיבה אמיתית מול Open Finance — דורשת אישור מפורש של המשתמש "
-            "לפני ביצוע. הכסף עובר רק לאחר אישור המשלם בבנק."
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "amount": {"type": "number", "description": "סכום בש\"ח (חיובי)"},
-                "description": {"type": "string", "description": "תיאור התשלום"},
-                "creditor_name": {"type": "string", "description": "שם המוטב"},
-                "creditor_account_number": {
-                    "type": "string",
-                    "description": "חשבון המוטב: bban בפורמט בנק-סניף-חשבון (למשל 12-345-67890) או IBAN",
-                },
-                "creditor_account_type": {
-                    "type": "string",
-                    "enum": ["bban", "iban"],
-                    "default": "bban",
-                },
-            },
-            "required": ["amount", "description", "creditor_name", "creditor_account_number"],
-        },
-        category="write",
-        policy_action="bank_payment.propose",
-        fn=_create_bank_payment_request,
+        description="Execute an already approved invoice-linked Open Finance collection request. The payer must still authorize in the bank; creation never means paid.",
+        input_schema={"type":"object", "properties":{
+            "invoice_id":{"type":"integer"}, "approval_id":{"type":"integer"}},
+            "required":["invoice_id","approval_id"]},
+        category="write", policy_action="bank_payment.propose", fn=_create_bank_payment_request,
     ),
     "connect_bank_account": ChatTool(
         name="connect_bank_account",
@@ -3360,25 +3485,60 @@ TOOLS: dict[str, ChatTool] = {
         policy_action="expenses.classify",
         fn=_classify_pending_expenses,
     ),
+    "propose_expense_filing": ChatTool(
+        name="propose_expense_filing", description="הכנת הצעה ליצירת טיוטת הוצאה ב-SUMIT לפי מקור שמור. שומרת את הנתונים המדויקים לאישור מורשה חתימה; אינה קוראת לספק ואינה רושמת בספרים.",
+        input_schema={"type": "object", "properties": {"expense_id": {"type": "integer"},
+            "reason": {"type": "string", "minLength": 20, "maxLength": 2000}}, "required": ["expense_id", "reason"]},
+        category="write", needs_user=True, policy_action="accounting.writeback.propose", fn=_propose_expense_filing),
     "file_expense": ChatTool(
         name="file_expense",
         description=(
-            "תיוק הוצאה בפועל ב-SUMIT (קריאת addexpense אמיתית) — הופך "
-            "טיוטה שנקלטה (מהצ'אט/מהבנק/מ-SUMIT) להוצאה מתויקת בספרים, "
-            "כולל שער הכפילויות הקיים. פעולת כתיבה — דורשת אישור מפורש; "
-            "בלתי-הפיכה (יוצרת מסמך אמיתי ב-SUMIT)."
+            "ביצוע פעם אחת של הצעת הוצאה חתומה: יצירת טיוטת ספק ב-SUMIT ממקור שמור. "
+            "דורש מזהה אישור עמיד; תשובת ספק אינה אימות מסמך, קליטה בספרים או תשלום. תוצאה לא ברורה חסומה לניסיון חוזר."
         ),
         input_schema={
             "type": "object",
             "properties": {
                 "expense_id": {"type": "integer", "description": "מזהה ההוצאה לתיוק"},
+                "approval_id": {"type": "integer", "description": "מזהה הצעה שאושרה בידי מורשה חתימה"},
             },
-            "required": ["expense_id"],
+            "required": ["expense_id", "approval_id"],
         },
         category="write",
         policy_action="expenses.file",
+        needs_user=True,
         fn=_file_expense,
     ),
+    "derive_document_sources": ChatTool(
+        name="derive_document_sources",
+        description="פיצול או מיזוג PDF לפי עמודים מפורשים ולאחר אישור המשתמש. כל עמוד נכלל פעם אחת; המקורות נשמרים ונחסמים מטיפול נוסף. אין חילוץ, רישום או תשלום.",
+        input_schema={"type": "object", "properties": {
+            "parents": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "object",
+                "properties": {"document_id": {"type": "integer", "minimum": 1}, "version": {"type": "integer", "minimum": 1}},
+                "required": ["document_id", "version"], "additionalProperties": False}},
+            "outputs": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "object", "properties": {
+                "filename": {"type": "string", "minLength": 1, "maxLength": 255},
+                "pages": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "object", "properties": {
+                    "document_id": {"type": "integer", "minimum": 1}, "page": {"type": "integer", "minimum": 1}},
+                    "required": ["document_id", "page"], "additionalProperties": False}}},
+                "required": ["filename", "pages"], "additionalProperties": False}},
+            "reason": {"type": "string", "minLength": 20, "maxLength": 2000}},
+            "required": ["parents", "outputs", "reason"], "additionalProperties": False},
+        category="write", needs_user=True, policy_action="expenses.review", fn=_derive_document_sources,
+        truth_class="unverified_needs_review"),
+    "review_document_source": ChatTool(
+        name="review_document_source",
+        description="שמירת תיקון נתוני מקור עם סיבה וגרסה, לאחר אישור המשתמש. יוצרת טיוטה בלבד; אינה אישור חשבונאי, קליטה בספרים או תשלום. דורש מנהל ארגון פעיל.",
+        input_schema={"type": "object", "properties": {
+            "document_id": {"type": "integer"}, "version": {"type": "integer", "minimum": 1},
+            "reason": {"type": "string", "minLength": 20, "maxLength": 2000},
+            "fields": {"type": "object", "properties": {
+                **{key: {"type": ["string", "null"]} for key in (
+                    "supplier_name", "supplier_tax_id", "expense_date", "invoice_number", "currency", "document_type")},
+                **{key: {"type": ["number", "null"]} for key in ("amount_total", "net_amount", "vat_amount")}},
+                "additionalProperties": False}}, "required": ["document_id", "version", "reason", "fields"]},
+        category="write", needs_user=True, policy_action="expenses.review", fn=_review_document_source,
+        truth_class="unverified_needs_review"),
     "get_expense_intake_status": ChatTool(
         name="get_expense_intake_status",
         description=(
@@ -3929,7 +4089,7 @@ _SUMIT_TOOLS = {
     "list_stock", "subscribe_trigger", "unsubscribe_trigger",
     "verify_bank_account",
 }
-_OPEN_FINANCE_TOOLS = {"create_bank_payment_request", "connect_bank_account"}
+_OPEN_FINANCE_TOOLS = {"create_bank_payment_request", "connect_bank_account", "execute_payable_request"}
 _LOCAL_TOOLS = {"rezef_help", "kb_lookup", "email_report"}
 _REZEF_DB_TOOLS = set(TOOLS) - _SUMIT_TOOLS - _OPEN_FINANCE_TOOLS - _LOCAL_TOOLS
 

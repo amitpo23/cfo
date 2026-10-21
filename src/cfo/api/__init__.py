@@ -188,7 +188,7 @@ async def unhandled_exception_handler(request, exc: Exception):
     ומוחזרת כ-500 כן — בלי להדליף פרטים פנימיים."""
     from ..services.system_health import record_system_error_best_effort
 
-    record_system_error_best_effort(path=str(getattr(request, "url", "")))
+    record_system_error_best_effort(path=request.url.path, exception=exc)
     return JSONResponse(
         status_code=500,
         content={
@@ -287,6 +287,12 @@ app.include_router(
 app.include_router(
     sumit_webhooks.router, prefix="/api/sumit", tags=["SUMIT Webhooks"],
 )
+
+from .routes import local_clients, open_finance_bind, client_dashboards
+app.include_router(local_clients.router, prefix="/api", tags=["Local office imports"])
+app.include_router(open_finance_bind.router, prefix="/api/admin", tags=["Open Finance bind"])
+app.include_router(client_dashboards.router, prefix="/api", tags=["Client dashboards"])
+app.include_router(client_dashboards.public_router, prefix="/api/public", tags=["Client dashboards"])
 
 # Accounting-office (multi-company) + cross-source synthesis
 app.include_router(
@@ -412,4 +418,6 @@ async def health_check():
     היום. עד 21/08 החזיר מחרוזת קבועה גם כשה-DB היה מת."""
     from ..services.system_health import health_snapshot
 
-    return health_snapshot()
+    snapshot = health_snapshot()
+    return JSONResponse(status_code=503 if snapshot["status"] == "unhealthy" else 200,
+                        content=snapshot)

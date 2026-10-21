@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "synthetic_only": true,
+  "provider_requests": 0,
+  "checks": [
+    "no screen-open writes",
+    "explicit identity selection",
+    "provisional disabled",
+    "allocation and unallocated excess",
+    "reversal history",
+    "mobile width",
+    "no JavaScript errors"
+  ]
+}

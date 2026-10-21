@@ -329,7 +329,7 @@ class DocumentIssuanceService:
         self.db.refresh(invoice)
         return {"document": self._serialize(invoice), "sumit": response}
 
-    async def create_payment_link(self, invoice_id: int) -> dict[str, Any]:
+    async def create_payment_link(self, invoice_id: int, *, amount: Decimal | None = None, external_identifier: str | None = None, document_type: str | None = None) -> dict[str, Any]:
         """Generate a hosted payment-page URL for an invoice's outstanding
         balance (SUMIT POST /billing/payments/beginredirect/) — e.g. to send
         with a collection reminder instead of just a balance notice."""
@@ -356,19 +356,27 @@ class DocumentIssuanceService:
             or invoice.invoice_number
             or "Customer"
         )
+        requested_amount = invoice.balance if amount is None else amount
+        if requested_amount <= 0 or requested_amount > invoice.balance:
+            raise ValueError("Payment link amount exceeds outstanding balance")
         charge = ChargeRequest(
             customer_id=customer_id,
-            amount=invoice.balance,
+            amount=requested_amount,
             currency=invoice.currency or "ILS",
             description=f"תשלום עבור חשבונית {invoice.invoice_number or invoice.id}",
         )
         client = await connector._get_client()
         async with client:
-            result = await client.create_payment_link(charge)
+            options = {}
+            if external_identifier is not None:
+                options['external_identifier'] = external_identifier
+            if document_type is not None:
+                options['document_type'] = document_type
+            result = await client.create_payment_link(charge, **options)
         return {
             "payment_url": result.payment_url,
             "invoice_id": invoice.id,
-            "amount": float(invoice.balance),
+            "amount": float(requested_amount),
         }
 
     @staticmethod

@@ -37,16 +37,17 @@ def ledger_cash_org(fresh_org):
         db.close()
 
 
-def test_cashflow_historical_inflows_from_ledger_gross(ledger_cash_org):
-    """ממוצע היסטורי של כניסות = ברוטו החשבונית (1180), לא 0."""
+def test_unpaid_documents_are_forward_obligations_not_bank_history(ledger_cash_org):
+    """An unpaid invoice has no bank movement; its balance appears once in the scenario."""
     from cfo.database import SessionLocal
     db = SessionLocal()
     try:
         rep = FinancialReportsService(db).generate_cash_flow_projection(
             organization_id=ledger_cash_org["org_id"], months=3, opening_balance=0
         )
-        assert rep.historical_average_inflows == 1180.0
-        assert rep.historical_average_outflows == 236.0
+        assert rep.historical_average_inflows is None
+        assert rep.total_projected_inflows == 1180.0
+        assert rep.historical_average_outflows is None
     finally:
         db.close()
 

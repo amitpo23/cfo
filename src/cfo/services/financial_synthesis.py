@@ -48,8 +48,7 @@ def link_payments(
     date_window: int = 14,
     min_score: float = 0.5,
 ) -> dict[str, Any]:
-    """Link SUMIT payments (which carry only a customer/contact id) to a specific
-    invoice or bill by amount + date proximity (+ contact when present)."""
+    """Propose payment/document candidates; never establish identity by similarity."""
     used: set[tuple[str, Any]] = set()
     links: list[dict] = []
     unlinked: list[Any] = []
@@ -76,7 +75,8 @@ def link_payments(
         else:
             unlinked.append(pay.id)
 
-    return {"links": links, "unlinked": unlinked, "linked_count": len(links)}
+    return {"links": [], "candidates": [{**link, "status":"candidate", "reason":"identity_review_required"} for link in links],
+            "unlinked": [pay.id for pay in payments], "linked_count": 0, "candidate_count":len(links)}
 
 
 # ---------------------------------------------------------------------- #
@@ -104,6 +104,7 @@ def build_synthesis(
     recon = reconcile(bank_txns, invoices, bills, expenses)
     matched_txn_ids = {m["bank_txn_id"] for m in recon["matches"]}
     matched_doc_keys = {(m["entity_type"], m["entity_id"]) for m in recon["matches"]}
+    candidate_doc_keys = {(m["entity_type"], m["entity_id"]) for m in recon["candidates"]}
 
     actions: list[dict] = []
 
@@ -113,26 +114,17 @@ def build_synthesis(
         t = txn_by_id.get(txn_id)
         if not t:
             continue
-        if t.amount < 0:
-            actions.append(_action(
-                "file_expense", SEV_HIGH,
-                f"תנועת בנק יוצאת ללא מסמך — {_money(abs(t.amount))}",
-                f"חיוב של {_money(abs(t.amount))} ({t.date}) \"{t.description}\" אינו מקושר "
-                f"לחשבונית הוצאה ב-SUMIT. תייק כדי לקבל את ניכוי מס התשומות.",
-                amount=abs(t.amount), refs={"bank_txn_id": t.id},
-            ))
-        else:
-            actions.append(_action(
-                "record_income", SEV_MED,
-                f"תקבול ללא חשבונית — {_money(t.amount)}",
-                f"כניסת {_money(t.amount)} ({t.date}) \"{t.description}\" ללא חשבונית מס מתאימה "
-                f"ב-SUMIT. הפק/שייך חשבונית כדי לדווח מע\"מ עסקאות.",
-                amount=t.amount, refs={"bank_txn_id": t.id},
-            ))
+        actions.append(_action(
+            "review_bank_evidence", SEV_MED,
+            f"Bank movement needs identity/document review — {_money(abs(t.amount))}",
+            "Check the payer/payee, existing payment and source document before collection or document issuance. "
+            "A bank amount alone does not determine income, expense or document type.",
+            amount=abs(t.amount), refs={"bank_txn_id":t.id},
+        ))
 
     # 2) Documents recorded but with no matching bank movement.
     for inv in invoices:
-        if ("invoice", inv.id) in matched_doc_keys:
+        if ("invoice", inv.id) in matched_doc_keys | candidate_doc_keys:
             continue
         if inv.id in unpaid_invoice_ids:
             actions.append(_action(
@@ -143,7 +135,7 @@ def build_synthesis(
                 amount=inv.amount, refs={"invoice_id": inv.id},
             ))
     for bill in bills:
-        if ("bill", bill.id) in matched_doc_keys:
+        if ("bill", bill.id) in matched_doc_keys | candidate_doc_keys:
             continue
         if bill.id in unpaid_bill_ids:
             actions.append(_action(
@@ -167,6 +159,7 @@ def build_synthesis(
     return {
         "reconciliation": {
             "matched": recon["matched_count"],
+            "candidates": recon["candidate_count"],
             "txn_count": recon["txn_count"],
             "unmatched_txns": len(recon["unmatched_txns"]),
         },
@@ -186,7 +179,7 @@ def link_payments_organization(db, organization_id: int, *, persist: bool = True
     payments = [
         PaymentLite(id=r.id, amount=float(r.amount or 0), date=r.payment_date,
                     contact_id=r.contact_id, name=_contact_name(r))
-        for r in pay_rows
+        for r in pay_rows if r.invoice_id is None and r.bill_id is None
     ]
     invoices = [
         DocLite(id=r.id, entity_type="invoice", amount=float(r.total or 0),
@@ -202,17 +195,8 @@ def link_payments_organization(db, organization_id: int, *, persist: bool = True
 
     result = link_payments(payments, invoices, bills)
 
-    if persist and result["links"]:
-        pay_by_id = {r.id: r for r in pay_rows}
-        for link in result["links"]:
-            row = pay_by_id.get(link["payment_id"])
-            if row is None:
-                continue
-            if link["entity_type"] == "invoice":
-                row.invoice_id = link["entity_id"]
-            elif link["entity_type"] == "bill":
-                row.bill_id = link["entity_id"]
-        db.commit()
+    # Existing reviewed/source-linked rows remain intact. Daily automation
+    # may suggest identity review, but never persists amount/date guesses.
     return result
 
 
@@ -472,8 +456,8 @@ def synthesize_organization(db, organization_id: int) -> dict[str, Any]:
         BankTransaction.organization_id == organization_id).all()
     bank_txns = [
         BankTxnLite(id=r.id, amount=float(r.amount), date=r.transaction_date,
-                    description=r.description or "")
-        for r in bank_rows if r.transaction_date is not None
+                    description=r.description or "", is_provisional=bool(r.is_provisional))
+        for r in bank_rows if r.transaction_date is not None and not r.is_reconciled
     ]
 
     invoice_rows = db.query(Invoice).filter(Invoice.organization_id == organization_id).all()

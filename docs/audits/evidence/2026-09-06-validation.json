@@ -1,0 +1,53 @@
+{
+  "date": "2026-09-06",
+  "base_commit": "260706b",
+  "scope": "Local stabilization; synthetic provider/browser data only",
+  "backend": {
+    "passed": 2626,
+    "warnings": 37392,
+    "seconds": 974.98
+  },
+  "qa": {
+    "full_run_exit": "failed only capability file tracking gate; fixed by staging new files",
+    "capability_recheck": {
+      "passed": 9
+    },
+    "local_checks_with_passing_evidence": 9,
+    "neon": "not run"
+  },
+  "route_audit": {
+    "routes": 262,
+    "ok": 172,
+    "warning": 50,
+    "configuration": 40,
+    "failure": 0
+  },
+  "frontend": {
+    "typescript_build": "passed",
+    "lint": "passed",
+    "router": "7.18.3",
+    "sheetjs": "0.20.3",
+    "browser_roles": [
+      "super_admin",
+      "admin"
+    ],
+    "production_dependency_audit": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "entry_kb": 117.44,
+    "entry_gzip_kb": 30.4
+  },
+  "postgres": {
+    "tables": 68,
+    "synthetic_rows": 5,
+    "restore": "passed",
+    "temporary_server": "stopped",
+    "production_backup_verified": false
+  },
+  "production_deployed": false
+}

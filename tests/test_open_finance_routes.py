@@ -9,9 +9,11 @@ def test_open_finance_routes_require_auth(client):
         assert client.get(path).status_code == 403, path
 
 
-def test_webhook_is_public_and_updates_nothing_gracefully(client):
-    # No auth required; unknown connection id is tolerated.
-    r = client.post("/api/open-finance/webhooks", json={"connectionId": "nope", "connectionStatus": "ACTIVE"})
+def test_webhook_authenticates_and_tolerates_unknown_connection(client, monkeypatch):
+    from cfo.config import settings
+    monkeypatch.setattr(settings, 'open_finance_webhook_secret', 'synthetic-callback-secret')
+    r = client.post("/api/open-finance/webhooks", headers={'X-Webhook-Secret': 'synthetic-callback-secret'},
+                    json={"connectionId": "nope", "connectionStatus": "ACTIVE"})
     assert r.status_code == 200
     assert r.json()["received"] is True
 
@@ -180,7 +182,7 @@ def test_status_rollup_keeps_each_connection_separate(client, of_configured_org)
             ),
             BankConnection(
                 organization_id=org_id, connection_id="conn-m", bank_name="מזרחי",
-                provider_id="mizrahi", status="ACTIVE",
+                provider_id="mizrahi", status="EXPIRED",
                 last_refresh_at=datetime.utcnow() - timedelta(hours=60),
             ),
         ])

@@ -35,6 +35,7 @@ class NormalizedAccount:
     balance: Decimal = Decimal("0")
     raw_data: Optional[dict] = None
     open_finance_connection_id: Optional[str] = None
+    provider_account_number: Optional[str] = None
     # טריות היתרה (referenceDate של רשומת ה-balance שנבחרה) — Open Finance בלבד.
     balance_as_of: Optional[datetime] = None
     # סוג החשבון הגולמי מהספק (CHECKING/SAVINGS/LOAN/CARD) — לפני המיפוי ל-

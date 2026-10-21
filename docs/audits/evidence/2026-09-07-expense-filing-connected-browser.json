@@ -1,0 +1,428 @@
+{
+  "passed": true,
+  "synthetic_only": true,
+  "api_responses_mocked": false,
+  "external_network_blocked": true,
+  "journey": "three email attachments, cross-channel duplicate, source correction, classification, distinct signer approval, pre-execution withdrawal and replacement approval, fake SUMIT draft acknowledgement, PDF split and lineage, app lifespan restart, saved report and download, RTL mobile",
+  "provider_calls": [
+    {
+      "invoice_number": "SYN-118",
+      "draft": true
+    }
+  ],
+  "provider_is_fake": true,
+  "api_requests": [
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/organizations",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/organizations",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/expenses/intake/2/review",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/expenses/1",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/1/filing-status",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/expenses/1/filing-proposal",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/1/filing-status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/approvals/1/approve",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/1/filing-status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/approvals/1/reject",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/1/filing-status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/expenses/1/filing-proposal",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/1/filing-status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/approvals/2/approve",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/1/filing-status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/expenses/1/file",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/1/filing-status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/expenses/intake/derive",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/organizations",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/organizations",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/organizations",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/organizations",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/templates",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/schedules",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/history",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/profit-loss",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/financial/reports/templates",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/templates",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/schedules",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/history",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/financial/reports/generate",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/templates",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/schedules",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/history",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/files/RPT-0820A24284E94A93B70D94C25CABF2CF",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/organizations",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/organizations",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/templates",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/schedules",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/financial/reports/history",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/reports/profit-loss",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/organizations",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/auth/organizations",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses/intake",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/expenses",
+      "status": 200
+    }
+  ],
+  "writes": [
+    "/api/expenses/intake",
+    "/api/expenses/intake/2/review",
+    "/api/expenses/1",
+    "/api/expenses/1/filing-proposal",
+    "/api/approvals/1/approve",
+    "/api/approvals/1/reject",
+    "/api/expenses/1/filing-proposal",
+    "/api/approvals/2/approve",
+    "/api/expenses/1/file",
+    "/api/expenses/intake/derive",
+    "/api/financial/reports/templates",
+    "/api/financial/reports/generate"
+  ],
+  "javascript_errors": [],
+  "official_books_verified": false,
+  "payment_or_period_close_executed": false
+}
