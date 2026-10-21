@@ -779,3 +779,41 @@ def test_explicit_dashboard_revocation_beats_org_membership(client, google, fres
         "target_type": "dashboard", "dashboard_id": dashboard_id, "email": email,
     })
     assert _new_client().get(f"/api/public/d/{slug}", headers=_bearer(token)).status_code == 404
+
+
+def test_dashboard_grant_revoked_before_first_login_still_wins(client, google, fresh_org):
+    owner = fresh_org()
+    slug = f"revoke-early-{uuid.uuid4().hex[:8]}"
+    dashboard_id = _active_dashboard(client, owner, slug)
+    email = _uniq("revoked-before-login")
+    client.post("/api/admin/access/grants", headers=owner["headers"], json={
+        "target_type": "organization", "organization_id": owner["org_id"], "email": email, "role": "viewer"})
+    client.post("/api/admin/access/grants", headers=owner["headers"], json={
+        "target_type": "dashboard", "dashboard_id": dashboard_id, "email": email})
+    client.post("/api/admin/access/grants/revoke", headers=owner["headers"], json={
+        "target_type": "dashboard", "dashboard_id": dashboard_id, "email": email})
+    _, token = _google_login(google, email)
+    assert _new_client().get(f"/api/public/d/{slug}", headers=_bearer(token)).status_code == 404
+
+
+def test_admin_user_creation_rejects_case_variant_of_granted_email(client, fresh_org):
+    org = fresh_org()
+    email = _uniq("case-dup")
+    client.post("/api/admin/access/grants", headers=org["headers"], json={
+        "target_type": "organization", "organization_id": org["org_id"], "email": email, "role": "viewer"})
+    resp = client.post("/api/admin/users", headers=org["headers"], json={
+        "email": email.upper(), "password": "secret123", "full_name": "Dup",
+        "role": "viewer", "organization_id": org["org_id"],
+    })
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "Email already registered"
+
+
+def test_import_maps_medici_booker_to_viewer(client, super_admin, fresh_org):
+    org = fresh_org()
+    resp = client.post("/api/admin/access/import", headers=super_admin["headers"], json={
+        "version": 1, "grants": [
+            {"email": _uniq("booker"), "target": {"type": "organization", "id": org["org_id"]}, "role": "booker"},
+            {"email": _uniq("medici-admin"), "target": {"type": "organization", "id": org["org_id"]}, "role": "super_admin"},
+        ]})
+    assert [r["ok"] for r in resp.json()["results"]] == [True, False]

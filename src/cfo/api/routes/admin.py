@@ -1570,7 +1570,8 @@ async def invite_existing_identity(
 ):
     if body.role == UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="SUPER_ADMIN is not a membership role")
-    target = db.query(User).filter(User.email == body.email).first()
+    from ...services.access_grants import find_user as _find_user
+    target = _find_user(db, body.email)
     if target is None:
         raise HTTPException(status_code=404, detail="User identity not found")
     if not target.is_active:
@@ -1881,7 +1882,8 @@ async def create_app_user(
         )
 
     # Email uniqueness
-    existing = db.query(User).filter(User.email == user_data.email).first()
+    from ...services.access_grants import find_user as _find_user
+    existing = _find_user(db, user_data.email)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

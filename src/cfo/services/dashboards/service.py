@@ -128,8 +128,12 @@ def role_for(db, user: User | None, row: ClientDashboard) -> str | None:
     from ...models import DashboardAccessGrant
     if db.query(DashboardMember).filter_by(
         dashboard_id=row.id, user_id=user.id, status="revoked",
-    ).first() is not None or db.query(DashboardAccessGrant).filter_by(
-        dashboard_id=row.id, user_id=user.id, status="revoked",
+    ).first() is not None or db.query(DashboardAccessGrant).filter(
+        DashboardAccessGrant.dashboard_id == row.id,
+        DashboardAccessGrant.status == "revoked",
+        # הרשאה שבוטלה כשהייתה invited עדיין בלי user_id — התאמה גם לפי מייל.
+        (DashboardAccessGrant.user_id == user.id)
+        | (DashboardAccessGrant.email == (user.email or "").strip().lower()),
     ).first() is not None:
         return None
     # חבר פעיל (לא-מנהל) בארגון הראשי צופה בדשבורד של העסק שלו.

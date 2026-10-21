@@ -85,7 +85,7 @@
 ]}
 ```
 
-הייבוא שמור ל-`super_admin`. `active` בייבוא נשמר כ-`invited`: הפעלה קורית רק
+הייבוא שמור ל-`super_admin`. תפקיד `booker` של Medici ממופה ל-`viewer`. `admin` של Medici אינו ממופה (כהרשאת ארגון הוא דו-משמעי), ושאר המפתחות הם מפתחות רצף. `active` בייבוא נשמר כ-`invited`: הפעלה קורית רק
 בהתחברות מאומתת. כל שורה רצה ב-savepoint משלה.
 
 ## 5. הזרימה
@@ -148,7 +148,8 @@ https://cfo-2-git-feat-medici-auth-port-guyofiror.vercel.app/api/auth/callback/g
 
 1. **חיפוש מייל תלוי-רישיות (תוקן).** `EmailStr` מנרמל רק את הדומיין. מי שנרשם
    כ-`Amit@…` ונכנס כ-`amit@…` קיבל "סיסמה שגויה" (וזה גם צבר נעילה). login, הרשמה
-   (בדיקת כפילות) ו-request-password-reset עוברים עכשיו דרך `access_grants.find_user`.
+   (בדיקת כפילות), יצירת משתמש באדמין, הזמנת חברות ו-request-password-reset עוברים
+   עכשיו דרך `access_grants.find_user`.
 2. **כניסה כושלת לא נרשמה (תוקן).** `LOGIN_FAILED` נרשם עם `bad_password`,
    `unknown_email` או `account_disabled`. סיסמה ומייל זר לא נשמרים.
 3. **0 חברויות בפרוד.** משתמש שאינו super_admin נכנס בהצלחה, ואז מקבל 403

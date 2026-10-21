@@ -30,7 +30,7 @@ from ..models import (
     User, UserRole,
 )
 from . import membership_service
-from .rbac import DASHBOARD_GRANT_ROLES, ORG_GRANT_ROLES
+from .rbac import DASHBOARD_GRANT_ROLES, MEDICI_ROLE_ALIASES, ORG_GRANT_ROLES
 
 INVITED = "invited"
 ACTIVE = "active"
@@ -341,6 +341,10 @@ def import_grants(db: Session, actor: User, payload: dict[str, Any]) -> dict[str
     for item in payload["grants"]:
         target = item.get("target") or {}
         status = item.get("status", INVITED)
+        # תאימות Medici: booker → viewer. admin של Medici אינו ממופה אוטומטית
+        # (כהרשאת ארגון הוא דו-משמעי) ולכן ייכשל כתפקיד לא חוקי — במכוון.
+        if target.get("type") == "organization" and item.get("role") == "booker":
+            item = {**item, "role": MEDICI_ROLE_ALIASES["booker"]}
         savepoint = db.begin_nested()
         try:
             if target.get("type") == "organization":
