@@ -759,3 +759,23 @@ def test_dashboard_grant_row_is_lowercased(client, fresh_org):
         assert db.get(ClientDashboard, dashboard_id) is not None
     finally:
         db.close()
+
+
+def test_explicit_dashboard_revocation_beats_org_membership(client, google, fresh_org):
+    """חבר ארגון רואה את דשבורד העסק — אבל ביטול מפורש לדשבורד גובר."""
+    owner = fresh_org()
+    slug = f"revoke-wins-{uuid.uuid4().hex[:8]}"
+    dashboard_id = _active_dashboard(client, owner, slug)
+    email = _uniq("org-viewer-revoked")
+    for body in (
+        {"target_type": "organization", "organization_id": owner["org_id"], "role": "viewer"},
+        {"target_type": "dashboard", "dashboard_id": dashboard_id},
+    ):
+        assert client.post("/api/admin/access/grants", headers=owner["headers"],
+                           json={**body, "email": email}).status_code == 201
+    _, token = _google_login(google, email)
+    assert _new_client().get(f"/api/public/d/{slug}", headers=_bearer(token)).status_code == 200
+    client.post("/api/admin/access/grants/revoke", headers=owner["headers"], json={
+        "target_type": "dashboard", "dashboard_id": dashboard_id, "email": email,
+    })
+    assert _new_client().get(f"/api/public/d/{slug}", headers=_bearer(token)).status_code == 404

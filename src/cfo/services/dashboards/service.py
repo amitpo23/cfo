@@ -123,6 +123,15 @@ def role_for(db, user: User | None, row: ClientDashboard) -> str | None:
     granted = dashboard_grant_role(db, user, row.id)
     if granted in READ_ROLES:
         return granted
+    # ביטול מפורש לדשבורד הזה גובר על חברות בארגון — אחרת חברות הייתה
+    # עוקפת בשקט את הביטול.
+    from ...models import DashboardAccessGrant
+    if db.query(DashboardMember).filter_by(
+        dashboard_id=row.id, user_id=user.id, status="revoked",
+    ).first() is not None or db.query(DashboardAccessGrant).filter_by(
+        dashboard_id=row.id, user_id=user.id, status="revoked",
+    ).first() is not None:
+        return None
     # חבר פעיל (לא-מנהל) בארגון הראשי צופה בדשבורד של העסק שלו.
     if role_in(db, user.id, row.primary_organization_id) is not None:
         return "client_viewer"
