@@ -340,7 +340,25 @@ def test_office_admin_needs_an_active_management_link(client, fresh_org):
 def test_public_rate_limit_trusts_vercel_and_ignores_spoofed_forwarded_for(client, fresh_org, monkeypatch):
     from starlette.requests import Request
 
+    import cfo.api.routes.client_dashboards as dashboard_routes
     from cfo.api.routes.client_dashboards import _claim_public_limit
+
+    # 121 claims share one minute window. A wall clock that ticks across a
+    # minute boundary would open a second window and the 121st call would pass.
+    frozen = datetime.now(timezone.utc)
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return frozen.replace(tzinfo=None)
+            return frozen.astimezone(tz)
+
+        @classmethod
+        def utcnow(cls):
+            return frozen.replace(tzinfo=None)
+
+    monkeypatch.setattr(dashboard_routes, "datetime", _FrozenDatetime)
 
     def _request(peer: str, headers: list[tuple[bytes, bytes]]) -> Request:
         return Request({
