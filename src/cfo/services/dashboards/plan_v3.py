@@ -1,10 +1,12 @@
 """Dashboard plan version 3. Stored on the existing plan tables. No provider calls.
 
 The plan is the client dashboard's source of truth for budget lines, status
-decisions, custom filing rules, and notes. ``bankDecisions`` are derived and
-are rejected rather than stored. Saving projects ``budgetLines`` into the
-organization's ``budgets`` rows and creates any missing group/category rows
-in the same transaction as the plan revision and its audit row.
+decisions, status rules, closed book months, and notes. Filing fields are
+checked by ``validate_filing_payload`` (the same rules as the loose plan
+API). ``bankDecisions`` are derived and are rejected rather than stored.
+Saving projects ``budgetLines`` into the organization's ``budgets`` rows and
+creates any missing group/category rows in the same transaction as the plan
+revision and its audit row.
 
 Write access reuses the dashboard plan roles: owner (the organization admin),
 accountant, and client_editor. Viewers (``client_viewer``) can read.
@@ -17,14 +19,21 @@ import math
 import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_serializer, field_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, ValidationError, field_serializer, field_validator,
+    model_validator,
+)
 from sqlalchemy.exc import IntegrityError
 
 from ...models import AuditLog, Budget, Category, DashboardPlan, DashboardPlanRevision, User
 from ..secret_compare import constant_time_equal
 from .budget import REVENUE_KEYS, category_key
-from .service import PLAN_LIMIT_BYTES, PLAN_ROLES, READ_ROLES, DashboardError, get_dashboard
+from .service import (
+    PLAN_LIMIT_BYTES, PLAN_ROLES, READ_ROLES, DashboardError, get_dashboard,
+    validate_filing_payload,
+)
 
 SCHEMA_VERSION = 3
 _MONTH = re.compile(r"^(?:20\d{2}|2100)-(?:0[1-9]|1[0-2])$")
@@ -65,41 +74,32 @@ class BudgetLineV3(BaseModel):
         return f"{value.quantize(Decimal('0.01')):f}"
 
 
-class StatusDecisionV3(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    key: str = Field(min_length=1, max_length=200)
-    status: str = Field(min_length=1, max_length=64)
-    note: str | None = Field(default=None, max_length=2000)
-
-    @field_validator("note", mode="before")
-    @classmethod
-    def _blank_note(cls, value):
-        if value is None:
-            return None
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
-
-
-class CustomFilingRuleV3(BaseModel):
-    """A stored filing instruction. This module does not apply it."""
-
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    name: str = Field(min_length=1, max_length=255)
-    match_text: str = Field(min_length=1, max_length=500)
-    group: str = Field(min_length=1, max_length=255)
-    category: str = Field(min_length=1, max_length=255)
-
-
 class DashboardPlanV3(BaseModel):
+    """Strict plan document. Filing fields reuse ``validate_filing_payload``.
+
+    ``statusDecisions``, ``statusRules`` and ``booksClosedMonths`` are not
+    re-checked here. The shared validator owns their shape, categories,
+    limits and the closed-month pattern. Extra keys inside a decision or a
+    rule are kept, matching that validator. Unknown keys on the plan itself
+    are rejected.
+    """
+
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     budgetLines: list[BudgetLineV3] = Field(max_length=500)
-    statusDecisions: list[StatusDecisionV3] = Field(max_length=2000)
-    customFilingRules: list[CustomFilingRuleV3] = Field(max_length=200)
+    statusDecisions: Any
+    statusRules: Any
+    booksClosedMonths: Any
     notes: str = Field(max_length=20000)
+
+    @model_validator(mode="after")
+    def _check_filing(self):
+        validate_filing_payload({
+            "statusDecisions": self.statusDecisions,
+            "statusRules": self.statusRules,
+            "booksClosedMonths": self.booksClosedMonths,
+        })
+        return self
 
 
 def read_plan(db, user: User, dashboard_id: int) -> dict:
@@ -172,6 +172,8 @@ def parse_plan(payload: object) -> DashboardPlanV3:
         raise DashboardError(422, "invalid_plan", "החלטות בנק נגזרות ואינן נשמרות בתוכנית")
     try:
         plan = DashboardPlanV3.model_validate(payload)
+    except DashboardError:
+        raise
     except ValidationError as exc:
         raise DashboardError(422, "invalid_plan", _validation_message(exc)) from exc
     _reject_duplicates(plan)
@@ -188,16 +190,6 @@ def _reject_duplicates(plan: DashboardPlanV3) -> None:
         if ident in lines:
             raise DashboardError(422, "invalid_plan", "אותה קטגוריה ואותו חודש מופיעים פעמיים")
         lines.add(ident)
-    decisions: set[str] = set()
-    for decision in plan.statusDecisions:
-        if decision.key in decisions:
-            raise DashboardError(422, "invalid_plan", "החלטת סטטוס כפולה")
-        decisions.add(decision.key)
-    rules: set[str] = set()
-    for rule in plan.customFilingRules:
-        if rule.name in rules:
-            raise DashboardError(422, "invalid_plan", "כלל תיוק כפול")
-        rules.add(rule.name)
 
 
 def _validation_message(exc: ValidationError) -> str:

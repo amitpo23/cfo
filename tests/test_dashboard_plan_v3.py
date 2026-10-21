@@ -19,10 +19,11 @@ def _plan(lines=None, **overrides):
             {"group": "הפעלה", "category": "שיווק ופרסום", "month": "2026-03", "amount": "150.00"},
             {"group": "הפעלה", "category": "שכירות", "month": "2026-03", "amount": "1000"},
         ],
-        "statusDecisions": [{"key": "2026-03", "status": "reviewed", "note": "נסגר"}],
-        "customFilingRules": [{
-            "name": "פרסום", "match_text": "פייסבוק", "group": "הפעלה", "category": "שיווק ופרסום",
-        }],
+        "statusDecisions": {
+            "12": {"category": "rent", "organizationId": 1, "date": "2026-03-01", "amount": 100},
+        },
+        "statusRules": [{"id": "r1", "contains": "בזק", "category": "office"}],
+        "booksClosedMonths": ["2026-03"],
         "notes": "הערה ללקוח",
     }
     body.update(overrides)
@@ -73,7 +74,10 @@ def test_unknown_fields_bank_decisions_and_bad_lines_are_rejected(client, fresh_
             {"group": "ב", "category": "שיווק ופרסום", "month": "2026-03", "amount": "2"},
         ]),
         {key: value for key, value in _plan().items() if key != "notes"},
-        _plan(statusDecisions=[{"key": "a", "status": "open"}, {"key": "a", "status": "closed"}]),
+        _plan(statusDecisions=[{"category": "rent"}]),
+        _plan(statusRules=[{"contains": "x", "category": "other_in"}]),
+        _plan(booksClosedMonths=["2026-13"]),
+        _plan(statusRules=[{"contains": "   ", "category": "office"}]),
     ]
     for body in cases:
         response = _put(client, owner["headers"], dashboard_id, body, "0")
@@ -81,6 +85,15 @@ def test_unknown_fields_bank_decisions_and_bad_lines_are_rejected(client, fresh_
         assert response.json()["error"]["code"] == "invalid_plan"
     bank = _put(client, owner["headers"], dashboard_id, cases[0], "0")
     assert "נגזרות" in bank.json()["error"]["message_he"]
+    unknown_category = _put(
+        client, owner["headers"], dashboard_id,
+        _plan(statusRules=[{"contains": "x", "category": "other_in"}]), "0",
+    )
+    assert unknown_category.json()["error"]["message_he"] == "קטגוריית הכלל אינה מוכרת"
+    bad_month = _put(
+        client, owner["headers"], dashboard_id, _plan(booksClosedMonths=["2026-13"]), "0",
+    )
+    assert bad_month.json()["error"]["message_he"] == "רשימת החודשים הסגורים לא תקינה"
     with SessionLocal() as db:
         assert db.query(DashboardPlan).filter_by(dashboard_id=dashboard_id).count() == 0
         assert db.query(Budget).filter_by(organization_id=owner["org_id"]).count() == 0
@@ -154,7 +167,9 @@ def test_projection_is_idempotent_and_audited(client, fresh_org):
     assert listed.status_code == 200
     assert listed.json()["revision"] == 3
     assert listed.json()["plan"]["notes"] == "הערה ללקוח"
-    assert listed.json()["plan"]["statusDecisions"][0]["status"] == "reviewed"
+    assert listed.json()["plan"]["statusDecisions"]["12"]["category"] == "rent"
+    assert listed.json()["plan"]["statusRules"][0]["id"] == "r1"
+    assert listed.json()["plan"]["booksClosedMonths"] == ["2026-03"]
 
 
 def test_stale_revision_conflicts_and_rolls_back(client, fresh_org):

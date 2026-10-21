@@ -431,7 +431,7 @@
         "scenario_label",
         "decision_owner"
       ],
-      "honest_boundary": "Decision support exists, but stale transaction-backed forecasts and illustrative AI output are not management truth. A dashboard plan v3 (budget lines, status decisions, custom filing rules, notes) is stored on the existing dashboard plan row and projects budget lines into that organization's budgets and categories in one local transaction with If-Match. Bank decisions are rejected and are not stored. Filing rules are stored only; they are not executed. No provider is called, and an existing Eliav plan is not imported by this path.",
+      "honest_boundary": "Decision support exists, but stale transaction-backed forecasts and illustrative AI output are not management truth. A dashboard plan v3 (budget lines, status decisions, status rules, closed book months, notes) is stored on the existing dashboard plan row and projects budget lines into that organization's budgets and categories in one local transaction with If-Match. Filing fields use the same validator as the loose plan API. Bank decisions are rejected and are not stored. Status rules are stored only; they are not executed by the save. No provider is called, and an existing Eliav plan is not imported by this path.",
       "next_gate": "Complete the pilot management pack: 13-week cash forecast, budget variance, debt plan and evidence-linked action list."
     },
     {
