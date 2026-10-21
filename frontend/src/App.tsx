@@ -49,6 +49,7 @@ import {
 } from 'lucide-react';
 
 // Dashboard Components
+const ClientDashboardPage = lazy(() => import('./components/ClientDashboardPage'));
 const CustomerDashboard = lazy(() => import('./components/CustomerDashboard'));
 const DocumentManager = lazy(() => import('./components/DocumentManager'));
 const PaymentInterface = lazy(() => import('./components/PaymentInterface'));
@@ -229,6 +230,16 @@ function App() {
   // במייל בלי סשן, לכן חייב להיפתר לפני שער ההתחברות (כמו /privacy).
   if (window.location.pathname.replace(/\/+$/, '') === '/reset-password') {
     return <ResetPassword darkMode={darkMode} />;
+  }
+
+  // Public client dashboard. Resolved before the auth gate so a share link
+  // does not load the admin shell or the authenticated API client.
+  if (/^\/d\/[a-z0-9][a-z0-9-]{2,47}$/.test(window.location.pathname.replace(/\/+$/, ''))) {
+    return (
+      <Suspense fallback={<p className="p-8">טוען דשבורד…</p>}>
+        <ClientDashboardPage />
+      </Suspense>
+    );
   }
 
   if (!authed && !AUTH_BYPASS) {

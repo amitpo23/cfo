@@ -136,6 +136,30 @@ def _utc_windows(now: datetime) -> tuple[datetime, datetime, datetime]:
     return minute, day, month
 
 
+def resolve_office_organization_id(db, organization_id: int) -> int:
+    """The office that owns the SUMIT key for this file.
+
+    A client file points at its office through an active ``SumitCompany``
+    row. An inactive link is a file that moved, so it does not keep charging
+    the old office. When several active links exist, the newest one wins.
+    A file with no active roster row is its own office.
+    """
+    from ..models import SumitCompany
+
+    roster = (
+        db.query(SumitCompany)
+        .filter(
+            SumitCompany.target_organization_id == organization_id,
+            SumitCompany.status == "active",
+        )
+        .order_by(SumitCompany.id.desc())
+        .first()
+    )
+    if roster is not None and roster.office_organization_id:
+        return int(roster.office_organization_id)
+    return int(organization_id)
+
+
 def paced_daily_limit(
     *, configured_daily: int, monthly_limit: int, month_used: int,
     day_used: int = 0, days_left: int, provider_remaining: int | None = None,
@@ -452,6 +476,20 @@ class SumitRequestLimiter:
                 if not day_ok:
                     raise SumitRequestBudgetExceeded(
                         "SUMIT organization daily request budget exceeded",
+                    )
+                office_id = resolve_office_organization_id(db, self.organization_id)
+                office_ok = self._claim_window(
+                    db,
+                    scope_key=f"office:{office_id}",
+                    organization_id=office_id,
+                    window_kind="month",
+                    window_start=month_start,
+                    limit_value=monthly_limit,
+                    now=now,
+                )
+                if not office_ok:
+                    raise SumitRequestBudgetExceeded(
+                        "SUMIT office monthly request budget exceeded",
                     )
         except SumitRequestBudgetExceeded:
             raise
