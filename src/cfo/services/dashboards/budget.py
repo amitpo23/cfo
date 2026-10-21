@@ -14,7 +14,8 @@ from decimal import Decimal, InvalidOperation
 
 from ...models import AuditLog, Budget, Category, User
 from ..financial_reports_service import FinancialReportsService
-from .service import READ_ROLES, DashboardError, get_dashboard
+from .filing import BLOCKABLE, PNL_ROWS
+from .service import PLAN_ROLES, READ_ROLES, DashboardError, get_dashboard
 
 UNCATEGORIZED = "other"
 UNCATEGORIZED_HE = "לא מסווג"
@@ -151,7 +152,7 @@ def _validated(db, organization_id: int, rows: list[dict]) -> list[dict]:
 
 def upsert_budget(db, user: User, dashboard_id: int, rows: list[dict]) -> dict:
     """Validate every row first, then write all of them and one audit row in one commit."""
-    dashboard = get_dashboard(db, user, dashboard_id, allowed={"owner"})
+    dashboard = get_dashboard(db, user, dashboard_id, allowed=PLAN_ROLES)
     organization_id = dashboard.primary_organization_id
     clean = _validated(db, organization_id, rows)
     saved = []
@@ -243,14 +244,35 @@ def _sort_key(line: dict):
     return (line["category"] == UNCATEGORIZED, line["category_he"])
 
 
-def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_known: bool) -> dict:
-    """Per month and category: budget, actual, variance. Actual is None when books are unknown."""
+def _cash_actuals(month: dict) -> dict:
+    """Actuals of a cash-basis month, keyed by the tool's comparison rows."""
+    revenue, cost = {}, {}
+    for line in month.get("lines") or []:
+        (revenue if line.get("side") == "revenue" else cost)[line["id"]] = float(line.get("amount") or 0)
+    return {"revenue": revenue, "cost": cost}
+
+
+def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_known: bool,
+                     pnl_months: list | None = None) -> dict:
+    """Per month and category: budget, actual, variance.
+
+    Each month takes its actual from the source the P&L chose for it
+    (``pnl_months[*].source``): the ledger, or classified bank cash ex-VAT.
+    A month never mixes sources. Without ``pnl_months`` every month uses the
+    ledger, as before. Actual is None when nothing is known for the month.
+    """
     budgets = _budget_index(db, organization_id, start, end)
     reports = FinancialReportsService(db)
+    by_month = {m.get("month"): m for m in pnl_months or [] if isinstance(m, dict)}
     months = []
+    any_known = False
     for year, month, lo, hi in _months(start, end):
+        key_month = f"{year}-{month:02d}"
+        info = by_month.get(key_month)
+        source = info.get("source") if info is not None else ("ledger" if books_known else None)
         actuals = {"revenue": None, "cost": None}
-        if books_known:
+        blocked = bool(info.get("blocked")) if info is not None else False
+        if source == "ledger":
             actuals["revenue"] = {
                 item.category: item.amount
                 for item in reports._ledger_revenue_items(organization_id, lo, hi, lo, hi, False)
@@ -259,6 +281,9 @@ def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_
                 item.category: item.amount
                 for item in reports._ledger_expense_items(organization_id, lo, hi, lo, hi, False)
             }
+        elif source == "cash_basis":
+            actuals = _cash_actuals(info)
+        any_known = any_known or source is not None
         planned = budgets.get((year, month), {})
         lines = []
         totals = {}
@@ -268,8 +293,12 @@ def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_
             kind_lines = []
             for key in keys:
                 actual = None if found is None else float(found.get(key, 0.0))
-                line = {"kind": kind, "category": key, "category_he": category_label(key)}
+                line = {"kind": kind, "category": key, "category_he": _cash_label(key)}
                 line.update(_compare(planned.get((kind, key)), actual))
+                if source == "cash_basis" and blocked and key in BLOCKABLE:
+                    line["variance"] = None
+                    line["variance_pct"] = None
+                    line["blocked"] = True
                 kind_lines.append(line)
             kind_lines.sort(key=_sort_key)
             lines.extend(kind_lines)
@@ -279,23 +308,43 @@ def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_
                 None if found is None else float(sum(found.values())),
             )
         months.append({
-            "month": f"{year}-{month:02d}",
+            "month": key_month,
             "period_start": lo.isoformat(),
             "period_end": hi.isoformat(),
+            "source": source,
+            "source_label": (info or {}).get("source_label") if info else (
+                "ספרים (הנהלת חשבונות)" if source == "ledger" else "לא ידוע"),
+            "blocked": blocked,
             "categories": lines,
             "totals": totals,
         })
+    known = any_known if pnl_months is not None else books_known
     return {
-        "status": "ready" if books_known else "unknown",
+        "status": "ready" if known else "unknown",
         "has_budget": bool(budgets),
         "months": months,
         "no_budget_label": NO_BUDGET_HE,
         "message": (
-            "ביצוע מספרי הנהלת החשבונות (נטו, ללא מע\"מ), באותם כללים של דוח רווח והפסד."
-            if books_known else
+            "כל חודש מחושב ממקור אחד: ספרי הנהלת החשבונות (נטו, ללא מע\"מ) כשהם מלאים, "
+            "אחרת בסיס מזומן מתנועות בנק מסווגות (BOOKED בלבד, ללא מע\"מ)."
+            if known else
             "אין מסמכי הכנסה או הוצאה בתקופה — הביצוע לא ידוע."
         ),
     }
+
+
+def _cash_label(key: str) -> str:
+    for row in PNL_ROWS:
+        if row["id"] == key:
+            return row["label"]
+    return category_label(key)
+
+
+def _public_line(line: dict) -> dict:
+    out = {key: line.get(key) for key in _PUBLIC_LINE_KEYS}
+    if line.get("blocked") is True:
+        out["blocked"] = True
+    return out
 
 
 def redact_public(section):
@@ -311,8 +360,11 @@ def redact_public(section):
             "month": month.get("month"),
             "period_start": month.get("period_start"),
             "period_end": month.get("period_end"),
+            "source": month.get("source"),
+            "source_label": month.get("source_label"),
+            "blocked": bool(month.get("blocked")),
             "categories": [
-                {key: line.get(key) for key in _PUBLIC_LINE_KEYS}
+                _public_line(line)
                 for line in month.get("categories") or [] if isinstance(line, dict)
             ],
             "totals": {

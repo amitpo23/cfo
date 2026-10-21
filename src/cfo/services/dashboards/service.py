@@ -195,6 +195,66 @@ def public_dashboard(db, slug: str) -> ClientDashboard:
     return _public_dashboard(db, slug)
 
 
+MAX_DECISIONS = 1000
+MAX_RULES = 200
+MAX_PLAN_AMOUNT = 1e9
+_RULE_FIELDS = {"description", "counterparty", "any"}
+_RULE_DIRECTIONS = {"in", "out", "both"}
+
+
+def _invalid_plan(message_he: str) -> DashboardError:
+    return DashboardError(422, "invalid_plan", message_he)
+
+
+def validate_filing_payload(payload: dict) -> None:
+    """Check the filing parts of a plan: statusDecisions, statusRules, booksClosedMonths.
+
+    Same limits as the Eliav tool's validatePlanData. Other keys are kept as sent.
+    """
+    from .filing import DECISION_CATEGORIES
+
+    decisions = payload.get("statusDecisions")
+    if decisions is not None:
+        if not isinstance(decisions, dict):
+            raise _invalid_plan("החלטות הסיווג חייבות להיות אובייקט")
+        if len(decisions) > MAX_DECISIONS:
+            raise _invalid_plan(f"אפשר לשמור עד {MAX_DECISIONS} החלטות סיווג")
+        for key, item in decisions.items():
+            if not str(key).isdigit() or not isinstance(item, dict):
+                raise _invalid_plan("החלטת סיווג לא תקינה")
+            if item.get("category") not in DECISION_CATEGORIES:
+                raise _invalid_plan("קטגוריית ההחלטה אינה מוכרת")
+            amount = item.get("amount")
+            if isinstance(amount, bool) or not isinstance(amount, (int, float)) or abs(amount) > MAX_PLAN_AMOUNT:
+                raise _invalid_plan("סכום ההחלטה לא תקין")
+            if not isinstance(item.get("organizationId"), int) or not isinstance(item.get("date"), str):
+                raise _invalid_plan("להחלטה חסרים ארגון או תאריך")
+    rules = payload.get("statusRules")
+    if rules is not None:
+        if not isinstance(rules, list):
+            raise _invalid_plan("כללי התיוק חייבים להיות רשימה")
+        if len(rules) > MAX_RULES:
+            raise _invalid_plan(f"אפשר לשמור עד {MAX_RULES} כללי תיוק")
+        for rule in rules:
+            if not isinstance(rule, dict):
+                raise _invalid_plan("כלל תיוק לא תקין")
+            contains = rule.get("contains")
+            if not isinstance(contains, str) or not contains.strip() or len(contains) > 120:
+                raise _invalid_plan("לכלל תיוק חסר טקסט לחיפוש")
+            if rule.get("category") not in DECISION_CATEGORIES:
+                raise _invalid_plan("קטגוריית הכלל אינה מוכרת")
+            if rule.get("field", "description") not in _RULE_FIELDS:
+                raise _invalid_plan("שדה הכלל אינו מוכר")
+            if rule.get("direction", "both") not in _RULE_DIRECTIONS:
+                raise _invalid_plan("כיוון הכלל אינו מוכר")
+    closed = payload.get("booksClosedMonths")
+    if closed is not None:
+        if not isinstance(closed, list) or not all(
+            isinstance(m, str) and re.fullmatch(r"20\d{2}-(0[1-9]|1[0-2])", m) for m in closed
+        ):
+            raise _invalid_plan("רשימת החודשים הסגורים לא תקינה")
+
+
 def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | None) -> dict:
     if if_match is None:
         raise DashboardError(412, "if_match_required", "חסרה כותרת If-Match")
@@ -203,6 +263,7 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
     encoded = json.dumps(payload, ensure_ascii=False)
     if len(encoded.encode()) > PLAN_LIMIT_BYTES:
         raise DashboardError(413, "plan_too_large", "התוכנית גדולה ממגבלת המגה-בייט")
+    validate_filing_payload(payload)
     row = get_dashboard(db, user, dashboard_id, allowed=PLAN_ROLES)
     current = db.get(DashboardPlan, row.id)
     expected = if_match.strip().strip('"')

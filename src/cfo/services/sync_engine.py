@@ -1041,6 +1041,7 @@ class SyncEngine:
                 existing.content_fingerprint = content_fingerprint(
                     existing.transaction_date, existing.amount, existing.description,
                 )
+            self._supersede_pending_twins(existing)
             return "updated"
 
         from .bank_coverage import content_fingerprint
@@ -1062,7 +1063,28 @@ class SyncEngine:
             is_provisional=(self.source == "open_finance"),
         )
         self.db.add(bank_tx)
+        self._supersede_pending_twins(bank_tx)
         return "created"
+
+    def _supersede_pending_twins(self, row: BankTransaction) -> None:
+        """BOOKED supersedes its PENDING twin (same entryReference and amount).
+
+        Only rows this sync wrote are touched. Existing PENDING rows that no
+        sync revisits stay as they are until a reviewed cleanup.
+        """
+        if self.source != "open_finance":
+            return
+        from .bank_status import (
+            BOOKED, PENDING, bank_status, supersede_by_booked_twin, supersede_pending,
+        )
+        status = bank_status(row)
+        if status not in (BOOKED, PENDING):
+            return
+        self.db.flush()
+        if status == BOOKED:
+            supersede_pending(self.db, row)
+        else:
+            supersede_by_booked_twin(self.db, row)
 
     def _upsert_journal_entry(self, item: NormalizedJournalEntry) -> str:
         payload_hash = _hash_payload(item.raw_data) if item.raw_data else None

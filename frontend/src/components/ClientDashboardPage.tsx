@@ -18,13 +18,34 @@ type BudgetLine = BudgetCompare & {
   kind: 'revenue' | 'cost';
   category: string;
   category_he: string;
+  blocked?: boolean;
 };
 
 type BudgetMonth = {
   month: string;
+  source?: string | null;
+  source_label?: string | null;
+  blocked?: boolean;
   categories: BudgetLine[];
   totals: { revenue: BudgetCompare; costs: BudgetCompare };
 };
+
+type PnlMonth = {
+  month: string;
+  source: string | null;
+  source_label?: string | null;
+  coverage_label?: string | null;
+  revenue: number | null;
+  costs: number | null;
+  net: number | null;
+  unresolved_in?: number | null;
+  unresolved_out?: number | null;
+  blocked?: boolean;
+};
+
+type PendingMonth = { month: string; inflows: number; outflows: number; count: number };
+
+type CardMonth = { month: string; total: number; merchants: { merchant: string; amount: number }[] };
 
 type DashboardView = {
   source?: string;
@@ -33,13 +54,17 @@ type DashboardView = {
     months?: CashMonth[];
     message?: string | null;
     coverage?: { message?: string | null } | null;
+    pending?: { count?: number; months?: PendingMonth[]; message?: string | null } | null;
   };
+  card_breakdown?: { months?: CardMonth[]; message?: string | null } | null;
   pnl?: {
     status?: string;
     total_revenue?: number | null;
     total_expenses?: number | null;
     net_income_before_tax?: number | null;
     message?: string | null;
+    basis?: string;
+    months?: PnlMonth[];
   };
   budget_vs_actual?: {
     status?: string;
@@ -81,6 +106,44 @@ function BudgetRow({ label, row, strong }: { label: string; row: BudgetCompare; 
   );
 }
 
+function PnlMonths({ months }: { months: PnlMonth[] }) {
+  const known = months.filter((month) => month.source);
+  if (known.length === 0) return null;
+  return (
+    <table className="mt-4 w-full text-sm">
+      <thead>
+        <tr className="border-b text-stone-500">
+          <th className="py-2 text-right font-medium">חודש</th>
+          <th className="py-2 text-right font-medium">מקור</th>
+          <th className="py-2 text-right font-medium">הכנסות</th>
+          <th className="py-2 text-right font-medium">הוצאות</th>
+          <th className="py-2 text-right font-medium">תוצאה</th>
+          <th className="py-2 text-right font-medium">לבירור (נכנס / יצא)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {known.map((month) => (
+          <tr key={month.month} className="border-b border-stone-100">
+            <td className="py-2">{month.month}</td>
+            <td className="py-2 text-xs text-stone-600">
+              {month.source === 'cash_basis' ? 'בסיס מזומן' : 'ספרים'}
+              {month.coverage_label ? ` · ${month.coverage_label}` : ''}
+            </td>
+            <td className="py-2">{money(month.revenue)}</td>
+            <td className="py-2">{money(month.costs)}</td>
+            <td className="py-2">{money(month.net)}</td>
+            <td className={`py-2 ${month.blocked ? 'text-amber-700' : 'text-stone-500'}`}>
+              {month.source === 'cash_basis'
+                ? `${money(month.unresolved_in ?? null)} / ${money(month.unresolved_out ?? null)}`
+                : '—'}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function BudgetVsActual({ section }: { section: NonNullable<DashboardView['budget_vs_actual']> }) {
   const months = section.months ?? [];
   const visible = months.filter((month) => month.categories.length > 0);
@@ -101,12 +164,16 @@ function BudgetVsActual({ section }: { section: NonNullable<DashboardView['budge
           {visible.map((month) => (
             <tbody key={month.month}>
               <tr className="border-b bg-stone-50">
-                <td className="py-2 font-medium" colSpan={4}>{month.month}</td>
+                <td className="py-2 font-medium" colSpan={4}>
+                  {month.month}
+                  {month.source_label ? <span className="ms-2 text-xs text-stone-500">· {month.source_label}</span> : null}
+                  {month.blocked ? <span className="ms-2 text-xs text-amber-700">· סטייה בשכר ובספקים מוסתרת: יותר מ־5,000 ₪ לבירור</span> : null}
+                </td>
               </tr>
               {month.categories.map((line) => (
                 <BudgetRow
                   key={`${line.kind}-${line.category}`}
-                  label={`${line.kind === 'revenue' ? 'הכנסה' : 'הוצאה'} · ${line.category_he}`}
+                  label={`${line.kind === 'revenue' ? 'הכנסה' : 'הוצאה'} · ${line.category_he}${line.blocked ? ' (סטייה מוסתרת)' : ''}`}
                   row={line}
                 />
               ))}
@@ -161,6 +228,8 @@ export default function ClientDashboardPage() {
   const months = view?.cashflow?.months ?? [];
   const pnl = view?.pnl;
   const coverageNote = view?.cashflow?.coverage?.message || '';
+  const pendingMonths = view?.cashflow?.pending?.months ?? [];
+  const cardMonths = view?.card_breakdown?.months ?? [];
   const emptyPeriodNote = view?.cashflow?.message || 'אין תנועות בנק בתקופה.';
   const emptyPeriodRepeatsCoverage = coverageNote !== '' && emptyPeriodNote === coverageNote;
 
@@ -193,6 +262,7 @@ export default function ClientDashboardPage() {
                   </div>
                 </dl>
               )}
+              {pnl?.status === 'ready' && pnl.months ? <PnlMonths months={pnl.months} /> : null}
               {pnl?.status === 'ready' && pnl.message ? (
                 <p className="mt-3 text-sm text-stone-500">{pnl.message}</p>
               ) : null}
@@ -229,7 +299,38 @@ export default function ClientDashboardPage() {
               {coverageNote ? (
                 <p className="mt-3 text-sm text-stone-600">{coverageNote}</p>
               ) : null}
+              <p className="mt-3 text-sm text-stone-500">התזרים כולל רק תנועות שנרשמו בבנק (BOOKED). חיובי כרטיסי האשראי נספרים פעם אחת, כחיוב החודשי בעו״ש.</p>
+              {pendingMonths.length > 0 ? (
+                <div className="mt-3 text-sm text-stone-600">
+                  <p>{view.cashflow?.pending?.message}</p>
+                  <ul className="mt-1">
+                    {pendingMonths.map((month) => (
+                      <li key={month.month}>
+                        {month.month}: נכנס {money(month.inflows)} · יצא {money(month.outflows)} ({month.count})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </section>
+            {cardMonths.length > 0 ? (
+              <section className="rounded-xl bg-white p-5 shadow-sm">
+                <h2 className="text-lg font-medium">פירוט כרטיסי אשראי</h2>
+                {cardMonths.map((month) => (
+                  <div key={month.month} className="mt-3 text-sm">
+                    <p className="font-medium">{month.month} · {money(month.total)}</p>
+                    <ul className="mt-1 text-stone-600">
+                      {month.merchants.map((item) => (
+                        <li key={item.merchant}>{item.merchant}: {money(item.amount)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+                {view.card_breakdown?.message ? (
+                  <p className="mt-3 text-sm text-stone-500">{view.card_breakdown.message}</p>
+                ) : null}
+              </section>
+            ) : null}
           </div>
         ) : null}
       </div>

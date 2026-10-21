@@ -188,7 +188,8 @@ def dashboard_view(dashboard_id: int, start: date | None = None, end: date | Non
         row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
         window_end = end or date.today()
         window_start = start or date(window_end.year, 1, 1)
-        view = view_model.build_view(db, row.primary_organization_id, window_start, window_end)
+        view = view_model.build_view(db, row.primary_organization_id, window_start, window_end,
+                                     plan=view_model.plan_payload(db, row.id))
     except DashboardError as exc:
         return _error(exc)
     except ValueError as exc:
@@ -203,7 +204,8 @@ def publish_snapshot(dashboard_id: int, db: Session = Depends(get_db_session),
     try:
         row = service.get_dashboard(db, user, dashboard_id, allowed={"owner"})
         today = date.today()
-        view = view_model.build_view(db, row.primary_organization_id, date(today.year, 1, 1), today)
+        view = view_model.build_view(db, row.primary_organization_id, date(today.year, 1, 1), today,
+                                     plan=view_model.plan_payload(db, row.id))
         saved = view_model.publish_view(db, row, view, day=today)
     except DashboardError as exc:
         return _error(exc)
@@ -440,7 +442,8 @@ def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get
         return _public_response(payload)
     today = date.today()
     view = view_model.redact_public_view(
-        view_model.build_view(db, dashboard.primary_organization_id, date(today.year, 1, 1), today)
+        view_model.build_view(db, dashboard.primary_organization_id, date(today.year, 1, 1), today,
+                              plan=view_model.plan_payload(db, dashboard.id))
     )
     view["source"] = "live"
     return _public_response(view)

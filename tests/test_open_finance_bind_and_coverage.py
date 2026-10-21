@@ -161,17 +161,17 @@ def test_provider_rows_inside_local_coverage_are_not_double_counted(fresh_org):
         from cfo.services.bank_coverage import attach_provider_account
         attach_provider_account(db, provider)
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-dup",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-dup",
             account_id=provider.id, transaction_date=date(2026, 10, 13),
             amount=Decimal("-6000.00"), description=" supplier   payment ", currency="ILS",
         ))
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-new",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-new",
             account_id=provider.id, transaction_date=date(2026, 10, 14),
             amount=Decimal("-80.00"), description="Card charge", currency="ILS",
         ))
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-unmatched",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-unmatched",
             account_id=provider.id, transaction_date=date(2026, 9, 1),
             amount=Decimal("25.00"), description="Not in the file", currency="ILS",
         ))
@@ -223,7 +223,7 @@ def test_non_manual_bank_transaction_requires_an_external_id(fresh_org):
     org_id = fresh_org()["org_id"]
     with SessionLocal() as db:
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id=None,
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id=None,
             transaction_date=date(2026, 10, 1), amount=Decimal("1.00"),
         ))
         with pytest.raises(IntegrityError):
@@ -294,12 +294,12 @@ def test_unattached_coverage_excludes_provider_rows_before_the_boundary(fresh_or
         db.add(provider)
         db.flush()
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-before",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-before",
             account_id=provider.id, transaction_date=date(2026, 10, 13),
             amount=Decimal("-6000.00"), description="Supplier payment", currency="ILS",
         ))
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-after",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-after",
             account_id=provider.id, transaction_date=date(2026, 10, 14),
             amount=Decimal("-15.00"), description="After the boundary", currency="ILS",
         ))
@@ -348,7 +348,7 @@ def test_zero_unmatched_does_not_keep_an_overlap_row(fresh_org):
         from cfo.services.bank_coverage import attach_provider_account
         attach_provider_account(db, provider)
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-same",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-same",
             account_id=provider.id, transaction_date=date(2026, 10, 13),
             amount=Decimal("-6000.00"), description="Supplier payment", currency="ILS",
         ))
@@ -509,12 +509,12 @@ def test_gap_days_after_the_local_import_stay_in_the_sum(fresh_org):
         from cfo.services.bank_coverage import attach_provider_account
         attach_provider_account(db, provider)
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-1014",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-1014",
             account_id=provider.id, transaction_date=date(2026, 10, 14),
             amount=Decimal("-700.00"), description="Gap day", currency="ILS",
         ))
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-1018",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-1018",
             account_id=provider.id, transaction_date=date(2026, 10, 18),
             amount=Decimal("-30.00"), description="After coverage", currency="ILS",
         ))
@@ -547,7 +547,7 @@ def test_unclassified_numbered_account_is_excluded_until_declared_independent(fr
         db.add(other)
         db.flush()
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-other-1001",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-other-1001",
             account_id=other.id, transaction_date=date(2026, 10, 1),
             amount=Decimal("-2500.00"), description="Other bank", currency="ILS",
         ))
@@ -602,7 +602,7 @@ def test_bind_commits_the_unattached_alert_and_a_read_does_not(fresh_org):
         db.add(provider)
         db.flush()
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-alert-tx",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-alert-tx",
             account_id=provider.id, transaction_date=date(2026, 10, 13),
             amount=Decimal("-6000.00"), description="Supplier payment", currency="ILS",
         ))
@@ -652,7 +652,7 @@ def test_sync_commits_the_unattached_coverage_alert(fresh_org):
         db.add(feed)
         db.flush()
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-sync-tx",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-sync-tx",
             account_id=feed.id, transaction_date=date(2026, 10, 1),
             amount=Decimal("-20.00"), description="Before the import", currency="ILS",
         ))
@@ -734,7 +734,7 @@ def _provider_account(db, org_id, external_id, number):
 
 def _provider_tx(db, org_id, account, external_id, day, amount, description="Supplier payment"):
     db.add(BankTransaction(
-        organization_id=org_id, source="open_finance", external_id=external_id,
+        organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id=external_id,
         account_id=account.id, transaction_date=day, amount=Decimal(amount),
         description=description, currency="ILS",
     ))
@@ -1098,7 +1098,7 @@ def test_independent_account_counts_fully_and_is_named_in_the_alert(fresh_org):
         db.add(other)
         db.flush()
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-ind-tx",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-ind-tx",
             account_id=other.id, transaction_date=date(2026, 10, 1),
             amount=Decimal("-2500.00"), description="Other bank", currency="ILS",
         ))
@@ -1147,7 +1147,7 @@ def test_org_without_a_local_import_counts_every_provider_row(fresh_org):
         db.add(account)
         db.flush()
         db.add(BankTransaction(
-            organization_id=org_id, source="open_finance", external_id="of-only-tx",
+            organization_id=org_id, source="open_finance", raw_data={"status": "BOOKED"}, external_id="of-only-tx",
             account_id=account.id, transaction_date=date(2026, 10, 1),
             amount=Decimal("-2500.00"), description="Feed only", currency="ILS",
         ))

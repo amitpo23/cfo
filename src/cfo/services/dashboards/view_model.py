@@ -9,16 +9,26 @@ import hashlib
 import json
 from datetime import date, datetime
 
-from ...models import Bill, Expense, Invoice, PipelineRun
+from ...models import PipelineRun
 from ..bank_coverage import redact_public_coverage
 from ..financial_reports_service import FinancialReportsService
 from ..live_cash_flow_service import LiveCashFlowService
-from . import budget
+from .. import bank_status
+from . import books, budget
 
 MAX_RANGE_DAYS = 366
 
 
-def build_view(db, organization_id: int, start: date, end: date) -> dict:
+def plan_payload(db, dashboard_id: int | None) -> dict | None:
+    """The dashboard's management plan (decisions, filing rules, closed months)."""
+    if dashboard_id is None:
+        return None
+    from ...models import DashboardPlan
+    row = db.get(DashboardPlan, dashboard_id)
+    return row.payload if row is not None and isinstance(row.payload, dict) else None
+
+
+def build_view(db, organization_id: int, start: date, end: date, *, plan: dict | None = None) -> dict:
     if end < start:
         raise ValueError("end date is before the start date")
     if (end - start).days > MAX_RANGE_DAYS:
@@ -27,19 +37,25 @@ def build_view(db, organization_id: int, start: date, end: date) -> dict:
     cashflow = LiveCashFlowService(db, organization_id).monthly_cash_flow(
         months=max(months, 1), as_of_date=end,
     )
-    pnl = _profit_and_loss(db, organization_id, start, end)
+    cashflow = dict(cashflow)
+    cashflow["basis"] = "booked_only"
+    cashflow["pending"] = bank_status.pending_summary(db, organization_id, start, end)
+    pnl = _profit_and_loss(db, organization_id, start, end, plan=plan)
     budget_vs_actual = budget.budget_vs_actual(
         db, organization_id, start, end, books_known=pnl["status"] != "unknown",
+        pnl_months=pnl.get("months"),
     )
     view = {
         "status": "unknown" if pnl["status"] == "unknown" and not cashflow.get("months") else "ready",
         "cashflow": cashflow,
         "pnl": pnl,
         "budget_vs_actual": budget_vs_actual,
+        "card_breakdown": bank_status.card_breakdown(db, organization_id, start, end),
         "provider_calls": 0,
         "freshness": {
             "cashflow": "books" if cashflow.get("months") else "unknown",
             "pnl": pnl["status"],
+            "pnl_basis": pnl.get("basis"),
             "budget_vs_actual": budget_vs_actual["status"],
             "published": False,
         },
@@ -76,6 +92,7 @@ def publish_view(db, dashboard, view: dict, *, day: date | None = None) -> dict:
     A second publish on that day keeps the same row and replaces the view.
     """
     day = day or date.today()
+    books.assert_publishable((view or {}).get("pnl"))
     encoded = json.dumps(view, sort_keys=True, ensure_ascii=False, default=str)
     digest = hashlib.sha256(encoded.encode()).hexdigest()
     from ...models import PublishedSnapshot
@@ -115,43 +132,48 @@ def publish_view(db, dashboard, view: dict, *, day: date | None = None) -> dict:
     }
 
 
-def _profit_and_loss(db, organization_id: int, start: date, end: date) -> dict:
-    has_books = any((
-        db.query(Invoice.id).filter(
-            Invoice.organization_id == organization_id,
-            Invoice.issue_date >= start,
-            Invoice.issue_date <= end,
-        ).first(),
-        db.query(Bill.id).filter(
-            Bill.organization_id == organization_id,
-            Bill.issue_date >= start,
-            Bill.issue_date <= end,
-        ).first(),
-        db.query(Expense.id).filter(
-            Expense.organization_id == organization_id,
-            Expense.expense_date >= start,
-            Expense.expense_date <= end,
-        ).first(),
-    ))
-    if not has_books:
+def _profit_and_loss(db, organization_id: int, start: date, end: date, *, plan: dict | None = None) -> dict:
+    """P&L of the window, one source per month (see ``books``)."""
+    monthly = books.monthly_pnl(db, organization_id, start, end, plan=plan)
+    basis = monthly["basis"]
+    if basis == "unknown":
         return {
             "status": "unknown",
+            "basis": basis,
+            "months": monthly["months"],
             "total_revenue": None,
             "total_expenses": None,
             "net_income_before_tax": None,
             "tax_expense": None,
-            "message": "אין מסמכי הכנסה או הוצאה בתקופה — הרווח וההפסד לא ידוע.",
+            "message": "אין מסמכי הכנסה או הוצאה ואין תנועות בנק בתקופה — הרווח וההפסד לא ידוע.",
         }
-    report = FinancialReportsService(db).generate_profit_loss(
-        organization_id, start, end, compare_previous=False,
-    )
+    if basis == books.LEDGER:
+        report = FinancialReportsService(db).generate_profit_loss(
+            organization_id, start, end, compare_previous=False,
+        )
+        total_revenue = report.total_revenue
+        total_expenses = report.total_expenses
+        net = report.net_income_before_tax
+        message = "מס לא חושב. הערכה של 23% אינה מוצגת כמספר."
+    else:
+        total_revenue = monthly["total_revenue"]
+        total_expenses = monthly["total_expenses"]
+        net = monthly["net"]
+        cash_months = [m["month"] for m in monthly["months"] if m["source"] == books.CASH_BASIS]
+        message = (
+            "בסיס מזומן: " + ", ".join(cash_months)
+            + " חושבו מתנועות בנק מסווגות (BOOKED בלבד, ללא מע״מ), כי הספרים בחודשים אלה חלקיים או חסרים."
+            " כל חודש מחושב ממקור אחד בלבד. מס לא חושב."
+        )
     return {
         "status": "ready",
-        "total_revenue": report.total_revenue,
-        "total_expenses": report.total_expenses,
-        "net_income_before_tax": report.net_income_before_tax,
+        "basis": basis,
+        "months": monthly["months"],
+        "total_revenue": total_revenue,
+        "total_expenses": total_expenses,
+        "net_income_before_tax": net,
         "tax_expense": None,
-        "message": "מס לא חושב. הערכה של 23% אינה מוצגת כמספר.",
+        "message": message,
         "period_start": start.isoformat(),
         "period_end": end.isoformat(),
     }

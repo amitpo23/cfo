@@ -255,7 +255,9 @@ def test_window_edges_are_clamped_to_the_view_range(client, fresh_org):
     march, april = body["budget_vs_actual"]["months"]
     assert march["period_start"] == "2026-03-11" and april["period_end"] == "2026-04-08"
     assert march["totals"]["revenue"]["actual"] == 0.0
-    assert april["totals"]["revenue"]["actual"] == 0.0
+    # April 1-8 has no books and no bank rows: unknown, never zero.
+    assert april["totals"]["revenue"]["actual"] is None
+    assert april["source"] is None and march["source"] == "ledger"
     assert march["totals"]["costs"]["actual"] == pytest.approx(body["pnl"]["total_expenses"])
 
 
