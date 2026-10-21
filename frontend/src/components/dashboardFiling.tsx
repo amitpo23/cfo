@@ -4,8 +4,8 @@ export type FilingRule = {
   id: string;
   source: 'builtin' | 'custom';
   contains: string;
-  field: 'description' | 'payee';
-  direction: 'in' | 'out' | null;
+  field: 'description' | 'counterparty' | 'any';
+  direction: 'in' | 'out' | 'both';
   category: string;
   category_he: string;
   organization_id?: number | null;
@@ -19,7 +19,7 @@ export type ReviewItem = {
   organization_id: number;
   date: string;
   description: string;
-  payee: string;
+  counterparty: string;
   amount: number;
   filed_by: { reason_he: string; note?: string | null };
 };
@@ -54,7 +54,9 @@ function money(value: number): string {
 }
 
 function fieldLabel(field: FilingRule['field']): string {
-  return field === 'payee' ? 'מוטב' : 'תיאור';
+  if (field === 'counterparty') return 'מוטב';
+  if (field === 'any') return 'תיאור או מוטב';
+  return 'תיאור';
 }
 
 function directionLabel(direction: FilingRule['direction']): string {
@@ -325,9 +327,9 @@ export function FilingRulesCard({
   onSave: (rules: FilingRule[]) => void;
 }) {
   const [contains, setContains] = useState('');
-  const [field, setField] = useState<'description' | 'payee'>('description');
-  const [direction, setDirection] = useState<'in' | 'out' | ''>('');
-  const [category, setCategory] = useState(categories[0]?.key ?? 'overhead');
+  const [field, setField] = useState<FilingRule['field']>('description');
+  const [direction, setDirection] = useState<FilingRule['direction']>('both');
+  const [category, setCategory] = useState(categories[0]?.key ?? '');
 
   useEffect(() => {
     if (seed.text) setContains(seed.text);
@@ -341,7 +343,7 @@ export function FilingRulesCard({
       source: 'custom',
       contains: keyword,
       field,
-      direction: direction || null,
+      direction,
       category,
       category_he: categories.find((item) => item.key === category)?.label_he ?? category,
       match_count: 0,
@@ -406,15 +408,16 @@ export function FilingRulesCard({
           </label>
           <label className="text-stone-600">
             שדה
-            <select className="mt-1 block rounded border border-stone-300 px-2 py-1" value={field} onChange={(event) => setField(event.target.value as 'description' | 'payee')}>
+            <select className="mt-1 block rounded border border-stone-300 px-2 py-1" value={field} onChange={(event) => setField(event.target.value as FilingRule['field'])}>
               <option value="description">תיאור</option>
-              <option value="payee">מוטב</option>
+              <option value="counterparty">מוטב</option>
+              <option value="any">תיאור או מוטב</option>
             </select>
           </label>
           <label className="text-stone-600">
             כיוון
-            <select className="mt-1 block rounded border border-stone-300 px-2 py-1" value={direction} onChange={(event) => setDirection(event.target.value as 'in' | 'out' | '')}>
-              <option value="">כל כיוון</option>
+            <select className="mt-1 block rounded border border-stone-300 px-2 py-1" value={direction} onChange={(event) => setDirection(event.target.value as FilingRule['direction'])}>
+              <option value="both">כל כיוון</option>
               <option value="in">נכנס</option>
               <option value="out">יוצא</option>
             </select>
@@ -449,15 +452,15 @@ function ReviewRow({
   onApprove: (item: ReviewItem, category: string, note: string) => void;
   onCreateRule: (description: string) => void;
 }) {
-  const [category, setCategory] = useState(categories[0]?.key ?? 'overhead');
+  const [category, setCategory] = useState(categories[0]?.key ?? '');
   const [note, setNote] = useState('');
-  const description = item.description || item.payee || 'ללא תיאור';
+  const description = item.description || item.counterparty || 'ללא תיאור';
   return (
     <tr className="border-b border-stone-100 align-top">
       <td className="py-2">{item.date}</td>
       <td className="py-2">
         <div>{description}</div>
-        {item.payee && item.payee !== item.description ? <div className="text-stone-500">{item.payee}</div> : null}
+        {item.counterparty && item.counterparty !== item.description ? <div className="text-stone-500">{item.counterparty}</div> : null}
       </td>
       <td className="py-2">{money(item.amount)}</td>
       <td className="py-2 text-stone-600">{item.filed_by.reason_he}</td>
