@@ -14,7 +14,7 @@ from ..bank_coverage import redact_public_coverage
 from ..financial_reports_service import FinancialReportsService
 from ..live_cash_flow_service import LiveCashFlowService
 from .. import bank_status
-from . import books, budget
+from . import activity_quality, books, budget
 
 MAX_RANGE_DAYS = 366
 
@@ -40,6 +40,7 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
     cashflow = dict(cashflow)
     cashflow["basis"] = "booked_only"
     cashflow["pending"] = bank_status.pending_summary(db, organization_id, start, end)
+    cashflow = activity_quality.adjust_cashflow(db, organization_id, cashflow, plan)
     pnl = _profit_and_loss(db, organization_id, start, end, plan=plan)
     budget_vs_actual = budget.budget_vs_actual(
         db, organization_id, start, end, books_known=pnl["status"] != "unknown",

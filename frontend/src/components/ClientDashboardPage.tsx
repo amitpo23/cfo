@@ -47,6 +47,16 @@ type PendingMonth = { month: string; inflows: number; outflows: number; count: n
 
 type CardMonth = { month: string; total: number; merchants: { merchant: string; amount: number }[] };
 
+type QualityMessage = { message_he?: string };
+
+type QualityBucket = { merchant?: string; category?: string; net?: string | number | null; count?: number };
+
+type ActivityQuality = {
+  notes?: QualityMessage[];
+  warnings?: QualityMessage[];
+  detail?: { merchants?: QualityBucket[]; categories?: QualityBucket[] } | null;
+};
+
 type DashboardView = {
   source?: string;
   provider_calls?: number;
@@ -55,6 +65,7 @@ type DashboardView = {
     message?: string | null;
     coverage?: { message?: string | null } | null;
     pending?: { count?: number; months?: PendingMonth[]; message?: string | null } | null;
+    activity_quality?: ActivityQuality | null;
   };
   card_breakdown?: { months?: CardMonth[]; message?: string | null } | null;
   pnl?: {
@@ -83,6 +94,55 @@ function slugFromLocation(): string {
 function money(value: number | null | undefined): string {
   if (value === null || value === undefined) return 'לא ידוע';
   return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(value);
+}
+
+function qualityMoney(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return 'לא ידוע';
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return 'לא ידוע';
+  return money(parsed);
+}
+
+function ActivityNotes({ quality }: { quality: ActivityQuality | null | undefined }) {
+  const notes = quality?.notes ?? [];
+  const warnings = quality?.warnings ?? [];
+  if (notes.length === 0 && warnings.length === 0) return null;
+  return (
+    <div className="mt-3 grid gap-2 text-sm">
+      {notes.map((note, index) => (
+        <p key={`note-${index}`} className="text-stone-600">{note.message_he}</p>
+      ))}
+      {warnings.map((warning, index) => (
+        <p key={`warning-${index}`} className="text-amber-800">{warning.message_he}</p>
+      ))}
+    </div>
+  );
+}
+
+function PayloadDetail({ quality }: { quality: ActivityQuality | null | undefined }) {
+  const merchants = quality?.detail?.merchants ?? [];
+  const categories = quality?.detail?.categories ?? [];
+  if (merchants.length === 0 && categories.length === 0) return null;
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">פירוט חשבונות פירוט</h2>
+      <p className="mt-2 text-sm text-stone-500">התנועות האלה לא נכללות בסיכום התזרים. הן מפרקות את חיוב הכרטיס לפי בית עסק.</p>
+      {merchants.length > 0 ? (
+        <ul className="mt-3 text-sm text-stone-700">
+          {merchants.map((item) => (
+            <li key={item.merchant}>{item.merchant}: {qualityMoney(item.net)}</li>
+          ))}
+        </ul>
+      ) : null}
+      {categories.length > 0 ? (
+        <ul className="mt-3 text-sm text-stone-600">
+          {categories.map((item) => (
+            <li key={item.category}>{item.category}: {qualityMoney(item.net)}</li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
 }
 
 function budgetCell(value: number | null | undefined): string {
@@ -230,6 +290,7 @@ export default function ClientDashboardPage() {
   const coverageNote = view?.cashflow?.coverage?.message || '';
   const pendingMonths = view?.cashflow?.pending?.months ?? [];
   const cardMonths = view?.card_breakdown?.months ?? [];
+  const activityQuality = view?.cashflow?.activity_quality;
   const emptyPeriodNote = view?.cashflow?.message || 'אין תנועות בנק בתקופה.';
   const emptyPeriodRepeatsCoverage = coverageNote !== '' && emptyPeriodNote === coverageNote;
 
@@ -312,7 +373,9 @@ export default function ClientDashboardPage() {
                   </ul>
                 </div>
               ) : null}
+              <ActivityNotes quality={activityQuality} />
             </section>
+            <PayloadDetail quality={activityQuality} />
             {cardMonths.length > 0 ? (
               <section className="rounded-xl bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-medium">פירוט כרטיסי אשראי</h2>
