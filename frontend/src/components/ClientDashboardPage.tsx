@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import GoogleSignInButton from './GoogleSignInButton';
 
 type CashMonth = {
   month: string;
@@ -56,7 +57,12 @@ export default function ClientDashboardPage() {
           body: JSON.stringify({ token }),
         });
       }
-      const response = await fetch(`/api/public/d/${slug}`, { credentials: 'include' });
+      // דשבורד שאינו ציבורי נפתח גם למשתמש מחובר עם הרשאה (חברות או הרשאת מייל).
+      const authToken = localStorage.getItem('auth_token');
+      const response = await fetch(`/api/public/d/${slug}`, {
+        credentials: 'include',
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
+      });
       const body = (await response.json().catch(() => ({}))) as DashboardView;
       if (cancelled) return;
       if (!response.ok) {
@@ -84,6 +90,12 @@ export default function ClientDashboardPage() {
         <p className="text-sm text-stone-500">רצף</p>
         <h1 className="mt-1 text-2xl font-semibold">דשבורד לקוח</h1>
         {error ? <p className="mt-8 text-stone-700">{error}</p> : null}
+        {error && !localStorage.getItem('auth_token') ? (
+          <div className="mt-4 max-w-xs">
+            <p className="mb-2 text-sm text-stone-500">קיבלתם גישה לדשבורד הזה במייל? התחברו כדי לצפות.</p>
+            <GoogleSignInButton returnTo={window.location.pathname} />
+          </div>
+        ) : null}
         {!error && !view ? <p className="mt-8 text-stone-500">טוען נתונים…</p> : null}
         {view ? (
           <div className="mt-8 grid gap-6">

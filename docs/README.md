@@ -39,6 +39,7 @@
 - [`rezef_capabilities.json`](rezef_capabilities.json) — חוזה היכולות המכונתי; נבדק מול קוד וטסטים
 - [`DATABASE_MAP.md`](DATABASE_MAP.md) — מודל הנתונים
 - [`PERMISSIONS.md`](PERMISSIONS.md) · [`AUTH_ROADMAP.md`](AUTH_ROADMAP.md) — הרשאות ורב-דיירות
+- [`AUTH_MEDICI_PORT.md`](AUTH_MEDICI_PORT.md) — כניסת Google (זרימת שרת), RBAC והרשאות מייל לארגון/דשבורד, פורט מ-Medici
 - [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — מצב מוכנות לפרוד
 - [`DOCKER_LOCAL.md`](DOCKER_LOCAL.md) — הרמה מקומית
 - [`REPO_ORDER_AND_CONTROL_PLANE.md`](REPO_ORDER_AND_CONTROL_PLANE.md) — סדר הריפו ושכבות ההנחיה לסוכנים

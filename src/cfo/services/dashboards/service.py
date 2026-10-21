@@ -115,11 +115,18 @@ def role_for(db, user: User | None, row: ClientDashboard) -> str | None:
         .filter_by(dashboard_id=row.id, user_id=user.id, status="active")
         .first()
     )
-    if member is None:
-        return None
-    if member.expires_at and member.expires_at < datetime.utcnow():
-        return None
-    return member.role if member.role in READ_ROLES else None
+    if member is not None and not (member.expires_at and member.expires_at < datetime.utcnow()):
+        if member.role in READ_ROLES:
+            return member.role
+    # הרשאת מייל פעילה (DashboardAccessGrant) — הופעלה בהתחברות מאומתת.
+    from ..access_grants import dashboard_grant_role
+    granted = dashboard_grant_role(db, user, row.id)
+    if granted in READ_ROLES:
+        return granted
+    # חבר פעיל (לא-מנהל) בארגון הראשי צופה בדשבורד של העסק שלו.
+    if role_in(db, user.id, row.primary_organization_id) is not None:
+        return "client_viewer"
+    return None
 
 
 def create_share_link(db, user: User, dashboard_id: int, *, label: str | None = None,
@@ -191,7 +198,14 @@ def mark_link_used(db, link: DashboardShareLink) -> None:
     db.commit()
 
 
-def public_dashboard(db, slug: str) -> ClientDashboard:
+def public_dashboard(db, slug: str, *, allow_members: bool = False) -> ClientDashboard:
+    """``allow_members``: דשבורד ``members`` נגיש ב-/d רק למשתמש מחובר עם
+    הרשאה — הקורא חייב לבדוק זאת. קישורי שיתוף לעולם אינם פותחים אותו."""
+    if allow_members:
+        row = db.query(ClientDashboard).filter_by(slug=slug).first()
+        if row is None or row.status != "active":
+            raise not_found()
+        return row
     return _public_dashboard(db, slug)
 
 

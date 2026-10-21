@@ -155,8 +155,14 @@ class Settings(BaseSettings):
     whatsapp_push_template_name: Optional[str] = None
     whatsapp_push_template_language: str = "he"
 
-    # Google Sign-In
+    # Google Sign-In — אותו OAuth client של Medici (GOOGLE_CLIENT_ID/SECRET).
+    # ה-secret נדרש רק לזרימת authorization-code בצד השרת
+    # (/api/auth/signin/google). ראו docs/AUTH_MEDICI_PORT.md.
     google_client_id: Optional[str] = None
+    google_client_secret: Optional[str] = None
+    # בסיס ה-redirect של OAuth (המקבילה ל-NEXTAUTH_URL). קודם לכל דבר אחר;
+    # אחריו VERCEL_BRANCH_URL בפריוויו, ואחריו app_url. לעולם לא Host header.
+    auth_url: Optional[str] = None
 
     # SaaS billing / checkout. Stripe Checkout enables Apple Pay and Google Pay
     # when the Stripe account, domain, and payment methods are configured.

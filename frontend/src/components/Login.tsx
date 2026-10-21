@@ -1,23 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import GoogleSignInButton, { consumeGoogleAuthError } from './GoogleSignInButton';
 import axios from 'axios';
 import { Loader2, LogIn, UserPlus, TrendingUp } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        id: {
-          initialize: (config: { client_id: string; callback: (response: { credential?: string }) => void }) => void;
-          renderButton: (element: HTMLElement, options: Record<string, string | number>) => void;
-        };
-      };
-    };
-  }
-}
-
 interface Props {
   darkMode: boolean;
   onSuccess: () => void;
@@ -37,7 +23,6 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const googleButtonRef = useRef<HTMLDivElement | null>(null);
 
   const handleForgotSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,55 +67,10 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
     }
   };
 
-  const handleGoogleCredential = useCallback(async (credential?: string) => {
-    if (!credential) return;
-    setError(null);
-    setLoading(true);
-    try {
-      const { data } = await axios.post<TokenResponse>(`${API_BASE_URL}/admin/auth/google`, {
-        id_token: credential,
-        registration_code: registrationCode || undefined,
-      });
-      localStorage.setItem('auth_token', data.access_token);
-      onSuccess();
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'התחברות Google נכשלה.');
-    } finally {
-      setLoading(false);
-    }
-  }, [onSuccess, registrationCode]);
-
   useEffect(() => {
-    if (!GOOGLE_CLIENT_ID || !googleButtonRef.current) return;
-
-    const render = () => {
-      if (!window.google || !googleButtonRef.current) return;
-      window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: (response) => handleGoogleCredential(response.credential),
-      });
-      googleButtonRef.current.innerHTML = '';
-      window.google.accounts.id.renderButton(googleButtonRef.current, {
-        theme: 'outline',
-        size: 'large',
-        width: 320,
-        text: mode === 'login' ? 'signin_with' : 'signup_with',
-      });
-    };
-
-    if (window.google) {
-      render();
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.defer = true;
-    script.onload = render;
-    document.head.appendChild(script);
-  }, [handleGoogleCredential, mode]);
+    const googleError = consumeGoogleAuthError();
+    if (googleError) setError(googleError);
+  }, []);
 
   const inputClass = `w-full px-4 py-2.5 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
     darkMode
@@ -266,9 +206,9 @@ const Login: React.FC<Props> = ({ darkMode, onSuccess }) => {
 
         {mode !== 'forgot' && (
           <>
-            {GOOGLE_CLIENT_ID && (
-              <div className="mt-4 flex justify-center">
-                <div ref={googleButtonRef} />
+            {mode === 'login' && (
+              <div className="mt-4">
+                <GoogleSignInButton />
               </div>
             )}
 

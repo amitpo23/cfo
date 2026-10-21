@@ -15,7 +15,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from ..dependencies import get_current_user
+from fastapi.security import HTTPAuthorizationCredentials
+
+from ..dependencies import get_current_user, security
+from ...auth import decode_access_token
 from ...config import settings
 from ...database import get_db_session
 from ...models import DashboardRateLimit, PublishedSnapshot, User
@@ -380,21 +383,55 @@ def open_share_session(slug: str, body: SessionBody, request: Request,
     return response
 
 
+async def _signed_in_user(
+    db: Session,
+    credentials: HTTPAuthorizationCredentials | None,
+) -> User | None:
+    """משתמש מחובר, או None. אותן בדיקות כמו get_current_user (jti,
+    token_version, is_active) — ובלי auth_bypass: בלי טוקן אמיתי אין משתמש."""
+    if credentials is None or not credentials.credentials:
+        return None
+    from fastapi import HTTPException
+    from ..dependencies import get_current_user as _resolve
+    payload = decode_access_token(credentials.credentials)
+    if payload is None:
+        return None
+    try:
+        user = await _resolve(credentials=credentials, db=db)
+    except HTTPException:
+        return None
+    # auth_bypass עלול להחזיר משתמש-על חלופי לטוקן של משתמש שאינו קיים.
+    if str(user.id) != str(payload.get("sub")):
+        return None
+    return user
+
+
 @public_router.get("/d/{slug}")
-def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get_db_session)):
+async def read_public_dashboard(
+    slug: str,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+):
     limited = _claim_public_limit(db, request, slug)
     if limited:
         return limited
     try:
-        dashboard = service.public_dashboard(db, slug)
+        dashboard = service.public_dashboard(db, slug, allow_members=True)
     except DashboardError as exc:
         return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
     link = None
     if dashboard.access_mode != "public":
-        link = _cookie_dashboard(db, request, dashboard.id)
+        # שני מסלולים בלתי-תלויים: קישור שיתוף (סמנטיקה קיימת; לא ל-members)
+        # או משתמש מחובר עם חברות/הרשאה פעילה. סירוב ואנונימי — 404.
+        if dashboard.access_mode == "link":
+            link = _cookie_dashboard(db, request, dashboard.id)
         if link is None:
-            return _public_response({"error": {"code": "not_found", "message_he": "הדשבורד לא נמצא"}}, 404)
-        service.mark_link_used(db, link)
+            viewer = await _signed_in_user(db, credentials)
+            if viewer is None or service.role_for(db, viewer, dashboard) is None:
+                return _public_response({"error": {"code": "not_found", "message_he": "הדשבורד לא נמצא"}}, 404)
+        else:
+            service.mark_link_used(db, link)
     snapshot = None
     if dashboard.current_snapshot_id:
         snapshot = db.get(PublishedSnapshot, dashboard.current_snapshot_id)
