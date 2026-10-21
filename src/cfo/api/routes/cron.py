@@ -585,13 +585,32 @@ def _finish_periodic_provider_attempt(
 _of_budget_gate = _daily_budget_gate
 
 
+def _sumit_automatic_calls_skipped() -> Optional[dict]:
+    """No-op payload when scheduled SUMIT work is not explicitly enabled."""
+    if settings.sumit_automatic_calls_enabled:
+        return None
+    return {
+        "status": "ok",
+        "skipped": "sumit_automatic_calls_disabled",
+        "synced": 0,
+        "refreshed": 0,
+        "results": [],
+    }
+
+
 @router.get("/cron/sync-sumit", dependencies=[Depends(_verify_cron_secret)])
 async def scheduled_sync_sumit(db: Session = Depends(get_db_session)):
     """Daily: run a sync for every organization with an active SUMIT integration.
 
     Open Finance is intentionally excluded here -- see /cron/sync-open-finance,
     which enforces its own daily call budget (RSF-020/021).
+
+    Unscheduled. Even a manual hit does not call SUMIT unless
+    ``SUMIT_AUTOMATIC_CALLS_ENABLED`` is set.
     """
+    skipped = _sumit_automatic_calls_skipped()
+    if skipped is not None:
+        return skipped
     repaired_roster = repair_missing_client_roster(db)
     targets = {
         (conn.organization_id, conn.source)
@@ -633,7 +652,14 @@ async def scheduled_refresh_sumit_quota(db: Session = Depends(get_db_session)):
     (≈30 בחודש). בלי מדידה טרייה — כל פעולה בתשלום חסומה fail-closed,
     ולכן זה ה-cron שמחזיק את הזמינות של `getpdf`/`getdetails`/יצירת
     מסמכים. שער עמיד: רענון אחד ליום פר-ארגון גם אם ה-cron נורה פעמיים.
+
+    With automatic calls disabled the route still answers 200 and does
+    not build a SUMIT client. Paid actions stay fail-closed until a
+    fresh quota reading exists.
     """
+    skipped = _sumit_automatic_calls_skipped()
+    if skipped is not None:
+        return skipped
     from ...database import SessionLocal
     from ...services.sumit_quota import refresh_quota_measurement
     from ...services.sumit_request_budget import (
@@ -931,6 +957,7 @@ async def run_collection_reminders(db: Session = Depends(get_db_session)):
         "email_sent": 0,
         "failed": 0,
         "skipped_no_sumit": 0,
+        "skipped_sumit_automatic_disabled": 0,
         "delivery_attempts": 0,
         "budget_skipped": 0,
     }
@@ -974,16 +1001,22 @@ async def run_collection_reminders(db: Session = Depends(get_db_session)):
                     )
                 continue
             planned = _limit_reminder_deliveries(planned, claimed)
-            sumit = sumit_for_org(db, org.id)
+            # SMS is a SUMIT paid call. Email stays on the local SMTP path.
+            automatic_sumit = bool(settings.sumit_automatic_calls_enabled)
+            sumit = sumit_for_org(db, org.id) if automatic_sumit else None
 
             async def email_sender(to, subject, body):
                 return await send_email_smtp(to, subject, body, settings)
 
             if sumit is None:
-                # אין SUMIT לארגון — מייל בלבד (SMS ידלג כי אין שולח)
+                # אין SUMIT לארגון — מייל בלבד (SMS ידלג כי אין שולח).
+                # אותו דילוג כשהקריאות האוטומטיות כבויות: לא בונים לקוח.
                 async def sms_sender(phone, message):
                     return False
-                totals["skipped_no_sumit"] += 1
+                if automatic_sumit:
+                    totals["skipped_no_sumit"] += 1
+                else:
+                    totals["skipped_sumit_automatic_disabled"] += 1
             else:
                 async def sms_sender(phone, message, _s=org.collection_sms_sender, _c=sumit):
                     return bool(await _c.send_sms(SMSRequest(

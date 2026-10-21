@@ -101,6 +101,14 @@ def test_post_binary_enforces_the_paid_endpoint_gate(monkeypatch):
 def test_live_paid_action_claims_a_durable_monthly_counter(monkeypatch, fresh_org):
     """גם ב-live יש מונה חודשי עמיד משלנו — הגנה שנייה לצד המדידה מהספק."""
     org_id = fresh_org()["org_id"]
+    from cfo.database import SessionLocal
+    from cfo.models import ProviderRequestBudget
+    db = SessionLocal()
+    try:
+        db.query(ProviderRequestBudget).delete()
+        db.commit()
+    finally:
+        db.close()
     monkeypatch.setattr(settings, "sumit_environment", "live")
     monkeypatch.setattr(settings, "sumit_document_issuance_enabled", True)
     monkeypatch.setattr(settings, "sumit_live_monthly_paid_action_limit", 1)

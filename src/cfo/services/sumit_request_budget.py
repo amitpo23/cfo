@@ -192,8 +192,35 @@ def paced_daily_limit(
     return min(limits)
 
 
+# One SUMIT account, not one window per office. Live is hard-capped here
+# as well as in Settings, so a later setattr cannot raise it.
+LIVE_ACCOUNT_REQUEST_HARD_CAP = 50
+ACCOUNT_REQUEST_SCOPE = "sumit:account"
+# The test track's own monthly ceiling. Not a live allowance.
+_TEST_ACCOUNT_REQUEST_HARD_CAP = 200
+
+
+def account_monthly_request_limit() -> int:
+    """Shared monthly request ceiling for every org and office.
+
+    Live uses ``sumit_live_monthly_request_limit`` and never exceeds 50.
+    The test track keeps its own ceiling so offline tests are not collapsed
+    onto the exempt plan, and that ceiling is still one account window.
+    """
+    if settings.sumit_environment == "live":
+        configured = settings.sumit_live_monthly_request_limit
+        return min(LIVE_ACCOUNT_REQUEST_HARD_CAP, max(0, int(configured)))
+    configured = settings.sumit_test_monthly_request_limit
+    return min(_TEST_ACCOUNT_REQUEST_HARD_CAP, max(0, int(configured)))
+
+
 class SumitRequestLimiter:
-    """Claim one global-minute slot and one per-org UTC-day slot atomically."""
+    """Claim the account month, then the minute and per-org windows.
+
+    The account window is one counter for the whole SUMIT account. An org
+    with no roster row is its own office, so per-office ceilings do not
+    bound the account.
+    """
 
     def __init__(
         self,
@@ -412,6 +439,22 @@ class SumitRequestLimiter:
                 # P0-A תיקון 2: זמן קנוני מה-DB, לא משעון-התהליך.
                 now = _db_now(db)
                 minute_start, day_start, month_start = _utc_windows(now)
+                # Account first, same transaction as the scopes below. A later
+                # refusal rolls this claim back; a full account never reaches
+                # the per-office windows.
+                account_ok = self._claim_window(
+                    db,
+                    scope_key=ACCOUNT_REQUEST_SCOPE,
+                    organization_id=None,
+                    window_kind="month",
+                    window_start=month_start,
+                    limit_value=account_monthly_request_limit(),
+                    now=now,
+                )
+                if not account_ok:
+                    raise SumitRequestBudgetExceeded(
+                        "SUMIT account monthly request budget exceeded",
+                    )
                 minute_ok = self._claim_window(
                     db,
                     scope_key="global",

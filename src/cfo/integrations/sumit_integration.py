@@ -526,7 +526,8 @@ class SumitIntegration(BaseIntegration):
 
         # This deliberately re-enters the normal request path.  The endpoint
         # itself is exempt only from recursively demanding prior verification;
-        # credentials and the durable request limiter remain mandatory.
+        # credentials and the durable request limiter remain mandatory, so
+        # the verification call consumes the account-wide monthly budget.
         await self._make_request(_SUMIT_ENVIRONMENT_VERIFY_ENDPOINT)
 
     def _validate_and_cache_environment(self, payload: Any) -> None:

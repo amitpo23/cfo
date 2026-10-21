@@ -342,6 +342,8 @@ def test_cron_sync_pulls_pending_expenses_per_sumit_org(client, monkeypatch, cle
     ממצא אודיט התאימות (2026-07-05): טבלת ההוצאות פיגרה ב~43 מסמכים כי
     sync_pending_from_sumit רץ רק ידנית.
     """
+    from cfo.config import settings
+    monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
     calls = []
 
     async def _fake_pull(self, from_date=None, to_date=None):
@@ -362,6 +364,9 @@ def test_cron_sync_pulls_pending_expenses_per_sumit_org(client, monkeypatch, cle
 
 def test_cron_sync_expense_pull_failure_does_not_abort(client, monkeypatch, clear_sumit_sync_budget):
     """כשל במשיכת הוצאות של ארגון לא מפיל את ריצת ה-cron כולה."""
+
+    from cfo.config import settings
+    monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
 
     async def _boom(self, from_date=None, to_date=None):
         raise RuntimeError("SUMIT rate limit")
