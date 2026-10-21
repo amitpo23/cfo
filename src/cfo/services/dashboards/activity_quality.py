@@ -1,36 +1,30 @@
-"""View-layer quality for dashboard cash flow. Reads books; writes nothing.
+"""Suspected bank duplicates and a card-bill check for the dashboard view.
 
-Open Finance often stores a PENDING row and a later BOOKED copy. They share
-``entryReference`` but not id, and the description can change. This module
-decides which rows a dashboard may sum. It does not update ``superseded_by_id``
-and it does not call a provider.
+BOOKED-only totals, future-charge PENDING rows, the sync supersede pointer,
+and card-account exclusion already live in ``bank_status`` and the cash-flow
+read. This module does not repeat those filters and does not write rows.
+
+It lists suspected pairs (including העברת יומן against העברה באינטרנט), drops
+only pairs an admin confirmed in ``payload.dedupePairs``, and warns when a
+month's card transactions and the checking-account card bill differ by more
+than 1%.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
-import re
 
-from ...models import BankTransaction, Category, ClientDashboard, DashboardPlan
+from ...models import BankTransaction, ClientDashboard, DashboardPlan
 from ..bank_coverage import cashflow_row_objects, content_fingerprint
 from ..bank_status import card_account_ids
 
 OF_SOURCE = "open_finance"
 BOOKED = "BOOKED"
 FUTURE_CHARGE_TEXT = "חיובים עתידיים"
-PAIR_WINDOW_DAYS = 3
+REF_WINDOW_DAYS = 5
+FINGERPRINT_WINDOW_DAYS = 3
 BILL_TOLERANCE = Decimal("0.01")
-_CAL_WORD = re.compile(r"(?<![a-z])cal(?![a-z])")
-
-EXCLUSION_KEYS = (
-    "pending_superseded",
-    "future_charge",
-    "superseded_by_id",
-    "non_booked",
-    "detail_account",
-    "confirmed_pair",
-)
 
 
 @dataclass(frozen=True)
@@ -46,35 +40,22 @@ class Txn:
     content_fingerprint: str
     superseded_by_id: int | None
     source: str | None
-    category_name: str | None
-    merchant_name: str | None
+    is_card: bool = False
 
 
 @dataclass
 class Outcome:
-    counted: list[Txn]
-    detail: list[Txn]
     pairs: list[dict]
     notes: list[dict]
     warnings: list[dict]
     billing_cycles: list[dict]
-    excluded_counts: dict[str, int]
-    detail_enabled: bool
+    drop_ids: set[int]
 
     def as_view(self) -> dict:
-        detail = None
-        if self.detail_enabled:
-            detail = {
-                "merchants": _buckets(self.detail, lambda txn: txn.merchant_name, "merchant", "לא ידוע"),
-                "categories": _buckets(self.detail, lambda txn: txn.category_name, "category", "לא מסווג"),
-            }
         return {
-            "booked_only": True,
-            "excluded_counts": self.excluded_counts,
             "notes": self.notes,
             "warnings": self.warnings,
             "billing_cycles": self.billing_cycles,
-            "detail": detail,
         }
 
 
@@ -93,26 +74,22 @@ def is_card_bill(description: str | None) -> bool:
         return False
     text = " ".join(description.casefold().split())
     has_visa = "ויזה" in text or "visa" in text
-    has_cal = "כאל" in text or "כ.א.ל" in text or _CAL_WORD.search(text) is not None
+    has_cal = "כאל" in text or "כ.א.ל" in text or _has_cal_word(text)
     has_charge = "חיוב" in text
     return (has_visa and has_cal) or (has_charge and (has_visa or has_cal))
 
 
-def parse_id_list(value) -> tuple[set[int], bool]:
-    """Return ids and whether the payload shape was invalid."""
-    if value is None:
-        return set(), False
-    if not isinstance(value, list):
-        return set(), True
-    ids: set[int] = set()
-    invalid = False
-    for item in value:
-        parsed = _as_int(item)
-        if parsed is None:
-            invalid = True
-            continue
-        ids.add(parsed)
-    return ids, invalid
+def is_journal_transfer(description: str | None) -> bool:
+    if not description:
+        return False
+    text = " ".join(description.split())
+    return "העברת יומן" in text or "יומן זכות" in text
+
+
+def is_internet_transfer(description: str | None) -> bool:
+    if not description:
+        return False
+    return "העברה באינטרנט" in " ".join(description.split())
 
 
 def parse_confirmed_pairs(payload: dict | None) -> tuple[list[tuple[int, int]], list[dict]]:
@@ -154,101 +131,71 @@ def parse_confirmed_pairs(payload: dict | None) -> tuple[list[tuple[int, int]], 
     return pairs, warnings
 
 
-def parse_detail_account_ids(payload: dict | None) -> tuple[set[int], list[dict]]:
-    if not payload or "detailAccountIds" not in payload:
-        return set(), []
-    ids, invalid = parse_id_list(payload.get("detailAccountIds"))
-    if not invalid:
-        return ids, []
-    return ids, [{
-        "code": "invalid_detail_accounts",
-        "message_he": "detailAccountIds אינו רשימת מזהים תקינה — ערכים לא תקינים דולגו.",
-    }]
-
-
 def classify(
     txns: list[Txn],
     *,
-    detail_account_ids: set[int] | None = None,
+    card_account_ids: set[int] | None = None,
     confirmed_pairs: list[tuple[int, int]] | None = None,
 ) -> Outcome:
-    detail_ids = set(detail_account_ids or ())
+    """Pair suspects and confirmed drops. Does not rebuild a cash-flow total."""
+    card_ids = set(card_account_ids or ())
     confirmed = list(confirmed_pairs or ())
     by_id = {txn.id: txn for txn in txns}
     drop_ids: set[int] = set()
-    missing_pairs = 0
-    confirmed_rows: list[dict] = []
+    missing = 0
+    confirmed_rows: list[tuple[Txn, Txn]] = []
     for keep_id, drop_id in confirmed:
         keep = by_id.get(keep_id)
         drop = by_id.get(drop_id)
         if keep is None or drop is None:
-            missing_pairs += 1
+            missing += 1
             continue
         drop_ids.add(drop_id)
-        confirmed_rows.append(_pair_row(keep, drop, "confirmed", "confirmed"))
+        confirmed_rows.append((keep, drop))
 
-    links = _pending_links(txns)
-    superseded_ids = {pending.id for pending, _booked, _rule in links}
-    amount_diffs = sum(
-        1 for pending, booked, rule in links
-        if rule == "entry_reference" and _q(pending.amount) != _q(booked.amount)
-    )
+    cash = [txn for txn in txns if not _is_card_txn(txn, card_ids)]
+    detected = _journal_internet_pairs(cash)
+    used = {txn_id for left, right, _rule in detected for txn_id in (left.id, right.id)}
+    detected.extend(_reference_pairs(cash, used))
+    used = {txn_id for left, right, _rule in detected for txn_id in (left.id, right.id)}
+    detected.extend(_fingerprint_pairs(cash, used))
 
-    suspected = []
-    suspected.extend(_duplicate_booked_references(txns, drop_ids))
-    suspected.extend(_duplicate_booked_fingerprints(txns, drop_ids))
-    suspected.extend(_ambiguous_pending(txns, superseded_ids, drop_ids))
+    seen = {frozenset((left.id, right.id)) for left, right, _rule in detected}
+    pairs: list[dict] = []
+    warnings: list[dict] = []
+    for left, right, rule in detected:
+        disposition = "confirmed" if left.id in drop_ids or right.id in drop_ids else _open_disposition(left, right)
+        pairs.append(_pair_row(left, right, rule, disposition))
+        if disposition == "warning":
+            warnings.append(_suspected_warning(left, right, rule))
+    for keep, drop in confirmed_rows:
+        if frozenset((keep.id, drop.id)) in seen:
+            continue
+        pairs.append(_pair_row(keep, drop, "confirmed", "confirmed"))
 
-    counted: list[Txn] = []
-    detail: list[Txn] = []
-    counts = {key: 0 for key in EXCLUSION_KEYS}
-    for txn in txns:
-        reason = _reason(txn, drop_ids, superseded_ids, detail_ids)
-        if reason == "counted":
-            counted.append(txn)
-        elif reason == "detail":
-            detail.append(txn)
-            counts["detail_account"] += 1
-        else:
-            counts[reason] += 1
-
-    pairs = [_pair_row(pending, booked, rule, "excluded") for pending, booked, rule in links]
-    pairs.extend(_pair_row(left, right, rule, "warning") for left, right, rule in suspected)
-    pairs.extend(confirmed_rows)
-
-    notes = _notes(counts, amount_diffs)
-    warnings = [_suspected_warning(left, right, rule) for left, right, rule in suspected]
-    if missing_pairs:
+    if missing:
         warnings.append({
             "code": "unmatched_dedupe_pair",
-            "message_he": (
-                f"{missing_pairs} זוגות dedupePairs מפנים לתנועה שאינה בחלון, ולא הוחלו."
-            ),
+            "message_he": f"{missing} זוגות dedupePairs מפנים לתנועה שאינה בחלון, ולא הוחלו.",
         })
-    cycles: list[dict] = []
-    if detail_ids:
-        cycle_warnings, cycles = _billing_cycles(detail, counted)
-        warnings.extend(cycle_warnings)
+    notes = []
+    if drop_ids:
+        notes.append({"message_he": (
+            f"{len(drop_ids)} תנועות הוסרו לפי זוגות כפילות שאושרו בתוכנית הדשבורד."
+        )})
+    cycle_warnings, cycles = _billing_cycles(txns, card_ids)
+    warnings.extend(cycle_warnings)
     return Outcome(
-        counted=counted,
-        detail=detail,
         pairs=pairs,
         notes=notes,
         warnings=warnings,
         billing_cycles=cycles,
-        excluded_counts=counts,
-        detail_enabled=bool(detail_ids),
+        drop_ids=drop_ids,
     )
 
 
 def adjust_cashflow(db, organization_id: int, cashflow: dict, plan_payload: dict | None) -> dict:
-    """Attach quality notes and subtract only rows the cash-flow total already summed.
-
-    BOOKED-only, future-charge, and card-account rules already live in the
-    cash-flow read. This step does not rebuild those months. It removes an
-    admin-confirmed duplicate and a payload detail account (not already a card
-    account) from the existing inflows and outflows, then records warnings.
-    """
+    """Subtract admin-confirmed drops and attach warnings. Totals otherwise stay."""
     if not isinstance(cashflow, dict):
         return cashflow
     months = cashflow.get("months") or []
@@ -256,41 +203,17 @@ def adjust_cashflow(db, organization_id: int, cashflow: dict, plan_payload: dict
         return cashflow
     start = _window_start(months)
     end = date.fromisoformat(str(cashflow["as_of"]))
-    detail_ids, detail_warnings = parse_detail_account_ids(plan_payload)
     confirmed, pair_warnings = parse_confirmed_pairs(plan_payload)
-    card_ids = card_account_ids(db, organization_id)
+    cards = card_account_ids(db, organization_id)
     txns = load_txns(db, organization_id, start, end, respect_coverage=True)
-    outcome = classify(
-        txns,
-        detail_account_ids=detail_ids | card_ids,
-        confirmed_pairs=confirmed,
-    )
+    outcome = classify(txns, card_account_ids=cards, confirmed_pairs=confirmed)
     service_ids = {row.id for row in cashflow_row_objects(db, organization_id, start, end)}
-    drop_ids = {drop_id for _keep_id, drop_id in confirmed}
-    remove = [
-        txn for txn in txns
-        if txn.id in service_ids and (
-            txn.id in drop_ids
-            or txn.superseded_by_id is not None
-            or (txn.account_id in detail_ids and txn.account_id not in card_ids)
-        )
-    ]
+    remove = [txn for txn in txns if txn.id in service_ids and txn.id in outcome.drop_ids]
     updated = dict(cashflow)
     if remove:
         updated["months"] = _subtract_rows(months, remove)
     view = outcome.as_view()
-    extra_detail = [
-        txn for txn in outcome.detail
-        if txn.account_id in detail_ids and txn.account_id not in card_ids
-    ]
-    if extra_detail:
-        view["detail"] = {
-            "merchants": _buckets(extra_detail, lambda txn: txn.merchant_name, "merchant", "לא ידוע"),
-            "categories": _buckets(extra_detail, lambda txn: txn.category_name, "category", "לא מסווג"),
-        }
-    elif not detail_ids:
-        view["detail"] = None
-    view["warnings"] = detail_warnings + pair_warnings + view["warnings"]
+    view["warnings"] = pair_warnings + view["warnings"]
     updated["activity_quality"] = view
     return updated
 
@@ -305,18 +228,12 @@ def load_txns(db, organization_id: int, start: date | None, end: date | None, *,
     rows = query.all()
     if respect_coverage:
         rows = _coverage_keeps(db, organization_id, rows)
-    names = _category_names(db, rows)
-    return [txn_from_row(row, names.get(row.category_id)) for row in rows]
+    return [txn_from_row(row) for row in rows]
 
 
-def txn_from_row(row: BankTransaction, category_name: str | None) -> Txn:
+def txn_from_row(row: BankTransaction) -> Txn:
     raw = row.raw_data if isinstance(row.raw_data, dict) else {}
-    status = _status(raw.get("status"))
-    reference = _text(raw.get("entryReference"))
-    if reference is None:
-        reference = _text(raw.get("entry_reference"))
-    merchant = _text(raw.get("merchantName")) or _text(row.description)
-    category = _text(category_name) or _category_from_raw(raw)
+    reference = _text(raw.get("entryReference")) or _text(raw.get("entry_reference"))
     stored = _text(row.content_fingerprint)
     fingerprint = stored or content_fingerprint(row.transaction_date, row.amount, row.description)
     return Txn(
@@ -326,13 +243,12 @@ def txn_from_row(row: BankTransaction, category_name: str | None) -> Txn:
         transaction_date=row.transaction_date,
         amount=row.amount if isinstance(row.amount, Decimal) else Decimal(str(row.amount or 0)),
         description=row.description,
-        status=status,
+        status=_status(raw.get("status")),
         entry_reference=reference,
         content_fingerprint=fingerprint,
         superseded_by_id=row.superseded_by_id,
         source=row.source,
-        category_name=category,
-        merchant_name=merchant,
+        is_card=str(raw.get("type") or "").strip().upper() == "CARD",
     )
 
 
@@ -353,7 +269,7 @@ def confirmed_pairs_for_org(db, organization_id: int) -> list[tuple[int, int]]:
 
 
 def duplicate_pairs(db, organization_id: int | None = None) -> list[dict]:
-    """Suspected and auto-excluded pairs. Does not apply card netting."""
+    """Suspected, already-excluded, and admin-confirmed pairs. Read only."""
     if organization_id is not None:
         org_ids = [organization_id]
     else:
@@ -368,7 +284,7 @@ def duplicate_pairs(db, organization_id: int | None = None) -> list[dict]:
         txns = load_txns(db, org_id, None, None, respect_coverage=False)
         outcome = classify(
             txns,
-            detail_account_ids=set(),
+            card_account_ids=card_account_ids(db, org_id),
             confirmed_pairs=confirmed_pairs_for_org(db, org_id),
         )
         found.extend(outcome.pairs)
@@ -383,200 +299,129 @@ def duplicate_pairs(db, organization_id: int | None = None) -> list[dict]:
     return found
 
 
-def _subtract_rows(months: list[dict], remove: list[Txn]) -> list[dict]:
-    flows = [(txn.transaction_date, txn.amount) for txn in remove]
-    cumulative = 0.0
-    adjusted = []
-    for month in months:
-        year, mon = (int(part) for part in str(month["month"]).split("-"))
-        m_start = date(year, mon, 1)
-        m_end = _add_months(m_start, 1) - timedelta(days=1)
-        inflow, outflow = _sum_flows(flows, m_start, m_end)
-        copied = dict(month)
-        copied["inflows"] = round(float(month.get("inflows") or 0) - inflow, 2)
-        copied["outflows"] = round(float(month.get("outflows") or 0) - outflow, 2)
-        net = round(copied["inflows"] - copied["outflows"], 2)
-        cumulative = round(cumulative + net, 2)
-        copied["net_flow"] = net
-        copied["cumulative"] = cumulative
-        adjusted.append(copied)
-    return adjusted
+def _journal_internet_pairs(txns: list[Txn]) -> list[tuple[Txn, Txn, str]]:
+    journals = [txn for txn in txns if is_journal_transfer(txn.description) and txn.account_id is not None]
+    internets = [txn for txn in txns if is_internet_transfer(txn.description) and txn.account_id is not None]
+    used: set[int] = set()
+    pairs = []
+    for journal in sorted(journals, key=lambda txn: (txn.transaction_date, txn.id)):
+        if journal.id in used:
+            continue
+        best = None
+        best_key = None
+        for other in internets:
+            if other.id in used or other.id == journal.id or other.account_id != journal.account_id:
+                continue
+            if _q(other.amount) != _q(journal.amount):
+                continue
+            delta = abs((other.transaction_date - journal.transaction_date).days)
+            if delta > REF_WINDOW_DAYS:
+                continue
+            key = (delta, other.id)
+            if best_key is None or key < best_key:
+                best = other
+                best_key = key
+        if best is not None:
+            used.add(journal.id)
+            used.add(best.id)
+            pairs.append((journal, best, "journal_vs_internet"))
+    return pairs
 
 
-def rebuild_months(months: list[dict], counted: list[Txn]) -> list[dict]:
-    flows = [(txn.transaction_date, txn.amount) for txn in counted]
-    cumulative = 0.0
-    rebuilt = []
-    for month in months:
-        year, mon = (int(part) for part in str(month["month"]).split("-"))
-        m_start = date(year, mon, 1)
-        m_end = _add_months(m_start, 1) - timedelta(days=1)
-        inflow, outflow = _sum_flows(flows, m_start, m_end)
-        net = round(inflow - outflow, 2)
-        cumulative = round(cumulative + net, 2)
-        copied = dict(month)
-        copied["inflows"] = inflow
-        copied["outflows"] = outflow
-        copied["net_flow"] = net
-        copied["cumulative"] = cumulative
-        rebuilt.append(copied)
-    return rebuilt
+def _reference_pairs(txns: list[Txn], used: set[int]) -> list[tuple[Txn, Txn, str]]:
+    pending = [
+        txn for txn in txns
+        if txn.id not in used and txn.source == OF_SOURCE and txn.status != BOOKED
+        and txn.entry_reference and txn.account_id is not None
+    ]
+    booked = [
+        txn for txn in txns
+        if txn.status == BOOKED and txn.entry_reference and txn.account_id is not None
+    ]
+    pairs = []
+    claimed = set(used)
+    for left in sorted(pending, key=lambda txn: (txn.transaction_date, txn.id)):
+        if left.id in claimed:
+            continue
+        candidates = [
+            txn for txn in booked
+            if txn.id not in claimed and txn.account_id == left.account_id
+            and txn.entry_reference == left.entry_reference and _q(txn.amount) == _q(left.amount)
+            and abs((txn.transaction_date - left.transaction_date).days) <= REF_WINDOW_DAYS
+        ]
+        if not candidates:
+            continue
+        right = min(candidates, key=lambda txn: (abs((txn.transaction_date - left.transaction_date).days), txn.id))
+        claimed.add(left.id)
+        claimed.add(right.id)
+        pairs.append((left, right, "entry_reference"))
+    groups: dict[tuple, list[Txn]] = {}
+    for txn in booked:
+        if txn.id in claimed:
+            continue
+        groups.setdefault((txn.account_id, txn.entry_reference, _q(txn.amount)), []).append(txn)
+    for group in groups.values():
+        ordered = sorted(group, key=lambda txn: (txn.transaction_date, txn.id))
+        for index, left in enumerate(ordered):
+            if left.id in claimed:
+                continue
+            for right in ordered[index + 1:]:
+                if right.id in claimed:
+                    continue
+                if abs((right.transaction_date - left.transaction_date).days) > REF_WINDOW_DAYS:
+                    continue
+                claimed.add(left.id)
+                claimed.add(right.id)
+                pairs.append((left, right, "duplicate_booked_reference"))
+                break
+    return pairs
 
 
-def _pending_links(txns: list[Txn]) -> list[tuple[Txn, Txn, str]]:
-    booked_by_ref: dict[tuple[int, str], list[Txn]] = {}
-    booked_rows = []
+def _fingerprint_pairs(txns: list[Txn], used: set[int]) -> list[tuple[Txn, Txn, str]]:
+    groups: dict[tuple, list[Txn]] = {}
     for txn in txns:
-        if txn.status != BOOKED:
-            continue
-        booked_rows.append(txn)
-        if txn.entry_reference and txn.account_id is not None:
-            booked_by_ref.setdefault((txn.account_id, txn.entry_reference), []).append(txn)
-    links = []
-    for txn in sorted(txns, key=lambda item: (item.transaction_date, item.id)):
-        if txn.source != OF_SOURCE or txn.status == BOOKED or txn.account_id is None:
-            continue
-        match = None
-        rule = None
-        if txn.entry_reference:
-            candidates = booked_by_ref.get((txn.account_id, txn.entry_reference)) or []
-            if candidates:
-                match = min(candidates, key=lambda item: item.id)
-                rule = "entry_reference"
-        if match is None:
-            match = _fallback_booked(txn, booked_rows)
-            rule = "fingerprint" if match is not None else None
-        if match is not None and rule is not None:
-            links.append((txn, match, rule))
-    return links
-
-
-def _fallback_booked(pending: Txn, booked_rows: list[Txn]) -> Txn | None:
-    best = None
-    best_delta = None
-    for booked in booked_rows:
-        if booked.account_id != pending.account_id:
-            continue
-        if _q(booked.amount) != _q(pending.amount):
-            continue
-        if booked.content_fingerprint != pending.content_fingerprint:
-            continue
-        delta = abs((booked.transaction_date - pending.transaction_date).days)
-        if delta > PAIR_WINDOW_DAYS:
-            continue
-        if best is None or delta < best_delta or (delta == best_delta and booked.id < best.id):
-            best = booked
-            best_delta = delta
-    return best
-
-
-def _duplicate_booked_references(txns: list[Txn], drop_ids: set[int]) -> list[tuple[Txn, Txn, str]]:
-    groups: dict[tuple[int, str], list[Txn]] = {}
-    for txn in txns:
-        if txn.id in drop_ids or txn.status != BOOKED or txn.superseded_by_id is not None:
-            continue
-        if txn.account_id is None or not txn.entry_reference:
-            continue
-        groups.setdefault((txn.account_id, txn.entry_reference), []).append(txn)
-    return _keeper_pairs(groups, "duplicate_booked_reference")
-
-
-def _duplicate_booked_fingerprints(txns: list[Txn], drop_ids: set[int]) -> list[tuple[Txn, Txn, str]]:
-    grouped_refs = {
-        (left.account_id, left.entry_reference)
-        for left, _right, rule in _duplicate_booked_references(txns, drop_ids)
-        if rule == "duplicate_booked_reference" and left.entry_reference
-    }
-    groups: dict[tuple[int, str, Decimal], list[Txn]] = {}
-    for txn in txns:
-        if txn.id in drop_ids or txn.status != BOOKED or txn.superseded_by_id is not None:
-            continue
-        if txn.account_id is None or not txn.content_fingerprint:
-            continue
-        if txn.entry_reference and (txn.account_id, txn.entry_reference) in grouped_refs:
+        if txn.id in used or txn.status != BOOKED or txn.account_id is None or not txn.content_fingerprint:
             continue
         groups.setdefault((txn.account_id, txn.content_fingerprint, _q(txn.amount)), []).append(txn)
     pairs = []
     for group in groups.values():
         ordered = sorted(group, key=lambda txn: (txn.transaction_date, txn.id))
-        used: set[int] = set()
+        claimed: set[int] = set()
         for index, left in enumerate(ordered):
-            if left.id in used:
+            if left.id in claimed:
                 continue
             for right in ordered[index + 1:]:
-                if right.id in used:
+                if right.id in claimed:
                     continue
-                if abs((right.transaction_date - left.transaction_date).days) > PAIR_WINDOW_DAYS:
+                if abs((right.transaction_date - left.transaction_date).days) > FINGERPRINT_WINDOW_DAYS:
                     continue
-                used.add(right.id)
+                claimed.add(left.id)
+                claimed.add(right.id)
                 pairs.append((left, right, "duplicate_booked_fingerprint"))
                 break
     return pairs
 
 
-def _ambiguous_pending(txns: list[Txn], superseded_ids: set[int], drop_ids: set[int]):
-    pendings = [
-        txn for txn in txns
-        if txn.source == OF_SOURCE and txn.status == "PENDING" and txn.id not in superseded_ids
-        and txn.id not in drop_ids and txn.account_id is not None
-        and not is_future_charge(txn.description)
-    ]
-    booked_rows = [
-        txn for txn in txns
-        if txn.status == BOOKED and txn.superseded_by_id is None and txn.id not in drop_ids
-        and txn.account_id is not None
-    ]
-    pairs = []
-    for pending in pendings:
-        match = None
-        best_delta = None
-        for booked in booked_rows:
-            if booked.account_id != pending.account_id:
-                continue
-            if _q(booked.amount) != _q(pending.amount):
-                continue
-            delta = abs((booked.transaction_date - pending.transaction_date).days)
-            if delta > PAIR_WINDOW_DAYS:
-                continue
-            if pending.entry_reference and pending.entry_reference == booked.entry_reference:
-                continue
-            if pending.content_fingerprint == booked.content_fingerprint:
-                continue
-            if best_delta is None or delta < best_delta or (delta == best_delta and booked.id < match.id):
-                match = booked
-                best_delta = delta
-        if match is not None:
-            pairs.append((match, pending, "ambiguous_pending"))
-    return pairs
+def _open_disposition(left: Txn, right: Txn) -> str:
+    if left.status == BOOKED and right.status == BOOKED:
+        return "warning"
+    return "excluded"
 
 
-def _reason(txn: Txn, drop_ids: set[int], superseded_ids: set[int], detail_ids: set[int]) -> str:
-    if txn.id in drop_ids:
-        return "confirmed_pair"
-    if txn.superseded_by_id is not None:
-        return "superseded_by_id"
-    if txn.id in superseded_ids:
-        return "pending_superseded"
-    if txn.source == OF_SOURCE and txn.status != BOOKED and is_future_charge(txn.description):
-        return "future_charge"
-    if txn.source == OF_SOURCE and txn.status != BOOKED:
-        return "non_booked"
-    if txn.account_id in detail_ids:
-        return "detail"
-    return "counted"
-
-
-def _billing_cycles(detail: list[Txn], counted: list[Txn]) -> tuple[list[dict], list[dict]]:
+def _billing_cycles(txns: list[Txn], card_ids: set[int]) -> tuple[list[dict], list[dict]]:
     by_month: dict[str, list[Txn]] = {}
-    for txn in detail:
+    for txn in txns:
+        if txn.status != BOOKED or not _is_card_txn(txn, card_ids):
+            continue
         by_month.setdefault(_month(txn.transaction_date), []).append(txn)
     warnings = []
     cycles = []
     for month in sorted(by_month):
         card = sum((_q(txn.amount) for txn in by_month[month]), Decimal("0"))
         bills = [
-            txn for txn in counted
-            if _month(txn.transaction_date) == month and is_card_bill(txn.description)
+            txn for txn in txns
+            if _month(txn.transaction_date) == month and not _is_card_txn(txn, card_ids)
+            and _counts_like_cash(txn) and is_card_bill(txn.description)
         ]
         if not bills:
             warnings.append({
@@ -586,16 +431,13 @@ def _billing_cycles(detail: list[Txn], counted: list[Txn]) -> tuple[list[dict], 
                 "bill_total": None,
                 "status": "unknown",
                 "message_he": (
-                    f"ב-{month} יש עסקאות בחשבון פירוט ({_money(card)}) ואין חיוב כרטיס "
-                    "מזוהה בחשבון העובר ושב באותו חודש. ההשוואה לא ידועה והסכומים לא שונו."
+                    f"ב-{month} יש עסקאות כרטיס ({_money(card)}) ואין חיוב כרטיס מזוהה "
+                    "בחשבון העובר ושב באותו חודש. ההשוואה לא ידועה והסכומים לא שונו."
                 ),
             })
             cycles.append({
-                "month": month,
-                "card_total": _money(card),
-                "bill_total": None,
-                "status": "unknown",
-                "tolerance": "0.01",
+                "month": month, "card_total": _money(card), "bill_total": None,
+                "status": "unknown", "tolerance": "0.01",
             })
             continue
         bill = sum((_q(txn.amount) for txn in bills), Decimal("0"))
@@ -613,73 +455,31 @@ def _billing_cycles(detail: list[Txn], counted: list[Txn]) -> tuple[list[dict], 
                 ),
             })
         cycles.append({
-            "month": month,
-            "card_total": _money(card),
-            "bill_total": _money(bill),
-            "status": status,
-            "tolerance": "0.01",
+            "month": month, "card_total": _money(card), "bill_total": _money(bill),
+            "status": status, "tolerance": "0.01",
         })
     return warnings, cycles
-
-
-def _notes(counts: dict[str, int], amount_diffs: int) -> list[dict]:
-    notes = []
-    if counts["pending_superseded"]:
-        notes.append({"message_he": (
-            f"{counts['pending_superseded']} תנועות ממתינות הוחלפו בתנועה סגורה (BOOKED) "
-            "עם אותו חשבון ואסמכתא או טביעת תוכן, ולא נספרו בתזרים."
-        )})
-    if amount_diffs:
-        notes.append({"message_he": (
-            f"{amount_diffs} זוגות PENDING ו-BOOKED עם אותה אסמכתא נבדלים בסכום. "
-            "נספר הסכום הסגור בלבד."
-        )})
-    if counts["future_charge"]:
-        notes.append({"message_he": (
-            f"{counts['future_charge']} שורות חיוב עתידי לא נספרו בתזרים."
-        )})
-    if counts["non_booked"]:
-        notes.append({"message_he": (
-            f"{counts['non_booked']} תנועות Open Finance שאינן BOOKED לא נספרו."
-        )})
-    if counts["superseded_by_id"]:
-        notes.append({"message_he": (
-            f"{counts['superseded_by_id']} תנועות שסומנו כבר ככפולות לא נספרו."
-        )})
-    if counts["confirmed_pair"]:
-        notes.append({"message_he": (
-            f"{counts['confirmed_pair']} תנועות הוסרו לפי זוגות כפילות שאושרו בתוכנית הדשבורד."
-        )})
-    if counts["detail_account"]:
-        notes.append({"message_he": (
-            f"{counts['detail_account']} תנועות מחשבונות פירוט לא נכנסו לסיכום התזרים "
-            "ומופיעות רק בפירוט בתי העסק."
-        )})
-    return notes
 
 
 def _suspected_warning(left: Txn, right: Txn, rule: str) -> dict:
     amount = _money(_q(left.amount))
     month = _month(left.transaction_date)
-    if rule == "ambiguous_pending":
+    if rule == "journal_vs_internet":
         message = (
-            f"ב-{month} יש תנועה ממתינה ותנועה סגורה על סכום {amount} בטווח של שלושה ימים, "
-            "בלי אסמכתא זהה ובלי טביעת תוכן זהה. התנועה הממתינה לא נספרה כי היא אינה BOOKED. "
-            "התנועה הסגורה נספרה. הזוג לא הוסר ככפילות."
+            f"ב-{month} שתי תנועות שנרשמו בבנק על סכום {amount} — העברת יומן והעברה באינטרנט — "
+            "נראות ככפילות. שתיהן נספרות עד אישור ב-dedupePairs."
         )
-    else:
-        why = "אותה אסמכתא" if rule == "duplicate_booked_reference" else "אותה טביעת תוכן"
+    elif rule == "duplicate_booked_reference":
         message = (
-            f"ב-{month} שתי תנועות BOOKED על סכום {amount} נראות ככפילות ({why}). "
+            f"ב-{month} שתי תנועות BOOKED על סכום {amount} חולקות אסמכתא. "
             "שתיהן נספרות עד אישור ב-dedupePairs."
         )
-    return {
-        "code": "suspected_pair",
-        "rule": rule,
-        "month": month,
-        "amount": amount,
-        "message_he": message,
-    }
+    else:
+        message = (
+            f"ב-{month} שתי תנועות BOOKED על סכום {amount} עם אותה טביעת תוכן "
+            "בטווח של שלושה ימים. שתיהן נספרות עד אישור ב-dedupePairs."
+        )
+    return {"code": "suspected_pair", "rule": rule, "month": month, "amount": amount, "message_he": message}
 
 
 def _pair_row(left: Txn, right: Txn, rule: str, disposition: str) -> dict:
@@ -702,16 +502,14 @@ def _pair_row(left: Txn, right: Txn, rule: str, disposition: str) -> dict:
     }
 
 
-def _keeper_pairs(groups: dict, rule: str) -> list[tuple[Txn, Txn, str]]:
-    pairs = []
-    for group in groups.values():
-        if len(group) < 2:
-            continue
-        ordered = sorted(group, key=lambda txn: txn.id)
-        keeper = ordered[0]
-        for other in ordered[1:]:
-            pairs.append((keeper, other, rule))
-    return pairs
+def _counts_like_cash(txn: Txn) -> bool:
+    if txn.source == OF_SOURCE:
+        return txn.status == BOOKED
+    return True
+
+
+def _is_card_txn(txn: Txn, card_ids: set[int]) -> bool:
+    return txn.is_card or (txn.account_id is not None and txn.account_id in card_ids)
 
 
 def _coverage_keeps(db, organization_id: int, rows: list[BankTransaction]) -> list[BankTransaction]:
@@ -726,35 +524,24 @@ def _coverage_keeps(db, organization_id: int, rows: list[BankTransaction]) -> li
     return [row for row in rows if _decision(row, context)[0]]
 
 
-def _category_names(db, rows: list[BankTransaction]) -> dict[int, str]:
-    ids = {row.category_id for row in rows if row.category_id}
-    if not ids:
-        return {}
-    return {
-        row.id: row.name
-        for row in db.query(Category).filter(Category.id.in_(ids)).all()
-    }
-
-
-def _buckets(rows: list[Txn], keyfn, field: str, missing: str) -> list[dict]:
-    groups: dict[str, list[Txn]] = {}
-    for txn in rows:
-        groups.setdefault(keyfn(txn) or missing, []).append(txn)
-    items = []
-    for name, grouped in groups.items():
-        amounts = [_q(txn.amount) for txn in grouped]
-        inflow = sum((amount for amount in amounts if amount > 0), Decimal("0"))
-        outflow = sum((-amount for amount in amounts if amount < 0), Decimal("0"))
-        net = sum(amounts, Decimal("0"))
-        items.append({
-            field: name,
-            "inflows": _money(inflow),
-            "outflows": _money(outflow),
-            "net": _money(net),
-            "count": len(grouped),
-        })
-    items.sort(key=lambda item: (Decimal(item["net"]), item[field]))
-    return items
+def _subtract_rows(months: list[dict], remove: list[Txn]) -> list[dict]:
+    flows = [(txn.transaction_date, txn.amount) for txn in remove]
+    cumulative = 0.0
+    adjusted = []
+    for month in months:
+        year, mon = (int(part) for part in str(month["month"]).split("-"))
+        m_start = date(year, mon, 1)
+        m_end = _add_months(m_start, 1) - timedelta(days=1)
+        inflow, outflow = _sum_flows(flows, m_start, m_end)
+        copied = dict(month)
+        copied["inflows"] = round(float(month.get("inflows") or 0) - inflow, 2)
+        copied["outflows"] = round(float(month.get("outflows") or 0) - outflow, 2)
+        net = round(copied["inflows"] - copied["outflows"], 2)
+        cumulative = round(cumulative + net, 2)
+        copied["net_flow"] = net
+        copied["cumulative"] = cumulative
+        adjusted.append(copied)
+    return adjusted
 
 
 def _window_start(months: list[dict]) -> date:
@@ -790,11 +577,9 @@ def _within_tolerance(card: Decimal, bill: Decimal) -> bool:
     return abs(card - bill) / abs(bill) <= BILL_TOLERANCE
 
 
-def _category_from_raw(raw: dict) -> str | None:
-    category = raw.get("category")
-    if isinstance(category, dict):
-        return _text(category.get("main"))
-    return _text(category)
+def _has_cal_word(text: str) -> bool:
+    padded = f" {text} "
+    return " cal " in padded
 
 
 def _status(value) -> str | None:

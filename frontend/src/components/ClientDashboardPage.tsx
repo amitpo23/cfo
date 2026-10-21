@@ -49,12 +49,9 @@ type CardMonth = { month: string; total: number; merchants: { merchant: string; 
 
 type QualityMessage = { message_he?: string };
 
-type QualityBucket = { merchant?: string; category?: string; net?: string | number | null; count?: number };
-
 type ActivityQuality = {
   notes?: QualityMessage[];
   warnings?: QualityMessage[];
-  detail?: { merchants?: QualityBucket[]; categories?: QualityBucket[] } | null;
 };
 
 type DashboardView = {
@@ -96,13 +93,6 @@ function money(value: number | null | undefined): string {
   return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(value);
 }
 
-function qualityMoney(value: string | number | null | undefined): string {
-  if (value === null || value === undefined || value === '') return 'לא ידוע';
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(parsed)) return 'לא ידוע';
-  return money(parsed);
-}
-
 function ActivityNotes({ quality }: { quality: ActivityQuality | null | undefined }) {
   const notes = quality?.notes ?? [];
   const warnings = quality?.warnings ?? [];
@@ -116,32 +106,6 @@ function ActivityNotes({ quality }: { quality: ActivityQuality | null | undefine
         <p key={`warning-${index}`} className="text-amber-800">{warning.message_he}</p>
       ))}
     </div>
-  );
-}
-
-function PayloadDetail({ quality }: { quality: ActivityQuality | null | undefined }) {
-  const merchants = quality?.detail?.merchants ?? [];
-  const categories = quality?.detail?.categories ?? [];
-  if (merchants.length === 0 && categories.length === 0) return null;
-  return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">פירוט חשבונות פירוט</h2>
-      <p className="mt-2 text-sm text-stone-500">התנועות האלה לא נכללות בסיכום התזרים. הן מפרקות את חיוב הכרטיס לפי בית עסק.</p>
-      {merchants.length > 0 ? (
-        <ul className="mt-3 text-sm text-stone-700">
-          {merchants.map((item) => (
-            <li key={item.merchant}>{item.merchant}: {qualityMoney(item.net)}</li>
-          ))}
-        </ul>
-      ) : null}
-      {categories.length > 0 ? (
-        <ul className="mt-3 text-sm text-stone-600">
-          {categories.map((item) => (
-            <li key={item.category}>{item.category}: {qualityMoney(item.net)}</li>
-          ))}
-        </ul>
-      ) : null}
-    </section>
   );
 }
 
@@ -375,7 +339,6 @@ export default function ClientDashboardPage() {
               ) : null}
               <ActivityNotes quality={activityQuality} />
             </section>
-            <PayloadDetail quality={activityQuality} />
             {cardMonths.length > 0 ? (
               <section className="rounded-xl bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-medium">פירוט כרטיסי אשראי</h2>

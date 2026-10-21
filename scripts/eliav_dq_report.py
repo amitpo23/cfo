@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only CSV of Open Finance duplicate pairs per organization, account, and month.
+"""Read-only CSV of suspected duplicate bank pairs per organization, account, and month.
 
-Auto-excluded PENDING/BOOKED pairs are included with disposition ``excluded``.
-Unconfirmed lookalikes are ``warning`` and are not removed by this report.
-Confirmed ``dedupePairs`` from the organization's dashboard plans are ``confirmed``.
+Pairs include העברת יומן against העברה באינטרנט. A PENDING row already left out of
+the BOOKED cash total is disposition ``excluded``. Two BOOKED lookalikes are
+``warning`` until an admin confirms ``dedupePairs``. Confirmed pairs are
+``confirmed``.
 
 The script refuses any non-sqlite database URL, opens sqlite in query_only mode,
 and does not import a SUMIT or Open Finance client.
