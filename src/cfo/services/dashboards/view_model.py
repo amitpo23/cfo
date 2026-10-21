@@ -13,6 +13,7 @@ from ...models import Bill, Expense, Invoice, PipelineRun
 from ..bank_coverage import redact_public_coverage
 from ..financial_reports_service import FinancialReportsService
 from ..live_cash_flow_service import LiveCashFlowService
+from . import budget
 
 MAX_RANGE_DAYS = 366
 
@@ -27,14 +28,19 @@ def build_view(db, organization_id: int, start: date, end: date) -> dict:
         months=max(months, 1), as_of_date=end,
     )
     pnl = _profit_and_loss(db, organization_id, start, end)
+    budget_vs_actual = budget.budget_vs_actual(
+        db, organization_id, start, end, books_known=pnl["status"] != "unknown",
+    )
     view = {
         "status": "unknown" if pnl["status"] == "unknown" and not cashflow.get("months") else "ready",
         "cashflow": cashflow,
         "pnl": pnl,
+        "budget_vs_actual": budget_vs_actual,
         "provider_calls": 0,
         "freshness": {
             "cashflow": "books" if cashflow.get("months") else "unknown",
             "pnl": pnl["status"],
+            "budget_vs_actual": budget_vs_actual["status"],
             "published": False,
         },
     }
@@ -45,6 +51,9 @@ def redact_public_view(view: dict) -> dict:
     """Remove internal ids and staff identity from a dashboard view before it is shown on /d/."""
     if not isinstance(view, dict):
         return view
+    if "budget_vs_actual" in view:
+        view = dict(view)
+        view["budget_vs_actual"] = budget.redact_public(view["budget_vs_actual"])
     cashflow = view.get("cashflow")
     if not isinstance(cashflow, dict) or "coverage" not in cashflow:
         return view

@@ -7,6 +7,25 @@ type CashMonth = {
   net_flow: number;
 };
 
+type BudgetCompare = {
+  budget: number | null;
+  actual: number | null;
+  variance: number | null;
+  variance_pct: number | null;
+};
+
+type BudgetLine = BudgetCompare & {
+  kind: 'revenue' | 'cost';
+  category: string;
+  category_he: string;
+};
+
+type BudgetMonth = {
+  month: string;
+  categories: BudgetLine[];
+  totals: { revenue: BudgetCompare; costs: BudgetCompare };
+};
+
 type DashboardView = {
   source?: string;
   provider_calls?: number;
@@ -22,6 +41,12 @@ type DashboardView = {
     net_income_before_tax?: number | null;
     message?: string | null;
   };
+  budget_vs_actual?: {
+    status?: string;
+    has_budget?: boolean;
+    months?: BudgetMonth[];
+    message?: string | null;
+  } | null;
   error?: { message_he?: string };
 };
 
@@ -33,6 +58,67 @@ function slugFromLocation(): string {
 function money(value: number | null | undefined): string {
   if (value === null || value === undefined) return 'לא ידוע';
   return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(value);
+}
+
+function budgetCell(value: number | null | undefined): string {
+  return value === null || value === undefined ? 'אין תקציב' : money(value);
+}
+
+function varianceCell(row: BudgetCompare): string {
+  if (row.variance === null || row.variance === undefined) return '—';
+  const pct = row.variance_pct === null || row.variance_pct === undefined ? '' : ` (${row.variance_pct}%)`;
+  return `${money(row.variance)}${pct}`;
+}
+
+function BudgetRow({ label, row, strong }: { label: string; row: BudgetCompare; strong?: boolean }) {
+  return (
+    <tr className={`border-b border-stone-100 ${strong ? 'font-medium' : ''}`}>
+      <td className="py-2">{label}</td>
+      <td className={`py-2 ${row.budget === null ? 'text-stone-400' : ''}`}>{budgetCell(row.budget)}</td>
+      <td className="py-2">{money(row.actual)}</td>
+      <td className="py-2">{varianceCell(row)}</td>
+    </tr>
+  );
+}
+
+function BudgetVsActual({ section }: { section: NonNullable<DashboardView['budget_vs_actual']> }) {
+  const months = section.months ?? [];
+  const visible = months.filter((month) => month.categories.length > 0);
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">תקציב מול ביצוע</h2>
+      {!section.has_budget ? <p className="mt-3 text-stone-600">לא הוזן תקציב לתקופה.</p> : null}
+      {visible.length === 0 ? null : (
+        <table className="mt-4 w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <th className="py-2 text-right font-medium">קטגוריה</th>
+              <th className="py-2 text-right font-medium">תקציב</th>
+              <th className="py-2 text-right font-medium">ביצוע</th>
+              <th className="py-2 text-right font-medium">סטייה</th>
+            </tr>
+          </thead>
+          {visible.map((month) => (
+            <tbody key={month.month}>
+              <tr className="border-b bg-stone-50">
+                <td className="py-2 font-medium" colSpan={4}>{month.month}</td>
+              </tr>
+              {month.categories.map((line) => (
+                <BudgetRow
+                  key={`${line.kind}-${line.category}`}
+                  label={`${line.kind === 'revenue' ? 'הכנסה' : 'הוצאה'} · ${line.category_he}`}
+                  row={line}
+                />
+              ))}
+              <BudgetRow label='סה"כ הכנסות' row={month.totals.revenue} strong />
+              <BudgetRow label='סה"כ הוצאות' row={month.totals.costs} strong />
+            </tbody>
+          ))}
+        </table>
+      )}
+      {section.message ? <p className="mt-3 text-sm text-stone-500">{section.message}</p> : null}
+    </section>
+  );
 }
 
 export default function ClientDashboardPage() {
@@ -111,6 +197,7 @@ export default function ClientDashboardPage() {
                 <p className="mt-3 text-sm text-stone-500">{pnl.message}</p>
               ) : null}
             </section>
+            {view.budget_vs_actual ? <BudgetVsActual section={view.budget_vs_actual} /> : null}
             <section className="rounded-xl bg-white p-5 shadow-sm">
               <h2 className="text-lg font-medium">תזרים</h2>
               {months.length === 0 ? (
