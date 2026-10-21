@@ -19,7 +19,7 @@ from ..dependencies import get_current_user
 from ...config import settings
 from ...database import get_db_session
 from ...models import DashboardRateLimit, PublishedSnapshot, User
-from ...services.dashboards import service, view_model
+from ...services.dashboards import budget, service, view_model
 from ...services.dashboards.service import READ_ROLES, DashboardError
 
 router = APIRouter()
@@ -54,6 +54,21 @@ class DashboardPatch(BaseModel):
 class PlanBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     payload: dict
+
+
+class BudgetRowBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    year: int
+    month: int
+    category: str | None = Field(default=None, max_length=255)
+    category_id: int | None = None
+    budgeted_amount: float
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class BudgetBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rows: list[BudgetRowBody]
 
 
 class ShareBody(BaseModel):
@@ -173,7 +188,8 @@ def dashboard_view(dashboard_id: int, start: date | None = None, end: date | Non
         row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
         window_end = end or date.today()
         window_start = start or date(window_end.year, 1, 1)
-        view = view_model.build_view(db, row.primary_organization_id, window_start, window_end)
+        view = view_model.build_view(db, row.primary_organization_id, window_start, window_end,
+                                     plan=view_model.plan_payload(db, row.id))
     except DashboardError as exc:
         return _error(exc)
     except ValueError as exc:
@@ -188,7 +204,8 @@ def publish_snapshot(dashboard_id: int, db: Session = Depends(get_db_session),
     try:
         row = service.get_dashboard(db, user, dashboard_id, allowed={"owner"})
         today = date.today()
-        view = view_model.build_view(db, row.primary_organization_id, date(today.year, 1, 1), today)
+        view = view_model.build_view(db, row.primary_organization_id, date(today.year, 1, 1), today,
+                                     plan=view_model.plan_payload(db, row.id))
         saved = view_model.publish_view(db, row, view, day=today)
     except DashboardError as exc:
         return _error(exc)
@@ -245,6 +262,24 @@ def save_plan(dashboard_id: int, body: PlanBody, db: Session = Depends(get_db_se
     response = JSONResponse(plan)
     response.headers["ETag"] = f'"{plan["version"]}"'
     return response
+
+
+@router.get("/dashboards/{dashboard_id}/budget")
+def read_budget(dashboard_id: int, year: int | None = None, db: Session = Depends(get_db_session),
+                user: User = Depends(get_current_user)):
+    try:
+        return budget.read_budget(db, user, dashboard_id, year=year)
+    except DashboardError as exc:
+        return _error(exc)
+
+
+@router.put("/dashboards/{dashboard_id}/budget")
+def save_budget(dashboard_id: int, body: BudgetBody, db: Session = Depends(get_db_session),
+                user: User = Depends(get_current_user)):
+    try:
+        return budget.upsert_budget(db, user, dashboard_id, [row.model_dump() for row in body.rows])
+    except DashboardError as exc:
+        return _error(exc)
 
 
 def _public_response(payload: dict, status_code: int = 200) -> JSONResponse:
@@ -407,7 +442,8 @@ def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get
         return _public_response(payload)
     today = date.today()
     view = view_model.redact_public_view(
-        view_model.build_view(db, dashboard.primary_organization_id, date(today.year, 1, 1), today)
+        view_model.build_view(db, dashboard.primary_organization_id, date(today.year, 1, 1), today,
+                              plan=view_model.plan_payload(db, dashboard.id))
     )
     view["source"] = "live"
     return _public_response(view)

@@ -734,6 +734,8 @@ def classify_open_finance_account(
 def cashflow_selection(db, org_id: int, start: date, end: date):
     """Rows that may be summed, plus the accounts withheld from that window.
 
+    Open Finance rows count only when BOOKED and not on a card account.
+
     An organization with no reviewed local import is unchanged: every row
     counts and there is no coverage note. Otherwise each Open Finance
     account is BOUND, INDEPENDENT, or UNCLASSIFIED. This read does not
@@ -748,6 +750,11 @@ def cashflow_selection(db, org_id: int, start: date, end: date):
         )
         .all()
     )
+    # Only money that moved in a cash account: BOOKED Open Finance rows,
+    # never PENDING twins or card-account detail (see bank_status).
+    from .bank_status import card_account_ids, counts_in_cash_flow
+    card_ids = card_account_ids(db, org_id)
+    rows = [row for row in rows if counts_in_cash_flow(row, card_ids)]
     if not _org_has_reviewed_local_import(db, org_id):
         return [(row.transaction_date, row.amount) for row in rows], None
     ctx = _classification_context(db, org_id)
@@ -761,6 +768,27 @@ def cashflow_selection(db, org_id: int, start: date, end: date):
         "message": _coverage_message(lines, excluded),
     }
     return visible, note
+
+
+def cashflow_row_objects(db, org_id: int, start: date, end: date) -> list:
+    """The same rows ``cashflow_selection`` sums, as BankTransaction objects."""
+    from .bank_status import card_account_ids, counts_in_cash_flow
+    rows = (
+        db.query(BankTransaction)
+        .filter(
+            BankTransaction.organization_id == org_id,
+            BankTransaction.transaction_date >= start,
+            BankTransaction.transaction_date <= end,
+        )
+        .order_by(BankTransaction.transaction_date, BankTransaction.id)
+        .all()
+    )
+    card_ids = card_account_ids(db, org_id)
+    rows = [row for row in rows if counts_in_cash_flow(row, card_ids)]
+    if not _org_has_reviewed_local_import(db, org_id):
+        return rows
+    ctx = _classification_context(db, org_id)
+    return [row for row in rows if _decision(row, ctx)[0]]
 
 
 def _classification_context(db, org_id: int) -> dict:

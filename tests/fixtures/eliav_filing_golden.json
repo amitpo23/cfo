@@ -1,0 +1,1091 @@
+[
+ {
+  "description": "כאל סליקה",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "sales_card"
+ },
+ {
+  "description": "כאל סליקה",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "card_bills"
+ },
+ {
+  "description": "ישראכרט בע\"מ",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "sales_card"
+ },
+ {
+  "description": "ישראכרט בע\"מ",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "card_bills"
+ },
+ {
+  "description": "מקס איט פיננסים",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "sales_card"
+ },
+ {
+  "description": "מקס איט פיננסים",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "card_bills"
+ },
+ {
+  "description": "שב\"א זיכוי",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "sales_card"
+ },
+ {
+  "description": "שב\"א זיכוי",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "ויזה כאל חיוב",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "sales_card"
+ },
+ {
+  "description": "ויזה כאל חיוב",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "card_bills"
+ },
+ {
+  "description": "כא\"ל חיוב חודשי",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "sales_card"
+ },
+ {
+  "description": "כא\"ל חיוב חודשי",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "card_bills"
+ },
+ {
+  "description": "אמריקן אקספרס",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "sales_card"
+ },
+ {
+  "description": "אמריקן אקספרס",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "card_bills"
+ },
+ {
+  "description": "לאומי קארד",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "sales_card"
+ },
+ {
+  "description": "לאומי קארד",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "card_bills"
+ },
+ {
+  "description": "צ'קים דחויים",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "check_discounting"
+ },
+ {
+  "description": "צ'קים דחויים",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "check_discounting"
+ },
+ {
+  "description": "ניכיון שיקים",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "check_discounting"
+ },
+ {
+  "description": "ניכיון שיקים",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "check_discounting"
+ },
+ {
+  "description": "הלוואה קרן",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_in"
+ },
+ {
+  "description": "הלוואה קרן",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_out"
+ },
+ {
+  "description": "העמדת הלוואה",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_in"
+ },
+ {
+  "description": "העמדת הלוואה",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_out"
+ },
+ {
+  "description": "הלוואה- פרעון",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_out"
+ },
+ {
+  "description": "הלוואה- פרעון",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_out"
+ },
+ {
+  "description": "מימון ישיר",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_out"
+ },
+ {
+  "description": "מימון ישיר",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_out"
+ },
+ {
+  "description": "פיגור תשלום",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_out"
+ },
+ {
+  "description": "פיגור תשלום",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_out"
+ },
+ {
+  "description": "קרן/כללי",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_out"
+ },
+ {
+  "description": "קרן/כללי",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "loans_out"
+ },
+ {
+  "description": "ריבית עו\"ש",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "interest"
+ },
+ {
+  "description": "ריבית עו\"ש",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "interest"
+ },
+ {
+  "description": "רבית חובה",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "interest"
+ },
+ {
+  "description": "רבית חובה",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "interest"
+ },
+ {
+  "description": "עמלת העברה",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "bank_fees"
+ },
+ {
+  "description": "עמלת העברה",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "bank_fees"
+ },
+ {
+  "description": "ע.מפעולות",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "bank_fees"
+ },
+ {
+  "description": "ע.מפעולות",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "bank_fees"
+ },
+ {
+  "description": "דמי טפול",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "bank_fees"
+ },
+ {
+  "description": "דמי טפול",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "bank_fees"
+ },
+ {
+  "description": "פנקסי שיקים",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "bank_fees"
+ },
+ {
+  "description": "פנקסי שיקים",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "bank_fees"
+ },
+ {
+  "description": "מכס ומע\"מ",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "tax_refund"
+ },
+ {
+  "description": "מכס ומע\"מ",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "רשות המסים החזר",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "tax_refund"
+ },
+ {
+  "description": "רשות המסים החזר",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "הפקדת מזומן",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "sales_cash"
+ },
+ {
+  "description": "הפקדת מזומן",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "ה.מזומן",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "sales_cash"
+ },
+ {
+  "description": "ה.מזומן",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "הפקדת שיק",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "customer_checks"
+ },
+ {
+  "description": "הפקדת שיק",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "החזר חיוב",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "reversal"
+ },
+ {
+  "description": "החזר חיוב",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "ביטול חיוב",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "reversal"
+ },
+ {
+  "description": "ביטול חיוב",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "העברת יומן",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "bank_journal"
+ },
+ {
+  "description": "העברת יומן",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "יומן זכות",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "bank_journal"
+ },
+ {
+  "description": "יומן זכות",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "פירעון שיק",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "other_in"
+ },
+ {
+  "description": "פירעון שיק",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "supplier_checks"
+ },
+ {
+  "description": "שיק 1234",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "other_in"
+ },
+ {
+  "description": "שיק 1234",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "supplier_checks"
+ },
+ {
+  "description": "שיקים עסקיים",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "other_in"
+ },
+ {
+  "description": "שיקים עסקיים",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "supplier_checks"
+ },
+ {
+  "description": "ביטוח לאומי",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "national_insurance"
+ },
+ {
+  "description": "ביטוח לאומי",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "national_insurance"
+ },
+ {
+  "description": "ב. לאומי",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "national_insurance"
+ },
+ {
+  "description": "ב. לאומי",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "national_insurance"
+ },
+ {
+  "description": "מנורה מבטחים",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "pension_insurance"
+ },
+ {
+  "description": "מנורה מבטחים",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "pension_insurance"
+ },
+ {
+  "description": "הראל ביטוח",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "pension_insurance"
+ },
+ {
+  "description": "הראל ביטוח",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "pension_insurance"
+ },
+ {
+  "description": "כלל חיים",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "pension_insurance"
+ },
+ {
+  "description": "כלל חיים",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "pension_insurance"
+ },
+ {
+  "description": "מגדל",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "pension_insurance"
+ },
+ {
+  "description": "מגדל",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "pension_insurance"
+ },
+ {
+  "description": "פניקס",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "pension_insurance"
+ },
+ {
+  "description": "פניקס",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "pension_insurance"
+ },
+ {
+  "description": "דלק מוטורס",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "fuel_energy"
+ },
+ {
+  "description": "דלק מוטורס",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "fuel_energy"
+ },
+ {
+  "description": "פז צפון",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "fuel_energy"
+ },
+ {
+  "description": "פז צפון",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "fuel_energy"
+ },
+ {
+  "description": "סונול",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "fuel_energy"
+ },
+ {
+  "description": "סונול",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "fuel_energy"
+ },
+ {
+  "description": "דור אלון",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "fuel_energy"
+ },
+ {
+  "description": "דור אלון",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "fuel_energy"
+ },
+ {
+  "description": "ten תחנה",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "fuel_energy"
+ },
+ {
+  "description": "ten תחנה",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "fuel_energy"
+ },
+ {
+  "description": "ליסינג רכב",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "vehicles"
+ },
+ {
+  "description": "ליסינג רכב",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "vehicles"
+ },
+ {
+  "description": "השכרת רכב",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "vehicles"
+ },
+ {
+  "description": "השכרת רכב",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "vehicles"
+ },
+ {
+  "description": "בזק",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "office"
+ },
+ {
+  "description": "בזק",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "office"
+ },
+ {
+  "description": "פרטנר",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "office"
+ },
+ {
+  "description": "פרטנר",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "office"
+ },
+ {
+  "description": "סלקום",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "office"
+ },
+ {
+  "description": "סלקום",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "office"
+ },
+ {
+  "description": "Google Workspace",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "office"
+ },
+ {
+  "description": "Google Workspace",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "office"
+ },
+ {
+  "description": "משיכת מזומן",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "cash_withdrawals"
+ },
+ {
+  "description": "משיכת מזומן",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "cash_withdrawals"
+ },
+ {
+  "description": "כספומט",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "cash_withdrawals"
+ },
+ {
+  "description": "כספומט",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "cash_withdrawals"
+ },
+ {
+  "description": "העברה באינטרנט",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "other_in"
+ },
+ {
+  "description": "העברה באינטרנט",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "transfers_out"
+ },
+ {
+  "description": "העב' לאחר",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "other_in"
+ },
+ {
+  "description": "העב' לאחר",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "transfers_out"
+ },
+ {
+  "description": "העברה מבנק הפועלים",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "other_in"
+ },
+ {
+  "description": "העברה מבנק הפועלים",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "transfers_out"
+ },
+ {
+  "description": "תשלום כללי",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "other_in"
+ },
+ {
+  "description": "תשלום כללי",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "",
+  "amount": 1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "other_in"
+ },
+ {
+  "description": "",
+  "amount": -1000,
+  "org": 2,
+  "account": 35,
+  "debtor": "",
+  "creditor": "",
+  "expected": "suppliers_direct"
+ },
+ {
+  "description": "העברה",
+  "amount": 500,
+  "org": 2,
+  "account": 35,
+  "debtor": "אליהב כהן פודגרופ",
+  "creditor": "",
+  "expected": "intercompany"
+ },
+ {
+  "description": "העברה",
+  "amount": 500,
+  "org": 2,
+  "account": 36,
+  "debtor": "פוד גרופ",
+  "creditor": "",
+  "expected": "other_in"
+ },
+ {
+  "description": "העברה",
+  "amount": -500,
+  "org": 6,
+  "account": 1043,
+  "debtor": "",
+  "creditor": "פודגרופ",
+  "expected": "intercompany"
+ }
+]
