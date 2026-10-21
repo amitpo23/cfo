@@ -197,6 +197,13 @@ async def unhandled_exception_handler(request, exc: Exception):
     )
 
 
+# Medici auth port — נרשמים ראשונים כדי שאף נתיב כללי תחת /api לא יקדים
+# אותם. הנתיבים /api/auth/signin/google ו-/api/auth/callback/google תואמי
+# NextAuth (docs/AUTH_MEDICI_PORT.md).
+from .routes import auth_google, access_admin
+app.include_router(auth_google.router, prefix="/api/auth", tags=["Auth"])
+app.include_router(access_admin.router, prefix="/api/admin/access", tags=["Access grants"])
+
 # Include existing routers
 # SUMIT pass-through routers — every route already injects get_sumit_integration
 # (which is org-scoped + authenticated), but pin auth at the mount too so a future

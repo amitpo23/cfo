@@ -41,6 +41,7 @@ import {
   HelpCircle,
   ChevronDown,
   ClipboardCheck,
+  KeyRound,
   MessageCircle,
   Activity,
   FileX,
@@ -106,6 +107,8 @@ import RezefLanding from './components/RezefLanding';
 import PrivacyPolicy from './components/PrivacyPolicy';
 import ResetPassword from './components/ResetPassword';
 const TeamManagement = lazy(() => import('./components/TeamManagement'));
+const AccessManagement = lazy(() => import('./components/AccessManagement'));
+const GoogleAuthComplete = lazy(() => import('./components/GoogleAuthComplete'));
 
 import './App.css';
 
@@ -193,6 +196,7 @@ const navigationConfig = [
       { to: '/settings', icon: Settings, label: 'Settings', description: 'System settings' },
       { to: '/team', icon: Users, label: 'ניהול צוות', description: 'חברי הארגון, תפקידים והזמנות', adminOnly: true },
       { to: '/policies', icon: ClipboardCheck, label: 'הרשאות כספיות', description: 'תקרות, ערוצים ומורשי חתימה', adminOnly: true },
+      { to: '/access', icon: KeyRound, label: 'הרשאות גישה', description: 'מי נכנס לאיזה ארגון/דשבורד (לפי מייל)', adminOnly: true },
     ]
   }
 ];
@@ -230,6 +234,16 @@ function App() {
   // במייל בלי סשן, לכן חייב להיפתר לפני שער ההתחברות (כמו /privacy).
   if (window.location.pathname.replace(/\/+$/, '') === '/reset-password') {
     return <ResetPassword darkMode={darkMode} />;
+  }
+
+  // סוף זרימת Google (קוד חד-פעמי ב-fragment) — לפני שער ההתחברות, כמו
+  // /reset-password: המשתמש עדיין אינו מחובר כשהוא מגיע לכאן.
+  if (window.location.pathname.replace(/\/+$/, '') === '/auth/complete') {
+    return (
+      <Suspense fallback={<p className="p-8">משלים התחברות…</p>}>
+        <GoogleAuthComplete />
+      </Suspense>
+    );
   }
 
   // Public client dashboard. Resolved before the auth gate so a share link
@@ -445,6 +459,7 @@ function App() {
                 <Route path="/settings" element={<SettingsPage darkMode={darkMode} />} />
                 <Route path="/team" element={<TeamManagement darkMode={darkMode} currentUser={currentUser} />} />
                 <Route path="/policies" element={<PolicyManagementDashboard currentUser={currentUser} />} />
+                <Route path="/access" element={<AccessManagement darkMode={darkMode} />} />
 
                 {/* Financial Operations */}
                 <Route path="/invoices" element={<InvoicesDashboard />} />

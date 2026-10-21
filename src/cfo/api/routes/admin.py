@@ -358,7 +358,8 @@ def _create_self_registered_user(
     payment_status = verified_checkout.payment_status if verified_checkout else "pending"
     selected_plan = verified_checkout.selected_plan if verified_checkout else selected_plan
     requested_organization_id = organization_id
-    existing_user = db.query(User).filter(User.email == email).first()
+    from ...services.access_grants import find_user as _find_user
+    existing_user = _find_user(db, email)
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -517,63 +518,46 @@ async def register(
     return _token_for_user(new_user)
 
 
-@router.post("/auth/google", response_model=Token, tags=["Auth"])
+@router.post("/auth/google", response_model=Token, tags=["Auth"], deprecated=True)
 async def google_login(
     login_data: GoogleLogin,
+    request: Request,
     db: Session = Depends(get_db_session),
 ):
-    """Login or register with a verified Google ID token."""
-    from ...config import settings
-    import httpx
+    """DEPRECATED — כניסת GIS (ID token מהדפדפן). המסלול הראשי:
+    GET /api/auth/signin/google (docs/AUTH_MEDICI_PORT.md).
+
+    הוקשח כמו זרימת השרת: אימות מקומי מול JWKS (חתימה RS256, aud, iss,
+    exp/iat, email_verified) במקום tokeninfo, ומייל לא מוכר נדחה — אין
+    יותר הרשמה עצמית דרך Google. שדות ההרשמה בגוף הבקשה מתעלמים מהם.
+    """
+    from ...services import google_oidc
+    from ...services.google_login import (
+        GoogleLoginRejected, record_verification_failure, resolve_user,
+    )
 
     if not settings.google_client_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Google Sign-In is not configured"
+            detail="התחברות עם Google אינה מוגדרת במערכת.",
         )
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(
-            "https://oauth2.googleapis.com/tokeninfo",
-            params={"id_token": login_data.id_token},
+    try:
+        # GIS בלי nonce (הכפתור הישן לא שלח). כל שאר הבדיקות זהות.
+        identity = google_oidc.verify_id_token(login_data.id_token, expected_nonce=None)
+    except google_oidc.GoogleAuthError as exc:
+        record_verification_failure(db, request, exc.reason, channel="gis")
+        detail = (
+            "כתובת המייל בחשבון Google אינה מאומתת."
+            if exc.reason == "email_not_verified"
+            else "אימות מול Google נכשל. נסו להתחבר שוב."
         )
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Google token")
-
-    payload = resp.json()
-    if payload.get("aud") != settings.google_client_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google token audience mismatch")
-    if str(payload.get("email_verified")).lower() != "true":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Google email is not verified")
-
-    email = payload.get("email")
-    if not email:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google token missing email")
-
-    user = db.query(User).filter(User.email == email).first()
-    if user:
-        if not user.is_active:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is disabled")
-        user.last_login = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(user)
-        return _token_for_user(user)
-
-    checkout = await _assert_registration_allowed(login_data.registration_code, login_data.checkout_session_id, db=db, email=email)
-    full_name = payload.get("name") or email.split("@", 1)[0]
-    new_user = _create_self_registered_user(
-        db,
-        email=email,
-        full_name=full_name,
-        password_hash=get_password_hash(secrets.token_urlsafe(32)),
-        selected_plan=login_data.selected_plan,
-        annual_revenue=login_data.annual_revenue,
-        annual_report_requested=login_data.annual_report_requested,
-        payment_template=login_data.payment_template,
-        checkout_session_id=login_data.checkout_session_id,
-        verified_checkout=checkout,
-    )
-    return _token_for_user(new_user)
+        code = status.HTTP_403_FORBIDDEN if exc.reason == "email_not_verified" else status.HTTP_401_UNAUTHORIZED
+        raise HTTPException(status_code=code, detail=detail)
+    try:
+        user = resolve_user(db, identity, request, channel="gis")
+    except GoogleLoginRejected as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.message_he)
+    return _token_for_user(user)
 
 
 # --- הקשחת login (W6.7) --- #
@@ -694,7 +678,10 @@ async def login(
             detail="יותר מדי ניסיונות התחברות ממקור זה. נסו שוב בעוד דקה.",
         )
 
-    user = db.query(User).filter(User.email == login_data.email).first()
+    # ללא תלות ברישיות: EmailStr מנרמל רק את הדומיין, ולכן מי שנרשם
+    # כ-"Amit@..." ונכנס כ-"amit@..." נדחה בעבר כ"סיסמה שגויה".
+    from ...services import access_grants, auth_audit
+    user = access_grants.find_user(db, login_data.email)
 
     # נעילה נבדקת לפני אימות הסיסמה: חשבון נעול נשאר נעול גם מול סיסמה
     # נכונה, אחרת התוקף פשוט ממשיך לנחש בזמן הנעילה.
@@ -722,12 +709,22 @@ async def login(
         if user is not None:
             _record_failed_login(db, user.id, now=now)
             db.commit()
+        # ביקורת: לא נשמרת הסיסמה ולא המייל של מי שאינו משתמש.
+        auth_audit.record(
+            db, action="LOGIN_FAILED", resource="AUTH.PASSWORD", status=401,
+            request=request, user_id=user.id if user else None,
+            error="bad_password" if user else "unknown_email",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=LOGIN_FAILED_DETAIL,
         )
 
     if not user.is_active:
+        auth_audit.record(
+            db, action="LOGIN_FAILED", resource="AUTH.PASSWORD", status=403,
+            request=request, user_id=user.id, error="account_disabled",
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is disabled"
@@ -737,18 +734,17 @@ async def login(
     user.last_login = datetime.now(timezone.utc)
     user.failed_login_attempts = 0
     user.locked_until = None
+    # הזמנה **אינה** מופעלת בכניסת סיסמה (tests/test_admin_user_membership_routes):
+    # סיסמה שמנהל קבע אינה מוכיחה בעלות על המייל. הפעלה = Google מאומת
+    # או /memberships/accept.
     db.commit()
-    
+
     # Log login
-    audit_log = AuditLog(
-        user_id=user.id,
-        organization_id=user.organization_id,
-        action="LOGIN",
-        entity_type="User",
-        entity_id=user.id
+    auth_audit.record(
+        db, action="LOGIN", resource="AUTH.PASSWORD", status=200, request=request,
+        user_id=user.id, organization_id=user.organization_id,
+        entity_type="User", entity_id=user.id,
     )
-    db.add(audit_log)
-    db.commit()
     
     access_token = create_access_token(
         data={
@@ -886,7 +882,8 @@ async def request_password_reset(
             ),
         )
 
-    user = db.query(User).filter(User.email == body.email).first()
+    from ...services.access_grants import find_user as _find_user
+    user = _find_user(db, body.email)
     if user is not None and user.is_active:
         raw_token = secrets.token_urlsafe(32)
         db.add(PasswordResetToken(
@@ -1573,7 +1570,8 @@ async def invite_existing_identity(
 ):
     if body.role == UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="SUPER_ADMIN is not a membership role")
-    target = db.query(User).filter(User.email == body.email).first()
+    from ...services.access_grants import find_user as _find_user
+    target = _find_user(db, body.email)
     if target is None:
         raise HTTPException(status_code=404, detail="User identity not found")
     if not target.is_active:
@@ -1884,7 +1882,8 @@ async def create_app_user(
         )
 
     # Email uniqueness
-    existing = db.query(User).filter(User.email == user_data.email).first()
+    from ...services.access_grants import find_user as _find_user
+    existing = _find_user(db, user_data.email)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

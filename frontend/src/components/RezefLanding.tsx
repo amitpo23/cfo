@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import GoogleSignInButton, { consumeGoogleAuthError } from './GoogleSignInButton';
 import axios from 'axios';
 import {
   AlertTriangle,
@@ -29,21 +30,6 @@ import {
 } from 'lucide-react';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        id: {
-          initialize: (config: { client_id: string; callback: (response: { credential?: string }) => void }) => void;
-          renderButton: (element: HTMLElement, options: Record<string, string | number>) => void;
-        };
-      };
-    };
-  }
-}
-
 interface Props {
   darkMode: boolean;
   onSuccess: () => void;
@@ -414,7 +400,6 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkout, setCheckout] = useState<CheckoutResponse | null>(null);
   const [billingStatus, setBillingStatus] = useState<BillingStatusResponse | null>(null);
-  const googleButtonRef = useRef<HTMLDivElement | null>(null);
 
   const goToLogin = useCallback(() => {
     setMode('login');
@@ -526,69 +511,14 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
     }
   };
 
-  const handleGoogleCredential = useCallback(async (credential?: string) => {
-    if (!credential) return;
-    setError(null);
-    setLoading(true);
-    try {
-      const { data } = await axios.post<TokenResponse>(`${API_BASE_URL}/admin/auth/google`, {
-        id_token: credential,
-        registration_code: registrationCode || undefined,
-        selected_plan: selectedPlan,
-        annual_revenue: annualRevenue,
-        annual_report_requested: annualReportRequested,
-        payment_template: paymentTemplate,
-        checkout_session_id: checkoutSessionId,
-        payment_status: paymentStatus,
-      });
-      completeLogin(data);
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'התחברות Google נכשלה.');
-    } finally {
-      setLoading(false);
-    }
-  }, [
-    annualReportRequested,
-    annualRevenue,
-    checkoutSessionId,
-    completeLogin,
-    paymentStatus,
-    paymentTemplate,
-    registrationCode,
-    selectedPlan,
-  ]);
-
+  // שגיאת Google חוזרת כ-?auth_error=... מה-callback בשרת.
   useEffect(() => {
-    if (!GOOGLE_CLIENT_ID || !googleButtonRef.current) return;
-
-    const render = () => {
-      if (!window.google || !googleButtonRef.current) return;
-      window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: (response) => handleGoogleCredential(response.credential),
-      });
-      googleButtonRef.current.innerHTML = '';
-      window.google.accounts.id.renderButton(googleButtonRef.current, {
-        theme: 'outline',
-        size: 'large',
-        width: 320,
-        text: mode === 'login' ? 'signin_with' : 'signup_with',
-      });
-    };
-
-    if (window.google) {
-      render();
-      return;
+    const googleError = consumeGoogleAuthError();
+    if (googleError) {
+      setError(googleError);
+      goToLogin();
     }
-
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.defer = true;
-    script.onload = render;
-    document.head.appendChild(script);
-  }, [handleGoogleCredential, mode]);
+  }, [goToLogin]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1124,7 +1054,6 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
               selectedPlanName={selectedPlanName}
               error={error}
               loading={loading}
-              googleButtonRef={googleButtonRef}
               checkout={checkout}
               billingStatus={billingStatus}
               checkoutLoading={checkoutLoading}
@@ -1391,7 +1320,6 @@ function SignupForm({
   selectedPlanName,
   error,
   loading,
-  googleButtonRef,
   checkout,
   billingStatus,
   checkoutLoading,
@@ -1419,7 +1347,6 @@ function SignupForm({
   selectedPlanName: string;
   error: string | null;
   loading: boolean;
-  googleButtonRef: React.RefObject<HTMLDivElement>;
   checkout: CheckoutResponse | null;
   billingStatus: BillingStatusResponse | null;
   checkoutLoading: boolean;
@@ -1544,14 +1471,12 @@ function SignupForm({
         {mode === 'login' ? 'כניסה למערכת' : `הרשמה ל-${selectedPlanName}`}
       </button>
 
-      {GOOGLE_CLIENT_ID && (
+      {mode === 'login' && (
         <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
           <div className="mb-3 text-center text-xs font-medium text-slate-600">
-            או הרשמה עם Google, כולל החבילה וה-checkout שנבחרו
+            או כניסה עם חשבון Google של המייל שהוזמן
           </div>
-          <div className="flex justify-center">
-            <div ref={googleButtonRef} />
-          </div>
+          <GoogleSignInButton />
         </div>
       )}
     </form>

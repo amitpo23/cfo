@@ -129,9 +129,11 @@ ANTHROPIC_API_KEY=...   # required for the AI chat assistant (/api/ai/chat); wit
   write-back endpoint, the system says so instead of pretending it posted.
 - The live deployment observed before this checklist was still an older build
   and had wildcard CORS headers.
-- Google Sign-In is implemented as `/api/admin/auth/google` using Google
-  `tokeninfo` verification. The UI shows the button only when
-  `VITE_GOOGLE_CLIENT_ID` is configured.
+- Google Sign-In is a server-side authorization-code flow ported from Medici
+  (`/api/auth/signin/google`, `/api/auth/callback/google`), with local JWKS
+  verification and email-grant authorization. The legacy GIS endpoint
+  `/api/admin/auth/google` is deprecated and hardened. See
+  `docs/AUTH_MEDICI_PORT.md`.
 - Tenant separation is organization-based inside one database. Each
   self-registered user gets a separate organization and can store its own
   encrypted SUMIT/Open Finance credentials. The app does not currently create a

@@ -975,6 +975,66 @@ class DashboardShareLink(Base):
     use_count = Column(Integer, nullable=False, default=0)
 
 
+class DashboardAccessGrant(Base):
+    """הרשאת גישה לדשבורד לפי כתובת מייל (פורט של hotel_user_access ב-Medici).
+
+    מחזור חיים: invited → active (בהתחברות מאומתת ראשונה של המייל) →
+    revoked. רק ``active`` עם ``user_id`` מקנה גישה. המייל נשמר באותיות
+    קטנות; ההענקה היא החלטה מפורשת של מנהל, לא התאמת דומיין.
+    """
+    __tablename__ = "dashboard_access_grants"
+
+    id = Column(Integer, primary_key=True)
+    dashboard_id = Column(Integer, ForeignKey("client_dashboards.id"), nullable=False)
+    email = Column(String(320), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    role = Column(String(32), nullable=False, default="client_viewer")
+    status = Column(String(20), nullable=False, default="invited")
+    source = Column(String(20), nullable=False, default="rezef")
+    granted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    activated_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("dashboard_id", "email", name="uq_dashboard_grant_email"),
+        CheckConstraint(
+            "role IN ('client_viewer','client_editor')",
+            name="ck_dashboard_grant_role",
+        ),
+        CheckConstraint(
+            "status IN ('invited','active','revoked')",
+            name="ck_dashboard_grant_status",
+        ),
+        Index("ix_dashboard_grant_email_status", "email", "status"),
+        Index("ix_dashboard_grant_user", "user_id"),
+    )
+
+
+class AuthLoginCode(Base):
+    """קוד חד-פעמי קצר-מועד להעברת סשן מ-callback של Google ל-SPA.
+
+    נשמר רק sha256 של הקוד. ``used_at`` נכתב ב-UPDATE מותנה אחד, ולכן
+    קוד אינו ניתן למימוש פעמיים גם בבקשות מקבילות.
+    """
+    __tablename__ = "auth_login_codes"
+
+    id = Column(Integer, primary_key=True)
+    code_hash = Column(String(64), nullable=False)
+    # sha256 של nonce בעוגיית HttpOnly שנקבעה ב-callback — הקוד נפדה רק
+    # מאותו דפדפן (חסימת login-CSRF: הדבקת קוד של תוקף אצל קורבן).
+    browser_binding = Column(String(64), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("code_hash", name="uq_auth_login_code_hash"),
+    )
+
+
 class DashboardPlan(Base):
     __tablename__ = "dashboard_plans"
 
