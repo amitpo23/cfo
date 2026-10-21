@@ -260,6 +260,7 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
         raise DashboardError(412, "if_match_required", "חסרה כותרת If-Match")
     if not isinstance(payload, dict):
         raise DashboardError(415, "invalid_plan", "התוכנית חייבת להיות אובייקט JSON")
+    _validate_managed_plan(payload)
     encoded = json.dumps(payload, ensure_ascii=False)
     if len(encoded.encode()) > PLAN_LIMIT_BYTES:
         raise DashboardError(413, "plan_too_large", "התוכנית גדולה ממגבלת המגה-בייט")
@@ -293,14 +294,93 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
             version=version, dashboard_id=row.id, previous_version=previous,
             payload=payload, changed_at=datetime.utcnow(), changed_by=user.id,
         ))
+    projected = _project_plan_budget(db, row.primary_organization_id, current.version, payload)
     db.add(AuditLog(
         user_id=user.id, organization_id=row.primary_organization_id,
         action="SAVE_DASHBOARD_PLAN", entity_type="DashboardPlan", entity_id=row.id,
-        details={"version": version if current is not None else None, "provider_calls": 0},
+        details={
+            "version": current.version,
+            "projected_budget_rows": projected,
+            "provider_calls": 0,
+        },
     ))
     db.commit()
     db.refresh(current)
     return {"version": current.version, "payload": current.payload, "updated_at": _iso(current.updated_at)}
+
+
+def _validate_managed_plan(payload: dict) -> None:
+    from .plan_budget import PlanBudgetError, validate_budget_lines
+    try:
+        validate_budget_lines(payload)
+    except PlanBudgetError as exc:
+        raise DashboardError(422, "invalid_plan", exc.message_he)
+
+
+def _project_plan_budget(db, organization_id: int, version: str, payload: dict) -> int:
+    from .plan_budget import PlanBudgetError, project_budget_lines, validate_budget_lines
+    try:
+        lines = validate_budget_lines(payload)
+        if lines is None:
+            return 0
+        return project_budget_lines(db, organization_id, version, lines)
+    except PlanBudgetError as exc:
+        db.rollback()
+        raise DashboardError(422, "invalid_plan", exc.message_he)
+
+
+def dashboard_by_slug(db, user: User, slug: str) -> dict:
+    row = db.query(ClientDashboard).filter_by(slug=slug).first()
+    role = role_for(db, user, row) if row is not None else None
+    if role not in READ_ROLES:
+        raise not_found()
+    return {
+        "id": row.id, "slug": row.slug, "title": row.title, "status": row.status,
+        "role": role, "can_edit": role in PLAN_ROLES, "provider_calls": 0,
+    }
+
+
+def read_filing(db, user: User, dashboard_id: int, *, page: int, page_size: int) -> dict:
+    if page < 1 or page_size < 1 or page_size > 200:
+        raise DashboardError(422, "invalid_page", "עמוד או גודל עמוד לא תקינים")
+    row = get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
+    from ...models import BankTransaction, Invoice
+    from ..bank_status import card_account_ids, counts_in_cash_flow
+    from .filing_report import build_filing_report
+    from .plan_budget import budget_catalog
+    current = db.get(DashboardPlan, row.id)
+    payload = current.payload if current is not None and isinstance(current.payload, dict) else {}
+    org_id = row.primary_organization_id
+    card_ids = card_account_ids(db, org_id)
+    bank_rows = (
+        db.query(BankTransaction)
+        .filter(
+            BankTransaction.organization_id == org_id,
+            BankTransaction.superseded_by_id.is_(None),
+        )
+        .order_by(BankTransaction.transaction_date.desc(), BankTransaction.id.desc())
+        .all()
+    )
+    visible = [bank for bank in bank_rows if counts_in_cash_flow(bank, card_ids)]
+    invoices = [
+        {
+            "organization_id": invoice.organization_id,
+            "number": invoice.invoice_number,
+            "date": invoice.issue_date.isoformat(),
+            "total": float(invoice.total or 0),
+        }
+        for invoice in db.query(Invoice).filter(Invoice.organization_id == org_id).all()
+        if invoice.issue_date is not None
+    ]
+    report = build_filing_report(
+        visible, payload, page=page, page_size=page_size, invoices=invoices,
+    )
+    role = role_for(db, user, row)
+    report["role"] = role
+    report["can_edit"] = role in PLAN_ROLES
+    report["budget_categories"] = budget_catalog()
+    report["provider_calls"] = 0
+    return report
 
 
 def read_plan(db, user: User, dashboard_id: int) -> dict:
