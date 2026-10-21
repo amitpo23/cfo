@@ -142,7 +142,10 @@ async def _assert_registration_allowed(registration_code, checkout_session_id=No
         checkout = None
     if (getenv("VERCEL") or getenv("VERCEL_ENV") in {"production", "preview"}) and not settings.registration_secret:
         raise HTTPException(403, "Self-registration is disabled on public deployments")
-    if settings.registration_secret and registration_code != settings.registration_secret:
+    from ...services.secret_compare import constant_time_equal
+    if settings.registration_secret and not constant_time_equal(
+        registration_code, settings.registration_secret,
+    ):
         raise HTTPException(403, "Registration requires a valid registration code")
     return checkout
 
@@ -3278,6 +3281,10 @@ async def cost_protection_status(
             "test_org_daily_request_limit": live_settings.sumit_test_org_daily_request_limit,
             "test_monthly_request_limit": live_settings.sumit_test_monthly_request_limit,
             "live_monthly_request_limit": live_settings.sumit_live_monthly_request_limit,
+            "live_monthly_paid_action_limit": live_settings.sumit_live_monthly_paid_action_limit,
+            "live_org_daily_request_limit": live_settings.sumit_live_org_daily_request_limit,
+            "live_requests_per_minute": live_settings.sumit_live_requests_per_minute,
+            "document_issuance_enabled": live_settings.sumit_document_issuance_enabled,
             "enrichment_daily_action_limit": live_settings.sumit_enrichment_daily_action_limit,
             "sync_min_interval_hours": live_settings.sumit_sync_min_interval_hours,
             "effective_per_minute_limit": limiter.per_minute_limit,

@@ -240,6 +240,7 @@ def list_clients(db, office_organization_id: int) -> list[dict[str, Any]]:
         out.append({
             "id": r.id,
             "company_id": r.company_id,
+            "mode": (r.raw_data or {}).get("mode", "connected"),
             "name": r.name,
             "status": r.status,
             "target_organization_id": r.target_organization_id,

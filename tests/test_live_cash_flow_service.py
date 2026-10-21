@@ -25,6 +25,8 @@ def _add_months(d: date, months: int) -> date:
 # monthly_cash_flow
 # --------------------------------------------------------------------- #
 def test_monthly_cash_flow_sums_bank_transactions_per_calendar_month(fresh_org):
+    # Fixed calendar. Using date.today() made the 10th/11th of the current
+    # month look like future rows whenever CI ran before the 11th.
     as_of = date(2026, 5, 20)
     anchor = as_of.replace(day=1)
     org_id = fresh_org()["org_id"]
@@ -60,6 +62,46 @@ def test_monthly_cash_flow_sums_bank_transactions_per_calendar_month(fresh_org):
     assert m_cur["outflows"] == 1200.0
     assert m_cur["net_flow"] == 3800.0
     assert m_cur["cumulative"] == 5800.0
+
+
+def test_monthly_cash_flow_honors_as_of_when_today_is_before_the_rows(fresh_org, monkeypatch):
+    """Regression: the window is as_of, not the process clock.
+
+    The old test inserted the 10th and 11th and passed date.today() as as_of.
+    A run on the 1st–10th dropped those rows. Freezing "today" to 5 May while
+    as_of is 20 May must still count both rows.
+    """
+    import cfo.services.live_cash_flow_service as cash_flow_module
+
+    class _FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 5, 5)
+
+    monkeypatch.setattr(cash_flow_module, "date", _FrozenDate)
+    as_of = date(2026, 5, 20)
+    anchor = as_of.replace(day=1)
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(BankTransaction(
+            organization_id=org_id, transaction_date=anchor + timedelta(days=9),
+            description="הפקדה", amount=Decimal("5000"),
+        ))
+        db.add(BankTransaction(
+            organization_id=org_id, transaction_date=anchor + timedelta(days=10),
+            description="חיוב", amount=Decimal("-1200"),
+        ))
+        db.commit()
+        result = LiveCashFlowService(db, org_id).monthly_cash_flow(months=1, as_of_date=as_of)
+    finally:
+        db.close()
+
+    assert cash_flow_module.date.today() == date(2026, 5, 5)
+    month = result["months"][0]
+    assert month["month"] == "2026-05"
+    assert month["inflows"] == 5000.0
+    assert month["outflows"] == 1200.0
 
 
 def test_monthly_cash_flow_honest_null_for_empty_org(fresh_org):

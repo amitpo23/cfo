@@ -255,6 +255,10 @@ def _claim_monthly_paid_action(
     """
     if settings.sumit_environment == "test":
         limit_value = settings.sumit_test_monthly_paid_action_limit
+    elif not settings.sumit_document_issuance_enabled:
+        # Live document issuance stays off until the flag is set. A numeric
+        # paid-action limit on its own must not open the gate.
+        limit_value = 0
     else:
         limit_value = settings.sumit_live_monthly_paid_action_limit
     scope_key = f"paid:org:{organization_id}"
@@ -339,6 +343,28 @@ def _claim_monthly_paid_action(
             if not day_claimed:
                 raise SumitQuotaExhausted(
                     f"SUMIT daily paid-action pace exceeded ({endpoint})",
+                )
+            from .sumit_request_budget import resolve_office_organization_id
+            office_id = resolve_office_organization_id(db, organization_id)
+            # The office key is shared by every file. Live stays at the
+            # exempt-plan included actions (10). Test keeps its own ceiling
+            # so a shared window exists without shrinking the test plan.
+            office_paid_limit = (
+                10 if settings.sumit_environment == "live"
+                else settings.sumit_test_monthly_paid_action_limit
+            )
+            office_claimed = SumitRequestLimiter._claim_window(
+                db,
+                scope_key=f"paid:office:{office_id}",
+                organization_id=office_id,
+                window_kind="month",
+                window_start=month_start,
+                limit_value=office_paid_limit,
+                now=canonical_now,
+            )
+            if not office_claimed:
+                raise SumitQuotaExhausted(
+                    f"SUMIT office monthly paid-action budget exceeded ({endpoint})",
                 )
     except SumitQuotaError:
         raise

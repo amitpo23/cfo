@@ -182,7 +182,7 @@ def test_status_rollup_keeps_each_connection_separate(client, of_configured_org)
             ),
             BankConnection(
                 organization_id=org_id, connection_id="conn-m", bank_name="מזרחי",
-                provider_id="mizrahi", status="ACTIVE",
+                provider_id="mizrahi", status="EXPIRED",
                 last_refresh_at=datetime.utcnow() - timedelta(hours=60),
             ),
         ])
