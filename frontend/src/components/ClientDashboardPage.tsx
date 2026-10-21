@@ -1,4 +1,8 @@
 import { useEffect, useState } from 'react';
+import {
+  BudgetEditor, FILING_PAGE_SIZE, FilingReport, FilingRulesCard, LineDraft, PlanPayload,
+  ReviewItem, ReviewList, budgetLinesPayload, customRulesPayload, linesFromPayload,
+} from './dashboardFiling';
 
 type CashMonth = {
   month: string;
@@ -188,27 +192,50 @@ function BudgetVsActual({ section }: { section: NonNullable<DashboardView['budge
   );
 }
 
+type EditorContext = {
+  id: number;
+  role: string;
+  canEdit: boolean;
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  owner: 'בעלים',
+  accountant: 'רואה חשבון',
+  client_editor: 'עורך',
+  client_viewer: 'צופה',
+};
+
+function authHeaders(): HeadersInit {
+  const token = localStorage.getItem('auth_token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function currentMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
 export default function ClientDashboardPage() {
   const [view, setView] = useState<DashboardView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editor, setEditor] = useState<EditorContext | null>(null);
+  const [plan, setPlan] = useState<{ version: string | null; payload: PlanPayload } | null>(null);
+  const [lines, setLines] = useState<LineDraft[]>([]);
+  const [month, setMonth] = useState(currentMonth);
+  const [filing, setFiling] = useState<FilingReport | null>(null);
+  const [ruleSeed, setRuleSeed] = useState({ text: '', nonce: 0 });
+  const [notice, setNotice] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const slug = slugFromLocation();
-    const token = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('k');
+    const shareToken = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('k');
     if (window.location.hash) {
       window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}`);
     }
     let cancelled = false;
 
-    async function load() {
-      if (token) {
-        await fetch(`/api/public/d/${slug}/session`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token }),
-        });
-      }
+    async function loadPublic() {
       const response = await fetch(`/api/public/d/${slug}`, { credentials: 'include' });
       const body = (await response.json().catch(() => ({}))) as DashboardView;
       if (cancelled) return;
@@ -219,11 +246,141 @@ export default function ClientDashboardPage() {
       setView(body);
     }
 
+    async function loadEditor(dashboardId: number) {
+      const headers = authHeaders();
+      const [viewResponse, planResponse, filingResponse] = await Promise.all([
+        fetch(`/api/dashboards/${dashboardId}/view`, { headers }),
+        fetch(`/api/dashboards/${dashboardId}/plan`, { headers }),
+        fetch(`/api/dashboards/${dashboardId}/filing?page=1&page_size=${FILING_PAGE_SIZE}`, { headers }),
+      ]);
+      const viewBody = (await viewResponse.json().catch(() => ({}))) as DashboardView;
+      const planBody = (await planResponse.json().catch(() => ({}))) as {
+        version?: string | null;
+        payload?: PlanPayload | null;
+        error?: { message_he?: string };
+      };
+      const filingBody = (await filingResponse.json().catch(() => ({}))) as FilingReport & {
+        error?: { message_he?: string };
+      };
+      if (cancelled) return;
+      if (!viewResponse.ok) {
+        setError(viewBody.error?.message_he || 'הדשבורד לא נמצא');
+        return;
+      }
+      setView(viewBody);
+      if (planResponse.ok) {
+        const payload = planBody.payload && typeof planBody.payload === 'object' ? planBody.payload : {};
+        setPlan({ version: planBody.version ?? null, payload });
+        setLines(linesFromPayload(payload));
+      }
+      if (filingResponse.ok) setFiling(filingBody);
+    }
+
+    async function load() {
+      if (shareToken) {
+        await fetch(`/api/public/d/${slug}/session`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: shareToken }),
+        });
+      }
+      if (localStorage.getItem('auth_token')) {
+        const meta = await fetch(`/api/dashboards/by-slug/${slug}`, { headers: authHeaders() });
+        if (meta.ok) {
+          const dashboard = (await meta.json()) as { id: number; role: string; can_edit: boolean };
+          if (cancelled) return;
+          setEditor({ id: dashboard.id, role: dashboard.role, canEdit: dashboard.can_edit });
+          await loadEditor(dashboard.id);
+          return;
+        }
+      }
+      await loadPublic();
+    }
+
     void load();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  async function reloadFiling(page: number) {
+    if (!editor) return;
+    const response = await fetch(
+      `/api/dashboards/${editor.id}/filing?page=${page}&page_size=${FILING_PAGE_SIZE}`,
+      { headers: authHeaders() },
+    );
+    const body = (await response.json().catch(() => ({}))) as FilingReport & { error?: { message_he?: string } };
+    if (!response.ok) {
+      setNotice(body.error?.message_he || 'טעינת התיוק נכשלה');
+      return;
+    }
+    setFiling(body);
+  }
+
+  async function reloadView() {
+    if (!editor) return;
+    const response = await fetch(`/api/dashboards/${editor.id}/view`, { headers: authHeaders() });
+    if (!response.ok) return;
+    setView((await response.json()) as DashboardView);
+  }
+
+  async function savePayload(next: PlanPayload, resetLines: boolean): Promise<boolean> {
+    if (!editor || !plan) return false;
+    setSaving(true);
+    setNotice(null);
+    const response = await fetch(`/api/dashboards/${editor.id}/plan`, {
+      method: 'PUT',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json', 'If-Match': plan.version ?? 'null' },
+      body: JSON.stringify({ payload: next }),
+    });
+    const body = (await response.json().catch(() => ({}))) as {
+      version?: string;
+      payload?: PlanPayload;
+      error?: { message_he?: string };
+    };
+    setSaving(false);
+    if (!response.ok || !body.version || !body.payload) {
+      setNotice(body.error?.message_he || 'השמירה נכשלה');
+      return false;
+    }
+    setPlan({ version: body.version, payload: body.payload });
+    if (resetLines) setLines(linesFromPayload(body.payload));
+    await Promise.all([reloadView(), reloadFiling(filing?.review.page ?? 1)]);
+    return true;
+  }
+
+  function saveBudget() {
+    if (!plan || !filing) return;
+    const built = budgetLinesPayload(lines, filing.budget_categories);
+    if ('error' in built) {
+      setNotice(built.error);
+      return;
+    }
+    void savePayload({ ...plan.payload, budgetLines: built.lines }, true);
+  }
+
+  function saveRules(rules: FilingReport['rules']) {
+    if (!plan) return;
+    void savePayload({ ...plan.payload, statusRules: customRulesPayload(rules) }, false);
+  }
+
+  function approve(item: ReviewItem, category: string, note: string) {
+    if (!plan) return;
+    const existing = plan.payload.statusDecisions;
+    const decisions = existing && typeof existing === 'object' ? { ...(existing as Record<string, unknown>) } : {};
+    decisions[item.id] = {
+      category,
+      action: 'approve',
+      organizationId: item.organization_id,
+      date: item.date,
+      amount: item.amount,
+      source: 'dashboard',
+      note: note || null,
+      updatedAt: new Date().toISOString(),
+    };
+    void savePayload({ ...plan.payload, statusDecisions: decisions }, false);
+  }
 
   const months = view?.cashflow?.months ?? [];
   const pnl = view?.pnl;
@@ -238,10 +395,29 @@ export default function ClientDashboardPage() {
       <div className="mx-auto max-w-5xl px-4 py-8">
         <p className="text-sm text-stone-500">רצף</p>
         <h1 className="mt-1 text-2xl font-semibold">דשבורד לקוח</h1>
+        {editor ? (
+          <p className="mt-1 text-sm text-stone-500">
+            {ROLE_LABELS[editor.role] || editor.role}
+            {editor.canEdit ? ' · אפשר לערוך' : ' · צפייה בלבד'}
+          </p>
+        ) : null}
+        {notice ? <p className="mt-3 text-sm text-stone-700">{notice}</p> : null}
         {error ? <p className="mt-8 text-stone-700">{error}</p> : null}
         {!error && !view ? <p className="mt-8 text-stone-500">טוען נתונים…</p> : null}
         {view ? (
           <div className="mt-8 grid gap-6">
+            {editor && filing ? (
+              <BudgetEditor
+                canEdit={editor.canEdit}
+                categories={filing.budget_categories}
+                lines={lines}
+                month={month}
+                onMonth={setMonth}
+                onLines={setLines}
+                onSave={saveBudget}
+                saving={saving}
+              />
+            ) : null}
             <section className="rounded-xl bg-white p-5 shadow-sm">
               <h2 className="text-lg font-medium">רווח והפסד</h2>
               {pnl?.status === 'unknown' ? (
@@ -268,6 +444,26 @@ export default function ClientDashboardPage() {
               ) : null}
             </section>
             {view.budget_vs_actual ? <BudgetVsActual section={view.budget_vs_actual} /> : null}
+            {editor && filing ? (
+              <FilingRulesCard
+                canEdit={editor.canEdit}
+                rules={filing.rules}
+                categories={filing.categories}
+                seed={ruleSeed}
+                saving={saving}
+                onSave={saveRules}
+              />
+            ) : null}
+            {editor && filing ? (
+              <ReviewList
+                canEdit={editor.canEdit}
+                report={filing}
+                saving={saving}
+                onPage={(page) => { void reloadFiling(page); }}
+                onApprove={approve}
+                onCreateRule={(description) => setRuleSeed({ text: description.slice(0, 80), nonce: Date.now() })}
+              />
+            ) : null}
             <section className="rounded-xl bg-white p-5 shadow-sm">
               <h2 className="text-lg font-medium">תזרים</h2>
               {months.length === 0 ? (
@@ -285,12 +481,12 @@ export default function ClientDashboardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {months.map((month) => (
-                      <tr key={month.month} className="border-b border-stone-100">
-                        <td className="py-2">{month.month}</td>
-                        <td className="py-2">{money(month.inflows)}</td>
-                        <td className="py-2">{money(month.outflows)}</td>
-                        <td className="py-2">{money(month.net_flow)}</td>
+                    {months.map((cashMonth) => (
+                      <tr key={cashMonth.month} className="border-b border-stone-100">
+                        <td className="py-2">{cashMonth.month}</td>
+                        <td className="py-2">{money(cashMonth.inflows)}</td>
+                        <td className="py-2">{money(cashMonth.outflows)}</td>
+                        <td className="py-2">{money(cashMonth.net_flow)}</td>
                       </tr>
                     ))}
                   </tbody>
