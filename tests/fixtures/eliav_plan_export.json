@@ -1,0 +1,94 @@
+{
+  "version": "db15",
+  "exportedAt": "2026-10-21",
+  "data": {
+    "budgets": {
+      "2026-08|base": {
+        "revenue_pizza": {"quantity": 120, "rate": 48},
+        "suppliers_flour": {"quantity": 10, "rate": 84.5}
+      },
+      "2026-09|base": {
+        "revenue_pizza": {"quantity": 100, "rate": 48},
+        "suppliers_flour": {"quantity": 8, "rate": 84.5}
+      }
+    },
+    "lines": [
+      {
+        "id": "revenue_pizza",
+        "label": "מכירות פיצה",
+        "group": "הכנסות",
+        "kind": "revenue",
+        "activity": "operating",
+        "unit": "מגש"
+      },
+      {
+        "id": "suppliers_flour",
+        "label": "קמח",
+        "group": "ספקים",
+        "kind": "expense",
+        "activity": "operating",
+        "unit": "שק"
+      }
+    ],
+    "customLines": [],
+    "payroll": [
+      {"id": "wage_supervisor", "label": "משגיח", "monthly": 700},
+      {"id": "wage_aliya", "label": "עליה", "monthly": 9000},
+      {"id": "wage_shalev", "label": "שליו", "monthly": 10000},
+      {"id": "wage_eliav", "label": "אליאב", "monthly": 30000}
+    ],
+    "statusDecisions": {
+      "101": {
+        "category": "suppliers",
+        "action": "classify",
+        "ruleCategory": null,
+        "organizationId": 2,
+        "date": "2026-08-12",
+        "amount": -840.5,
+        "source": "bank",
+        "note": "קמח לאוגוסט",
+        "updatedAt": "2026-08-13T08:00:00Z",
+        "previous": null
+      },
+      "999999001": {
+        "category": "overhead",
+        "action": "classify",
+        "ruleCategory": null,
+        "organizationId": 2,
+        "date": "2026-08-02",
+        "amount": -50,
+        "source": "bank",
+        "note": "תנועה שלא נמצאה בבנק",
+        "updatedAt": "2026-08-03T08:00:00Z",
+        "previous": null
+      }
+    },
+    "statusRules": [
+      {
+        "id": "rule-flour",
+        "contains": "טחנת",
+        "field": "description",
+        "direction": "out",
+        "organizationId": 2,
+        "category": "suppliers",
+        "updatedAt": "2026-08-01T00:00:00Z"
+      }
+    ],
+    "statusParameters": {
+      "scenario": "base",
+      "horizon": 6,
+      "growth": 0,
+      "vat": 0.18
+    },
+    "manual": null,
+    "openingBalance": null,
+    "forecast": null,
+    "facilities": null,
+    "balanceAnchors": null,
+    "rateAssumptions": null,
+    "incomingAllocations": null,
+    "invoiceDecisions": null,
+    "discountInvoiceLinks": null,
+    "bankDecisions": {}
+  }
+}
