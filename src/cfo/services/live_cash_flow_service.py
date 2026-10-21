@@ -80,7 +80,7 @@ class LiveCashFlowService:
         rows = self._bank_rows(window_start, window_end)
 
         if not rows:
-            return {
+            empty = {
                 "as_of": as_of.isoformat(),
                 "data_sources": [],
                 "months": [],
@@ -90,6 +90,7 @@ class LiveCashFlowService:
                     "זה בחלון הזה."
                 ),
             }
+            return self._with_coverage(empty)
 
         months_out: list[dict[str, Any]] = []
         cumulative = 0.0
@@ -108,12 +109,12 @@ class LiveCashFlowService:
                 "cumulative": cumulative,
             })
 
-        return {
+        return self._with_coverage({
             "as_of": as_of.isoformat(),
             "data_sources": ["bank_transactions_actual"],
             "months": months_out,
             "message": None,
-        }
+        })
 
     # ------------------------------------------------------------------ #
     # מצב מזומנים יומי
@@ -354,16 +355,21 @@ class LiveCashFlowService:
     # ------------------------------------------------------------------ #
     # פנימי
     # ------------------------------------------------------------------ #
+    def _with_coverage(self, payload: dict[str, Any]) -> dict[str, Any]:
+        note = getattr(self, "_coverage_note", None)
+        if note is not None:
+            payload = dict(payload)
+            payload["coverage"] = note
+            if not payload.get("months") and note.get("message"):
+                payload["message"] = note["message"]
+                payload["data_sources"] = ["bank_transactions_actual"]
+        return payload
+
     def _bank_rows(self, start: date, end: date) -> list[tuple[date, Decimal]]:
-        return (
-            self.db.query(BankTransaction.transaction_date, BankTransaction.amount)
-            .filter(
-                BankTransaction.organization_id == self.organization_id,
-                BankTransaction.transaction_date >= start,
-                BankTransaction.transaction_date <= end,
-            )
-            .all()
-        )
+        from .bank_coverage import cashflow_selection
+        rows, note = cashflow_selection(self.db, self.organization_id, start, end)
+        self._coverage_note = note
+        return rows
 
     @staticmethod
     def _sum_flows(

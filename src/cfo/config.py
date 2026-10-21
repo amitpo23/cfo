@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     
     # Security
     jwt_secret_key: str = "CHANGE-THIS-IN-PRODUCTION-USE-LONG-RANDOM-STRING"
+    # Optional dedicated key for public dashboard share cookies. When unset,
+    # the cookie signer falls back to jwt_secret_key.
+    dashboard_cookie_secret: Optional[str] = None
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440  # 24 hours
     # When set, /auth/register requires this code — keeps open registration

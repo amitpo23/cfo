@@ -20,9 +20,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import BankConnection, IntegrationConnection
+from .bank_coverage import SYNCABLE_STATUSES, supersede_other_live_consents
 from .open_finance_client import OpenFinanceError
 from .credentials_vault import decrypt_credentials, encrypt_credentials
 
@@ -38,6 +40,20 @@ _STATUS_EXPLANATIONS = {
 
 def _org_user_id(org_id: int) -> str:
     return f"rezef-org-{org_id}"
+
+
+def _lost_active_consent_race(exc: IntegrityError) -> bool:
+    """True when the one-live-consent index rejected this commit.
+
+    Postgres names ``uq_bankconn_one_active_open_finance``. SQLite reports
+    the indexed column only, and a composite unique failure also lists
+    ``connection_id``.
+    """
+    detail = " ".join(str(getattr(exc, "orig", exc)).split())
+    if "uq_bankconn_one_active_open_finance" in detail:
+        return True
+    marker = "UNIQUE constraint failed: bank_connections.organization_id"
+    return marker in detail and f"{marker}," not in detail
 
 
 def ensure_of_identity(db: Session, org_id: int) -> IntegrationConnection:
@@ -269,7 +285,10 @@ async def get_connection_status(db: Session, org_id: int, connection_id: str) ->
             "connection status response missing status",
             payload,
         )
-    row.status = status
+    normalized = str(status).strip().upper()
+    if normalized in SYNCABLE_STATUSES:
+        supersede_other_live_consents(db, org_id, connection_id)
+    row.status = normalized
     row.provider_id = (
         payload.get("providerFriendlyId")
         or payload.get("providerId")
@@ -282,16 +301,25 @@ async def get_connection_status(db: Session, org_id: int, connection_id: str) ->
     elif isinstance(accounts, int):
         row.accounts_count = accounts
     row.raw_data = payload
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if _lost_active_consent_race(exc):
+            raise OpenFinanceError(
+                409,
+                "Organization already has an active Open Finance connection",
+            ) from exc
+        raise
 
     result: dict[str, Any] = {
-        "status": status,
+        "status": normalized,
         "provider": payload.get("providerFriendlyId") or payload.get("provider") or payload.get("bankName"),
         "expiry": payload.get("expiryDate") or payload.get("expiry"),
         "accounts": payload.get("accounts"),
         "last_fetched": payload.get("lastFetched") or payload.get("lastRefreshAt") or payload.get("updatedAt"),
     }
-    explanation = _STATUS_EXPLANATIONS.get(status)
+    explanation = _STATUS_EXPLANATIONS.get(normalized)
     if explanation:
         result["explanation"] = explanation
     return result

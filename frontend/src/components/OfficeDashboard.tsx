@@ -3,7 +3,7 @@
  * its own authentication, sync them, and view the cross-company (רוחבי) synthesis:
  * required reconciliations and VAT position aggregated across all clients.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Building2, Plus, Loader2, FolderSync, AlertCircle, CheckCircle2,
@@ -13,6 +13,7 @@ import api from '../services/api';
 interface ClientFile {
   id: number;
   company_id: string;
+  mode?: string;
   name: string;
   status: string;
   connections: string[];
@@ -44,9 +45,18 @@ const ACTION_LABEL: Record<string, string> = {
   pay_payable: 'תשלום התחייבות',
 };
 
-const emptyForm = { name: '', company_id: '', api_key: '', of_client_id: '', of_client_secret: '', of_user_id: '' };
+const emptyForm = { mode: 'import_only', tax_id: '', name: '', company_id: '', api_key: '', of_client_id: '', of_client_secret: '', of_user_id: '' };
 
 export default function OfficeDashboard() {
+  const [coverage, setCoverage] = useState<Array<{
+    organization_id: number; name: string; mode: string;
+    sources: Record<string, {status: string; last_run_at: string | null}>;
+    morning_cycle: {status: string; date: string | null; result: string | null};
+    reviewed_imports: Array<{source_name: string; observed_at: string}>;
+  }>>([]);
+  const sourceLabels: Record<string,string> = {current:'עודכן', stale:'ישן / לא הושלם', disabled:'כבוי', not_connected:'לא מחובר', not_run:'טרם רץ'};
+  const cycleLabels: Record<string,string> = {green:'תקין', yellow:'דורש בדיקה', red:'דורש טיפול'};
+  const sourceLabel = (status: string) => sourceLabels[status] || status;
   const [clients, setClients] = useState<ClientFile[]>([]);
   const [rollup, setRollup] = useState<Rollup | null>(null);
   const [form, setForm] = useState({ ...emptyForm });
@@ -57,26 +67,28 @@ export default function OfficeDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
-      const [c, r, s] = await Promise.all([
+      const [c, r, s, health] = await Promise.all([
         api.get<{ clients: ClientFile[] }>('/api/office/clients'),
         api.get<Rollup>('/api/office/rollup'),
         api.get<{ sumit_key_configured: boolean }>('/api/office/settings'),
+        api.get<{clients: Array<{organization_id:number;name:string;mode:string;sources:Record<string,{status:string;last_run_at:string|null}>;morning_cycle:{status:string;date:string|null;result:string|null};reviewed_imports:Array<{source_name:string;observed_at:string}>}>}>('/api/office/clients/daily-coverage'),
       ]);
       setClients(c.clients || []);
+      setCoverage(health.clients || []);
       setRollup(r);
       setKeyConfigured(s.sumit_key_configured);
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'שגיאה בטעינת נתוני המשרד');
     }
-  };
+  }, []);
 
   const saveOfficeKey = async () => {
     setBusy('officekey'); setError(null); setNotice(null);
     try {
       await api.post('/api/office/settings', { sumit_api_key: officeKey });
-      setNotice('מפתח המשרד נשמר — כל תיק חדש ישתמש בו עם ה-company id שלו.');
+      setNotice('מפתח המשרד נשמר. חיבור תיק דורש פרטי גישה מתאימים לתיק.');
       setOfficeKey('');
       await load();
     } catch (e: any) {
@@ -84,25 +96,38 @@ export default function OfficeDashboard() {
     } finally { setBusy(null); }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const addClient = async () => {
     setBusy('add'); setError(null); setNotice(null);
     try {
-      const payload: any = { name: form.name, company_id: form.company_id, api_key: form.api_key };
-      if (form.of_client_id && form.of_client_secret && form.of_user_id) {
+      const local = form.mode === 'import_only';
+      const payload: any = local ? {name: form.name, tax_id: form.tax_id} : { name: form.name, company_id: form.company_id, api_key: form.api_key };
+      if (!local && form.of_client_id && form.of_client_secret && form.of_user_id) {
         payload.open_finance = {
           client_id: form.of_client_id, client_secret: form.of_client_secret, user_id: form.of_user_id,
         };
       }
-      await api.post('/api/office/clients', payload);
-      setNotice(`תיק "${form.name}" נוסף עם אותנטיקציה משלו.`);
+      await api.post(local ? '/api/office/clients/import-only' : '/api/office/clients', payload);
+      setNotice(local ? 'התיק נוסף ליבוא מקומי. חיבורי ספק וסנכרון כבויים.' : 'התיק נוסף.');
       setForm({ ...emptyForm });
       setShowForm(false);
       await load();
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'שגיאה בהוספת תיק');
     } finally { setBusy(null); }
+  };
+
+  const importSource = async (clientId: number, file: File) => {
+    setBusy('import'); setError(null); setNotice(null);
+    try {
+      if (file.size > 4 * 1024 * 1024) throw new Error('קובץ היבוא מוגבל ל־4MB');
+      const body: unknown = JSON.parse(await file.text());
+      const response = await api.post<{inserted:number;unchanged:number}>('/api/office/clients/'+clientId+'/reviewed-import', body);
+      setNotice('נקלטו '+response.inserted+' רשומות. '+response.unchanged+' רשומות קיימות נשמרו ללא שינוי.');
+      await load();
+    } catch (e: any) { setError(e?.response?.data?.detail || e?.message || 'היבוא לא הושלם'); }
+    finally { setBusy(null); }
   };
 
   const syncAll = async () => {
@@ -117,6 +142,7 @@ export default function OfficeDashboard() {
   };
 
   const t = rollup?.totals;
+  const incompleteFinancials = clients.some(c=>c.mode === 'import_only');
 
   return (
     <div className="p-6 max-w-6xl mx-auto" dir="rtl">
@@ -154,7 +180,7 @@ export default function OfficeDashboard() {
         <div className="flex-1 min-w-[200px]">
           <div className="font-semibold text-sm">מפתח SUMIT של המשרד</div>
           <div className="text-xs text-slate-500 mt-0.5">
-            מפתח אחד שמשרת את כל התיקים (כל תיק עם ה-company id שלו). אפשר לדרוס פר-לקוח.
+            יש להשתמש בפרטי גישה מאומתים לכל תיק. תיקים ביבוא מקומי אינם משתמשים במפתח זה.
             {keyConfigured
               ? <span className="text-emerald-600 mr-1">✓ מוגדר</span>
               : <span className="text-amber-600 mr-1">לא מוגדר</span>}
@@ -171,10 +197,17 @@ export default function OfficeDashboard() {
 
       {showForm && (
         <div className="mb-6 p-4 border rounded-xl bg-slate-50">
-          <h3 className="font-semibold mb-3">תיק לקוח חדש (אותנטיקציה משלו)</h3>
+          <h3 className="font-semibold mb-3">תיק לקוח חדש</h3>
+          <label className="block text-sm mb-3">אופן קליטה
+            <select aria-label="אופן קליטה" className="border rounded-lg px-3 py-2 mr-2" value={form.mode} onChange={e=>setForm({...form, mode:e.target.value})}>
+              <option value="import_only">יבוא מקומי — ללא קריאות לספקים</option>
+              <option value="connected">הגדרת חיבורי ספק</option>
+            </select>
+          </label>
           <div className="grid md:grid-cols-3 gap-3">
             <input className="border rounded-lg px-3 py-2 text-sm" placeholder="שם הלקוח"
               value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            {form.mode === 'import_only' ? <input className="border rounded-lg px-3 py-2 text-sm" aria-label="ח״פ / עוסק" placeholder="ח״פ / עוסק — 9 ספרות" value={form.tax_id} onChange={e=>setForm({...form,tax_id:e.target.value})} /> : <>
             <input className="border rounded-lg px-3 py-2 text-sm" placeholder="SUMIT company id (תיק)"
               value={form.company_id} onChange={(e) => setForm({ ...form, company_id: e.target.value })} />
             <input className="border rounded-lg px-3 py-2 text-sm" placeholder="SUMIT API key (ריק = מפתח המשרד)"
@@ -185,8 +218,10 @@ export default function OfficeDashboard() {
               value={form.of_client_secret} onChange={(e) => setForm({ ...form, of_client_secret: e.target.value })} />
             <input className="border rounded-lg px-3 py-2 text-sm" placeholder="Open Finance user id (אופ׳)"
               value={form.of_user_id} onChange={(e) => setForm({ ...form, of_user_id: e.target.value })} />
+            </>}
+
           </div>
-          <button onClick={addClient} disabled={!!busy || !form.name || !form.company_id}
+          <button onClick={addClient} disabled={!!busy || !form.name || (form.mode === 'import_only' ? !/^\d{9}$/.test(form.tax_id) : !form.company_id)}
             className="mt-3 inline-flex items-center gap-1 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm hover:bg-emerald-700 disabled:opacity-50">
             {busy === 'add' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} שמור תיק
           </button>
@@ -198,10 +233,23 @@ export default function OfficeDashboard() {
         <div className="grid sm:grid-cols-4 gap-3 mb-6">
           <Stat label="תיקים" value={t.clients} />
           <Stat label="התאמות נדרשות" value={t.required_actions} accent={t.required_actions ? 'text-orange-600' : ''} />
-          <Stat label='מע"מ נטו' value={`₪${t.net_vat.toLocaleString()}`} accent={t.net_vat >= 0 ? 'text-rose-600' : 'text-emerald-600'} />
-          <Stat label='מע"מ עסקאות/תשומות' value={`₪${t.output_vat.toLocaleString()} / ₪${t.input_vat.toLocaleString()}`} />
+          <Stat label='מע"מ נטו' value={incompleteFinancials ? "נתונים חלקיים" : "₪"+t.net_vat.toLocaleString()} accent={t.net_vat >= 0 ? 'text-rose-600' : 'text-emerald-600'} />
+          <Stat label='מע"מ עסקאות/תשומות' value={incompleteFinancials ? "ממתין למיפוי המקורות" : "₪"+t.output_vat.toLocaleString()+" / ₪"+t.input_vat.toLocaleString()} />
         </div>
       )}
+
+      <section className="mb-6 border rounded-xl p-4 overflow-x-auto" aria-label="בקרת עדכון יומית">
+        <h2 className="font-semibold mb-2">בקרת עדכון יומית</h2>
+        <p className="text-xs text-slate-500 mb-3">מועד ריצת הבקרה מוצג בנפרד מטריות הבנק והמסמכים. יבוא מקומי הוא מקור מתוארך.</p>
+        <table className="w-full text-sm"><thead><tr><th className="text-right p-2">תיק</th><th className="text-right p-2">מחזור בוקר</th><th className="text-right p-2">בנק</th><th className="text-right p-2">SUMIT</th><th className="text-right p-2">מקורות מיובאים</th></tr></thead>
+          <tbody>{coverage.map(c=><tr key={c.organization_id} className="border-t">
+            <td className="p-2">{c.name}</td>
+            <td className="p-2">{c.morning_cycle.date || sourceLabel(c.morning_cycle.status)}{c.morning_cycle.result ? ' · '+(cycleLabels[c.morning_cycle.result]||c.morning_cycle.result):''}</td>
+            <td className="p-2">{sourceLabel(c.sources.open_finance.status)}{c.sources.open_finance.last_run_at && <div className="text-xs"><bdi>{new Date(c.sources.open_finance.last_run_at).toLocaleString('he-IL')}</bdi></div>}</td>
+            <td className="p-2">{sourceLabel(c.sources.sumit.status)}{c.sources.sumit.last_run_at && <div className="text-xs"><bdi>{new Date(c.sources.sumit.last_run_at).toLocaleString('he-IL')}</bdi></div>}</td>
+            <td className="p-2">{c.reviewed_imports.length ? c.reviewed_imports.map(x=><div key={x.source_name+x.observed_at} className="text-xs">{x.source_name}</div>) : 'טרם יובאו'}</td>
+          </tr>)}</tbody></table>
+      </section>
 
       {/* Client roster */}
       <div className="border rounded-xl overflow-hidden">
@@ -222,8 +270,10 @@ export default function OfficeDashboard() {
               const r = rollup?.clients.find((x) => x.company_id === c.company_id);
               return (
                 <tr key={c.id} className="border-t">
-                  <td className="px-4 py-2 font-medium">{c.name}</td>
-                  <td className="px-4 py-2 text-slate-500">{c.company_id}</td>
+                  <td className="px-4 py-2 font-medium">{c.name}{c.mode === 'import_only' && <label className="block text-xs text-indigo-600 mt-1">יבוא מקור שנבדק (JSON)
+                    <input type="file" accept=".json,application/json" aria-label={'יבוא מקור עבור '+c.name} disabled={!!busy} className="block mt-1 max-w-[220px]" onChange={e=>{const file=e.target.files?.[0];if(file)void importSource(c.id,file);e.target.value='';}} />
+                  </label>}</td>
+                  <td className="px-4 py-2 text-slate-500">{c.mode === 'import_only' ? 'יבוא מקומי' : c.company_id}</td>
                   <td className="px-4 py-2">
                     {c.connections.map((s) => (
                       <span key={s} className="inline-flex items-center gap-1 text-xs bg-slate-100 rounded px-2 py-0.5 ml-1">
@@ -238,7 +288,7 @@ export default function OfficeDashboard() {
                       </span>
                     ) : <span className="text-slate-400">—</span>}
                   </td>
-                  <td className="px-4 py-2">{r ? `₪${r.net_vat.toLocaleString()}` : '—'}</td>
+                  <td className="px-4 py-2">{c.mode === "import_only" ? "מיפוי המקור טרם הושלם" : r ? "₪"+r.net_vat.toLocaleString() : "—"}</td>
                 </tr>
               );
             })}
