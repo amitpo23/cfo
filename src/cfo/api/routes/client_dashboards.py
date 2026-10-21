@@ -19,7 +19,7 @@ from ..dependencies import get_current_user
 from ...config import settings
 from ...database import get_db_session
 from ...models import DashboardRateLimit, PublishedSnapshot, User
-from ...services.dashboards import budget, service, view_model
+from ...services.dashboards import budget, multi_entity, service, view_model
 from ...services.dashboards.service import READ_ROLES, DashboardError
 
 router = APIRouter()
@@ -197,8 +197,8 @@ def dashboard_view(dashboard_id: int, start: date | None = None, end: date | Non
         row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
         window_end = end or date.today()
         window_start = start or date(window_end.year, 1, 1)
-        view = view_model.build_view(db, row.primary_organization_id, window_start, window_end,
-                                     plan=view_model.plan_payload(db, row.id))
+        view = multi_entity.build_dashboard_view(db, row, window_start, window_end,
+                                                 plan=view_model.plan_payload(db, row.id))
     except DashboardError as exc:
         return _error(exc)
     except ValueError as exc:
