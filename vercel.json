@@ -71,16 +71,8 @@
       "schedule": "15 3 * * *"
     },
     {
-      "path": "/api/cron/refresh-sumit-quota",
-      "schedule": "30 3 * * *"
-    },
-    {
       "path": "/api/cron/bookkeeper-morning",
       "schedule": "45 3 * * *"
-    },
-    {
-      "path": "/api/cron/collection-reminders",
-      "schedule": "0 4 * * *"
     },
     {
       "path": "/api/cron/roster-health",

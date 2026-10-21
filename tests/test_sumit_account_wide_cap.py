@@ -235,7 +235,7 @@ def test_automatic_sumit_calls_default_off():
 
 
 def test_crons_make_zero_sumit_requests_when_automatic_calls_are_off(
-    client, fresh_org, monkeypatch,
+    client, owner, fresh_org, monkeypatch,
 ):
     org_id = fresh_org()["org_id"]
     db = SessionLocal()
@@ -280,41 +280,56 @@ def test_crons_make_zero_sumit_requests_when_automatic_calls_are_off(
         return False
 
     monkeypatch.setattr("cfo.api.routes.cron.send_email_smtp", no_email)
-    headers = {"Authorization": "Bearer test-cron-secret"}
+    denied = client.get(
+        "/api/cron/sync-sumit",
+        headers={"Authorization": "Bearer test-cron-secret"},
+    )
+    assert denied.status_code == 401
+    headers = owner["headers"]
     responses = {}
     for path in (
         "/api/cron/refresh-sumit-quota",
         "/api/cron/sync-sumit",
         "/api/cron/sync",
+        "/api/cron/enrich-expenses",
+        "/api/cron/process-ocr",
         "/api/cron/collection-reminders",
     ):
         response = client.get(path, headers=headers)
         assert response.status_code == 200, response.text
         responses[path] = response.json()
 
-    assert responses["/api/cron/refresh-sumit-quota"]["skipped"] == (
-        "sumit_automatic_calls_disabled"
-    )
-    assert responses["/api/cron/refresh-sumit-quota"]["results"] == []
-    assert responses["/api/cron/sync-sumit"]["skipped"] == (
-        "sumit_automatic_calls_disabled"
-    )
-    assert responses["/api/cron/sync"]["skipped"] == (
-        "sumit_automatic_calls_disabled"
-    )
+    for path in (
+        "/api/cron/refresh-sumit-quota",
+        "/api/cron/sync-sumit",
+        "/api/cron/sync",
+        "/api/cron/enrich-expenses",
+        "/api/cron/process-ocr",
+    ):
+        assert responses[path]["skipped"] == "sumit_automatic_calls_disabled"
+        assert responses[path]["results"] == []
     summary = responses["/api/cron/collection-reminders"]["summary"]
     assert summary["skipped_sumit_automatic_disabled"] >= 1
     assert calls == []
 
     schedule = json.loads((ROOT / "vercel.json").read_text())
     scheduled = {job["path"] for job in schedule["crons"]}
-    assert "/api/cron/sync-sumit" not in scheduled
+    for path in (
+        "/api/cron/sync-sumit",
+        "/api/cron/sync",
+        "/api/cron/refresh-sumit-quota",
+        "/api/cron/collection-reminders",
+        "/api/cron/enrich-expenses",
+        "/api/cron/process-ocr",
+    ):
+        assert path not in scheduled
 
 
 def test_refresh_reaches_sumit_only_after_the_flag_is_enabled(
-    client, monkeypatch,
+    client, owner, monkeypatch,
 ):
-    """The route stays mounted. Turning the flag on is what allows the call."""
+    """An admin request reaches SUMIT only after the flag is on.
+    The cron secret cannot call the route."""
     monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
     reached = {"connector": 0}
 
@@ -343,8 +358,12 @@ def test_refresh_reaches_sumit_only_after_the_flag_is_enabled(
         "cfo.services.sumit_quota.refresh_quota_measurement",
         _refresh,
     )
-    headers = {"Authorization": "Bearer test-cron-secret"}
-    response = client.get("/api/cron/refresh-sumit-quota", headers=headers)
+    secret = client.get(
+        "/api/cron/refresh-sumit-quota",
+        headers={"Authorization": "Bearer test-cron-secret"},
+    )
+    assert secret.status_code == 401
+    response = client.get("/api/cron/refresh-sumit-quota", headers=owner["headers"])
     assert response.status_code == 200, response.text
     assert response.json().get("skipped") != "sumit_automatic_calls_disabled"
     assert reached["connector"] >= 1

@@ -27,11 +27,13 @@ Three entry points:
       regardless of which of the two paths composed this particular brief.
   render_hebrew(brief) -> (subject, text, html)
       Pure formatting — no DB access.
-  persist_and_deliver(db, org_id, today, brief, force=False) -> dict
+  persist_and_deliver(db, org_id, today, brief, force=False, allow_sumit_sms=False) -> dict
       Upserts the MorningBrief row and delivers over whichever channels are
-      configured + not already delivered today (or `force`). Never raises —
-      every channel's outcome (sent/skipped/failed/error) is recorded
-      per-channel instead.
+      configured + not already delivered today (or `force`). SUMIT SMS is
+      off unless the caller passes allow_sumit_sms and
+      SUMIT_AUTOMATIC_CALLS_ENABLED is true; the scheduled morning cycle
+      does not pass that flag. Never raises — every channel's outcome
+      (sent/skipped/failed/error) is recorded per-channel instead.
 """
 from __future__ import annotations
 
@@ -468,13 +470,19 @@ def _deliver_email(db, org, subject: str, text: str, delivered: dict, force: boo
     return {"status": "failed", "reason": "send_returned_false", "recipients": recipients}
 
 
-def _deliver_sms(db, organization_id: int, org, status: str, reds: list, delivered: dict, force: bool) -> dict:
+def _deliver_sms(
+    db, organization_id: int, org, status: str, reds: list, delivered: dict, force: bool,
+    *, allow_sumit: bool = False,
+) -> dict:
     if not force and delivered.get("sms"):
         return {"status": "skipped", "reason": "already_delivered_today"}
     if status != "red":
         return {"status": "skipped", "reason": "not_red"}
     if org is None or not org.morning_brief_sms_enabled:
         return {"status": "skipped", "reason": "org_disabled"}
+    from ..config import settings as _settings
+    if not allow_sumit or not _settings.sumit_automatic_calls_enabled:
+        return {"status": "skipped", "reason": "sumit_automatic_calls_disabled"}
 
     try:
         from ..api.dependencies import sumit_for_org
@@ -530,10 +538,13 @@ def _deliver_channel(db, organization_id: int, text: str, severity: str, deliver
 
 def persist_and_deliver(
     db, organization_id: int, today: date, brief: dict, *, force: bool = False,
+    allow_sumit_sms: bool = False,
 ) -> dict[str, Any]:
     """Upsert the MorningBrief row for (organization_id, today) and deliver
     over email/SMS per the org's opt-ins, guarded by per-channel idempotency
-    (delivered_channels) unless `force`. Never raises."""
+    (delivered_channels) unless `force`. SUMIT SMS also requires
+    `allow_sumit_sms` (default false; the morning cycle does not pass it)
+    and SUMIT_AUTOMATIC_CALLS_ENABLED. Never raises."""
     from ..models import MorningBrief, Organization
 
     status = brief.get("status") or "unknown"
@@ -563,7 +574,10 @@ def persist_and_deliver(
     channel_severity = "high" if status == "red" else "info"
     channel_results = {
         "email": _deliver_email(db, org, subject, text, delivered, force),
-        "sms": _deliver_sms(db, organization_id, org, status, brief.get("reds") or [], delivered, force),
+        "sms": _deliver_sms(
+            db, organization_id, org, status, brief.get("reds") or [], delivered, force,
+            allow_sumit=allow_sumit_sms,
+        ),
         "channel": _deliver_channel(db, organization_id, text, channel_severity, delivered, force),
     }
 

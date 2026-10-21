@@ -254,6 +254,13 @@ async def handle_sumit_trigger_event(db: Session, payload: dict) -> dict:
         refused = _claim_webhook_budget(org_id, "sumit")
         if refused:
             return {"handled": False, "reason": refused}
+        from ..config import settings
+        if not settings.sumit_automatic_calls_enabled:
+            return {
+                "handled": False,
+                "reason": "sumit_automatic_calls_disabled",
+                "org_id": org_id,
+            }
 
         result = await _run_targeted_sync(db, org_id, "sumit", ["invoices", "bills", "payments"])
         return {"handled": True, "event": "document_change", "org_id": org_id, **result}

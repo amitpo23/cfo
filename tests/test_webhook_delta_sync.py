@@ -48,6 +48,11 @@ def _patch_targeted_sync(monkeypatch, calls):
     monkeypatch.setattr(wds, "_run_targeted_sync", _fake)
 
 
+def _enable_automatic_sumit(monkeypatch):
+    from cfo.config import settings
+    monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
+
+
 # --------------------------------------------------------------------- #
 # handle_open_finance_event
 # --------------------------------------------------------------------- #
@@ -205,6 +210,7 @@ def test_of_org_resolution_matches_user_id_else_rejects(monkeypatch, fresh_org):
 # --------------------------------------------------------------------- #
 def test_sumit_document_event_triggers_targeted_sync(monkeypatch):
     calls = []
+    _enable_automatic_sumit(monkeypatch)
     _patch_targeted_sync(monkeypatch, calls)
     monkeypatch.setattr(wds, "_resolve_sumit_org", lambda db, payload: 3)
 
@@ -219,6 +225,7 @@ def test_sumit_document_event_triggers_targeted_sync(monkeypatch):
 
 def test_sumit_event_recognized_by_entity_id_alone(monkeypatch):
     calls = []
+    _enable_automatic_sumit(monkeypatch)
     _patch_targeted_sync(monkeypatch, calls)
     monkeypatch.setattr(wds, "_resolve_sumit_org", lambda db, payload: 3)
 
@@ -248,6 +255,7 @@ def test_sumit_org_resolution_matches_company_id_else_rejects(monkeypatch, fresh
         db.commit()
 
         calls = []
+        _enable_automatic_sumit(monkeypatch)
         _patch_targeted_sync(monkeypatch, calls)
 
         result_match = asyncio.run(wds.handle_sumit_trigger_event(db, {
@@ -268,6 +276,22 @@ def test_sumit_org_resolution_matches_company_id_else_rejects(monkeypatch, fresh
         db.close()
 
 
+def test_sumit_trigger_does_not_sync_when_automatic_calls_are_off(monkeypatch):
+    calls = []
+    _patch_targeted_sync(monkeypatch, calls)
+    monkeypatch.setattr(wds, "_resolve_sumit_org", lambda db, payload: 3)
+    from cfo.config import settings
+    monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", False)
+
+    result = asyncio.run(wds.handle_sumit_trigger_event(None, {
+        "TriggerType": "CreateOrUpdate", "EntityID": "doc-1",
+    }))
+
+    assert result["handled"] is False
+    assert result["reason"] == "sumit_automatic_calls_disabled"
+    assert calls == []
+
+
 def test_sumit_unknown_payload_handled_gracefully():
     assert asyncio.run(wds.handle_sumit_trigger_event(None, {"foo": "bar"})) == {
         "handled": False, "reason": "unrecognized_event_type",
@@ -278,6 +302,7 @@ def test_sumit_unknown_payload_handled_gracefully():
 
 def test_sumit_debounce(monkeypatch):
     calls = []
+    _enable_automatic_sumit(monkeypatch)
     _patch_targeted_sync(monkeypatch, calls)
     monkeypatch.setattr(wds, "_resolve_sumit_org", lambda db, payload: 3)
 

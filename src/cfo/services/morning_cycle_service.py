@@ -2,10 +2,10 @@
 
 Runs the accountant's morning order-of-operations for one organization, end
 to end, entirely against Rezef's own Postgres data — **zero new SUMIT/Open
-Finance API calls** (those happen on their own cron schedules: sync-sumit
-01:30 UTC, sync-open-finance 02:00 UTC, enrichment 02:15 UTC and process-ocr
-02:45 UTC). This module only reads and reasons over what has already been
-synced.
+Finance API calls**. SUMIT sync, enrichment and OCR are not scheduled.
+Open Finance sync is its own cron (02:00 UTC). This module only reads and
+reasons over what has already been synced, and it does not opt the morning
+brief into SUMIT SMS.
 
 Step order (accountant-judgment, advisor-mandated — see
 docs/bookkeeper_kb/00-role-and-daily-order.md, "לא נוגעים במספר לפני שיודעים
@@ -463,8 +463,8 @@ def _step_morning_brief(db, org_id: int, today: date, cycle_result: dict[str, An
 
 def _step_debtors(db, org_id: int, today: date) -> dict[str, Any]:
     """Read-only AR aging summary + top-5 overdue by amount, for the (future)
-    morning brief. Never sends anything — collection reminders are their own
-    cron (07:00)."""
+    morning brief. Never sends anything — collection reminders are an
+    unscheduled admin route, not a cron."""
     report = ARAPAgingService(db, org_id).ar_aging_report(as_of_date=today)
     overdue: list[dict[str, Any]] = []
     for bucket_name in ("31_60", "61_90", "90plus"):
