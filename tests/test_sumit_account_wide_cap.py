@@ -234,7 +234,7 @@ def test_automatic_sumit_calls_default_off():
     assert loaded.sumit_automatic_calls_enabled is False
 
 
-def test_crons_make_zero_sumit_requests_when_automatic_calls_are_off(
+def test_crons_make_zero_sumit_requests_when_automatic_calls_are_off(platform_admin, 
     client, owner, fresh_org, monkeypatch,
 ):
     org_id = fresh_org()["org_id"]
@@ -285,7 +285,7 @@ def test_crons_make_zero_sumit_requests_when_automatic_calls_are_off(
         headers={"Authorization": "Bearer test-cron-secret"},
     )
     assert denied.status_code == 401
-    headers = owner["headers"]
+    headers = platform_admin["headers"]
     responses = {}
     for path in (
         "/api/cron/refresh-sumit-quota",
@@ -325,7 +325,7 @@ def test_crons_make_zero_sumit_requests_when_automatic_calls_are_off(
         assert path not in scheduled
 
 
-def test_refresh_reaches_sumit_only_after_the_flag_is_enabled(
+def test_refresh_reaches_sumit_only_after_the_flag_is_enabled(platform_admin, 
     client, owner, monkeypatch,
 ):
     """An admin request reaches SUMIT only after the flag is on.
@@ -363,7 +363,90 @@ def test_refresh_reaches_sumit_only_after_the_flag_is_enabled(
         headers={"Authorization": "Bearer test-cron-secret"},
     )
     assert secret.status_code == 401
-    response = client.get("/api/cron/refresh-sumit-quota", headers=owner["headers"])
+    response = client.get("/api/cron/refresh-sumit-quota", headers=platform_admin["headers"])
     assert response.status_code == 200, response.text
     assert response.json().get("skipped") != "sumit_automatic_calls_disabled"
     assert reached["connector"] >= 1
+
+
+_ON_DEMAND_SUMIT_ROUTES = (
+    "/api/cron/refresh-sumit-quota",
+    "/api/cron/sync-sumit",
+    "/api/cron/sync",
+    "/api/cron/enrich-expenses",
+    "/api/cron/process-ocr",
+    "/api/cron/collection-reminders",
+)
+
+
+def test_on_demand_sumit_routes_refuse_an_organization_admin(client, owner, fresh_org):
+    """They run for every organization, so a tenant admin cannot start them."""
+    tenant_admin = fresh_org()
+    for headers in (owner["headers"], tenant_admin["headers"]):
+        for path in _ON_DEMAND_SUMIT_ROUTES:
+            assert client.get(path, headers=headers).status_code == 403, path
+
+
+def _forbid_sumit_clients(monkeypatch) -> list[str]:
+    from cfo.services.sumit_connector import SumitConnector
+
+    built: list[str] = []
+
+    def no_integration(self, *args, **kwargs):
+        built.append("SumitIntegration")
+        raise AssertionError("SumitIntegration was constructed")
+
+    def no_connector(self, *args, **kwargs):
+        built.append("SumitConnector")
+        raise AssertionError("SumitConnector was constructed")
+
+    monkeypatch.setattr(SumitIntegration, "__init__", no_integration)
+    monkeypatch.setattr(SumitConnector, "__init__", no_connector)
+    return built
+
+
+def test_every_scheduled_cron_builds_no_sumit_client(client, owner, monkeypatch):
+    """Whatever stays on the Vercel schedule must not reach SUMIT.
+
+    Org 1 has the env SUMIT key in tests, so any path that resolves a SUMIT
+    client for it would construct one here.
+    """
+    monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", False)
+    built = _forbid_sumit_clients(monkeypatch)
+    schedule = json.loads((ROOT / "vercel.json").read_text())
+    for job in schedule["crons"]:
+        response = client.get(job["path"], headers={"Authorization": "Bearer test-cron-secret"})
+        assert response.status_code < 500, (job["path"], response.text)
+    assert built == []
+
+
+def test_sumit_webhook_and_credential_save_start_no_sumit_work(client, fresh_org, monkeypatch):
+    import asyncio
+
+    from cfo.services import onboarding_service, webhook_delta_sync as wds
+
+    monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", False)
+    built = _forbid_sumit_clients(monkeypatch)
+    claimed: list[int] = []
+    monkeypatch.setattr(wds, "_resolve_sumit_org", lambda _db, _payload: 1)
+    monkeypatch.setattr(wds, "_claim_webhook_budget", lambda org_id, _src: claimed.append(org_id))
+    db = SessionLocal()
+    try:
+        result = asyncio.run(wds.handle_sumit_trigger_event(db, {"DocumentID": "7"}))
+    finally:
+        db.close()
+    assert result["reason"] == "sumit_automatic_calls_disabled"
+    assert claimed == []
+
+    started: list[tuple] = []
+
+    async def record(org_id, source="sumit"):
+        started.append((org_id, source))
+
+    monkeypatch.setattr(onboarding_service, "run_onboarding_bg", record)
+    saved = client.post("/api/integration/sumit/configure", json={
+        "api_key": "wide-cap-test-key", "company_id": "wide-cap-test-file",
+    }, headers=fresh_org()["headers"])
+    assert saved.status_code == 200, saved.text
+    assert started == []
+    assert built == []

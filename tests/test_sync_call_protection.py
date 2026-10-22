@@ -812,7 +812,7 @@ def test_cost_protection_settings_have_hard_floors():
     assert s.manual_refresh_cooldown_minutes >= 15
 
 
-def test_collection_cron_caps_and_claims_channel_deliveries_including_email(
+def test_collection_cron_caps_and_claims_channel_deliveries_including_email(platform_admin, 
     client, owner, fresh_org, monkeypatch,
 ):
     from cfo.api.routes import cron
@@ -860,7 +860,7 @@ def test_collection_cron_caps_and_claims_channel_deliveries_including_email(
         return True
 
     monkeypatch.setattr(cron, "send_email_smtp", fake_email)
-    headers = owner["headers"]
+    headers = platform_admin["headers"]
 
     first = client.get("/api/cron/collection-reminders", headers=headers)
     second = client.get("/api/cron/collection-reminders", headers=headers)
@@ -879,7 +879,7 @@ def test_collection_cron_caps_and_claims_channel_deliveries_including_email(
     assert len(sent_emails) == 10
 
 
-def test_expense_enrichment_is_hard_gated_to_one_provider_attempt_per_day(
+def test_expense_enrichment_is_hard_gated_to_one_provider_attempt_per_day(platform_admin, 
     client, owner, monkeypatch
 ):
     """Repeat invocations stop before a SUMIT connector can be used."""
@@ -915,7 +915,7 @@ def test_expense_enrichment_is_hard_gated_to_one_provider_attempt_per_day(
         fake_resolve,
     )
     monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
-    headers = owner["headers"]
+    headers = platform_admin["headers"]
 
     first = client.get("/api/cron/enrich-expenses", headers=headers)
     second = client.get("/api/cron/enrich-expenses", headers=headers)
@@ -934,7 +934,7 @@ def test_expense_enrichment_is_hard_gated_to_one_provider_attempt_per_day(
     }
 
 
-def test_failed_expense_enrichment_keeps_daily_cooldown(
+def test_failed_expense_enrichment_keeps_daily_cooldown(platform_admin, 
     client, owner, monkeypatch
 ):
     """Failure is not permission to retry a billable provider operation."""
@@ -964,7 +964,7 @@ def test_failed_expense_enrichment_keeps_daily_cooldown(
         failing_resolve,
     )
     monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
-    headers = owner["headers"]
+    headers = platform_admin["headers"]
 
     first = client.get("/api/cron/enrich-expenses", headers=headers)
     second = client.get("/api/cron/enrich-expenses", headers=headers)
@@ -996,7 +996,7 @@ def test_failed_expense_enrichment_keeps_daily_cooldown(
         db.close()
 
 
-def test_ocr_cron_stops_before_sumit_when_llm_is_disabled(
+def test_ocr_cron_stops_before_sumit_when_llm_is_disabled(platform_admin, 
     client, owner, monkeypatch
 ):
     from cfo.config import settings
@@ -1016,7 +1016,7 @@ def test_ocr_cron_stops_before_sumit_when_llm_is_disabled(
 
     response = client.get(
         "/api/cron/process-ocr",
-        headers=owner["headers"],
+        headers=platform_admin["headers"],
     )
 
     assert response.status_code == 200
@@ -1024,7 +1024,7 @@ def test_ocr_cron_stops_before_sumit_when_llm_is_disabled(
     assert calls == []
 
 
-def test_ocr_cron_claims_daily_budget_before_processing(
+def test_ocr_cron_claims_daily_budget_before_processing(platform_admin, 
     client, owner, monkeypatch
 ):
     from cfo.config import settings
@@ -1068,7 +1068,7 @@ def test_ocr_cron_claims_daily_budget_before_processing(
         "cfo.services.expense_ocr_scheduler.ExpenseOCRScheduler.run_scheduled_ocr",
         fake_run,
     )
-    headers = owner["headers"]
+    headers = platform_admin["headers"]
 
     first = client.get("/api/cron/process-ocr", headers=headers)
     second = client.get("/api/cron/process-ocr", headers=headers)

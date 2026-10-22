@@ -141,7 +141,7 @@ def test_near_limit_measurement_creates_an_owner_insight(fresh_org):
         db.close()
 
 
-def test_refresh_route_is_admin_only_and_noops_while_automatic_calls_are_off(client, owner):
+def test_refresh_route_is_admin_only_and_noops_while_automatic_calls_are_off(platform_admin, client, owner):
     denied = client.get("/api/cron/refresh-sumit-quota")
     assert denied.status_code in (401, 403)
     secret = client.get(
@@ -150,8 +150,8 @@ def test_refresh_route_is_admin_only_and_noops_while_automatic_calls_are_off(cli
     )
     assert secret.status_code == 401
 
-    first = client.get("/api/cron/refresh-sumit-quota", headers=owner["headers"])
-    second = client.get("/api/cron/refresh-sumit-quota", headers=owner["headers"])
+    first = client.get("/api/cron/refresh-sumit-quota", headers=platform_admin["headers"])
+    second = client.get("/api/cron/refresh-sumit-quota", headers=platform_admin["headers"])
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json()["skipped"] == "sumit_automatic_calls_disabled"

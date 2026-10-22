@@ -1,8 +1,8 @@
 """
 Scheduled jobs endpoint, invoked by Vercel Cron.
 
-Routes that can call SUMIT are not on the Vercel schedule. They require an
-organization-admin JWT and still return a no-op while
+Routes that can call SUMIT are not on the Vercel schedule. They require a
+platform SUPER_ADMIN JWT and still return a no-op while
 SUMIT_AUTOMATIC_CALLS_ENABLED is false. The remaining crons are protected by
 CRON_SECRET (Vercel sends "Authorization: Bearer <CRON_SECRET>").
 """
@@ -43,7 +43,7 @@ from ...services.email_sender import send_email_smtp
 # attribute for tests/test_shaam_reminder.py's monkeypatch target; the actual
 # call now happens inside run_daily_close_step via its own import.
 from ...services.shaam_reminder import ensure_shaam_renewal_reminder
-from ..dependencies import require_admin, sumit_for_org
+from ..dependencies import get_super_admin, sumit_for_org
 from ...integrations.sumit_models import SMSRequest
 
 logger = logging.getLogger(__name__)
@@ -600,9 +600,11 @@ def _sumit_automatic_calls_skipped() -> Optional[dict]:
     }
 
 
-# These routes used to be Vercel crons. They stay callable only by an
-# admin, and the automatic-calls flag still refuses the provider call.
-_ADMIN_ON_DEMAND = [Depends(require_admin)]
+# These routes used to be Vercel crons. Each one runs for every organization,
+# so an organization admin (any self-registered tenant) must not trigger it:
+# only a platform SUPER_ADMIN can, and the automatic-calls flag still refuses
+# the provider call.
+_ADMIN_ON_DEMAND = [Depends(get_super_admin)]
 
 
 @router.get("/cron/sync-sumit", dependencies=_ADMIN_ON_DEMAND)

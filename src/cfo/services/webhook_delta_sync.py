@@ -249,11 +249,8 @@ async def handle_sumit_trigger_event(db: Session, payload: dict) -> dict:
         org_id = _resolve_sumit_org(db, payload)
         if org_id is None:
             return {"handled": False, "reason": "unresolvable_org"}
-        if _debounced(org_id, "sumit"):
-            return {"handled": False, "reason": "debounced"}
-        refused = _claim_webhook_budget(org_id, "sumit")
-        if refused:
-            return {"handled": False, "reason": refused}
+        # Checked before the debounce and the webhook budget: a refused
+        # delivery must not spend the budget a later enabled run needs.
         from ..config import settings
         if not settings.sumit_automatic_calls_enabled:
             return {
@@ -261,6 +258,11 @@ async def handle_sumit_trigger_event(db: Session, payload: dict) -> dict:
                 "reason": "sumit_automatic_calls_disabled",
                 "org_id": org_id,
             }
+        if _debounced(org_id, "sumit"):
+            return {"handled": False, "reason": "debounced"}
+        refused = _claim_webhook_budget(org_id, "sumit")
+        if refused:
+            return {"handled": False, "reason": refused}
 
         result = await _run_targeted_sync(db, org_id, "sumit", ["invoices", "bills", "payments"])
         return {"handled": True, "event": "document_change", "org_id": org_id, **result}

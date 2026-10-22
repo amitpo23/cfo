@@ -228,12 +228,12 @@ def test_sumit_sync_route_rejects_anonymous_and_non_admin_tokens(client):
     ).status_code == 401
 
 
-def test_cron_sync_is_admin_on_demand_and_refuses_the_cron_secret(client, owner):
+def test_cron_sync_is_admin_on_demand_and_refuses_the_cron_secret(platform_admin, client, owner):
     denied = client.get(
         "/api/cron/sync", headers={"Authorization": "Bearer test-cron-secret"},
     )
     assert denied.status_code == 401
-    resp = client.get("/api/cron/sync", headers=owner["headers"])
+    resp = client.get("/api/cron/sync", headers=platform_admin["headers"])
     assert resp.status_code == 200
     body = resp.json()
     assert body["skipped"] == "sumit_automatic_calls_disabled"
@@ -342,7 +342,7 @@ def clear_sumit_sync_budget():
     yield
 
 
-def test_cron_sync_pulls_pending_expenses_per_sumit_org(client, owner, monkeypatch, clear_sumit_sync_budget):
+def test_cron_sync_pulls_pending_expenses_per_sumit_org(platform_admin, client, owner, monkeypatch, clear_sumit_sync_budget):
     """ה-cron חייב למשוך הוצאות ממתינות מ-SUMIT לכל ארגון — לא רק SyncEngine.
 
     ממצא אודיט התאימות (2026-07-05): טבלת ההוצאות פיגרה ב~43 מסמכים כי
@@ -360,7 +360,7 @@ def test_cron_sync_pulls_pending_expenses_per_sumit_org(client, owner, monkeypat
         "cfo.services.expense_filing_service.ExpenseFilingService.sync_pending_from_sumit",
         _fake_pull,
     )
-    resp = client.get("/api/cron/sync", headers=owner["headers"])
+    resp = client.get("/api/cron/sync", headers=platform_admin["headers"])
     assert resp.status_code == 200
     assert 1 in calls, "org 1 (SUMIT env) חייב לקבל משיכת הוצאות בכל ריצת cron"
     org1_results = [r for r in resp.json()["results"]
@@ -368,7 +368,7 @@ def test_cron_sync_pulls_pending_expenses_per_sumit_org(client, owner, monkeypat
     assert org1_results, "התוצאה חייבת לדווח על משיכת ההוצאות"
 
 
-def test_cron_sync_expense_pull_failure_does_not_abort(client, owner, monkeypatch, clear_sumit_sync_budget):
+def test_cron_sync_expense_pull_failure_does_not_abort(platform_admin, client, owner, monkeypatch, clear_sumit_sync_budget):
     """כשל במשיכת הוצאות של ארגון לא מפיל את ריצת ה-cron כולה."""
 
     from cfo.config import settings
@@ -381,7 +381,7 @@ def test_cron_sync_expense_pull_failure_does_not_abort(client, owner, monkeypatc
         "cfo.services.expense_filing_service.ExpenseFilingService.sync_pending_from_sumit",
         _boom,
     )
-    resp = client.get("/api/cron/sync", headers=owner["headers"])
+    resp = client.get("/api/cron/sync", headers=platform_admin["headers"])
     assert resp.status_code == 200
     org1 = [r for r in resp.json()["results"] if r.get("organization_id") == 1]
     assert any("expenses_pull" in r and "error" in str(r.get("expenses_pull"))

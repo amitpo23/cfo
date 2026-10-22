@@ -41,9 +41,17 @@ class SumitConfigRequest(BaseModel):
 
 
 def _kickoff_onboarding(db: Session, org_id: int, source: str, background_tasks) -> None:
-    """Materialize the onboarding checklist now and run it in the background."""
+    """Materialize the onboarding checklist now and run it in the background.
+
+    A SUMIT run is a full sync (dozens of requests against the account-wide
+    monthly cap), so saving credentials does not start it while
+    SUMIT_AUTOMATIC_CALLS_ENABLED is off. The checklist is still created and
+    a user runs it explicitly through POST /onboarding/run?source=sumit.
+    """
     from ...services import onboarding_service
     onboarding_service.ensure_tasks(db, org_id, source)
+    if source == "sumit" and not settings.sumit_automatic_calls_enabled:
+        return
     background_tasks.add_task(onboarding_service.run_onboarding_bg, org_id, source)
 
 
