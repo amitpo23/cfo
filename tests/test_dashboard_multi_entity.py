@@ -130,7 +130,8 @@ def test_combined_view_sums_entities_and_nets_intercompany(client, fresh_org):
     assert august["month"] == "2026-08"
     assert august["inflows"] == 550
     assert august["outflows"] == 200
-    assert body["combined"]["intercompany_removed"] == {"pairs": 1, "inflows": 1000.0, "outflows": 1000.0}
+    removed = body["combined"]["intercompany_removed"]
+    assert (removed["pairs"], removed["inflows"], removed["outflows"], removed["amount"]) == (1, 1000.0, 1000.0, 1000.0)
     chef_august = body["entities"][0]["view"]["cashflow"]["months"][0]
     assert chef_august["inflows"] == 1550
 

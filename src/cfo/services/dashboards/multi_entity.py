@@ -14,10 +14,20 @@ from ...models import BankTransaction, ClientDashboard, DashboardEntity, Dashboa
 from .. import bank_status
 from ..office_access import classifying_office_id, office_manages
 from .service import DashboardError
-from . import forecast, liquidity, view_model
+from . import cash_statement, filing, forecast, liquidity, view_model
 
 _MARKER = ("intercompany", "בין-חברתי", "בין חברתי")
-_PAIR_TOLERANCE = Decimal("0.005")
+# The explicit intercompany rule (see ``_intercompany``).
+IC_CATEGORIES = frozenset({"intercompany", "transfers_out", "other_in", "bank_journal"})
+IC_TOLERANCE = Decimal("0.01")
+IC_WINDOW_DAYS = 4
+IC_MAX_WINDOW_DAYS = 10
+IC_MAX_ITEMS = 200
+IC_RULE_HE = (
+    "קיזוז בין-חברתי: יציאה בישות אחת מול כניסה בישות אחרת, באותו סכום (±0.01 ₪), "
+    "עד {days} ימים זה מזה. שתי התנועות מתויקות כהעברה (בין-חברתי, העברה יוצאת, תקבול לבירור, "
+    "זיכוי יומן) ולא כמכירה, ספק או עמלה. כל תנועה מקוזזת פעם אחת."
+)
 _PNL_FIELDS = ("total_revenue", "total_expenses", "net_income_before_tax")
 
 
@@ -112,22 +122,44 @@ def _accounts(db, entity) -> list[dict]:
 def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | None = None) -> dict:
     views = [section["view"] for section in sections]
     org_ids = [section["organization_id"] for section in sections]
-    removed = _intercompany(db, org_ids, start, end)
+    labels = {section["organization_id"]: section["label"] for section in sections}
+    removed = _intercompany(db, org_ids, start, end, plan=plan, labels=labels)
+    removed["summary"]["rule"] = IC_RULE_HE.format(days=removed["summary"]["window_days"])
     position = liquidity.combine([
         {"label": section["label"], "liquidity": section["view"].get("liquidity")} for section in sections
     ])
+    # The plan budget is the group's budget, so the combined forecast uses all of it.
+    outlook = forecast.build_forecast(
+        forecast.combined_pnl_months(sections), as_of=end, plan=plan,
+        debt_service=position["debt_service"], budget_sums=view_model.plan_budget_sums(plan),
+        opening_balance=position["balance"],
+    )
     return {
         "pnl": _combine_pnl(views),
         "cashflow": _combine_cashflow(views, removed),
         "budget_vs_actual": _combine_budget(views),
         "liquidity": position,
-        # The plan budget is the group's budget, so the combined forecast uses all of it.
-        "forecast": forecast.build_forecast(
-            forecast.combined_pnl_months(sections), as_of=end, plan=plan,
-            debt_service=position["debt_service"], budget_sums=view_model.plan_budget_sums(plan),
-            opening_balance=position["balance"],
-        ),
+        "forecast": outlook,
+        "cash_statement": cash_statement.combine(sections, outlook, removed["by_month"]),
         "intercompany_removed": removed["summary"],
+        "sources": _combine_sources(sections),
+        "provider_calls": 0,
+    }
+
+
+def _combine_sources(sections: list[dict]) -> dict:
+    """Every entity's sources in one table, each row naming its entity."""
+    items = []
+    rule = None
+    for section in sections:
+        own = (section["view"] or {}).get("sources") or {}
+        rule = rule or own.get("rule")
+        items.extend({**item, "entity": section["label"]} for item in own.get("items") or [])
+    return {
+        "status": "ready" if items else "unknown",
+        "items": items,
+        "stale_count": sum(1 for item in items if item.get("status") == "stale"),
+        "rule": rule,
         "provider_calls": 0,
     }
 
@@ -306,55 +338,116 @@ def _marked(description: str | None) -> bool:
     return any(marker.casefold() in text for marker in _MARKER)
 
 
-def _intercompany(db, org_ids: list[int], start: date, end: date) -> dict:
-    empty = {"summary": {"pairs": 0, "inflows": 0.0, "outflows": 0.0}, "by_month": {}}
-    if len(org_ids) < 2:
+def intercompany_settings(plan: dict | None) -> dict:
+    """``plan.intercompany``: ``windowDays`` (0–10, default 4) and ``accountIds``."""
+    raw = (plan or {}).get("intercompany") if isinstance(plan, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    window = raw.get("windowDays", IC_WINDOW_DAYS)
+    if isinstance(window, bool) or not isinstance(window, int) or not 0 <= window <= IC_MAX_WINDOW_DAYS:
+        window = IC_WINDOW_DAYS
+    accounts = raw.get("accountIds")
+    accounts = {a for a in accounts if isinstance(a, int) and not isinstance(a, bool)} if isinstance(accounts, list) else set()
+    return {"window_days": window, "account_ids": accounts}
+
+
+def _candidates(db, org_ids: list[int], start: date, end: date, plan: dict | None, account_ids: set[int]):
+    """The rows each entity's cash flow sums, filed, and limited to the configured accounts."""
+    from ..bank_coverage import cashflow_row_objects
+    from .activity_quality import confirmed_drop_ids
+    plan = plan if isinstance(plan, dict) else {}
+    decisions = plan.get("statusDecisions") if isinstance(plan.get("statusDecisions"), dict) else None
+    rules = plan.get("statusRules") if isinstance(plan.get("statusRules"), list) else None
+    out = []
+    for org_id in dict.fromkeys(org_ids):
+        rows = cashflow_row_objects(db, org_id, start, end)
+        dropped = confirmed_drop_ids(rows, plan)
+        rows = [row for row in rows if row.id not in dropped]
+        # An organization none of whose accounts is configured keeps all its accounts.
+        if account_ids and any(row.account_id in account_ids for row in rows):
+            rows = [row for row in rows if row.account_id in account_ids]
+        for row in rows:
+            txn = filing.txn_from_row(row)
+            category = filing.classify(txn, decisions=decisions, custom_rules=rules).category
+            if category in IC_CATEGORIES or _marked(row.description):
+                out.append((row, Decimal(str(row.amount)), category))
+    return out
+
+
+def _intercompany(db, org_ids: list[int], start: date, end: date, plan: dict | None = None,
+                  labels: dict | None = None) -> dict:
+    """Intercompany netting of the combined cash flow, an explicit rule:
+
+    1. rows: what each entity's cash flow sums (BOOKED, not superseded, no card rows,
+       confirmed duplicates dropped), on ``plan.intercompany.accountIds`` when the
+       entity has rows on those accounts;
+    2. eligible: the row is filed as a transfer (``IC_CATEGORIES``: intercompany,
+       transfers_out, other_in, bank_journal), not as sales, supplier, fee, ...; or
+       its description carries an intercompany marker;
+    3. a pair: two entities, opposite signs, the same absolute amount (±0.01), dates at
+       most ``windowDays`` apart (default 4, the tool's match);
+    4. deterministic: outflows in (date, id) order each take the free inflow with the
+       smallest date gap, then the lowest id. A row is used once.
+
+    Each side is removed from its own month (an outflow on 31.8 paired with an
+    inflow on 2.9 removes 31.8 from August's outflows and 2.9 from September's inflows).
+    """
+    settings = intercompany_settings(plan)
+    empty = {
+        "summary": {"pairs": 0, "inflows": 0.0, "outflows": 0.0, "amount": 0.0,
+                    "window_days": settings["window_days"], "rule": IC_RULE_HE, "items": []},
+        "by_month": {},
+    }
+    if len(set(org_ids)) < 2:
         return empty
-    rows = db.query(BankTransaction).filter(
-        BankTransaction.organization_id.in_(org_ids),
-        BankTransaction.transaction_date >= start,
-        BankTransaction.transaction_date <= end,
-    ).all()
-    # Same basis as the per-entity cash flow: BOOKED, not superseded, no card rows.
-    card_ids: set[int] = set()
-    for org_id in set(org_ids):
-        card_ids |= bank_status.card_account_ids(db, org_id)
-    marked = [
-        row for row in rows
-        if _marked(row.description) and bank_status.counts_in_cash_flow(row, card_ids)
-    ]
+    labels = labels or {}
+    rows = _candidates(db, org_ids, start, end, plan, settings["account_ids"])
+    outs = sorted((item for item in rows if item[1] < 0), key=lambda item: (item[0].transaction_date, item[0].id))
+    ins = [item for item in rows if item[1] > 0]
     used: set[int] = set()
     by_month: dict[str, dict] = {}
-    pairs = 0
-    inflows = 0.0
-    outflows = 0.0
-    for index, left in enumerate(marked):
-        if left.id in used:
+    items = []
+    total = Decimal(0)
+    for out_row, out_amount, out_category in outs:
+        best = None
+        for in_row, in_amount, in_category in ins:
+            if in_row.id in used or in_row.organization_id == out_row.organization_id:
+                continue
+            if abs(abs(out_amount) - in_amount) > IC_TOLERANCE:
+                continue
+            gap = abs((in_row.transaction_date - out_row.transaction_date).days)
+            if gap > settings["window_days"]:
+                continue
+            key = (gap, in_row.id)
+            if best is None or key < best[0]:
+                best = (key, in_row, in_amount)
+        if best is None:
             continue
-        for right in marked[index + 1:]:
-            if right.id in used or left.organization_id == right.organization_id:
-                continue
-            if left.transaction_date != right.transaction_date:
-                continue
-            left_amount = Decimal(str(left.amount))
-            right_amount = Decimal(str(right.amount))
-            if left_amount * right_amount >= 0:
-                continue
-            if abs(abs(left_amount) - abs(right_amount)) > _PAIR_TOLERANCE:
-                continue
-            used.add(left.id)
-            used.add(right.id)
-            pairs += 1
-            month = left.transaction_date.strftime("%Y-%m")
-            slot = by_month.setdefault(month, {"inflows": 0.0, "outflows": 0.0})
-            positive = left_amount if left_amount > 0 else right_amount
-            negative = right_amount if right_amount < 0 else left_amount
-            slot["inflows"] = round(slot["inflows"] + float(positive), 2)
-            slot["outflows"] = round(slot["outflows"] + float(abs(negative)), 2)
-            inflows = round(inflows + float(positive), 2)
-            outflows = round(outflows + float(abs(negative)), 2)
-            break
-    return {
-        "summary": {"pairs": pairs, "inflows": inflows, "outflows": outflows},
-        "by_month": by_month,
-    }
+        _, in_row, in_amount = best
+        used.add(in_row.id)
+        out_month = out_row.transaction_date.strftime("%Y-%m")
+        in_month = in_row.transaction_date.strftime("%Y-%m")
+        by_month.setdefault(in_month, {"inflows": 0.0, "outflows": 0.0})["inflows"] += float(in_amount)
+        by_month.setdefault(out_month, {"inflows": 0.0, "outflows": 0.0})["outflows"] += float(-out_amount)
+        total += in_amount
+        if len(items) < IC_MAX_ITEMS:
+            items.append({
+                "from": labels.get(out_row.organization_id),
+                "to": labels.get(in_row.organization_id),
+                "out_date": out_row.transaction_date.isoformat(),
+                "in_date": in_row.transaction_date.isoformat(),
+                "amount": float(in_amount),
+                "days_apart": abs((in_row.transaction_date - out_row.transaction_date).days),
+            })
+    for slot in by_month.values():
+        slot["inflows"] = round(slot["inflows"], 2)
+        slot["outflows"] = round(slot["outflows"], 2)
+    pairs = len(used)
+    summary = dict(empty["summary"])
+    summary.update({
+        "pairs": pairs,
+        "inflows": round(float(total), 2),
+        "outflows": round(float(total), 2),
+        "amount": round(float(total), 2),
+        "items": items,
+    })
+    return {"summary": summary, "by_month": by_month}

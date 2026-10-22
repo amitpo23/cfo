@@ -17,12 +17,13 @@ const components = process.argv[2] || join(here, '..', 'src', 'components');
 const entry = `
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import { BudgetVsActual } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
-import { LiquidityPanel, OpeningBalanceCard, upcomingAmount, withOpeningBalance } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
+import { BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
+import { LiquidityEvidenceCard, LiquidityPanel, OpeningBalanceCard, draftFromItem, evidenceItems, itemFromDraft, upcomingAmount, withEvidenceItem, withOpeningBalance, ZReportsCard, withZReport, zReportsFromPayload } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
-export { renderToStaticMarkup, createElement, BudgetVsActual, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
+export { renderToStaticMarkup, createElement, BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
+  LiquidityEvidenceCard, draftFromItem, evidenceItems, itemFromDraft, withEvidenceItem, ZReportsCard, withZReport, zReportsFromPayload,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
   categoryLabel, pieSlices };
 `;
@@ -176,6 +177,98 @@ try {
     const panel = html(ui.LiquidityPanel, { section: { status: 'ready', position: { balance: -32099.5, as_of: '2026-10-13',
       balance_source: 'opening_balance', limit: 80000, limit_source: 'plan.liquidityEvidence', available_to_limit: 47900.5 } } });
     expect(panel.includes('יתרת פתיחה ידנית'), 'the balance source is not named');
+  });
+
+  check('journal card: source accounts by month and the bank amount not counted', () => {
+    const months = [
+      { month: '2026-07', source: null, revenue: null, costs: null, net: null,
+        journal: { source_label: 'יומן', lines: [{ code: '99002', label: 'ריבית', row: 'interest', amount: 300 }], entries: 1, unbalanced: 1, balance_only: 0 } },
+      { month: '2026-08', source: 'cash_basis', revenue: 10000, costs: 4872.46, net: 5127.54,
+        journal: { source_label: 'יומן', lines: [{ code: '90003', label: 'מזון וחומרי גלם', row: 'suppliers', amount: 3000 }], entries: 2, unbalanced: 0, balance_only: 1 },
+        journal_dedupe: { rows_replaced: [{ id: 'suppliers', label: 'ספקים', bank_amount: 5000, journal_amount: 3000 }], bank_dropped: 5000, journal_used: 3000 } },
+      { month: '2026-09', source: 'cash_basis', revenue: 1, costs: 1, net: 0 },
+    ];
+    const markup = html(ui.JournalCard, { months });
+    expect(markup.includes('מזון וחומרי גלם') && markup.includes('(90003)'), 'no source account row');
+    expect(markup.includes('5,000') && markup.includes('לא נכלל'), 'no dropped bank amount / excluded month');
+    expect(!markup.includes('2026-09'), 'a month without journal is shown');
+    expect(html(ui.JournalCard, { months: [months[2]] }) === '', 'card rendered without a journal');
+  });
+
+  check('intercompany card: netted amount, rule and pairs', () => {
+    const removed = { pairs: 1, inflows: 5000, outflows: 5000, amount: 5000, window_days: 4, rule: 'קיזוז בין-חברתי: עד 4 ימים',
+      items: [{ from: 'פוד גרופ', to: 'השף', out_date: '2026-08-30', in_date: '2026-09-02', amount: 5000, days_apart: 3 }] };
+    const markup = html(ui.IntercompanyCard, { removed });
+    expect(markup.includes('5,000') && markup.includes('עד 4 ימים') && markup.includes('2026-09-02 (3 ימים)'), 'pairs or rule missing');
+    const old = html(ui.IntercompanyCard, { removed: { pairs: 0, inflows: 0, outflows: 0 } });
+    expect(old.includes('קוזזו 0'), 'the older shape does not render');
+  });
+
+  check('sources card: per account, stale flag, entity column in the combined view', () => {
+    const sources = { stale_count: 1, rule: 'כלל רעננות', items: [
+      { kind: 'bank', kind_label: 'תנועות בנק', label: 'עו״ש 8954', source: 'open_finance', source_label: 'Open Finance', last_date: '2026-10-20',
+        last_sync: '2026-10-21T02:00:35', rows: 1234, age_days: 1, status: 'fresh', status_label: 'עדכני', entity: 'השף' },
+      { kind: 'journal', kind_label: 'יומן', label: 'יומן', source: 'reviewed_local_import', source_label: 'יבוא מקומי שנבדק', last_date: null,
+        last_sync: null, rows: 0, age_days: null, status: 'unknown', status_label: 'לא ידוע', entity: 'פוד גרופ' },
+    ] };
+    const markup = html(ui.SourcesCard, { sources });
+    expect(markup.includes('עו״ש 8954') && markup.includes('2026-10-21 02:00') && markup.includes('עדכני (1 ימים)'), 'bank row');
+    expect(markup.includes('פוד גרופ') && markup.includes('לא ידוע') && markup.includes('1 מקורות לא עדכניים'), 'entity / unknown / stale count');
+    expect(html(ui.SourcesCard, { sources: { items: [] } }) === '', 'empty card rendered');
+  });
+
+  check('cash statement: lines by month, group totals, unknown month, forecast columns', () => {
+    const statement = {
+      status: 'ready', months: ['2026-07', '2026-08'],
+      groups: [{ id: 'operating_in', label: 'תפעולי — כניסות' }, { id: 'financing', label: 'מימון' }],
+      lines: [
+        { id: 'sales_cash', label: 'הפקדות מזומן (מכירות)', group: 'operating_in', values: { '2026-07': null, '2026-08': 11800 }, total: 11800 },
+        { id: 'loans_out', label: 'החזרי הלוואות ומימון', group: 'financing', values: { '2026-07': null, '2026-08': -2000 }, total: -2000 },
+      ],
+      totals: { operating_in: { '2026-07': null, '2026-08': 11800 }, financing: { '2026-07': null, '2026-08': -2000 }, net: { '2026-07': null, '2026-08': 9800 } },
+      forecast: { months: ['2026-11'], rows: { operating_in: { '2026-11': 10000 }, operating_out: { '2026-11': -8000 }, financing: { '2026-11': -1000 }, net: { '2026-11': 1000 } }, note: 'ללא מע״מ' },
+    };
+    const markup = html(ui.CashStatementCard, { statement });
+    expect(markup.includes('11,800') && markup.includes('9,800') && markup.includes('לא ידוע'), 'actual cells');
+    expect(markup.includes('2026-11 (תחזית)') && markup.includes('10,000') && markup.includes('ללא מע״מ'), 'forecast columns');
+    expect(html(ui.CashStatementCard, { statement: { status: 'unknown', months: [] } }) === '', 'unknown statement rendered');
+  });
+
+  check('liquidity evidence form: add, edit, delete keep openingBalances and unknown keys', () => {
+    const opening = [{ organizationId: 6, date: '2026-07-31', amount: -30000, source: 'דף בנק' }];
+    const payload = { budgetLines: [{ id: 'x' }], somethingNew: { a: 1 },
+      liquidityEvidence: { observedAt: '2026-10-15', openingBalances: opening,
+        loans: [{ organizationId: 6, label: 'הלוואה 1', balance: 100000, account: '1662', product: '7', referenceBalance: 99000 }] } };
+    const draft = { ...ui.draftFromItem('checks', null), organizationId: '6', check: '10005', date: '2026-11-05', amount: '2,500' };
+    const built = ui.itemFromDraft('checks', draft, null);
+    expect('item' in built && built.item.amount === 2500 && built.item.payee === null, 'check not built');
+    const added = ui.withEvidenceItem(payload, 'checks', null, built.item);
+    expect(added.liquidityEvidence.openingBalances === opening && added.somethingNew.a === 1 && added.budgetLines.length === 1, 'keys lost on add');
+    expect(added.liquidityEvidence.observedAt === '2026-10-15' && ui.evidenceItems(added, 'checks').length === 1, 'check not added');
+    const loan = ui.evidenceItems(added, 'loans')[0];
+    const edited = ui.itemFromDraft('loans', { ...ui.draftFromItem('loans', loan), balance: '' }, loan);
+    expect('item' in edited && edited.item.balance === null && edited.item.referenceBalance === 99000 && edited.item.product === '7', 'edit lost a field or made 0');
+    const replaced = ui.withEvidenceItem(added, 'loans', 0, edited.item);
+    expect(ui.evidenceItems(replaced, 'loans')[0].balance === null && replaced.liquidityEvidence.openingBalances === opening, 'edit');
+    const removed = ui.withEvidenceItem(replaced, 'checks', 0, null);
+    expect(ui.evidenceItems(removed, 'checks').length === 0 && removed.liquidityEvidence.openingBalances === opening, 'delete');
+    expect('error' in ui.itemFromDraft('checks', { ...draft, amount: '0' }, null), 'a zero check is accepted');
+    expect('error' in ui.itemFromDraft('events', { ...ui.draftFromItem('events', null), label: 'x', date: '31/10/2026' }, null), 'a bad date is accepted');
+    const markup = html(ui.LiquidityEvidenceCard, { entities: [{ organization_id: 6, label: 'פוד גרופ' }], payload: added, saving: false, onSave: () => {} });
+    expect(markup.includes('ראיות נזילות') && markup.includes('מסגרות (0)') && markup.includes('צ׳קים דחויים (1)'), 'card');
+  });
+
+  check('Z reports: one per entity and month, other keys kept, card renders', () => {
+    const payload = { liquidityEvidence: { openingBalances: [{ organizationId: 6 }] },
+      zReports: [{ organizationId: 6, month: '2026-08', revenueExVat: 52126.2, source: 'Z' }] };
+    const next = ui.withZReport(payload, 6, '2026-07', { organizationId: 6, month: '2026-07', revenueExVat: 76510.82, source: 'Z' });
+    expect(ui.zReportsFromPayload(next).map((item) => item.month).join() === '2026-07,2026-08', 'not added in order');
+    expect(next.liquidityEvidence === payload.liquidityEvidence, 'evidence lost');
+    const replaced = ui.withZReport(next, 6, '2026-08', { organizationId: 6, month: '2026-08', revenueExVat: 1, source: 'Z2' });
+    expect(ui.zReportsFromPayload(replaced).length === 2 && ui.zReportsFromPayload(replaced)[1].revenueExVat === 1, 'not replaced');
+    expect(ui.zReportsFromPayload(ui.withZReport(replaced, 6, '2026-07', null)).length === 1, 'not removed');
+    const markup = html(ui.ZReportsCard, { entities: [{ organization_id: 6, label: 'פוד גרופ' }], items: ui.zReportsFromPayload(next), saving: false, onSave: () => {} });
+    expect(markup.includes('הכנסות פיצה מדוחות Z') && markup.includes('76,511') && markup.includes('פוד גרופ'), 'card');
   });
 
   const importedPlan = process.env.REZEF_IMPORTED_PLAN;

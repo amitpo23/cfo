@@ -477,6 +477,360 @@ export function OpeningBalanceCard({
   );
 }
 
+export type EvidenceKind = 'facilities' | 'loans' | 'checks' | 'events';
+export type EvidenceItem = Record<string, unknown>;
+type EvidenceField = { key: string; label: string; type: 'text' | 'amount' | 'date'; required?: boolean; negative?: boolean; positive?: boolean };
+
+const COMMON_FIELDS: EvidenceField[] = [
+  { key: 'source', label: 'מקור', type: 'text' },
+  { key: 'note', label: 'הערה', type: 'text' },
+];
+
+// The kinds of plan.liquidityEvidence the form edits, with the fields the server checks.
+export const EVIDENCE_KINDS: { kind: EvidenceKind; label: string; title: string; fields: EvidenceField[] }[] = [
+  { kind: 'facilities', label: 'מסגרות', title: 'label', fields: [
+    { key: 'label', label: 'שם', type: 'text', required: true },
+    { key: 'limit', label: 'מסגרת (₪)', type: 'amount' },
+    { key: 'validFrom', label: 'בתוקף מ-', type: 'date' },
+    { key: 'validTo', label: 'בתוקף עד', type: 'date' },
+  ] },
+  { kind: 'loans', label: 'הלוואות', title: 'label', fields: [
+    { key: 'label', label: 'שם', type: 'text', required: true },
+    { key: 'balance', label: 'יתרה (₪)', type: 'amount' },
+    { key: 'asOf', label: 'נכון ל-', type: 'date' },
+    { key: 'maturity', label: 'סיום', type: 'date' },
+  ] },
+  { kind: 'checks', label: 'צ׳קים דחויים', title: 'check', fields: [
+    { key: 'check', label: 'מספר צ׳ק', type: 'text', required: true },
+    { key: 'date', label: 'תאריך פירעון', type: 'date', required: true },
+    { key: 'amount', label: 'סכום (₪)', type: 'amount', required: true, positive: true },
+    { key: 'payee', label: 'לפקודת', type: 'text' },
+  ] },
+  { kind: 'events', label: 'מועדים', title: 'label', fields: [
+    { key: 'label', label: 'אירוע', type: 'text', required: true },
+    { key: 'date', label: 'תאריך', type: 'date', required: true },
+    { key: 'amount', label: 'סכום (₪, אפשר שלילי)', type: 'amount', negative: true },
+    { key: 'kind', label: 'סוג', type: 'text' },
+  ] },
+];
+
+export function evidenceItems(payload: Record<string, unknown> | null | undefined, kind: EvidenceKind): EvidenceItem[] {
+  const evidence = payload?.liquidityEvidence;
+  const items = evidence && typeof evidence === 'object' ? (evidence as Record<string, unknown>)[kind] : null;
+  return Array.isArray(items) ? items.filter((item): item is EvidenceItem => !!item && typeof item === 'object') : [];
+}
+
+// The payload with one evidence item added (index null), replaced, or removed (item null).
+// Every other key of the plan and of liquidityEvidence (openingBalances, observedAt, ...) is kept.
+export function withEvidenceItem(
+  payload: Record<string, unknown>, kind: EvidenceKind, index: number | null, item: EvidenceItem | null,
+): Record<string, unknown> {
+  const evidence = payload.liquidityEvidence && typeof payload.liquidityEvidence === 'object'
+    ? payload.liquidityEvidence as Record<string, unknown> : {};
+  const items = [...evidenceItems(payload, kind)];
+  if (index === null) {
+    if (item) items.push(item);
+  } else if (item) {
+    items[index] = item;
+  } else {
+    items.splice(index, 1);
+  }
+  return { ...payload, liquidityEvidence: { ...evidence, [kind]: items } };
+}
+
+export type EvidenceDraft = Record<string, string>;
+
+export function draftFromItem(kind: EvidenceKind, item: EvidenceItem | null): EvidenceDraft {
+  const spec = EVIDENCE_KINDS.find((entry) => entry.kind === kind)!;
+  const draft: EvidenceDraft = { organizationId: item && typeof item.organizationId === 'number' ? String(item.organizationId) : '' };
+  [...spec.fields, ...COMMON_FIELDS].forEach((field) => {
+    const value = item?.[field.key];
+    draft[field.key] = value === null || value === undefined ? '' : String(value);
+  });
+  return draft;
+}
+
+// The item the server accepts, or the first error in Hebrew. An empty amount is null
+// (unknown), never 0. Fields the form does not edit are kept from the original item.
+export function itemFromDraft(kind: EvidenceKind, draft: EvidenceDraft, original: EvidenceItem | null): { item: EvidenceItem } | { error: string } {
+  const spec = EVIDENCE_KINDS.find((entry) => entry.kind === kind)!;
+  const item: EvidenceItem = { ...(original ?? {}) };
+  const org = draft.organizationId?.trim();
+  if (org) item.organizationId = Number(org);
+  else delete item.organizationId;
+  for (const field of [...spec.fields, ...COMMON_FIELDS]) {
+    const raw = (draft[field.key] ?? '').trim();
+    if (!raw) {
+      if (field.required) return { error: `חסר ${field.label}` };
+      item[field.key] = null;
+      continue;
+    }
+    if (field.type === 'amount') {
+      const value = Number(raw.replace(/,/g, ''));
+      if (!Number.isFinite(value) || (!field.negative && value < 0) || (field.positive && value <= 0)) {
+        return { error: `${field.label}: סכום לא תקין` };
+      }
+      item[field.key] = value;
+    } else if (field.type === 'date') {
+      if (!/^20\d{2}-\d{2}-\d{2}$/.test(raw)) return { error: `${field.label}: תאריך לא תקין` };
+      item[field.key] = raw;
+    } else {
+      item[field.key] = raw;
+    }
+  }
+  return { item };
+}
+
+function evidenceCell(field: EvidenceField, value: unknown): string {
+  if (value === null || value === undefined || value === '') return field.type === 'amount' ? 'לא ידוע' : '—';
+  return field.type === 'amount' && typeof value === 'number' ? money(value) : String(value);
+}
+
+// Credit facilities, loans, post-dated checks and events of plan.liquidityEvidence:
+// add, edit and delete. Owner only (the server refuses other roles).
+export function LiquidityEvidenceCard({
+  entities, payload, saving, onSave,
+}: {
+  entities: { organization_id: number; label: string | null }[];
+  payload: Record<string, unknown>;
+  saving: boolean;
+  onSave: (next: Record<string, unknown>) => void;
+}) {
+  const [kind, setKind] = useState<EvidenceKind>('facilities');
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState<EvidenceDraft>(() => draftFromItem('facilities', null));
+  const [error, setError] = useState<string | null>(null);
+  const spec = EVIDENCE_KINDS.find((entry) => entry.kind === kind)!;
+  const items = evidenceItems(payload, kind);
+  const entityLabel = (id: unknown) => entities.find((entity) => entity.organization_id === id)?.label ?? (id ? String(id) : '—');
+
+  function open(nextKind: EvidenceKind, index: number | null) {
+    setKind(nextKind);
+    setEditing(index);
+    setDraft(draftFromItem(nextKind, index === null ? null : evidenceItems(payload, nextKind)[index] ?? null));
+    setError(null);
+  }
+
+  function save() {
+    const built = itemFromDraft(kind, draft, editing === null ? null : items[editing] ?? null);
+    if ('error' in built) {
+      setError(built.error);
+      return;
+    }
+    setError(null);
+    onSave(withEvidenceItem(payload, kind, editing, built.item));
+    open(kind, null);
+  }
+
+  return (
+    <Card title="ראיות נזילות">
+      <p className="mt-2 text-sm text-stone-600">
+        מסגרות, הלוואות, צ׳קים דחויים ומועדים שאינם מגיעים מהבנק. סכום שלא ידוע נשאר ריק ומוצג כ"לא ידוע". רק בעלי הדשבורד יכולים לשנות.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2 text-sm" role="tablist">
+        {EVIDENCE_KINDS.map((entry) => (
+          <button key={entry.kind} type="button" role="tab" aria-selected={kind === entry.kind}
+            className={`rounded-full border px-3 py-1 ${kind === entry.kind ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-300'}`}
+            onClick={() => open(entry.kind, null)}>
+            {entry.label} ({evidenceItems(payload, entry.kind).length})
+          </button>
+        ))}
+      </div>
+      {items.length > 0 ? (
+        <table className="mt-3 w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <Th>ישות</Th>
+              {spec.fields.map((field) => <Th key={field.key}>{field.label}</Th>)}
+              <Th>מקור</Th>
+              <Th />
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, index) => (
+              <tr key={`${kind}-${index}`} className={`border-b border-stone-100 ${editing === index ? 'bg-amber-50' : ''}`}>
+                <td className="py-1">{entityLabel(item.organizationId)}</td>
+                {spec.fields.map((field) => <td key={field.key} className="py-1">{evidenceCell(field, item[field.key])}</td>)}
+                <td className="py-1 text-xs text-stone-500">{typeof item.source === 'string' ? item.source : '—'}</td>
+                <td className="py-1 whitespace-nowrap">
+                  <button type="button" className="text-stone-700 underline disabled:opacity-50" disabled={saving}
+                    onClick={() => open(kind, index)}>ערוך</button>
+                  {' · '}
+                  <button type="button" className="text-red-700 underline disabled:opacity-50" disabled={saving}
+                    onClick={() => onSave(withEvidenceItem(payload, kind, index, null))}>מחק</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <p className="mt-3 text-sm text-stone-500">אין פריטים מסוג זה.</p>}
+      <div className="mt-4 flex flex-wrap items-end gap-3 text-sm">
+        <label className="text-stone-600">
+          ישות
+          <select className="mt-1 block rounded border border-stone-300 px-2 py-1" value={draft.organizationId}
+            onChange={(event) => setDraft({ ...draft, organizationId: event.target.value })}>
+            <option value="">ללא ישות</option>
+            {entities.map((entity) => (
+              <option key={entity.organization_id} value={entity.organization_id}>{entity.label ?? entity.organization_id}</option>
+            ))}
+          </select>
+        </label>
+        {[...spec.fields, ...COMMON_FIELDS].map((field) => (
+          <label key={field.key} className="text-stone-600">
+            {field.label}{field.required ? ' *' : ''}
+            <input
+              type={field.type === 'date' ? 'date' : 'text'}
+              dir={field.type === 'text' ? undefined : 'ltr'}
+              inputMode={field.type === 'amount' ? 'decimal' : undefined}
+              className="mt-1 block w-36 rounded border border-stone-300 px-2 py-1"
+              value={draft[field.key] ?? ''}
+              onChange={(event) => setDraft({ ...draft, [field.key]: event.target.value })}
+            />
+          </label>
+        ))}
+        <button type="button" className="rounded bg-stone-900 px-3 py-1 text-white disabled:opacity-50" disabled={saving} onClick={save}>
+          {editing === null ? 'הוסף' : 'שמור שינוי'}
+        </button>
+        {editing !== null ? (
+          <button type="button" className="rounded border border-stone-300 px-3 py-1" onClick={() => open(kind, null)}>ביטול</button>
+        ) : null}
+      </div>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </Card>
+  );
+}
+
+export type ZReport = {
+  organizationId: number; month: string; revenueExVat: number; totalInclVat?: number | null;
+  cashNet?: number | null; cardNet?: number | null; source: string; note?: string | null;
+};
+
+export function zReportsFromPayload(payload: Record<string, unknown> | null | undefined): ZReport[] {
+  const items = payload?.zReports;
+  return Array.isArray(items) ? items.filter((item): item is ZReport => !!item && typeof item === 'object') : [];
+}
+
+// The payload with one organization-month Z report replaced or added (null removes it).
+// Every other plan key is kept.
+export function withZReport(
+  payload: Record<string, unknown>, organizationId: number, month: string, item: ZReport | null,
+): Record<string, unknown> {
+  const others = zReportsFromPayload(payload).filter((row) => row.organizationId !== organizationId || row.month !== month);
+  const next = item ? [...others, item] : others;
+  next.sort((a, b) => a.organizationId - b.organizationId || a.month.localeCompare(b.month));
+  return { ...payload, zReports: next };
+}
+
+// Pizza revenue from a reviewed Z report, per entity and month. Owner only. In the
+// cash-basis P&L the Z total replaces the bank's card settlements and cash deposits.
+export function ZReportsCard({
+  entities, items, saving, onSave,
+}: {
+  entities: { organization_id: number; label: string | null }[];
+  items: ZReport[];
+  saving: boolean;
+  onSave: (organizationId: number, month: string, item: ZReport | null) => void;
+}) {
+  const [orgId, setOrgId] = useState<number | null>(entities[entities.length - 1]?.organization_id ?? null);
+  const [month, setMonth] = useState('');
+  const [revenue, setRevenue] = useState('');
+  const [total, setTotal] = useState('');
+  const [source, setSource] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const label = (id: number) => entities.find((entity) => entity.organization_id === id)?.label ?? String(id);
+
+  function edit(item: ZReport) {
+    setOrgId(item.organizationId);
+    setMonth(item.month);
+    setRevenue(String(item.revenueExVat));
+    setTotal(item.totalInclVat === null || item.totalInclVat === undefined ? '' : String(item.totalInclVat));
+    setSource(item.source);
+  }
+
+  function save() {
+    if (orgId === null) return;
+    const value = Number(revenue.replace(/,/g, ''));
+    const gross = total.trim() ? Number(total.replace(/,/g, '')) : null;
+    if (!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month) || !revenue.trim() || !Number.isFinite(value) || value < 0
+      || (gross !== null && (!Number.isFinite(gross) || gross < 0)) || !source.trim()) {
+      setError('יש למלא חודש, הכנסה ללא מע״מ (לא שלילית) ומקור — למשל "דוח Z חודשי של הקופה"');
+      return;
+    }
+    setError(null);
+    const original = items.find((item) => item.organizationId === orgId && item.month === month);
+    onSave(orgId, month, { ...(original ?? {}), organizationId: orgId, month, revenueExVat: value, totalInclVat: gross, source: source.trim() });
+  }
+
+  return (
+    <Card title="הכנסות פיצה מדוחות Z">
+      <p className="mt-2 text-sm text-stone-600">
+        סכום חודשי מדוח Z מאומת של הקופה. בחודש שיש לו דוח Z, ההכנסה ברווח והפסד היא סכום ה-Z, וסליקת האשראי והפקדות המזומן בבנק לא נספרות שוב. רק בעלי הדשבורד יכולים לשנות.
+      </p>
+      {items.length > 0 ? (
+        <table className="mt-3 w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <Th>ישות</Th><Th>חודש</Th><Th>ללא מע״מ</Th><Th>כולל מע״מ</Th><Th>מקור</Th><Th />
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={`${item.organizationId}-${item.month}`} className="border-b border-stone-100">
+                <td className="py-1">{label(item.organizationId)}</td>
+                <td className="py-1">{item.month}</td>
+                <td className="py-1">{money(item.revenueExVat)}</td>
+                <td className="py-1">{money(item.totalInclVat ?? null)}</td>
+                <td className="py-1 text-xs text-stone-500">{item.source}</td>
+                <td className="py-1 whitespace-nowrap">
+                  <button type="button" className="underline" onClick={() => edit(item)}>ערוך</button>
+                  {' · '}
+                  <button type="button" className="text-red-700 underline disabled:opacity-50" disabled={saving}
+                    onClick={() => onSave(item.organizationId, item.month, null)}>מחק</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <p className="mt-3 text-sm text-stone-500">לא הוזנו דוחות Z.</p>}
+      <div className="mt-3 flex flex-wrap items-end gap-3 text-sm">
+        <label className="text-stone-600">
+          ישות
+          <select className="mt-1 block rounded border border-stone-300 px-2 py-1" value={orgId ?? ''}
+            onChange={(event) => setOrgId(Number(event.target.value))}>
+            {entities.map((entity) => (
+              <option key={entity.organization_id} value={entity.organization_id}>{entity.label ?? entity.organization_id}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-stone-600">
+          חודש
+          <input type="month" dir="ltr" className="mt-1 block rounded border border-stone-300 px-2 py-1" value={month}
+            onChange={(event) => setMonth(event.target.value)} />
+        </label>
+        <label className="text-stone-600">
+          הכנסה ללא מע״מ (₪)
+          <input dir="ltr" inputMode="decimal" className="mt-1 block w-32 rounded border border-stone-300 px-2 py-1"
+            value={revenue} onChange={(event) => setRevenue(event.target.value)} />
+        </label>
+        <label className="text-stone-600">
+          כולל מע״מ (₪, רשות)
+          <input dir="ltr" inputMode="decimal" className="mt-1 block w-32 rounded border border-stone-300 px-2 py-1"
+            value={total} onChange={(event) => setTotal(event.target.value)} />
+        </label>
+        <label className="text-stone-600">
+          מקור
+          <input className="mt-1 block w-56 rounded border border-stone-300 px-2 py-1" value={source}
+            placeholder="דוח Z חודשי של הקופה" onChange={(event) => setSource(event.target.value)} />
+        </label>
+        <button type="button" className="rounded bg-stone-900 px-3 py-1 text-white disabled:opacity-50" disabled={saving} onClick={save}>
+          שמור דוח Z
+        </button>
+      </div>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </Card>
+  );
+}
+
 type ShareLink = { id: number; label: string | null; revoked_at: string | null; expires_at: string | null; use_count: number };
 
 export function ShareLinksCard({ dashboardId, slug, headers }: { dashboardId: number; slug: string; headers: () => HeadersInit }) {

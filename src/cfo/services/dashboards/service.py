@@ -250,6 +250,9 @@ def validate_filing_payload(payload: dict) -> None:
     _validate_parameters(payload.get("statusParameters"))
     _validate_evidence(payload.get("liquidityEvidence"))
     _validate_builtin_pin(payload.get("filingRulesBuiltin"))
+    _validate_journal_map(payload.get("journalAccountMap"))
+    _validate_intercompany(payload.get("intercompany"))
+    _validate_z_reports(payload.get("zReports"))
     closed = payload.get("booksClosedMonths")
     if closed is not None:
         if not isinstance(closed, list) or not all(
@@ -268,6 +271,8 @@ EVIDENCE_LIMIT = 200
 _EVIDENCE_KINDS = {"facilities", "loans", "checks", "events", "openingBalances"}
 # Only the dashboard owner (an admin of the organization) may enter an opening balance.
 OPENING_BALANCE_ROLES = {"owner"}
+# Facilities, loans, checks and events too: the liquidity form is the owner's (G-11).
+EVIDENCE_ROLES = {"owner"}
 
 
 def _number(value, *, low: float, high: float) -> bool:
@@ -362,10 +367,51 @@ def _validate_evidence(evidence) -> None:
                 raise _invalid_plan("פריט ראיה לא תקין")
 
 
+def _evidence(payload):
+    """``liquidityEvidence`` as stored; an absent key and an empty object are the same."""
+    evidence = payload.get("liquidityEvidence") if isinstance(payload, dict) else None
+    return evidence or None
+
+
 def _opening_balances(payload) -> list:
     evidence = payload.get("liquidityEvidence") if isinstance(payload, dict) else None
     items = evidence.get("openingBalances") if isinstance(evidence, dict) else None
     return items if isinstance(items, list) else []
+
+
+def _validate_intercompany(value) -> None:
+    """``plan.intercompany``: the netting window (0–10 days) and the counterparty accounts."""
+    if value is None:
+        return
+    from .multi_entity import IC_MAX_WINDOW_DAYS
+    ok = isinstance(value, dict) and not set(value) - {"windowDays", "accountIds", "note"}
+    window = value.get("windowDays") if ok else None
+    if ok and window is not None:
+        ok = not isinstance(window, bool) and isinstance(window, int) and 0 <= window <= IC_MAX_WINDOW_DAYS
+    accounts = value.get("accountIds") if ok else None
+    if ok and accounts is not None:
+        ok = isinstance(accounts, list) and len(accounts) <= 50 and all(
+            isinstance(item, int) and not isinstance(item, bool) for item in accounts)
+    if ok:
+        ok = _short_text(value.get("note"), limit=300)
+    if not ok:
+        raise _invalid_plan("הגדרות הקיזוז הבין-חברתי לא תקינות")
+
+
+def _validate_z_reports(value) -> None:
+    from .z_reports import ZReportError, validate_z_reports
+    try:
+        validate_z_reports(value)
+    except ZReportError:
+        raise _invalid_plan("דוחות ה-Z לא תקינים: ארגון, חודש YYYY-MM, הכנסה ללא מע״מ ומקור לכל חודש")
+
+
+def _validate_journal_map(value) -> None:
+    from .source_journal import JournalMapError, validate_account_map
+    try:
+        validate_account_map(value)
+    except JournalMapError:
+        raise _invalid_plan("מיפוי כרטיסי היומן לא תקין")
 
 
 def _validate_builtin_pin(pin) -> None:
@@ -393,9 +439,15 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
     validate_filing_payload(payload)
     row = get_dashboard(db, user, dashboard_id, allowed=PLAN_ROLES)
     current = db.get(DashboardPlan, row.id)
-    if _opening_balances(payload) != _opening_balances(current.payload if current is not None else None) \
+    stored = current.payload if current is not None else None
+    if _opening_balances(payload) != _opening_balances(stored) \
             and role_for(db, user, row) not in OPENING_BALANCE_ROLES:
         raise DashboardError(403, "opening_balance_forbidden", "רק בעלי הדשבורד או מנהל יכולים להזין יתרת פתיחה")
+    if _evidence(payload) != _evidence(stored) and role_for(db, user, row) not in EVIDENCE_ROLES:
+        raise DashboardError(403, "liquidity_evidence_forbidden", "רק בעלי הדשבורד או מנהל יכולים לשנות ראיות נזילות")
+    if (payload.get("zReports") or None) != ((stored or {}).get("zReports") or None) \
+            and role_for(db, user, row) not in EVIDENCE_ROLES:
+        raise DashboardError(403, "z_reports_forbidden", "רק בעלי הדשבורד או מנהל יכולים להזין דוחות Z")
     expected = if_match.strip().strip('"')
     if current is None:
         if expected not in {"null", "*"}:

@@ -14,7 +14,7 @@ from ..bank_coverage import redact_public_coverage
 from ..financial_reports_service import FinancialReportsService
 from ..live_cash_flow_service import LiveCashFlowService
 from .. import bank_status
-from . import activity_quality, books, budget, forecast, liquidity
+from . import activity_quality, books, budget, cash_statement, forecast, freshness, liquidity
 
 MAX_RANGE_DAYS = 366
 
@@ -76,6 +76,8 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
         "card_breakdown": bank_status.card_breakdown(db, organization_id, start, end),
         "liquidity": position,
         "forecast": outlook,
+        "sources": freshness.build_freshness(db, organization_id),
+        "cash_statement": cash_statement.build_cash_statement(filed, start, end, outlook),
         "provider_calls": 0,
         "freshness": {
             "cashflow": "books" if cashflow.get("months") else "unknown",
@@ -102,6 +104,9 @@ def redact_public_view(view: dict) -> dict:
     if "liquidity" in view:
         view = dict(view)
         view["liquidity"] = liquidity.redact_public(view["liquidity"])
+    if "sources" in view:
+        view = dict(view)
+        view["sources"] = freshness.redact_public(view["sources"])
     cashflow = view.get("cashflow")
     if not isinstance(cashflow, dict) or "coverage" not in cashflow:
         return view
@@ -138,6 +143,8 @@ def _redact_entities(view: dict) -> dict:
         combined = dict(view["combined"])
         if "budget_vs_actual" in combined:
             combined["budget_vs_actual"] = budget.redact_public(combined["budget_vs_actual"])
+        if "sources" in combined:
+            combined["sources"] = freshness.redact_public(combined["sources"])
         copied["combined"] = combined
     return copied
 

@@ -5,8 +5,9 @@ import {
   linesFromPayload,
 } from './dashboardFiling';
 import {
-  EntityLiquidity, Forecast, ForecastPanel, LiquidityPanel, Parameters, ParametersCard,
-  OpeningBalanceCard, ShareLinksCard, money, openingBalancesFromPayload, parametersFromPayload, withOpeningBalance,
+  EntityLiquidity, Forecast, ForecastPanel, LiquidityEvidenceCard, LiquidityPanel, Parameters, ParametersCard,
+  OpeningBalanceCard, ShareLinksCard, ZReportsCard, money, openingBalancesFromPayload, parametersFromPayload, withOpeningBalance,
+  withZReport, zReportsFromPayload,
 } from './dashboardTabs';
 import TabErrorBoundary from './TabErrorBoundary';
 
@@ -51,6 +52,56 @@ type PnlMonth = {
   unresolved_in?: number | null;
   unresolved_out?: number | null;
   blocked?: boolean;
+  journal?: JournalMonth | null;
+  z_dedupe?: { revenue_ex_vat: number; bank_till_dropped: number; source: string } | null;
+  journal_dedupe?: { rows_replaced: { id: string; label: string; bank_amount: number; journal_amount: number }[]; bank_dropped: number; journal_used: number } | null;
+};
+
+type JournalMonth = {
+  source_label: string;
+  lines: { code: string; label: string; row: string; amount: number }[];
+  entries: number;
+  unbalanced: number;
+  balance_only: number;
+};
+
+type IntercompanyRemoved = {
+  pairs: number;
+  inflows: number;
+  outflows: number;
+  amount?: number;
+  window_days?: number;
+  rule?: string;
+  items?: { from: string | null; to: string | null; out_date: string; in_date: string; amount: number; days_apart: number }[];
+};
+
+type SourceItem = {
+  kind: string;
+  kind_label: string;
+  label: string | null;
+  source: string;
+  source_label: string;
+  last_date: string | null;
+  last_sync: string | null;
+  rows: number;
+  age_days: number | null;
+  status: 'fresh' | 'stale' | 'unknown';
+  status_label: string;
+  entity?: string | null;
+};
+
+type Sources = { status?: string; items?: SourceItem[]; stale_count?: number; rule?: string | null };
+
+type StatementCells = Record<string, number | null>;
+
+type CashStatement = {
+  status?: string;
+  months?: string[];
+  groups?: { id: string; label: string }[];
+  lines?: { id: string; label: string; group: string; review?: boolean; values: StatementCells; total: number }[];
+  totals?: Record<string, StatementCells>;
+  forecast?: { status?: string; months: string[]; rows: Record<string, StatementCells>; note: string } | null;
+  message?: string | null;
 };
 
 type PendingMonth = { month: string; inflows: number; outflows: number; count: number };
@@ -92,6 +143,8 @@ type DashboardView = {
   } | null;
   liquidity?: EntityLiquidity | null;
   forecast?: Forecast | null;
+  sources?: Sources | null;
+  cash_statement?: CashStatement | null;
   entities?: { label: string | null; role: string; view: DashboardView }[];
   combined?: {
     pnl?: DashboardView['pnl'];
@@ -99,7 +152,9 @@ type DashboardView = {
     budget_vs_actual?: DashboardView['budget_vs_actual'];
     liquidity?: EntityLiquidity | null;
     forecast?: Forecast | null;
-    intercompany_removed?: { pairs: number; inflows: number; outflows: number };
+    intercompany_removed?: IntercompanyRemoved;
+    sources?: Sources | null;
+    cash_statement?: CashStatement | null;
   };
   error?: { message_he?: string };
 };
@@ -177,6 +232,8 @@ function PnlMonths({ months }: { months: PnlMonth[] }) {
             <td className="py-2">{month.month}</td>
             <td className="py-2 text-xs text-stone-600">
               {month.source === 'cash_basis' ? 'בסיס מזומן' : 'ספרים'}
+              {month.journal_dedupe ? ' + יומן SUMIT' : ''}
+              {month.z_dedupe ? ' + דוח Z' : ''}
               {month.coverage_label ? ` · ${month.coverage_label}` : ''}
             </td>
             <td className="py-2">{money(month.revenue)}</td>
@@ -191,6 +248,204 @@ function PnlMonths({ months }: { months: PnlMonth[] }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+// The imported SUMIT journal (Food Group) by source account and month, and which
+// comparison rows of the cash-basis P&L it replaced (the bank amount of those rows is dropped).
+export function JournalCard({ months }: { months: PnlMonth[] }) {
+  const withJournal = months.filter((month) => month.journal && month.journal.lines.length > 0);
+  if (withJournal.length === 0) return null;
+  const codes = new Map<string, string>();
+  withJournal.forEach((month) => month.journal?.lines.forEach((line) => codes.set(line.code, line.label)));
+  const amount = (month: PnlMonth, code: string) => month.journal?.lines.find((line) => line.code === code)?.amount ?? null;
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">יומן SUMIT מיובא ברווח והפסד</h2>
+      <p className="mt-1 text-sm text-stone-500">
+        מיפוי טיוטה של כרטיסי המקור לשורות הרווח וההפסד (ללא מע״מ), לאישור מנהלת החשבונות. בחודש שבו ליומן יש סכום בשורה,
+        השורה נלקחת מהיומן וסכום הבנק שלה לא נספר, כדי שהוצאה ותשלומה לא ייספרו פעמיים.
+      </p>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <th className="py-2 text-right font-medium">כרטיס</th>
+              {withJournal.map((month) => <th key={month.month} className="py-2 text-right font-medium">{month.month}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {[...codes.entries()].map(([code, label]) => (
+              <tr key={code} className="border-b border-stone-100">
+                <td className="py-2">{label} <span className="text-xs text-stone-400">({code})</span></td>
+                {withJournal.map((month) => <td key={month.month} className="py-2">{money(amount(month, code))}</td>)}
+              </tr>
+            ))}
+            <tr className="text-stone-600">
+              <td className="py-2">סכום בנק שלא נספר</td>
+              {withJournal.map((month) => (
+                <td key={month.month} className="py-2">{month.journal_dedupe ? money(month.journal_dedupe.bank_dropped) : 'לא נכלל'}</td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-xs text-stone-500">
+        חודש בלי תנועות בנק אינו נכלל ברווח והפסד: ביומן אין כרטיסי הכנסה, ולכן הרווח וההפסד של החודש לא ידוע.
+      </p>
+    </section>
+  );
+}
+
+// The intercompany transfers netted out of the consolidated cash flow, and the rule that matched them.
+export function IntercompanyCard({ removed }: { removed: IntercompanyRemoved | null | undefined }) {
+  if (!removed) return null;
+  const items = removed.items ?? [];
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">קיזוז בין-חברתי</h2>
+      <p className="mt-2 text-sm">
+        קוזזו {removed.pairs} העברות בסך {money(removed.amount ?? removed.inflows)} מהכניסות ומהיציאות של התזרים המאוחד.
+      </p>
+      {removed.rule ? <p className="mt-1 text-xs text-stone-500">{removed.rule}</p> : null}
+      {items.length > 0 ? (
+        <table className="mt-3 w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <th className="py-2 text-right font-medium">מ-</th>
+              <th className="py-2 text-right font-medium">אל</th>
+              <th className="py-2 text-right font-medium">יציאה</th>
+              <th className="py-2 text-right font-medium">כניסה</th>
+              <th className="py-2 text-right font-medium">סכום</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={`${item.out_date}-${item.in_date}-${item.amount}-${item.from}`} className="border-b border-stone-100">
+                <td className="py-2">{item.from ?? '—'}</td>
+                <td className="py-2">{item.to ?? '—'}</td>
+                <td className="py-2">{item.out_date}</td>
+                <td className="py-2">{item.in_date}{item.days_apart ? ` (${item.days_apart} ימים)` : ''}</td>
+                <td className="py-2">{money(item.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </section>
+  );
+}
+
+const STATUS_TONE: Record<string, string> = { fresh: 'text-emerald-700', stale: 'text-amber-700', unknown: 'text-stone-500' };
+
+// Sources and freshness: one row per bank account and per books source.
+export function SourcesCard({ sources }: { sources: Sources | null | undefined }) {
+  const items = sources?.items ?? [];
+  if (items.length === 0) return null;
+  const withEntity = items.some((item) => item.entity);
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">מקורות ורעננות</h2>
+      {sources?.stale_count ? (
+        <p className="mt-1 text-sm text-amber-700">{sources.stale_count} מקורות לא עדכניים.</p>
+      ) : null}
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              {withEntity ? <th className="py-2 text-right font-medium">ישות</th> : null}
+              <th className="py-2 text-right font-medium">מקור</th>
+              <th className="py-2 text-right font-medium">חשבון / סוג</th>
+              <th className="py-2 text-right font-medium">תנועה אחרונה</th>
+              <th className="py-2 text-right font-medium">סנכרון / יבוא אחרון</th>
+              <th className="py-2 text-right font-medium">שורות</th>
+              <th className="py-2 text-right font-medium">מצב</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={`${item.entity ?? ''}-${item.kind}-${item.label ?? ''}-${item.source}`} className="border-b border-stone-100">
+                {withEntity ? <td className="py-2">{item.entity ?? '—'}</td> : null}
+                <td className="py-2">{item.source_label}</td>
+                <td className="py-2">{item.kind === 'bank' ? item.label : item.kind_label}</td>
+                <td className="py-2">{item.last_date ?? 'לא ידוע'}</td>
+                <td className="py-2">{item.last_sync ? item.last_sync.slice(0, 16).replace('T', ' ') : 'לא ידוע'}</td>
+                <td className="py-2">{item.rows.toLocaleString('he-IL')}</td>
+                <td className={`py-2 ${STATUS_TONE[item.status] ?? ''}`}>
+                  {item.status_label}{item.age_days !== null ? ` (${item.age_days} ימים)` : ''}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {sources?.rule ? <p className="mt-2 text-xs text-stone-500">{sources.rule}</p> : null}
+    </section>
+  );
+}
+
+function cell(value: number | null | undefined): string {
+  return value === null || value === undefined ? 'לא ידוע' : money(value);
+}
+
+// Cash flow by line item × month: actual months from filed BOOKED rows, then the forecast months.
+export function CashStatementCard({ statement }: { statement: CashStatement | null | undefined }) {
+  const months = statement?.months ?? [];
+  if (!statement || months.length === 0 || statement.status !== 'ready') return null;
+  const lines = statement.lines ?? [];
+  const totals = statement.totals ?? {};
+  const forecast = statement.forecast && statement.forecast.months.length > 0 ? statement.forecast : null;
+  const forecastMonths = forecast?.months ?? [];
+  const blank = forecastMonths.map((month) => <td key={`f-${month}`} className="py-1" />);
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">דוח תזרים לפי סעיף וחודש</h2>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <th className="py-2 text-right font-medium">סעיף</th>
+              {months.map((month) => <th key={month} className="py-2 text-right font-medium">{month}</th>)}
+              {forecastMonths.map((month) => (
+                <th key={`f-${month}`} className="bg-stone-50 py-2 text-right font-medium">{month} (תחזית)</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(statement.groups ?? []).map((group) => {
+              const rows = lines.filter((line) => line.group === group.id);
+              if (rows.length === 0) return null;
+              const forecastRow = forecast?.rows[group.id];
+              return [
+                ...rows.map((line) => (
+                  <tr key={line.id} className="border-b border-stone-100">
+                    <td className={`py-1 ${line.review ? 'text-amber-700' : ''}`}>{line.label}</td>
+                    {months.map((month) => <td key={month} className="py-1">{cell(line.values[month])}</td>)}
+                    {blank}
+                  </tr>
+                )),
+                <tr key={`total-${group.id}`} className="border-b font-medium">
+                  <td className="py-1">סה״כ {group.label}</td>
+                  {months.map((month) => <td key={month} className="py-1">{cell(totals[group.id]?.[month])}</td>)}
+                  {forecastMonths.map((month) => (
+                    <td key={`f-${month}`} className="bg-stone-50 py-1">{forecastRow ? cell(forecastRow[month]) : ''}</td>
+                  ))}
+                </tr>,
+              ];
+            })}
+            <tr className="font-semibold">
+              <td className="py-2">תזרים נטו</td>
+              {months.map((month) => <td key={month} className="py-2">{cell(totals.net?.[month])}</td>)}
+              {forecastMonths.map((month) => (
+                <td key={`f-${month}`} className="bg-stone-50 py-2">{cell(forecast?.rows.net?.[month])}</td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {statement.message ? <p className="mt-2 text-xs text-stone-500">{statement.message}</p> : null}
+      {forecast ? <p className="mt-1 text-xs text-stone-500">{forecast.note}</p> : null}
+    </section>
   );
 }
 
@@ -453,6 +708,8 @@ export default function ClientDashboardPage() {
     budget_vs_actual: view.combined?.budget_vs_actual,
     liquidity: view.combined?.liquidity,
     forecast: view.combined?.forecast,
+    sources: view.combined?.sources,
+    cash_statement: view.combined?.cash_statement,
   } : entities[Number(scope)]?.view ?? view;
   const parameters = parametersFromPayload(plan?.payload);
 
@@ -502,18 +759,17 @@ export default function ClientDashboardPage() {
                 ))}
               </div>
             ) : null}
-            {multi && scope === 'combined' && view.combined?.intercompany_removed?.pairs ? (
-              <p className="mt-2 text-sm text-stone-500">
-                קוזזו {view.combined.intercompany_removed.pairs} העברות בין-חברתיות ({money(view.combined.intercompany_removed.inflows)}).
-              </p>
-            ) : null}
             <TabErrorBoundary tab={`${tab}:${scope}`}>
             <div className="mt-6 grid gap-6">
               {tab === 'status' ? (
                 <>
                   <StatusKpis view={scoped} reviewCount={filing?.review.total ?? null} />
+                  <SourcesCard sources={scoped.sources} />
                   <PnlCard pnl={scoped.pnl} />
+                  <JournalCard months={scoped.pnl?.months ?? []} />
                   <CashflowCard view={scoped} />
+                  <CashStatementCard statement={scoped.cash_statement} />
+                  {multi && scope === 'combined' ? <IntercompanyCard removed={view.combined?.intercompany_removed} /> : null}
                   {editor && filing ? (
                     <ReviewList
                       canEdit={editor.canEdit}
@@ -543,6 +799,14 @@ export default function ClientDashboardPage() {
               ) : null}
               {tab === 'liquidity' ? <LiquidityPanel section={scoped.liquidity} /> : null}
               {tab === 'liquidity' && editor?.role === 'owner' && plan && filing ? (
+                <LiquidityEvidenceCard
+                  entities={filing.entities ?? []}
+                  payload={plan.payload}
+                  saving={saving}
+                  onSave={(next) => void savePayload(next, false)}
+                />
+              ) : null}
+              {tab === 'liquidity' && editor?.role === 'owner' && plan && filing ? (
                 <OpeningBalanceCard
                   entities={filing.entities ?? []}
                   items={openingBalancesFromPayload(plan.payload)}
@@ -567,6 +831,14 @@ export default function ClientDashboardPage() {
                     />
                   ) : null}
                   <ParametersCard value={parameters} canEdit={editor.canEdit} saving={saving} onSave={saveParameters} />
+                  {editor.role === 'owner' && plan && filing ? (
+                    <ZReportsCard
+                      entities={filing.entities ?? []}
+                      items={zReportsFromPayload(plan.payload)}
+                      saving={saving}
+                      onSave={(organizationId, zMonth, item) => void savePayload(withZReport(plan.payload, organizationId, zMonth, item), false)}
+                    />
+                  ) : null}
                   {editor.role === 'owner' ? (
                     <ShareLinksCard dashboardId={editor.id} slug={slugFromLocation()} headers={authHeaders} />
                   ) : null}
