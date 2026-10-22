@@ -392,6 +392,41 @@ def test_budget_lines_project_quantity_times_rate_and_drop_removed_months(client
     assert bad.json()["error"]["code"] == "invalid_plan"
 
 
+def test_budget_editing_is_open_to_owner_accountant_and_client_editor(client, fresh_org):
+    """Same roles as PUT /budget in #47 (PLAN_ROLES). A viewer reads only."""
+    owner = fresh_org()
+    editor = fresh_org()
+    accountant = fresh_org()
+    viewer = fresh_org()
+    dashboard_id = _create(client, owner["headers"], owner["org_id"], "filing-budget-roles")
+    _member(dashboard_id, editor["org_id"], "client_editor")
+    _member(dashboard_id, accountant["org_id"], "accountant")
+    _member(dashboard_id, viewer["org_id"], "client_viewer")
+    row = {"rows": [{"year": 2026, "month": 2, "category": "rent", "budgeted_amount": 5}]}
+    for who in (owner, accountant, editor):
+        meta = client.get("/api/dashboards/by-slug/filing-budget-roles", headers=who["headers"])
+        assert meta.json()["can_edit"] is True
+        put = client.put(f"/api/dashboards/{dashboard_id}/budget", headers=who["headers"], json=row)
+        assert put.status_code == 200, put.text
+    meta = client.get("/api/dashboards/by-slug/filing-budget-roles", headers=viewer["headers"])
+    assert meta.json()["can_edit"] is False
+    denied = client.put(f"/api/dashboards/{dashboard_id}/budget", headers=viewer["headers"], json=row)
+    assert denied.status_code in (403, 404)
+    saved = _save(client, editor["headers"], dashboard_id, {"budgetLines": [{
+        "id": "line-e", "label": "שכירות", "category": "rent",
+        "months": {"2026-03": {"quantity": 2, "rate": 50}},
+    }]})
+    assert saved.status_code == 200, saved.text
+    with SessionLocal() as db:
+        march = db.query(Budget).filter_by(
+            organization_id=owner["org_id"], year=2026, month=3, category_name="rent",
+        ).one()
+        assert march.budgeted_amount == Decimal("100.00")
+    blocked = _save(client, viewer["headers"], dashboard_id, {"budgetLines": []},
+                    version=saved.json()["version"])
+    assert blocked.status_code == 404
+
+
 def test_filing_module_does_not_call_a_provider():
     import cfo.services.dashboards.filing as filing
     import cfo.services.dashboards.filing_report as filing_report
