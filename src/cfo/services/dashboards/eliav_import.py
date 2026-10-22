@@ -1,8 +1,19 @@
 """One-time import of an Eliav-tool plan into ``dashboard_plans`` and ``budgets``.
 
-The tool export keeps quantity × rate on each budget line. That detail is stored
-on the dashboard plan (schema version 3). The existing ``budgets`` table receives
-one summed row per group per month so the budget-vs-actual reader can use it.
+The tool export keeps quantity × rate on each budget line. The import writes
+those lines in the one canonical plan format, the one the dashboard editor saves
+through ``PUT /plan``::
+
+    {"id", "label", "category", "kind", "months": {"YYYY-MM": {"quantity", "rate"}}}
+
+``category`` is a P&L category key (``plan_budget.budget_catalog``), chosen from
+the line's Eliav group (``GROUPS``) unless the line names one itself. Only the
+active scenario (``statusParameters.scenario``, default ``base``) becomes
+``months``. Cells of any other scenario are kept, not projected, under
+``eliavImport.otherScenarios[scenario][line_id]``. The ``budgets`` table receives
+the same projection ``PUT /plan`` writes (``plan_budget.project_budget_lines``).
+The finished payload goes through the same validators as ``PUT /plan``, so the
+editor can save over an imported plan.
 
 Dry-run is the default. Nothing here calls SUMIT, Financy, or Open Finance, and
 nothing is written to the books tables.
@@ -17,9 +28,16 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from ...models import (
-    AuditLog, BankTransaction, Budget, Category, ClientDashboard, DashboardEntity,
+    AuditLog, BankTransaction, Budget, ClientDashboard, DashboardEntity,
     DashboardPlan, DashboardPlanRevision,
 )
+from .budget import category_key, category_label
+from .filing import DECISION_CATEGORIES
+from .plan_budget import (
+    PLAN_NOTE_PREFIX, PlanBudgetError, budget_catalog, project_budget_lines,
+    validate_budget_lines,
+)
+from .service import PLAN_LIMIT_BYTES, DashboardError, validate_filing_payload
 
 MAX_DECISIONS = 1000
 MAX_RULES = 200
@@ -40,7 +58,7 @@ PASSTHROUGH = (
     "rateAssumptions", "incomingAllocations", "invoiceDecisions",
     "discountInvoiceLinks",
 )
-LINE_KEYS = {"id", "label", "group", "kind", "activity", "unit", "custom"}
+LINE_KEYS = {"id", "label", "group", "kind", "activity", "unit", "custom", "category"}
 CELL_KEYS = {"quantity", "rate"}
 DECISION_KEYS = {
     "category", "action", "ruleCategory", "organizationId", "date", "amount",
@@ -53,17 +71,21 @@ RULE_KEYS = {
 RULE_REQUIRED = RULE_KEYS - {"updatedAt"}
 PARAMETER_KEYS = {"scenario", "horizon", "growth", "vat"}
 PAYROLL_KEYS = {"id", "label", "monthly", "group"}
-RULE_FIELDS = {"description", "counterparty", "reference"}
-RULE_DIRECTIONS = {"in", "out", "any"}
-LINE_KINDS = {"revenue", "expense"}
+# Same field and direction values as the filing rules (filing._custom_match).
+RULE_FIELDS = {"description", "counterparty", "any"}
+RULE_DIRECTIONS = {"in", "out", "both"}
+# Eliav line kind -> plan_budget kind.
+LINE_KINDS = {"revenue": "revenue", "expense": "cost"}
+# Eliav group -> default P&L category key. A line may name its own ``category``.
 GROUPS = {
-    "הכנסות": ("revenue_pizza", "revenue"),
-    "כוח אדם": ("payroll", "expense"),
-    "רכבים": ("vehicles", "expense"),
-    "ספקים": ("suppliers", "expense"),
-    "הנהלה וכלליות": ("overhead", "expense"),
-    "השקעות ומימון": ("financing", "expense"),
+    "הכנסות": "sales",
+    "כוח אדם": "salaries",
+    "רכבים": "vehicle",
+    "ספקים": "cost_of_goods",
+    "הנהלה וכלליות": "other",
+    "השקעות ומימון": "interest_expense",
 }
+CATALOG = {row["key"]: row["kind"] for row in budget_catalog()}
 BUDGET_KEY = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])\|([^|\s]{1,40})$")
 DATE_KEY = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 MONTH_KEY = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -154,6 +176,14 @@ def _line(raw: dict, *, custom: bool) -> dict:
         _reject("unknown_group", f"קבוצה לא מוכרת: {group}")
     if kind not in LINE_KINDS:
         _reject("invalid_plan", f"סוג שורה לא מוכר: {kind}")
+    category = raw.get("category")
+    if category is None:
+        category = GROUPS[group]
+    if not isinstance(category, str) or category_key(category) not in CATALOG:
+        _reject("unknown_category", f"קטגוריית תקציב לא מוכרת בשורה {line_id}")
+    category = category_key(category)
+    if CATALOG[category] != LINE_KINDS[kind]:
+        _reject("invalid_plan", f"סוג השורה {line_id} לא תואם לקטגוריה {category}")
     activity = raw.get("activity") or "operating"
     unit = raw.get("unit") or "יחידה"
     if not isinstance(activity, str) or not isinstance(unit, str):
@@ -166,6 +196,7 @@ def _line(raw: dict, *, custom: bool) -> dict:
         "activity": activity,
         "unit": unit,
         "custom": bool(custom or raw.get("custom")),
+        "category": category,
         "cells": {},
     }
 
@@ -328,35 +359,60 @@ def _rules(data: dict) -> list:
             _reject("invalid_plan", "organizationId בכלל חייב להיות מספר")
         if not isinstance(rule.get("contains"), str) or not rule["contains"]:
             _reject("invalid_plan", "כלל בלי טקסט לחיפוש")
-        if not isinstance(rule.get("category"), str) or not rule["category"].strip():
-            _reject("invalid_plan", "כלל בלי קטגוריה")
+        if rule.get("category") not in DECISION_CATEGORIES:
+            _reject("unknown_category", f"קטגוריית הכלל אינה מוכרת: {rule.get('category')}")
         clean.append(dict(rule))
     return clean
 
 
-def monthly_totals(lines: list[dict], scenario: str) -> list[dict]:
-    """Sum quantity × rate per group per month for one scenario."""
+def monthly_totals(lines: list[dict]) -> list[dict]:
+    """Sum quantity × rate per category per month over canonical plan lines."""
     totals: dict[tuple[str, str], Decimal] = {}
     for line in lines:
-        for key, cell in (line.get("cells") or {}).items():
-            month, _, cell_scenario = str(key).partition("|")
-            if cell_scenario != scenario:
-                continue
+        key = category_key(str(line.get("category") or ""))
+        for month, cell in (line.get("months") or {}).items():
             amount = (
                 _as_decimal(cell["quantity"], label="quantity", allow_negative=False)
                 * _as_decimal(cell["rate"], label="rate", allow_negative=False)
             )
-            totals[(month, line["group"])] = totals.get((month, line["group"]), Decimal("0")) + amount
-    rows = []
-    for (month, group), amount in sorted(totals.items()):
-        code, _kind = GROUPS[group]
-        rows.append({
+            totals[(str(month), key)] = totals.get((str(month), key), Decimal("0")) + amount
+    return [
+        {
             "month": month,
-            "category": group,
-            "category_code": code,
+            "category": key,
+            "category_he": category_label(key),
             "amount": f"{amount.quantize(MONEY):.2f}",
+        }
+        for (month, key), amount in sorted(totals.items())
+    ]
+
+
+def _canonical_lines(catalog: dict[str, dict], scenario: str) -> tuple[list[dict], dict, dict]:
+    """Split each line into the canonical line, its Eliav detail, and other-scenario cells."""
+    lines, detail, others = [], {}, {}
+    for line in sorted(catalog.values(), key=lambda row: row["id"]):
+        months = {}
+        for key, cell in sorted(line["cells"].items()):
+            month, _, cell_scenario = key.partition("|")
+            if cell_scenario == scenario:
+                months[month] = cell
+            else:
+                others.setdefault(cell_scenario, {}).setdefault(line["id"], {})[month] = cell
+        lines.append({
+            "id": line["id"],
+            "label": line["label"],
+            "category": line["category"],
+            "kind": CATALOG[line["category"]],
+            "months": months,
         })
-    return rows
+        detail[line["id"]] = {
+            "group": line["group"],
+            "kind": line["kind"],
+            "activity": line["activity"],
+            "unit": line["unit"],
+            "custom": line["custom"],
+        }
+    return lines, detail, others
 
 
 def _entity_org_ids(db, dashboard: ClientDashboard) -> set[int]:
@@ -370,8 +426,10 @@ def _match_decisions(db, org_ids: set[int], decisions: dict) -> tuple[dict, list
     applied = {}
     rejected = []
     for key, decision in decisions.items():
-        transaction = db.get(BankTransaction, int(key))
-        reason = _mismatch(transaction, decision, org_ids)
+        if decision["category"] not in DECISION_CATEGORIES:
+            reason = "unknown_category"
+        else:
+            reason = _mismatch(db.get(BankTransaction, int(key)), decision, org_ids)
         if reason is None:
             applied[key] = decision
             continue
@@ -408,9 +466,8 @@ def _build_payload(data: dict, *, source_version: str | None, applied: dict, rej
     catalog = _catalog(data)
     months = _scenario_months(catalog, scenario)
     _payroll(catalog, data, scenario, months)
-    lines = sorted(catalog.values(), key=lambda line: line["id"])
+    lines, detail, others = _canonical_lines(catalog, scenario)
     payload = {
-        "schemaVersion": 3,
         "source": "eliav-tool",
         "sourceVersion": source_version,
         "budgetLines": lines,
@@ -418,6 +475,12 @@ def _build_payload(data: dict, *, source_version: str | None, applied: dict, rej
         "statusDecisionExceptions": rejected,
         "statusRules": rules,
         "statusParameters": parameters,
+        "eliavImport": {
+            "scenario": scenario,
+            "groups": dict(GROUPS),
+            "lines": detail,
+            "otherScenarios": others,
+        },
     }
     for key in PASSTHROUGH:
         if key in data:
@@ -428,6 +491,20 @@ def _build_payload(data: dict, *, source_version: str | None, applied: dict, rej
     if len(encoded.encode()) > 1_048_576:
         _reject("plan_too_large", "התוכנית גדולה ממגבלת המגה-בייט")
     return payload, scenario
+
+
+def _editor_accepts(payload: dict) -> list[dict]:
+    """The checks ``PUT /plan`` runs. An import the editor could not save is refused."""
+    if len(json.dumps(payload, ensure_ascii=False, default=str).encode()) > PLAN_LIMIT_BYTES:
+        _reject("plan_too_large", "התוכנית גדולה ממגבלת המגה-בייט")
+    try:
+        validate_filing_payload(payload)
+        lines = validate_budget_lines(payload)
+    except DashboardError as exc:
+        _reject("invalid_plan", exc.message_he)
+    except PlanBudgetError as exc:
+        _reject("invalid_plan", exc.message_he)
+    return lines or []
 
 
 def _check_known(data: dict) -> None:
@@ -444,22 +521,14 @@ def _money_map(rows: list[dict]) -> dict[tuple[str, str], Decimal]:
 
 
 def _stored_budget_map(db, organization_id: int) -> dict[tuple[str, str], Decimal]:
-    categories = db.query(Category).filter(
-        Category.organization_id == organization_id,
-        Category.external_id.like("eliav:group:%"),
-    ).all()
-    if not categories:
-        return {}
-    ids = [row.id for row in categories]
+    """Plan-owned ``budgets`` rows, keyed by month and category key."""
     found = {}
     for budget in db.query(Budget).filter(
         Budget.organization_id == organization_id,
-        Budget.category_id.in_(ids),
+        Budget.notes.like(f"{PLAN_NOTE_PREFIX}%"),
     ).all():
-        if not (budget.notes or "").startswith("plan:"):
-            continue
-        key = (f"{budget.year:04d}-{budget.month:02d}", budget.category_name)
-        found[key] = Decimal(str(budget.budgeted_amount)).quantize(MONEY)
+        key = (f"{budget.year:04d}-{budget.month:02d}", category_key(budget.category_name or ""))
+        found[key] = found.get(key, Decimal("0")) + Decimal(str(budget.budgeted_amount)).quantize(MONEY)
     return found
 
 
@@ -506,9 +575,14 @@ def prepare_import(db, dashboard_id: int, document: dict) -> dict:
     payload, scenario = _build_payload(
         data, source_version=source_version, applied=applied, rejected=rejected, rules=rules,
     )
-    totals = monthly_totals(payload["budgetLines"], scenario)
-    digest = canonical_hash(document)
     current = db.get(DashboardPlan, dashboard.id)
+    if current is not None and isinstance(current.payload, dict):
+        # Keys the import does not own (booksClosedMonths, dedupePairs, ...) stay.
+        payload = {**current.payload, **payload}
+        payload.pop("schemaVersion", None)
+    lines = _editor_accepts(payload)
+    totals = monthly_totals(payload["budgetLines"])
+    digest = canonical_hash(document)
     revision = _current_revision(db, current)
     idempotent = _same_hash(revision, digest)
     before = {} if idempotent else _stored_budget_map(db, dashboard.primary_organization_id)
@@ -516,6 +590,7 @@ def prepare_import(db, dashboard_id: int, document: dict) -> dict:
         "dashboard": dashboard,
         "payload": payload,
         "scenario": scenario,
+        "lines": lines,
         "totals": totals,
         "digest": digest,
         "source_version": source_version,
@@ -536,6 +611,8 @@ def _result(prepared: dict, *, applied: bool) -> dict:
         "idempotent": prepared["idempotent"],
         "applied": applied and not prepared["idempotent"],
         "budget_lines": len(prepared["payload"]["budgetLines"]),
+        "scenario": prepared["scenario"],
+        "other_scenarios": sorted(prepared["payload"]["eliavImport"]["otherScenarios"]),
         "decisions_applied": len(prepared["applied"]),
         "decisions_rejected": len(prepared["rejected"]),
         "rules": len(prepared["rules"]),
@@ -568,7 +645,7 @@ def _write(db, prepared: dict) -> None:
         current = DashboardPlan(
             dashboard_id=dashboard.id,
             version=version,
-            schema_version=3,
+            schema_version=2,
             payload=prepared["payload"],
             updated_at=now,
             updated_by=None,
@@ -578,7 +655,7 @@ def _write(db, prepared: dict) -> None:
     else:
         previous = current.version
         current.version = version
-        current.schema_version = 3
+        current.schema_version = 2
         current.payload = prepared["payload"]
         current.updated_at = now
         current.updated_by = None
@@ -591,7 +668,7 @@ def _write(db, prepared: dict) -> None:
         changed_by=None,
         change_summary=summary,
     ))
-    _replace_budgets(db, dashboard.primary_organization_id, version, prepared["totals"])
+    budget_rows = project_budget_lines(db, dashboard.primary_organization_id, version, prepared["lines"])
     db.add(AuditLog(
         user_id=None,
         organization_id=dashboard.primary_organization_id,
@@ -603,58 +680,23 @@ def _write(db, prepared: dict) -> None:
             "input_sha256": prepared["digest"],
             "decisions_applied": len(prepared["applied"]),
             "decisions_rejected": len(prepared["rejected"]),
-            "budget_rows": len(prepared["totals"]),
+            "budget_rows": budget_rows,
             "provider_calls": 0,
         },
     ))
 
 
-def _replace_budgets(db, organization_id: int, version: str, totals: list[dict]) -> None:
-    existing = db.query(Category).filter(
-        Category.organization_id == organization_id,
-        Category.external_id.like("eliav:group:%"),
-    ).all()
-    if existing:
-        db.query(Budget).filter(
-            Budget.organization_id == organization_id,
-            Budget.category_id.in_([row.id for row in existing]),
-            Budget.notes.like("plan:%"),
-        ).delete(synchronize_session=False)
-    by_group = {row.name: row for row in existing}
-    for total in totals:
-        category = by_group.get(total["category"])
-        if category is None:
-            code, kind = GROUPS[total["category"]]
-            category = Category(
-                organization_id=organization_id,
-                name=total["category"],
-                category_type=kind,
-                external_id=f"eliav:group:{code}",
-            )
-            db.add(category)
-            db.flush()
-            by_group[total["category"]] = category
-        year, month = total["month"].split("-")
-        db.add(Budget(
-            organization_id=organization_id,
-            category_id=category.id,
-            category_name=total["category"],
-            year=int(year),
-            month=int(month),
-            budgeted_amount=Decimal(total["amount"]),
-            notes=f"plan:{version}",
-        ))
-
-
 def computed_monthly_totals(db, dashboard_id: int) -> list[dict]:
-    """Monthly group totals from the stored plan, quantity × rate."""
+    """Monthly category totals from the stored plan, quantity × rate."""
     plan = db.get(DashboardPlan, dashboard_id)
     if plan is None or not isinstance(plan.payload, dict):
         return []
-    lines = plan.payload.get("budgetLines") or []
-    parameters = plan.payload.get("statusParameters") or {}
-    scenario = parameters.get("scenario") or "base"
-    return monthly_totals(lines, scenario)
+    return monthly_totals(plan.payload.get("budgetLines") or [])
+
+
+def _baseline_key(name: str) -> str:
+    """A baseline category may be an Eliav group, a category key, or its Hebrew label."""
+    return GROUPS.get(name) or category_key(name)
 
 
 def reconcile(db, dashboard_id: int, baseline: dict, *, tolerance: Decimal = DEFAULT_TOLERANCE) -> dict:
@@ -674,7 +716,7 @@ def reconcile(db, dashboard_id: int, baseline: dict, *, tolerance: Decimal = DEF
         if not MONTH_KEY.fullmatch(str(month)) or not isinstance(categories, dict):
             _reject("invalid_baseline", f"חודש לא תקין: {month}")
         for category, amount in categories.items():
-            expected[(str(month), str(category))] = _as_decimal(
+            expected[(str(month), _baseline_key(str(category)))] = _as_decimal(
                 amount, label=str(category), allow_negative=False,
             ).quantize(MONEY)
     dashboard = db.get(ClientDashboard, dashboard_id)
@@ -706,6 +748,7 @@ def reconcile(db, dashboard_id: int, baseline: dict, *, tolerance: Decimal = DEF
         rows.append({
             "month": month,
             "category": category,
+            "category_he": category_label(category),
             "computed": None if got is None else f"{got:.2f}",
             "baseline": None if base is None else f"{base:.2f}",
             "budgets_table": None if stored is None else f"{stored:.2f}",
@@ -738,7 +781,7 @@ def render_report(report: dict) -> str:
         lines.append(report["message"])
     for row in report["rows"]:
         lines.append(
-            f"{row['month']}  {row['category']}  "
+            f"{row['month']}  {row['category_he']}  "
             f"רצף {row['computed'] if row['computed'] is not None else '—'}  "
             f"בסיס {row['baseline'] if row['baseline'] is not None else '—'}  "
             f"הפרש {row['delta'] if row['delta'] is not None else '—'}  "

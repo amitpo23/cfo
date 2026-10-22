@@ -39,7 +39,7 @@
     ],
     "statusDecisions": {
       "101": {
-        "category": "suppliers",
+        "category": "supplier_transfers",
         "action": "classify",
         "ruleCategory": null,
         "organizationId": 2,
@@ -51,7 +51,7 @@
         "previous": null
       },
       "999999001": {
-        "category": "overhead",
+        "category": "office",
         "action": "classify",
         "ruleCategory": null,
         "organizationId": 2,
@@ -70,7 +70,7 @@
         "field": "description",
         "direction": "out",
         "organizationId": 2,
-        "category": "suppliers",
+        "category": "supplier_transfers",
         "updatedAt": "2026-08-01T00:00:00Z"
       }
     ],

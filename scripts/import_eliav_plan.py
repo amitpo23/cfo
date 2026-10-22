@@ -2,8 +2,18 @@
 """Import an Eliav-tool plan export into a Rezef dashboard.
 
 Dry-run prints the diff and writes nothing. ``--apply`` writes the plan,
-a revision, and monthly group totals on the existing ``budgets`` table.
+a revision, and monthly category totals on the existing ``budgets`` table.
 A second apply of the same export is a no-op.
+
+Budget lines are written in the canonical plan format the dashboard editor
+saves (``{id, label, category, kind, months: {"YYYY-MM": {quantity, rate}}}``),
+so the editor can keep editing an imported plan. Each Eliav group maps to a
+P&L category (``eliav_import.GROUPS``); a line may name its own ``category``.
+Only the active scenario (``statusParameters.scenario``, default ``base``) is
+projected. Cells of other scenarios are kept under
+``eliavImport.otherScenarios`` and are not projected or shown in the editor.
+An export the editor could not save (unknown category, rule field, too long
+an id) is refused before anything is written.
 
 The script refuses a non-local database. It does not call SUMIT, Financy,
 or Open Finance.
