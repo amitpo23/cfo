@@ -18,11 +18,12 @@ const entry = `
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
-import { LiquidityPanel, OpeningBalanceCard, upcomingAmount, withOpeningBalance } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
+import { LiquidityEvidenceCard, LiquidityPanel, OpeningBalanceCard, draftFromItem, evidenceItems, itemFromDraft, upcomingAmount, withEvidenceItem, withOpeningBalance } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
 export { renderToStaticMarkup, createElement, BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
+  LiquidityEvidenceCard, draftFromItem, evidenceItems, itemFromDraft, withEvidenceItem,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
   categoryLabel, pieSlices };
 `;
@@ -231,6 +232,30 @@ try {
     expect(markup.includes('11,800') && markup.includes('9,800') && markup.includes('לא ידוע'), 'actual cells');
     expect(markup.includes('2026-11 (תחזית)') && markup.includes('10,000') && markup.includes('ללא מע״מ'), 'forecast columns');
     expect(html(ui.CashStatementCard, { statement: { status: 'unknown', months: [] } }) === '', 'unknown statement rendered');
+  });
+
+  check('liquidity evidence form: add, edit, delete keep openingBalances and unknown keys', () => {
+    const opening = [{ organizationId: 6, date: '2026-07-31', amount: -30000, source: 'דף בנק' }];
+    const payload = { budgetLines: [{ id: 'x' }], somethingNew: { a: 1 },
+      liquidityEvidence: { observedAt: '2026-10-15', openingBalances: opening,
+        loans: [{ organizationId: 6, label: 'הלוואה 1', balance: 100000, account: '1662', product: '7', referenceBalance: 99000 }] } };
+    const draft = { ...ui.draftFromItem('checks', null), organizationId: '6', check: '10005', date: '2026-11-05', amount: '2,500' };
+    const built = ui.itemFromDraft('checks', draft, null);
+    expect('item' in built && built.item.amount === 2500 && built.item.payee === null, 'check not built');
+    const added = ui.withEvidenceItem(payload, 'checks', null, built.item);
+    expect(added.liquidityEvidence.openingBalances === opening && added.somethingNew.a === 1 && added.budgetLines.length === 1, 'keys lost on add');
+    expect(added.liquidityEvidence.observedAt === '2026-10-15' && ui.evidenceItems(added, 'checks').length === 1, 'check not added');
+    const loan = ui.evidenceItems(added, 'loans')[0];
+    const edited = ui.itemFromDraft('loans', { ...ui.draftFromItem('loans', loan), balance: '' }, loan);
+    expect('item' in edited && edited.item.balance === null && edited.item.referenceBalance === 99000 && edited.item.product === '7', 'edit lost a field or made 0');
+    const replaced = ui.withEvidenceItem(added, 'loans', 0, edited.item);
+    expect(ui.evidenceItems(replaced, 'loans')[0].balance === null && replaced.liquidityEvidence.openingBalances === opening, 'edit');
+    const removed = ui.withEvidenceItem(replaced, 'checks', 0, null);
+    expect(ui.evidenceItems(removed, 'checks').length === 0 && removed.liquidityEvidence.openingBalances === opening, 'delete');
+    expect('error' in ui.itemFromDraft('checks', { ...draft, amount: '0' }, null), 'a zero check is accepted');
+    expect('error' in ui.itemFromDraft('events', { ...ui.draftFromItem('events', null), label: 'x', date: '31/10/2026' }, null), 'a bad date is accepted');
+    const markup = html(ui.LiquidityEvidenceCard, { entities: [{ organization_id: 6, label: 'פוד גרופ' }], payload: added, saving: false, onSave: () => {} });
+    expect(markup.includes('ראיות נזילות') && markup.includes('מסגרות (0)') && markup.includes('צ׳קים דחויים (1)'), 'card');
   });
 
   const importedPlan = process.env.REZEF_IMPORTED_PLAN;

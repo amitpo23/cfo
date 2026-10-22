@@ -283,3 +283,36 @@ def test_cash_statement_month_without_bank_rows_is_unknown(fresh_org):
     assert section["lines"][0]["values"] == {"2026-07": None, "2026-08": 100.0}
     assert section["totals"]["net"] == {"2026-07": None, "2026-08": 100.0}
     assert cash_statement.build_cash_statement([], date(2026, 7, 1), date(2026, 7, 31))["status"] == "unknown"
+
+
+# -------------------------------------------- G-11. liquidity evidence form
+
+def test_only_the_owner_may_change_liquidity_evidence(client, fresh_org, platform_admin):
+    from tests.test_dashboard_eliav_ui_r2 import _member, _put
+    dashboard_id, chef, food = _consolidated(client, platform_admin, fresh_org, "p1-evidence")
+    accountant = fresh_org()
+    _member(dashboard_id, accountant["org_id"], "accountant")
+    evidence = {"liquidityEvidence": {
+        "openingBalances": [{"organizationId": food["org_id"], "date": "2026-07-31", "amount": -30000, "source": "דף בנק"}],
+        "facilities": [{"organizationId": food["org_id"], "label": "מסגרת 1662", "limit": 80000, "validTo": "2026-12-31"}],
+    }, "statusParameters": {"scenario": "בסיס"}}
+    denied = _put(client, accountant["headers"], dashboard_id,
+                  {"liquidityEvidence": {"facilities": evidence["liquidityEvidence"]["facilities"]}})
+    assert denied.status_code == 403 and denied.json()["error"]["code"] == "liquidity_evidence_forbidden"
+    assert _put(client, platform_admin["headers"], dashboard_id, evidence).status_code == 200
+    # The owner's form adds a check and keeps the opening balance and the other keys.
+    added = dict(evidence["liquidityEvidence"])
+    added["checks"] = [{"organizationId": food["org_id"], "check": "10005", "date": "2026-11-05", "amount": 2500,
+                        "payee": None, "source": "צילום צ׳ק", "note": None}]
+    saved = _put(client, platform_admin["headers"], dashboard_id, {**evidence, "liquidityEvidence": added})
+    assert saved.status_code == 200, saved.text
+    stored = saved.json()["payload"]
+    assert stored["liquidityEvidence"]["openingBalances"] == evidence["liquidityEvidence"]["openingBalances"]
+    assert stored["statusParameters"] == {"scenario": "בסיס"}
+    # The accountant may still save other parts with the evidence unchanged.
+    kept = _put(client, accountant["headers"], dashboard_id, {**stored, "statusParameters": {"scenario": "שמרני"}})
+    assert kept.status_code == 200, kept.text
+    deleted = dict(stored["liquidityEvidence"], checks=[])
+    assert _put(client, accountant["headers"], dashboard_id, {**stored, "liquidityEvidence": deleted}).status_code == 403
+    view = _view(client, platform_admin["headers"], dashboard_id, "2026-10-01", "2026-10-31")
+    assert any(item.get("check") == "10005" for item in view["entities"][1]["view"]["liquidity"]["checks"])

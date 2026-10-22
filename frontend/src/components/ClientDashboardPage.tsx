@@ -5,7 +5,7 @@ import {
   linesFromPayload,
 } from './dashboardFiling';
 import {
-  EntityLiquidity, Forecast, ForecastPanel, LiquidityPanel, Parameters, ParametersCard,
+  EntityLiquidity, Forecast, ForecastPanel, LiquidityEvidenceCard, LiquidityPanel, Parameters, ParametersCard,
   OpeningBalanceCard, ShareLinksCard, money, openingBalancesFromPayload, parametersFromPayload, withOpeningBalance,
 } from './dashboardTabs';
 import TabErrorBoundary from './TabErrorBoundary';
@@ -795,6 +795,14 @@ export default function ClientDashboardPage() {
                 scoped.budget_vs_actual ? <BudgetVsActual section={scoped.budget_vs_actual} /> : <p className="text-stone-600">אין נתוני תקציב.</p>
               ) : null}
               {tab === 'liquidity' ? <LiquidityPanel section={scoped.liquidity} /> : null}
+              {tab === 'liquidity' && editor?.role === 'owner' && plan && filing ? (
+                <LiquidityEvidenceCard
+                  entities={filing.entities ?? []}
+                  payload={plan.payload}
+                  saving={saving}
+                  onSave={(next) => void savePayload(next, false)}
+                />
+              ) : null}
               {tab === 'liquidity' && editor?.role === 'owner' && plan && filing ? (
                 <OpeningBalanceCard
                   entities={filing.entities ?? []}

@@ -270,6 +270,8 @@ EVIDENCE_LIMIT = 200
 _EVIDENCE_KINDS = {"facilities", "loans", "checks", "events", "openingBalances"}
 # Only the dashboard owner (an admin of the organization) may enter an opening balance.
 OPENING_BALANCE_ROLES = {"owner"}
+# Facilities, loans, checks and events too: the liquidity form is the owner's (G-11).
+EVIDENCE_ROLES = {"owner"}
 
 
 def _number(value, *, low: float, high: float) -> bool:
@@ -364,6 +366,12 @@ def _validate_evidence(evidence) -> None:
                 raise _invalid_plan("פריט ראיה לא תקין")
 
 
+def _evidence(payload):
+    """``liquidityEvidence`` as stored; an absent key and an empty object are the same."""
+    evidence = payload.get("liquidityEvidence") if isinstance(payload, dict) else None
+    return evidence or None
+
+
 def _opening_balances(payload) -> list:
     evidence = payload.get("liquidityEvidence") if isinstance(payload, dict) else None
     items = evidence.get("openingBalances") if isinstance(evidence, dict) else None
@@ -422,9 +430,12 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
     validate_filing_payload(payload)
     row = get_dashboard(db, user, dashboard_id, allowed=PLAN_ROLES)
     current = db.get(DashboardPlan, row.id)
-    if _opening_balances(payload) != _opening_balances(current.payload if current is not None else None) \
+    stored = current.payload if current is not None else None
+    if _opening_balances(payload) != _opening_balances(stored) \
             and role_for(db, user, row) not in OPENING_BALANCE_ROLES:
         raise DashboardError(403, "opening_balance_forbidden", "רק בעלי הדשבורד או מנהל יכולים להזין יתרת פתיחה")
+    if _evidence(payload) != _evidence(stored) and role_for(db, user, row) not in EVIDENCE_ROLES:
+        raise DashboardError(403, "liquidity_evidence_forbidden", "רק בעלי הדשבורד או מנהל יכולים לשנות ראיות נזילות")
     expected = if_match.strip().strip('"')
     if current is None:
         if expected not in {"null", "*"}:
