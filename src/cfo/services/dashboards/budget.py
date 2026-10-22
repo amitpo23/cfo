@@ -72,7 +72,8 @@ def category_key(name: str) -> str:
 def category_label(key: str) -> str:
     if key == UNCATEGORIZED:
         return UNCATEGORIZED_HE
-    return _LABELS.get(key, key)
+    from ..category_labels import hebrew
+    return _LABELS.get(key) or hebrew(key)
 
 
 def _kind(row: Budget) -> str:
@@ -444,58 +445,113 @@ def _legacy_status(kind: str, budget: float | None, actual: float | None) -> str
     return "warning" if actual <= budget * 1.1 else "over_budget"
 
 
-def organization_summary(db, organization_id: int, year: int, month: int | None = None, *,
-                         period: str | None = None, plan: dict | None = None,
-                         today: date | None = None) -> dict:
-    """Budget vs actual of one organization in the legacy /budget page's shape.
+def dashboard_window(year: int, today: date) -> tuple[date, date]:
+    """The window the dashboard's /view reads by default: 1 January to today."""
+    if year == today.year:
+        return date(year, 1, 1), today
+    return date(year, 1, 1), date(year, 12, 31)
 
-    Budget and actual come from ``budget_vs_actual``, the dashboard's own
-    comparison, so both pages show the same numbers: each month's actual from
-    the source its P&L chose (books or classified bank cash, ex-VAT). A period
-    with a cash-basis month folds every category onto the comparison rows, so a
-    salary budget meets the payroll actual. Unknown actual stays ``None``.
-    ``variance`` keeps the legacy sign: budget minus actual.
+
+def dashboard_summary(db, user: User | None, dashboard, year: int, month: int | None = None, *,
+                      period: str | None = None, scope: str | None = None,
+                      today: date | None = None) -> dict:
+    """Budget vs actual of a dashboard organization in the legacy /budget page's shape.
+
+    The figures are the dashboard's own "תקציב מול ביצוע" tab: the same call
+    (``multi_entity.build_dashboard_view``) over the same window (1 January to
+    today, as /view), and the same section: the consolidated one (every entity of
+    the dashboard) when the dashboard has more than one entity and the user may
+    read it, else the primary organization's. ``scope`` asks for one of them.
+    Each month's actual comes from the source its P&L chose (books or classified
+    bank cash, ex-VAT); revenue and costs are totalled apart. Unknown actual stays
+    ``None``. ``variance`` keeps the legacy sign: budget minus actual.
     """
-    from . import books
+    from . import multi_entity, view_model
+    from .service import role_for
     today = today or date.today()
     start, end, name = _period(year, month, period, today)
-    window_end = min(end, today) if start <= today else end
-    pnl = books.monthly_pnl(db, organization_id, start, window_end, plan=plan)
-    section = budget_vs_actual(
-        db, organization_id, start, window_end, books_known=pnl["basis"] != "unknown",
-        pnl_months=pnl["months"],
+    window_start, window_end = dashboard_window(year, today)
+    plan = view_model.plan_payload(db, dashboard.id)
+    if window_start <= window_end:
+        view = multi_entity.build_dashboard_view(db, dashboard, window_start, window_end, plan=plan)
+        entities = view.get("entities") or []
+    else:  # a future year: budget only
+        view, entities = None, []
+    labels = [section.get("label") or "" for section in entities]
+    can_combine = len(entities) > 1 and role_for(db, user, dashboard) in READ_ROLES
+    chosen = "combined" if can_combine and scope in (None, "combined") else "primary"
+    if view is None:
+        section = {"status": "unknown", "months": [], "message": None}
+    elif chosen == "combined":
+        section = view["combined"]["budget_vs_actual"]
+    else:
+        section = view["budget_vs_actual"]
+    org_ids = (
+        [entity["organization_id"] for entity in entities] if chosen == "combined"
+        else [dashboard.primary_organization_id]
     )
-    # Whole months after today have a budget and no actual yet. The current month
-    # is in ``section`` with its full budget.
-    next_month = date(window_end.year + 1, 1, 1) if window_end.month == 12 else date(window_end.year, window_end.month + 1, 1)
-    later = _budget_index(db, organization_id, next_month, end) if next_month <= end else {}
-    fold = any(m.get("source") == "cash_basis" for m in section["months"])
+    primary_label = next((s.get("label") for s in entities if s.get("role") == "primary"), None) or dashboard.title
+    summary = _period_summary(db, org_ids, section, start, end, name, today)
+    summary.update({
+        "scope": chosen,
+        "scope_label": (
+            "מאוחד: " + " + ".join(labels) if chosen == "combined" else f"{primary_label} בלבד"
+        ),
+        "scopes": ["combined", "primary"] if can_combine else ["primary"],
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
+    })
+    return summary
+
+
+def _period_summary(db, org_ids: list[int], section: dict, start: date, end: date, name: str,
+                    today: date) -> dict:
+    in_period = [
+        m for m in section.get("months") or []
+        if start.isoformat()[:7] <= str(m.get("month")) <= end.isoformat()[:7]
+    ]
+    seen = {m.get("month") for m in in_period}
+    # Months of the period the section does not carry: after today (budget, no
+    # actual yet), or a consolidated section that is unknown. Their budget counts.
+    budget_only: dict = {}
+    for org_id in org_ids:
+        for (year, mon), planned in _budget_index(db, org_id, start, end).items():
+            key = f"{year}-{mon:02d}"
+            if key in seen:
+                continue
+            slot = budget_only.setdefault(key, {})
+            for ident, amount in planned.items():
+                slot[ident] = round(slot.get(ident, 0.0) + amount, 2)
+    current = today.isoformat()[:7]
+    unknown_month = any(m.get("source") is None for m in in_period) or any(
+        key <= current for key in budget_only
+    )
+    fold = any(m.get("source") in ("cash_basis", "mixed") for m in in_period)
     rows: dict[tuple[str, str], dict] = {}
 
     def slot(kind: str, key: str) -> dict:
         ident = (kind, CASH_ROW_FOR_CATEGORY.get(key, key) if fold else key)
         return rows.setdefault(ident, {"budget": None, "actual": None, "actual_known": True})
 
-    for item in section["months"]:
-        for line in item["categories"]:
+    for item in in_period:
+        for line in item.get("categories") or []:
             target = slot(line["kind"], line["category"])
-            if line["budget"] is not None:
+            if line.get("budget") is not None:
                 target["budget"] = round((target["budget"] or 0.0) + line["budget"], 2)
-            if line["actual"] is None:
+            if line.get("actual") is None:
                 target["actual_known"] = False
             else:
                 target["actual"] = round((target["actual"] or 0.0) + line["actual"], 2)
-    for planned in later.values():
+    for planned in budget_only.values():
         for (kind, key), amount in planned.items():
             target = slot(kind, key)
             target["budget"] = round((target["budget"] or 0.0) + amount, 2)
-    if any(item.get("source") is None for item in section["months"]):
+    if unknown_month:
         # A month with no books and no bank rows: the period's actual is not known.
         for target in rows.values():
             target["actual_known"] = False
     categories = []
-    totals = {"revenue": [0.0, 0.0], "cost": [0.0, 0.0]}
-    actual_known = True
+    totals = {"revenue": [0.0, 0.0, True, False], "cost": [0.0, 0.0, True, False]}
     for (kind, key), value in sorted(rows.items(), key=lambda item: (item[0][0] != "revenue", item[0][1])):
         budget = value["budget"]
         actual = value["actual"] if value["actual_known"] else None
@@ -513,20 +569,33 @@ def organization_summary(db, organization_id: int, year: int, month: int | None 
             "actual_amount": actual,
             "variance": variance,
             "variance_percentage": round(variance / budget * 100, 1) if variance is not None and budget else None,
+            "percentage_used": round(actual / budget * 100, 1) if actual is not None and budget else None,
             "status": _legacy_status(kind, budget, actual),
         })
-        totals[kind][0] += budget or 0.0
+        total = totals[kind]
+        total[0] += budget or 0.0
+        total[3] = total[3] or budget is not None
         if actual is None:
-            actual_known = False
+            total[2] = False
         else:
-            totals[kind][1] += actual
+            total[1] += actual
+    by_kind = {
+        name_out: {
+            "budget": round(totals[kind][0], 2) if totals[kind][3] else None,
+            "actual": round(totals[kind][1], 2) if totals[kind][2] else None,
+        }
+        for kind, name_out in (("revenue", "revenue"), ("cost", "costs"))
+    }
+    actual_known = totals["revenue"][2] and totals["cost"][2]
     total_budget = round(totals["revenue"][0] + totals["cost"][0], 2)
+    # Legacy fields: revenue and costs added together. The page shows ``totals``.
     total_actual = round(totals["revenue"][1] + totals["cost"][1], 2) if actual_known else None
     total_variance = None if total_actual is None else round(total_budget - total_actual, 2)
     return {
         "period": name,
         "period_start": start.isoformat(),
         "period_end": end.isoformat(),
+        "totals": by_kind,
         "total_budget": total_budget,
         "total_actual": total_actual,
         "total_variance": total_variance,
@@ -537,8 +606,38 @@ def organization_summary(db, organization_id: int, year: int, month: int | None 
         "source": "dashboard",
         "months": [
             {"month": m["month"], "source": m.get("source"), "source_label": m.get("source_label")}
-            for m in section["months"]
+            for m in in_period
         ],
         "message": section.get("message"),
         "provider_calls": 0,
     }
+
+
+def summary_alerts(summary: dict, threshold_pct: float) -> list[dict]:
+    """Budget alerts from the same figures as the page: a cost line that used
+    ``threshold_pct`` of its budget or more. Unknown actual raises no alert."""
+    alerts = []
+    for line in summary.get("categories") or []:
+        used = line.get("percentage_used")
+        if line.get("kind") != "cost" or used is None or used < threshold_pct:
+            continue
+        over = used > 100
+        label = line["category_hebrew"]
+        alerts.append({
+            "alert_id": f"{line['category_id']}_{summary['period']}",
+            "category": line["category_id"],
+            "category_hebrew": label,
+            "alert_type": "over_budget" if over else "warning",
+            "severity": "critical" if used >= 130 else ("high" if over else "medium"),
+            "message": (
+                f"חריגה ב{label}: ₪{line['actual_amount'] - line['budget_amount']:,.0f} מעל התקציב ({used:.0f}% מהתקציב)"
+                if over else f"{label}: נוצלו {used:.0f}% מהתקציב"
+            ),
+            "budget_amount": line["budget_amount"],
+            "actual_amount": line["actual_amount"],
+            "variance_percentage": line["variance_percentage"],
+            "percentage_used": used,
+            "period": summary["period"],
+            "scope_label": summary.get("scope_label"),
+        })
+    return sorted(alerts, key=lambda alert: alert["percentage_used"], reverse=True)

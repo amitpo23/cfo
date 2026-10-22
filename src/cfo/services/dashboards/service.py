@@ -265,7 +265,9 @@ _PARAMETER_KEYS = {
     "horizon", "growth", "vat",
 }
 EVIDENCE_LIMIT = 200
-_EVIDENCE_KINDS = {"facilities", "loans", "checks", "events"}
+_EVIDENCE_KINDS = {"facilities", "loans", "checks", "events", "openingBalances"}
+# Only the dashboard owner (an admin of the organization) may enter an opening balance.
+OPENING_BALANCE_ROLES = {"owner"}
 
 
 def _number(value, *, low: float, high: float) -> bool:
@@ -311,7 +313,9 @@ def _short_text(value, *, required: bool = False, limit: int = 120) -> bool:
 
 def _validate_evidence(evidence) -> None:
     """Dated liquidity evidence the bank feed does not carry (the tool's
-    liquidity-evidence.json): credit facilities, loans, post-dated checks, events.
+    liquidity-evidence.json): credit facilities, loans, post-dated checks, events,
+    and opening balances (the tool's ``openingBalance``: a closing balance of one
+    day with its source, for an imported account without a balance column).
     An unknown amount is ``null``, never 0."""
     if evidence is None:
         return
@@ -338,6 +342,13 @@ def _validate_evidence(evidence) -> None:
             elif kind == "loans":
                 ok = ok and _short_text(item.get("label"), required=True) and _optional_amount(item.get("balance")) \
                     and _optional_date(item.get("asOf")) and _optional_date(item.get("maturity"))
+            elif kind == "openingBalances":
+                account = item.get("accountId")
+                ok = ok and isinstance(org, int) and not isinstance(org, bool) \
+                    and (account is None or (isinstance(account, int) and not isinstance(account, bool))) \
+                    and item.get("date") is not None and _optional_date(item.get("date")) \
+                    and _number(item.get("amount"), low=-MAX_PLAN_AMOUNT, high=MAX_PLAN_AMOUNT) \
+                    and _short_text(item.get("source"), required=True, limit=300)
             elif kind == "checks":
                 ok = ok and _short_text(item.get("check"), required=True, limit=40) \
                     and _optional_date(item.get("date")) and item.get("date") is not None \
@@ -349,6 +360,12 @@ def _validate_evidence(evidence) -> None:
                     and _short_text(item.get("kind"), limit=40)
             if not ok:
                 raise _invalid_plan("פריט ראיה לא תקין")
+
+
+def _opening_balances(payload) -> list:
+    evidence = payload.get("liquidityEvidence") if isinstance(payload, dict) else None
+    items = evidence.get("openingBalances") if isinstance(evidence, dict) else None
+    return items if isinstance(items, list) else []
 
 
 def _validate_builtin_pin(pin) -> None:
@@ -376,6 +393,9 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
     validate_filing_payload(payload)
     row = get_dashboard(db, user, dashboard_id, allowed=PLAN_ROLES)
     current = db.get(DashboardPlan, row.id)
+    if _opening_balances(payload) != _opening_balances(current.payload if current is not None else None) \
+            and role_for(db, user, row) not in OPENING_BALANCE_ROLES:
+        raise DashboardError(403, "opening_balance_forbidden", "רק בעלי הדשבורד או מנהל יכולים להזין יתרת פתיחה")
     expected = if_match.strip().strip('"')
     if current is None:
         if expected not in {"null", "*"}:

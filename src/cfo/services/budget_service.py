@@ -124,10 +124,8 @@ BUDGET_CATEGORIES_HEBREW = {
 
 def hebrew_category(key: str) -> str:
     """Hebrew label of a budget category; the P&L labels cover the dashboard keys (salaries, ...)."""
-    from .financial_reports_service import FinancialReportsService
-    return (BUDGET_CATEGORIES_HEBREW.get(key)
-            or FinancialReportsService.CATEGORY_HEBREW.get(key)
-            or key)
+    from .category_labels import hebrew
+    return BUDGET_CATEGORIES_HEBREW.get(key) or hebrew(key)
 
 
 class BudgetService:

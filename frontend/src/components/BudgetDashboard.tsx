@@ -14,10 +14,13 @@ import {
   Legend,
 } from 'recharts';
 import api from '../services/api';
+import { categoryLabel } from '../services/categoryLabels';
 import ExportButtons from './ExportButtons';
+import { PIE_LABEL_MIN_SHARE, pieSlices } from './budgetChart';
 
 interface BudgetComparison {
   category: string;
+  kind?: string;
   planned: number;
   // null: the actual of the period is not known (not 0)
   actual: number | null;
@@ -33,7 +36,18 @@ type BudgetSummaryMeta = {
   totalActual?: number | null;
   message?: string | null;
   months?: { month: string; source_label?: string | null }[];
+  // The dashboard comparison: revenue and costs apart, and the scope it covers.
+  totals?: { revenue: KindTotal; costs: KindTotal } | null;
+  scope?: string | null;
+  scopeLabel?: string | null;
+  scopes?: string[];
+  windowStart?: string | null;
+  windowEnd?: string | null;
 };
+
+type KindTotal = { budget: number | null; actual: number | null };
+
+const SCOPE_LABELS: Record<string, string> = { combined: 'מאוחד (כל הישויות)', primary: 'הישות הראשית בלבד' };
 
 const STATUS_LABELS: Record<string, string> = {
   on_track: 'בתקציב',
@@ -67,6 +81,7 @@ const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'
 
 export const BudgetDashboard: React.FC = () => {
   const [selectedPeriod, setSelectedPeriod] = useState<string>('current_month');
+  const [scope, setScope] = useState<string | null>(null);
   const [showScenario, setShowScenario] = useState(false);
   const [scenarioParams, setScenarioParams] = useState({
     revenue_change_pct: 0,
@@ -75,10 +90,10 @@ export const BudgetDashboard: React.FC = () => {
 
   // Fetch budget vs actual — backend מחזיר {status, data: BudgetSummary}
   const { data: budgetResult, isLoading: loadingBudget } = useQuery({
-    queryKey: ['budget-vs-actual', selectedPeriod],
+    queryKey: ['budget-vs-actual', selectedPeriod, scope],
     queryFn: async () => {
       const res = await api.get<{ status: string; data: any }>('/api/financial/budget/vs-actual', {
-        params: periodParams(selectedPeriod),
+        params: { ...periodParams(selectedPeriod), ...(scope ? { scope } : {}) },
       });
       const data = res?.data ?? {};
       const summary: BudgetSummaryMeta = {
@@ -88,11 +103,18 @@ export const BudgetDashboard: React.FC = () => {
         totalActual: data.total_actual === undefined ? undefined : data.total_actual,
         message: data.message ?? null,
         months: Array.isArray(data.months) ? data.months : undefined,
+        totals: data.totals ?? null,
+        scope: data.scope ?? null,
+        scopeLabel: data.scope_label ?? null,
+        scopes: Array.isArray(data.scopes) ? data.scopes : undefined,
+        windowStart: data.window_start ?? null,
+        windowEnd: data.window_end ?? null,
       };
       const categories: any[] = data.categories ?? [];
       const known = (value: unknown) => (typeof value === 'number' ? value : null);
       const rows = categories.map((c: any): BudgetComparison => ({
-        category: c.category_hebrew || c.category_name || c.category_id,
+        category: categoryLabel(c.category_id || c.category_name, c.category_hebrew),
+        kind: c.kind,
         planned: c.budget_amount ?? 0,
         actual: data.source === 'dashboard' ? known(c.actual_amount) : (c.actual_amount ?? 0),
         variance: data.source === 'dashboard' ? known(c.variance) : (c.variance ?? 0),
@@ -107,18 +129,20 @@ export const BudgetDashboard: React.FC = () => {
 
   // Fetch budget alerts — backend מחזיר {status, data: [...]}
   const { data: alerts, isLoading: loadingAlerts } = useQuery({
-    queryKey: ['budget-alerts'],
+    queryKey: ['budget-alerts', scope],
     queryFn: async () => {
-      const res = await api.get<{ status: string; data: any[] }>('/api/financial/budget/alerts');
+      const res = await api.get<{ status: string; data: any[] }>('/api/financial/budget/alerts', {
+        params: scope ? { scope } : {},
+      });
       const list: any[] = res?.data ?? [];
       return list.map((a: any): BudgetAlert => ({
-        category: a.category,
+        category: categoryLabel(a.category, a.category_hebrew),
         alert_type: a.alert_type,
         message: a.message,
         severity: a.severity,
         current_spend: a.actual_amount ?? 0,
         budget: a.budget_amount ?? 0,
-        percentage_used: a.variance_percentage ?? 0,
+        percentage_used: a.percentage_used ?? a.variance_percentage ?? 0,
       }));
     },
   });
@@ -153,6 +177,10 @@ export const BudgetDashboard: React.FC = () => {
   const totalVariancePct = totals.planned ? ((totalVariance / totals.planned) * 100) : 0;
 
   const formatCurrency = (value: number | null) => (value === null ? 'לא ידוע' : `₪${value.toLocaleString()}`);
+  const byKind = meta.totals ?? null;
+  // The pie splits the cost budget (all rows on a page without kinds).
+  const slices = pieSlices((budgetData ?? []).filter((row) => !row.kind || row.kind === 'cost'));
+  const sourceLabels = [...new Set((meta.months ?? []).map((m) => m.source_label).filter(Boolean))];
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -189,8 +217,11 @@ export const BudgetDashboard: React.FC = () => {
           <h1 className="text-3xl font-bold text-gray-900">ניהול תקציב</h1>
           <p className="text-gray-600 mt-1">מעקב ובקרה תקציבית{meta.period ? ` · ${meta.period}` : ''}</p>
           {meta.source === 'dashboard' ? (
-            <p className="text-sm text-gray-500 mt-1">
-              התקציב והביצוע זהים ללשונית "תקציב מול ביצוע" בדשבורד
+            <p className="text-sm text-gray-500 mt-1" data-scope={meta.scope ?? ''}>
+              מחושב באותה פונקציה ובאותו חלון כמו לשונית "תקציב מול ביצוע" בדשבורד
+              {meta.scopeLabel ? <> · היקף: <strong>{meta.scopeLabel}</strong></> : null}
+              {meta.scope === 'combined' ? ' (כמו "מאוחד" בדשבורד)' : meta.scope === 'primary' ? ' (כמו לשונית הישות בדשבורד)' : null}
+              {sourceLabels.length > 0 ? <> · מקור הביצוע: {sourceLabels.join(' / ')}</> : null}
               {meta.dashboardSlug ? (
                 <> · <a className="underline" href={`/d/${encodeURIComponent(meta.dashboardSlug)}?tab=bva`}>פתח בדשבורד</a></>
               ) : null}
@@ -198,6 +229,16 @@ export const BudgetDashboard: React.FC = () => {
           ) : null}
         </div>
         <div className="flex gap-4">
+          {meta.scopes && meta.scopes.length > 1 ? (
+            <select
+              value={scope ?? meta.scope ?? ''}
+              onChange={(e) => setScope(e.target.value)}
+              className="rounded-lg border-gray-300 shadow-sm px-4 py-2"
+              aria-label="היקף"
+            >
+              {meta.scopes.map((key) => <option key={key} value={key}>{SCOPE_LABELS[key] ?? key}</option>)}
+            </select>
+          ) : null}
           <select
             value={selectedPeriod}
             onChange={(e) => setSelectedPeriod(e.target.value)}
@@ -241,6 +282,24 @@ export const BudgetDashboard: React.FC = () => {
       </div>
 
       {/* Summary Cards */}
+      {byKind ? (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {([['revenue', 'הכנסות'], ['costs', 'הוצאות']] as const).map(([key, label]) => {
+            const total = byKind[key];
+            return (
+              <div key={key} className="bg-white rounded-xl shadow-sm p-6 border border-gray-100" data-total={key}>
+                <h3 className="text-sm font-medium text-gray-500">{label}: תקציב מול ביצוע</h3>
+                <p className="text-2xl font-bold text-gray-900 mt-2">{formatCurrency(total.actual)}</p>
+                <p className="text-sm text-gray-500">תקציב: {total.budget === null ? 'אין תקציב' : formatCurrency(total.budget)}</p>
+              </div>
+            );
+          })}
+          <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+            <h3 className="text-sm font-medium text-gray-500">התראות פעילות</h3>
+            <p className="text-2xl font-bold text-orange-600 mt-2">{alerts?.length || 0}</p>
+          </div>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
           <h3 className="text-sm font-medium text-gray-500">תקציב מתוכנן</h3>
@@ -274,6 +333,7 @@ export const BudgetDashboard: React.FC = () => {
           </p>
         </div>
       </div>
+      )}
 
       {/* Alerts Section */}
       {alerts && alerts.length > 0 && (
@@ -332,25 +392,42 @@ export const BudgetDashboard: React.FC = () => {
         </div>
 
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <h2 className="text-xl font-bold text-gray-900 mb-4">פילוח תקציב</h2>
+          <h2 className="text-xl font-bold text-gray-900 mb-4">פילוח תקציב ההוצאות</h2>
+          {slices.length === 0 ? <p className="text-gray-500">אין תקציב הוצאות בתקופה.</p> : (
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
               <Pie
-                data={budgetData}
-                dataKey="planned"
-                nameKey="category"
+                data={slices}
+                dataKey="value"
+                nameKey="name"
                 cx="50%"
-                cy="50%"
-                outerRadius={100}
-                label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                cy="45%"
+                outerRadius={90}
+                labelLine={false}
+                isAnimationActive={false}
+                // Only the share, inside large slices; the legend carries the names.
+                label={({ percent, cx, cy, midAngle, innerRadius, outerRadius }) => {
+                  if (percent < PIE_LABEL_MIN_SHARE) return null;
+                  const radius = innerRadius + (outerRadius - innerRadius) * 0.6;
+                  const angle = (-midAngle * Math.PI) / 180;
+                  return (
+                    <text x={cx + radius * Math.cos(angle)} y={cy + radius * Math.sin(angle)} fill="#fff"
+                      textAnchor="middle" dominantBaseline="central" fontSize={12} direction="ltr">
+                      {`${(percent * 100).toFixed(0)}%`}
+                    </text>
+                  );
+                }}
               >
-                {budgetData?.map((_entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                {slices.map((slice, index) => (
+                  <Cell key={slice.name} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
               <Tooltip formatter={(value: number) => formatCurrency(value)} />
+              <Legend layout="horizontal" verticalAlign="bottom" align="center"
+                wrapperStyle={{ direction: 'rtl', fontSize: 12 }} />
             </PieChart>
           </ResponsiveContainer>
+          )}
         </div>
       </div>
 

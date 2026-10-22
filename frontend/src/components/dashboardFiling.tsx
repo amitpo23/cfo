@@ -47,7 +47,11 @@ export type LineDraft = {
   group?: string;
   unit?: string;
   months: Record<string, { quantity: string; rate: string }>;
+  // Fields of the stored line the editor does not edit; saved back as they were.
+  extra?: Record<string, unknown>;
 };
+
+const EDITED_LINE_KEYS = new Set(['id', 'label', 'category', 'kind', 'group', 'unit', 'months']);
 
 export type PlanPayload = Record<string, unknown>;
 
@@ -91,6 +95,7 @@ export function linesFromPayload(payload: PlanPayload): LineDraft[] {
         };
       }
     }
+    const extra = Object.fromEntries(Object.entries(row).filter(([key]) => !EDITED_LINE_KEYS.has(key)));
     return [{
       id: row.id,
       label: row.label,
@@ -98,6 +103,7 @@ export function linesFromPayload(payload: PlanPayload): LineDraft[] {
       ...(typeof row.group === 'string' ? { group: row.group } : {}),
       ...(typeof row.unit === 'string' ? { unit: row.unit } : {}),
       months,
+      ...(Object.keys(extra).length > 0 ? { extra } : {}),
     }];
   });
 }
@@ -171,14 +177,23 @@ function parseAmount(value: string): number | null {
   return parsed;
 }
 
-function cellAmount(cell: CellDraft | undefined, defaults: CellDraft | undefined): string {
+// The amount column. A line the tool seeded with only a quantity or only a
+// rate says which half is missing and shows the half it has, so the row does
+// not read as empty.
+export function cellAmount(cell: CellDraft | undefined, defaults: CellDraft | undefined): string {
   const value = cellValue(cell);
   if (value !== null) return money(value);
   const quantity = cell?.quantity.trim() || defaults?.quantity || '';
   const rate = cell?.rate.trim() || defaults?.rate || '';
-  if (!quantity && rate) return 'חסרה כמות';
-  if (quantity && !rate) return 'חסר תעריף';
+  const fromSeed = !cell?.quantity.trim() && !cell?.rate.trim();
+  if (!quantity && rate) return fromSeed ? `חסרה כמות · תעריף ${rate} מהכלי` : 'חסרה כמות';
+  if (quantity && !rate) return fromSeed ? `חסר תעריף · כמות ${quantity} מהכלי` : 'חסר תעריף';
   return 'אין תקציב';
+}
+
+// How many lines have an amount in the month: the editor says it above the table.
+export function budgetedCount(lines: LineDraft[], month: string): number {
+  return lines.filter((line) => cellValue(line.months[month]) !== null).length;
 }
 
 export function budgetLinesPayload(lines: LineDraft[], categories: BudgetCategory[]): { lines: Record<string, unknown>[] } | { error: string } {
@@ -195,10 +210,13 @@ export function budgetLinesPayload(lines: LineDraft[], categories: BudgetCategor
       if (!quantityText && !rateText) continue;
       const quantity = parseAmount(quantityText);
       const rate = parseAmount(rateText);
-      if (quantity === null || rate === null) return { error: `כמות או תעריף לא תקינים בחודש ${month}` };
+      if (quantity === null || rate === null) {
+        return { error: `בשורה "${label}" בחודש ${month} חסרים כמות או תעריף (או שאינם מספר). מלאו את שניהם או מחקו את שניהם.` };
+      }
       months[month] = { quantity, rate };
     }
     payload.push({
+      ...(line.extra ?? {}),
       id: line.id,
       label,
       category: line.category,
@@ -230,6 +248,14 @@ export function groupedLines(lines: LineDraft[]): { line: LineDraft; header: str
     line,
     header: showHeaders && index === 0 ? group : null,
   })));
+}
+
+function groupTotal(lines: LineDraft[], group: string, month: string): number | null {
+  const values = lines
+    .filter((line) => (line.group || NO_GROUP) === group)
+    .map((line) => cellValue(line.months[month]))
+    .filter((value): value is number => value !== null);
+  return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) : null;
 }
 
 export function monthTotal(lines: LineDraft[], month: string, categories: BudgetCategory[], kind: BudgetCategory['kind']): number {
@@ -272,6 +298,10 @@ export function BudgetEditor({
   onSave: () => void;
   saving: boolean;
 }) {
+  const [onlyBudgeted, setOnlyBudgeted] = useState(false);
+  const budgeted = budgetedCount(lines, month);
+  const shown = onlyBudgeted ? lines.filter((line) => cellValue(line.months[month]) !== null) : lines;
+
   function update(id: string, patch: Partial<LineDraft>) {
     onLines(lines.map((line) => (line.id === id ? { ...line, ...patch } : line)));
   }
@@ -318,7 +348,26 @@ export function BudgetEditor({
         ) : (
           <span className="text-stone-500">צפייה בלבד</span>
         )}
+        {lines.length > 0 ? (
+          <label className="text-stone-600">
+            <input
+              type="checkbox"
+              className="ml-1"
+              checked={onlyBudgeted}
+              onChange={(event) => setOnlyBudgeted(event.target.checked)}
+            />
+            רק שורות עם תקציב
+          </label>
+        ) : null}
       </div>
+      {lines.length > 0 ? (
+        <p className="mt-2 text-sm text-stone-600" data-budgeted={budgeted}>
+          בחודש {month} יש סכום ל-{budgeted} מתוך {lines.length} שורות.
+          {budgeted < lines.length
+            ? ' בשאר השורות אין עדיין כמות × תעריף. בשורות מהכלי שיש להן רק חצי, החצי הקיים מוצג בעמודת הסכום. מלאו את החסר כדי לתקצב.'
+            : null}
+        </p>
+      ) : null}
       {lines.length === 0 ? <p className="mt-3 text-stone-600">אין שורות תקציב.</p> : (
         <table className="mt-4 w-full text-sm">
           <thead>
@@ -333,7 +382,7 @@ export function BudgetEditor({
             </tr>
           </thead>
           <tbody>
-            {groupedLines(lines).map(({ line, header }) => {
+            {groupedLines(shown).map(({ line, header }) => {
               const stored = line.months[month];
               const cell = stored ?? { quantity: '', rate: '' };
               const defaults = lineDefaults[line.id];
@@ -342,7 +391,13 @@ export function BudgetEditor({
                 <Fragment key={line.id}>
                 {header ? (
                   <tr className="border-b bg-stone-50">
-                    <td className="py-2 font-medium" colSpan={canEdit ? 7 : 6}>{header}</td>
+                    <td className="py-2 font-medium" colSpan={4}>{header}</td>
+                    <td className="py-2 font-medium" colSpan={canEdit ? 3 : 2}>
+                      {(() => {
+                        const total = groupTotal(lines, header, month);
+                        return total === null ? 'אין תקציב' : money(total);
+                      })()}
+                    </td>
                   </tr>
                 ) : null}
                 <tr className="border-b border-stone-100">
@@ -396,7 +451,7 @@ export function BudgetEditor({
                     />
                   </td>
                   <td className={`py-2 ${cellValue(stored) === null ? 'text-stone-400' : ''}`}>{cellAmount(stored, defaults)}</td>
-                  <td className="py-2 text-stone-600">{yearTotal === null ? '—' : money(yearTotal)}</td>
+                  <td className="py-2 text-stone-600">{yearTotal === null ? 'אין תקציב' : money(yearTotal)}</td>
                   {canEdit ? (
                     <td className="py-2">
                       <button

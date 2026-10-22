@@ -13,7 +13,8 @@ and ``lib/liquidity-read.js``). Inputs are rows already in the database:
   per month (debt service).
 * ``plan.liquidityEvidence``: dated evidence the feed does not carry (credit
   facilities, loans of an entity without a live connection, post-dated checks,
-  loan maturities). Each item may name an ``organizationId``.
+  loan maturities) and dated opening balances of checking accounts whose
+  import has no balance column. Each item may name an ``organizationId``.
 
 Unknown is ``None``, never 0. A loan account whose name says it is the credit
 line ("מסגרת") mirrors the overdraft and is not added to the debts again.
@@ -33,7 +34,7 @@ CREDIT_LINE_TEXT = "מסגרת"
 CHECK_TEXT = re.compile(r"שיק|צ'ק|צ׳ק|צ\"ק")
 CHECK_HORIZON_DAYS = 120
 EVENT_HORIZON_DAYS = 400
-EVIDENCE_KINDS = ("facilities", "loans", "checks", "events")
+EVIDENCE_KINDS = ("facilities", "loans", "checks", "events", "openingBalances")
 
 
 def _r(value: float) -> float:
@@ -125,6 +126,47 @@ def imported_balance(db, account: Account) -> dict | None:
     if len(closing) != 1:
         return None
     return {"balance": closing.pop(), "as_of": last_day, "source": "imported_running_balance"}
+
+
+def opening_balance(db, account: Account, items: list[dict], end: date, *, sole: bool) -> dict | None:
+    """An owner-entered closing balance of one day plus the BOOKED rows after it.
+
+    The item names the account (``accountId``) or only the organization; an
+    organization-only item counts when this is the organization's only checking
+    account without a known balance (``sole``). The latest item dated on or
+    before ``end`` is used. Rows dated after ``end`` are not counted.
+    """
+    matching = [
+        item for item in items
+        if (item.get("accountId") == account.id
+            or (item.get("accountId") is None and sole
+                and item.get("organizationId") == account.organization_id))
+        and _num(item.get("amount")) is not None and item.get("date")
+        and date.fromisoformat(item["date"]) <= end
+    ]
+    if not matching:
+        return None
+    chosen = max(matching, key=lambda item: (item["date"], item.get("accountId") is not None))
+    opened_on = date.fromisoformat(chosen["date"])
+    rows = (
+        db.query(BankTransaction)
+        .filter(
+            BankTransaction.account_id == account.id,
+            BankTransaction.superseded_by_id.is_(None),
+            BankTransaction.transaction_date > opened_on,
+            BankTransaction.transaction_date <= end,
+        )
+        .all()
+    )
+    booked = [row for row in rows if str((row.raw_data or {}).get("status") or "BOOKED").upper() != "PENDING"]
+    moved = sum(float(row.amount or 0) for row in booked)
+    return {
+        "balance": _r(float(chosen["amount"]) + moved),
+        "as_of": max((row.transaction_date for row in booked), default=opened_on),
+        "source": "opening_balance",
+        "opening": {"date": chosen["date"], "amount": _r(float(chosen["amount"])),
+                    "source": chosen.get("source"), "transactions": len(booked)},
+    }
 
 
 def _account_kind(account: Account) -> str:
@@ -289,6 +331,11 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
             derived = imported_balance(db, account)
             if derived is not None:
                 known[account.id] = derived
+    unknown = [account for account in checking if account.id not in known]
+    for account in unknown:
+        derived = opening_balance(db, account, evidence["openingBalances"], end, sole=len(unknown) == 1)
+        if derived is not None:
+            known[account.id] = derived
     balance = None if not checking or len(known) != len(checking) else _r(sum(k["balance"] for k in known.values()))
     as_of = max((k["as_of"] for k in known.values()), default=None)
     sources = {k["source"] for k in known.values()}
@@ -391,7 +438,8 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
              "credit_limit": _num(a.credit_limit),
              "as_of": known[a.id]["as_of"].isoformat() if a.id in known else (
                  a.balance_as_of.date().isoformat() if a.balance_as_of else None),
-             "balance_source": known[a.id]["source"] if a.id in known else None}
+             "balance_source": known[a.id]["source"] if a.id in known else None,
+             **({"opening": known[a.id]["opening"]} if "opening" in known.get(a.id, {}) else {})}
             for a in accounts
         ],
         "cards": cards,
