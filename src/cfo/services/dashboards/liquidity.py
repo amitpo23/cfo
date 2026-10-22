@@ -61,6 +61,72 @@ def _balance(account: Account) -> float | None:
     return _num(account.balance)
 
 
+# Column names of a statement's running balance in a reviewed local import
+# (``raw_data.original``), compared without spaces, quotes or case.
+_IMPORTED_BALANCE_KEYS = {
+    "balance", "runningbalance", "balanceafter", "יתרה", "יתרהבשח", "יתרהבשקלים",
+    "יתרהלאחרפעולה", "יתרהאחריהפעולה", "יתרהבחשבון",
+}
+_KEY_NOISE = re.compile(r"[\s\"'\u05f3\u05f4_\-.]")
+
+
+def _statement_number(value) -> float | None:
+    """A statement cell as a number: "1,234.50", "-1,234.50", "1,234.50-", "₪ 12"."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    text = value.replace(",", "").replace("₪", "").replace("\u200f", "").replace("\u200e", "").strip()
+    negative = text.endswith("-") or (text.startswith("(") and text.endswith(")"))
+    text = text.strip("-()").strip() if negative else text
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return -number if negative else number
+
+
+def _row_balance(row) -> float | None:
+    raw = row.raw_data if isinstance(row.raw_data, dict) else {}
+    original = raw.get("original")
+    if not isinstance(original, dict):
+        return None
+    for key, value in original.items():
+        if _KEY_NOISE.sub("", str(key)).casefold() in _IMPORTED_BALANCE_KEYS:
+            return _statement_number(value)
+    return None
+
+
+def imported_balance(db, account: Account) -> dict | None:
+    """Closing balance of an imported statement: the running balance of its last day.
+
+    A local import has no balance on the account. When the statement rows carry
+    their running balance, the last day's closing is the row no other row of that
+    day follows (its balance is not another row's balance before the movement).
+    Two candidates, or none, leave the balance unknown.
+    """
+    rows = (
+        db.query(BankTransaction)
+        .filter(BankTransaction.account_id == account.id, BankTransaction.superseded_by_id.is_(None))
+        .order_by(BankTransaction.transaction_date.desc(), BankTransaction.id.desc())
+        .limit(200)
+        .all()
+    )
+    dated = [(row, _row_balance(row)) for row in rows]
+    dated = [(row, value) for row, value in dated if value is not None]
+    if not dated:
+        return None
+    last_day = dated[0][0].transaction_date
+    same_day = [(row, value) for row, value in dated if row.transaction_date == last_day]
+    before = {_r(value - float(row.amount or 0)) for row, value in same_day}
+    closing = {_r(value) for _row, value in same_day if _r(value) not in before or len(same_day) == 1}
+    if len(closing) != 1:
+        return None
+    return {"balance": closing.pop(), "as_of": last_day, "source": "imported_running_balance"}
+
+
 def _account_kind(account: Account) -> str:
     raw = str(account.raw_account_type or "").strip().upper()
     if raw == CARD:
@@ -214,9 +280,19 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
     evidence = evidence_for(plan, organization_id)
 
     checking = by_kind.get("checking", [])
-    balances = [_balance(account) for account in checking]
-    balance = None if not checking or any(value is None for value in balances) else _r(sum(balances))
-    as_of = max((a.balance_as_of for a in checking if a.balance_as_of), default=None)
+    known = {}
+    for account in checking:
+        if _balance(account) is not None:
+            known[account.id] = {"balance": _balance(account), "as_of": account.balance_as_of.date(),
+                                 "source": "accounts"}
+        elif account.source != "open_finance":
+            derived = imported_balance(db, account)
+            if derived is not None:
+                known[account.id] = derived
+    balance = None if not checking or len(known) != len(checking) else _r(sum(k["balance"] for k in known.values()))
+    as_of = max((k["as_of"] for k in known.values()), default=None)
+    sources = {k["source"] for k in known.values()}
+    balance_source = None if balance is None else (sources.pop() if len(sources) == 1 else "mixed")
     limits = [_num(account.credit_limit) for account in checking]
     limit = None if not checking or any(value is None for value in limits) else _r(sum(limits))
     limit_source = "accounts.credit_limit" if limit is not None else None
@@ -266,18 +342,18 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         for c in checks
         if c["state"] == "future" and date.fromisoformat(c["date"]) <= today + timedelta(days=CHECK_HORIZON_DAYS)
     ]
+    observed_on = str(evidence.get("observedAt") or "")[:10] or None
     for event in evidence["events"]:
         when = date.fromisoformat(event["date"])
         if today <= when <= today + timedelta(days=EVENT_HORIZON_DAYS):
             upcoming.append({
                 "date": event["date"], "label": event.get("label"), "kind": event.get("kind") or "event",
-                "amount": _num(event.get("amount")),
-                "note": None if _num(event.get("amount")) is not None else "הסכום לא מתועד",
+                **_event_amount(event, evidence["facilities"], loans, observed_on),
             })
     for loan in loans:
         if loan.get("maturity") and today <= date.fromisoformat(loan["maturity"]) <= today + timedelta(days=EVENT_HORIZON_DAYS):
             upcoming.append({"date": loan["maturity"], "label": f"{loan['name']} · סיום הלוואה",
-                             "kind": "loan_maturity", "amount": None, "note": "הסכום לא מתועד"})
+                             "kind": "loan_maturity", **_outstanding(loan.get("balance"), loan.get("as_of"))})
     upcoming.sort(key=lambda item: item["date"])
 
     debts = []
@@ -285,7 +361,7 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         debts.append({
             "label": "מינוס בעו״ש",
             "amount": None if balance is None else (_r(-balance) if balance < 0 else 0.0),
-            "as_of": as_of.date().isoformat() if as_of else None,
+            "as_of": as_of.isoformat() if as_of else None,
         })
     else:
         debts.append({"label": "מינוס בעו״ש", "amount": None, "as_of": None,
@@ -303,15 +379,19 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         "status": status,
         "position": {
             "balance": balance,
-            "as_of": as_of.date().isoformat() if as_of else None,
+            "as_of": as_of.isoformat() if as_of else None,
+            "balance_source": balance_source,
             "limit": limit,
             "limit_source": limit_source,
             "available_to_limit": None if balance is None or limit is None else _r(limit + balance),
         },
         "accounts": [
             {"account_id": a.id, "name": a.name, "kind": _account_kind(a),
-             "balance": _balance(a), "credit_limit": _num(a.credit_limit),
-             "as_of": a.balance_as_of.date().isoformat() if a.balance_as_of else None}
+             "balance": known[a.id]["balance"] if a.id in known else _balance(a),
+             "credit_limit": _num(a.credit_limit),
+             "as_of": known[a.id]["as_of"].isoformat() if a.id in known else (
+                 a.balance_as_of.date().isoformat() if a.balance_as_of else None),
+             "balance_source": known[a.id]["source"] if a.id in known else None}
             for a in accounts
         ],
         "cards": cards,
@@ -338,6 +418,47 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
     }
 
 
+NO_AMOUNT_NOTE = "הסכום לא מתועד"
+
+
+def _outstanding(balance, as_of) -> dict:
+    """A loan's last known balance as the amount due at its end. The schedule
+    (instalments until then) is not in the evidence, so the amount is an upper bound."""
+    value = _num(balance)
+    if value is None:
+        return {"amount": None, "note": NO_AMOUNT_NOTE}
+    when = f" נכון ל־{as_of}" if as_of else ""
+    return {
+        "amount": _r(-abs(value)), "amount_basis": "outstanding_balance", "amount_as_of": as_of,
+        "note": f"יתרת ההלוואה{when}; לוח הסילוקין לא מתועד, ולכן זה הסכום המרבי לסילוק",
+    }
+
+
+def _event_amount(event: dict, facilities: list[dict], loans: list[dict], observed_on: str | None) -> dict:
+    """The amount of a dated event: as documented, else the evidence it points to."""
+    amount = _num(event.get("amount"))
+    if amount is not None:
+        return {"amount": amount, "amount_basis": "documented", "note": None}
+    kind = event.get("kind")
+    if kind == "loan_maturity":
+        if _num(event.get("referenceBalance")) is not None:
+            return _outstanding(event.get("referenceBalance"), observed_on)
+        loan = next((item for item in loans if item.get("name") and item["name"] in (event.get("label") or "")), None)
+        if loan is not None:
+            return _outstanding(loan.get("balance"), loan.get("as_of"))
+    if kind == "facility_expiry":
+        facility = next((
+            item for item in facilities
+            if _num(item.get("limit")) is not None and event.get("account") is not None
+            and str(item.get("account")) == str(event.get("account"))
+        ), None)
+        if facility is not None:
+            limit = _r(float(facility["limit"]))
+            return {"amount": None, "reference_amount": limit, "amount_basis": "facility_limit",
+                    "note": f"תוקף מסגרת של {limit:,.0f} ₪ מסתיים; אין תשלום מתועד"}
+    return {"amount": None, "note": NO_AMOUNT_NOTE}
+
+
 def _month_keys(start: date, end: date):
     year, month = start.year, start.month
     while (year, month) <= (end.year, end.month):
@@ -346,9 +467,28 @@ def _month_keys(start: date, end: date):
 
 
 def combine(sections: list[dict]) -> dict:
-    """Combined position of several entities. A missing balance keeps the sum unknown."""
+    """Combined position of several entities.
+
+    The combined balance is the sum only when every entity's balance is known.
+    Otherwise ``balance`` stays unknown and ``balance_known`` carries the sum of
+    the entities that are known, with a note naming the ones that are not.
+    """
     parts = [(section.get("label"), section.get("liquidity") or {}) for section in sections]
-    balances = [(part.get("position") or {}).get("balance") for _label, part in parts]
+    entities = []
+    for label, part in parts:
+        position = part.get("position") or {}
+        entities.append({
+            "entity": label,
+            "balance": position.get("balance"),
+            "as_of": position.get("as_of"),
+            "balance_source": position.get("balance_source"),
+            "limit": position.get("limit"),
+            "limit_source": position.get("limit_source"),
+            "available_to_limit": position.get("available_to_limit"),
+        })
+    balances = [entity["balance"] for entity in entities]
+    missing = [entity["entity"] or "ישות" for entity in entities if entity["balance"] is None]
+    limits = [entity["limit"] for entity in entities]
     debts = []
     for label, part in parts:
         for debt in part.get("debts") or []:
@@ -363,11 +503,21 @@ def combine(sections: list[dict]) -> dict:
             slot = service.setdefault(row["month"], {"month": row["month"], "principal": 0.0, "interest": 0.0, "new_loans": 0.0})
             for key in ("principal", "interest", "new_loans"):
                 slot[key] = _r(slot[key] + (row.get(key) or 0.0))
+    balance = None if missing else _r(sum(balances))
+    limit = None if any(value is None for value in limits) else _r(sum(limits))
     return {
         "status": "ready" if any(part.get("status") == "ready" for _l, part in parts) else "unknown",
-        "balance": None if any(value is None for value in balances) else _r(sum(balances)),
-        "balance_note": None if all(value is not None for value in balances) else
-            "יתרת העו״ש של לפחות ישות אחת אינה ידועה, ולכן היתרה המאוחדת אינה מוצגת.",
+        "balance": balance,
+        "balance_known": _sum_or_none(balances),
+        "balance_note": None if not missing else (
+            "יתרת העו״ש של " + ", ".join(missing) + " אינה ידועה, ולכן אין יתרה מאוחדת. "
+            "הסכום החלקי כולל רק את הישויות שהיתרה שלהן ידועה."
+        ),
+        "as_of": min((e["as_of"] for e in entities if e["as_of"]), default=None),
+        "limit": limit,
+        "limit_known": _sum_or_none(limits),
+        "available_to_limit": None if balance is None or limit is None else _r(limit + balance),
+        "entities": entities,
         "debts": debts,
         "debts_known_total": _sum_or_none(d.get("amount") for d in debts),
         "debts_complete": all(d.get("amount") is not None for d in debts),

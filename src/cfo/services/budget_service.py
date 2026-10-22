@@ -121,6 +121,15 @@ BUDGET_CATEGORIES_HEBREW = {
 }
 
 
+
+def hebrew_category(key: str) -> str:
+    """Hebrew label of a budget category; the P&L labels cover the dashboard keys (salaries, ...)."""
+    from .financial_reports_service import FinancialReportsService
+    return (BUDGET_CATEGORIES_HEBREW.get(key)
+            or FinancialReportsService.CATEGORY_HEBREW.get(key)
+            or key)
+
+
 class BudgetService:
     """
     שירות ניהול תקציב
@@ -347,7 +356,7 @@ class BudgetService:
             category = BudgetCategory(
                 category_id=cat_id,
                 category_name=cat_id,
-                category_hebrew=BUDGET_CATEGORIES_HEBREW.get(cat_id, cat_id),
+                category_hebrew=hebrew_category(cat_id),
                 budget_amount=budget_amount,
                 actual_amount=actual_amount,
                 variance=variance,
@@ -364,7 +373,7 @@ class BudgetService:
             if status == BudgetStatus.OVER_BUDGET:
                 alerts.append({
                     'category': cat_id,
-                    'category_hebrew': BUDGET_CATEGORIES_HEBREW.get(cat_id, cat_id),
+                    'category_hebrew': hebrew_category(cat_id),
                     'type': 'over_budget',
                     'message': f"חריגה מתקציב ב{abs(variance_pct):.1f}%",
                     'severity': 'high' if abs(variance_pct) > 20 else 'medium'
@@ -372,7 +381,7 @@ class BudgetService:
             elif status == BudgetStatus.UNDER_BUDGET and cat_id in ['sales', 'revenue', 'services']:
                 alerts.append({
                     'category': cat_id,
-                    'category_hebrew': BUDGET_CATEGORIES_HEBREW.get(cat_id, cat_id),
+                    'category_hebrew': hebrew_category(cat_id),
                     'type': 'under_target',
                     'message': f"הכנסות נמוכות מהיעד ב{abs(variance_pct):.1f}%",
                     'severity': 'high' if abs(variance_pct) > 20 else 'medium'

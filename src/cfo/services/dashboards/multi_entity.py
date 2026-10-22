@@ -217,10 +217,18 @@ def _combine_budget(views: list[dict]) -> dict:
     for section in sections:
         for month in section.get("months") or []:
             key = month.get("month")
-            meta.setdefault(key, {
+            slot_meta = meta.setdefault(key, {
                 "period_start": month.get("period_start"),
                 "period_end": month.get("period_end"),
+                "sources": set(),
+                "labels": [],
+                "blocked": False,
             })
+            if month.get("source"):
+                slot_meta["sources"].add(month["source"])
+            if month.get("source_label") and month["source_label"] not in slot_meta["labels"]:
+                slot_meta["labels"].append(month["source_label"])
+            slot_meta["blocked"] = slot_meta["blocked"] or bool(month.get("blocked"))
             bucket = index.setdefault(key, {})
             for line in month.get("categories") or []:
                 ident = (line.get("kind"), line.get("category"))
@@ -236,9 +244,9 @@ def _combine_budget(views: list[dict]) -> dict:
                 if line.get("actual") is not None:
                     slot["actuals"].append(float(line["actual"]))
     months = []
-    for month in sorted(index):
+    for month in sorted(index | meta):
         lines = []
-        for ident in sorted(index[month]):
+        for ident in sorted(index.get(month, {}), key=lambda ident: tuple(str(part) for part in ident)):
             slot = index[month][ident]
             budget = round(sum(slot["budgets"]), 2) if slot["budgets"] else None
             actual = round(sum(slot["actuals"]), 2) if slot["actuals"] else None
@@ -255,17 +263,41 @@ def _combine_budget(views: list[dict]) -> dict:
                 "variance": variance,
                 "variance_pct": variance_pct,
             })
+        sources = meta[month]["sources"]
         months.append({
             "month": month,
             "period_start": meta[month]["period_start"],
             "period_end": meta[month]["period_end"],
+            "source": (next(iter(sources)) if len(sources) == 1 else "mixed") if sources else None,
+            "source_label": " / ".join(meta[month]["labels"]) or None,
+            "blocked": meta[month]["blocked"],
             "categories": lines,
+            # The totals of the combined month, the same shape as one entity's month.
+            "totals": {
+                "revenue": _total(lines, "revenue"),
+                "costs": _total(lines, "cost"),
+            },
         })
     return {
         "status": "ready",
         "has_budget": any(bool(section.get("has_budget")) for section in sections),
         "months": months,
         "message": "סכום התקציב והביצוע של ישויות הדשבורד.",
+    }
+
+
+def _total(lines: list[dict], kind: str) -> dict:
+    rows = [line for line in lines if line["kind"] == kind]
+    budgets = [line["budget"] for line in rows if line["budget"] is not None]
+    actuals = [line["actual"] for line in rows if line["actual"] is not None]
+    budget = round(sum(budgets), 2) if budgets else None
+    actual = round(sum(actuals), 2) if actuals else None
+    variance = None if budget is None or actual is None else round(actual - budget, 2)
+    return {
+        "budget": budget,
+        "actual": actual,
+        "variance": variance,
+        "variance_pct": round(variance / budget * 100, 1) if variance is not None and budget else None,
     }
 
 

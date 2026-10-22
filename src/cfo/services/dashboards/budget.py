@@ -278,7 +278,7 @@ def _cash_actuals(month: dict) -> dict:
 
 
 def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_known: bool,
-                     pnl_months: list | None = None) -> dict:
+                     pnl_months: list | None = None, reports: FinancialReportsService | None = None) -> dict:
     """Per month and category: budget, actual, variance.
 
     Each month takes its actual from the source the P&L chose for it
@@ -287,7 +287,7 @@ def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_
     ledger, as before. Actual is None when nothing is known for the month.
     """
     budgets = _budget_index(db, organization_id, start, end)
-    reports = FinancialReportsService(db)
+    reports = reports or FinancialReportsService(db, memoize=True)
     by_month = {m.get("month"): m for m in pnl_months or [] if isinstance(m, dict)}
     months = []
     any_known = False
@@ -407,4 +407,138 @@ def redact_public(section):
         "months": months,
         "no_budget_label": section.get("no_budget_label") or NO_BUDGET_HE,
         "message": section.get("message"),
+    }
+
+
+def _period(year: int, month: int | None, period: str | None, today: date) -> tuple[date, date, str]:
+    """The legacy /budget page's period: a month, its quarter, year to date or the year."""
+    if month is not None and not 1 <= month <= 12:
+        raise ValueError("month must be 1-12")
+    if period == "quarter" and month is not None:
+        first = (month - 1) // 3 * 3 + 1
+        start = date(year, first, 1)
+        end = date(year, first + 2, 1)
+        name = f"Q{(month - 1) // 3 + 1}/{year}"
+    elif month is not None and period in (None, "month"):
+        start = end = date(year, month, 1)
+        name = f"{year}-{month:02d}"
+    elif period == "ytd":
+        start, end = date(year, 1, 1), date(year, today.month if year == today.year else 12, 1)
+        name = f"{year} עד היום" if year == today.year else str(year)
+    else:
+        start, end = date(year, 1, 1), date(year, 12, 1)
+        name = str(year)
+    nxt = date(end.year + 1, 1, 1) if end.month == 12 else date(end.year, end.month + 1, 1)
+    return start, date.fromordinal(nxt.toordinal() - 1), name
+
+
+def _legacy_status(kind: str, budget: float | None, actual: float | None) -> str:
+    if budget is None or actual is None:
+        return "unknown"
+    if kind == "revenue":
+        if actual >= budget:
+            return "on_track"
+        return "warning" if actual >= budget * 0.8 else "under_budget"
+    if actual <= budget:
+        return "on_track"
+    return "warning" if actual <= budget * 1.1 else "over_budget"
+
+
+def organization_summary(db, organization_id: int, year: int, month: int | None = None, *,
+                         period: str | None = None, plan: dict | None = None,
+                         today: date | None = None) -> dict:
+    """Budget vs actual of one organization in the legacy /budget page's shape.
+
+    Budget and actual come from ``budget_vs_actual``, the dashboard's own
+    comparison, so both pages show the same numbers: each month's actual from
+    the source its P&L chose (books or classified bank cash, ex-VAT). A period
+    with a cash-basis month folds every category onto the comparison rows, so a
+    salary budget meets the payroll actual. Unknown actual stays ``None``.
+    ``variance`` keeps the legacy sign: budget minus actual.
+    """
+    from . import books
+    today = today or date.today()
+    start, end, name = _period(year, month, period, today)
+    window_end = min(end, today) if start <= today else end
+    pnl = books.monthly_pnl(db, organization_id, start, window_end, plan=plan)
+    section = budget_vs_actual(
+        db, organization_id, start, window_end, books_known=pnl["basis"] != "unknown",
+        pnl_months=pnl["months"],
+    )
+    # Whole months after today have a budget and no actual yet. The current month
+    # is in ``section`` with its full budget.
+    next_month = date(window_end.year + 1, 1, 1) if window_end.month == 12 else date(window_end.year, window_end.month + 1, 1)
+    later = _budget_index(db, organization_id, next_month, end) if next_month <= end else {}
+    fold = any(m.get("source") == "cash_basis" for m in section["months"])
+    rows: dict[tuple[str, str], dict] = {}
+
+    def slot(kind: str, key: str) -> dict:
+        ident = (kind, CASH_ROW_FOR_CATEGORY.get(key, key) if fold else key)
+        return rows.setdefault(ident, {"budget": None, "actual": None, "actual_known": True})
+
+    for item in section["months"]:
+        for line in item["categories"]:
+            target = slot(line["kind"], line["category"])
+            if line["budget"] is not None:
+                target["budget"] = round((target["budget"] or 0.0) + line["budget"], 2)
+            if line["actual"] is None:
+                target["actual_known"] = False
+            else:
+                target["actual"] = round((target["actual"] or 0.0) + line["actual"], 2)
+    for planned in later.values():
+        for (kind, key), amount in planned.items():
+            target = slot(kind, key)
+            target["budget"] = round((target["budget"] or 0.0) + amount, 2)
+    if any(item.get("source") is None for item in section["months"]):
+        # A month with no books and no bank rows: the period's actual is not known.
+        for target in rows.values():
+            target["actual_known"] = False
+    categories = []
+    totals = {"revenue": [0.0, 0.0], "cost": [0.0, 0.0]}
+    actual_known = True
+    for (kind, key), value in sorted(rows.items(), key=lambda item: (item[0][0] != "revenue", item[0][1])):
+        budget = value["budget"]
+        actual = value["actual"] if value["actual_known"] else None
+        if actual is None and value["actual_known"]:
+            actual = 0.0
+        if budget is None and not actual:
+            continue
+        variance = None if budget is None or actual is None else round(budget - actual, 2)
+        categories.append({
+            "category_id": key,
+            "category_name": key,
+            "category_hebrew": _cash_label(key),
+            "kind": kind,
+            "budget_amount": budget,
+            "actual_amount": actual,
+            "variance": variance,
+            "variance_percentage": round(variance / budget * 100, 1) if variance is not None and budget else None,
+            "status": _legacy_status(kind, budget, actual),
+        })
+        totals[kind][0] += budget or 0.0
+        if actual is None:
+            actual_known = False
+        else:
+            totals[kind][1] += actual
+    total_budget = round(totals["revenue"][0] + totals["cost"][0], 2)
+    total_actual = round(totals["revenue"][1] + totals["cost"][1], 2) if actual_known else None
+    total_variance = None if total_actual is None else round(total_budget - total_actual, 2)
+    return {
+        "period": name,
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+        "total_budget": total_budget,
+        "total_actual": total_actual,
+        "total_variance": total_variance,
+        "variance_percentage": round(total_variance / total_budget * 100, 1) if total_variance is not None and total_budget else None,
+        "status": "unknown" if total_actual is None else "ready",
+        "categories": categories,
+        "alerts": [],
+        "source": "dashboard",
+        "months": [
+            {"month": m["month"], "source": m.get("source"), "source_label": m.get("source_label")}
+            for m in section["months"]
+        ],
+        "message": section.get("message"),
+        "provider_calls": 0,
     }

@@ -4,7 +4,14 @@ import { useEffect, useState, type ReactNode } from 'react';
 // budget parameters and share links. Unknown amounts are shown as "לא ידוע".
 
 export type Debt = { label: string; amount: number | null; as_of?: string | null; entity?: string | null; note?: string | null };
-export type Upcoming = { date: string; label: string | null; amount: number | null; kind: string; note?: string | null; entity?: string | null };
+export type Upcoming = {
+  date: string; label: string | null; amount: number | null; kind: string; note?: string | null; entity?: string | null;
+  amount_basis?: string | null; amount_as_of?: string | null; reference_amount?: number | null;
+};
+export type EntityPosition = {
+  entity: string | null; balance: number | null; as_of: string | null; balance_source?: string | null;
+  limit: number | null; limit_source?: string | null; available_to_limit: number | null;
+};
 export type DebtService = { month: string; principal: number; interest: number; new_loans: number };
 
 export type EntityLiquidity = {
@@ -12,18 +19,25 @@ export type EntityLiquidity = {
   position?: {
     balance: number | null;
     as_of: string | null;
+    balance_source?: string | null;
     limit: number | null;
     limit_source: string | null;
     available_to_limit: number | null;
   };
-  accounts?: { name: string; kind: string; balance: number | null; credit_limit: number | null; as_of: string | null }[];
+  accounts?: { name: string; kind: string; balance: number | null; credit_limit: number | null; as_of: string | null; balance_source?: string | null }[];
   cards?: { name: string; balance: number | null; as_of: string | null }[];
   loans?: { name: string; balance: number | null; as_of: string | null; maturity?: string | null }[];
   months?: { month: string; days: number; min: number | null; negative_days: number; beyond_limit_days: number | null; last: number | null }[];
   checks?: { check: string; date: string; amount: number; payee: string | null; state: string; cleared_on?: string }[];
   // combined only
   balance?: number | null;
+  balance_known?: number | null;
   balance_note?: string | null;
+  as_of?: string | null;
+  limit?: number | null;
+  limit_known?: number | null;
+  available_to_limit?: number | null;
+  entities?: EntityPosition[];
   upcoming?: Upcoming[];
   debts?: Debt[];
   debts_known_total?: number | null;
@@ -81,6 +95,20 @@ const CHECK_STATES: Record<string, string> = {
   no_coverage: 'אין נתוני בנק',
 };
 
+const BALANCE_SOURCES: Record<string, string> = {
+  accounts: 'יתרת חשבון',
+  imported_running_balance: 'יתרה רצה בדף הבנק המיובא',
+  mixed: 'יתרת חשבון ודף בנק מיובא',
+};
+
+// The amount column of an upcoming date: the documented amount, else what the
+// evidence shows about it (a loan's balance, a facility's limit).
+export function upcomingAmount(item: Upcoming): string {
+  if (item.amount !== null && item.amount !== undefined) return money(item.amount);
+  if (item.reference_amount !== null && item.reference_amount !== undefined) return `מסגרת ${money(item.reference_amount)}`;
+  return 'לא ידוע';
+}
+
 const ACCOUNT_KINDS: Record<string, string> = {
   checking: 'עו״ש',
   card: 'כרטיס אשראי',
@@ -93,30 +121,53 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
   if (!section) return <Card title="נזילות והתחייבויות"><p className="mt-3 text-stone-600">אין נתוני נזילות.</p></Card>;
   const combined = section.position === undefined;
   const balance = combined ? section.balance : section.position?.balance;
+  const asOf = combined ? section.as_of : section.position?.as_of;
+  const balanceSource = combined ? null : section.position?.balance_source;
+  const limit = combined ? (section.limit ?? section.limit_known) : section.position?.limit;
+  const available = combined ? section.available_to_limit : section.position?.available_to_limit;
+  const partial = combined && (balance === null || balance === undefined) && section.balance_known !== null && section.balance_known !== undefined;
   return (
     <div className="grid gap-6">
       <Card title="נזילות">
         <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>
             <dt className="text-sm text-stone-500">יתרת עו״ש</dt>
-            <dd className="text-xl">{money(balance)}</dd>
-            {section.position?.as_of ? <dd className="text-xs text-stone-500">נכון ל־{section.position.as_of}</dd> : null}
+            <dd className="text-xl">{partial ? `${money(section.balance_known)} (חלקי)` : money(balance)}</dd>
+            {asOf && !partial ? <dd className="text-xs text-stone-500">נכון ל־{asOf}</dd> : null}
+            {balanceSource && balanceSource !== 'accounts' ? <dd className="text-xs text-stone-500">{BALANCE_SOURCES[balanceSource] ?? balanceSource}</dd> : null}
           </div>
-          {!combined ? (
-            <>
-              <div>
-                <dt className="text-sm text-stone-500">מסגרת אשראי</dt>
-                <dd className="text-xl">{money(section.position?.limit)}</dd>
-              </div>
-              <div>
-                <dt className="text-sm text-stone-500">פנוי עד המסגרת</dt>
-                <dd className={`text-xl ${(section.position?.available_to_limit ?? 0) < 0 ? 'text-red-700' : ''}`}>
-                  {money(section.position?.available_to_limit)}
-                </dd>
-              </div>
-            </>
-          ) : null}
+          <div>
+            <dt className="text-sm text-stone-500">מסגרת אשראי</dt>
+            <dd className="text-xl">{combined && section.limit === null && section.limit_known !== null && section.limit_known !== undefined ? `${money(section.limit_known)} (חלקי)` : money(limit)}</dd>
+          </div>
+          <div>
+            <dt className="text-sm text-stone-500">פנוי עד המסגרת</dt>
+            <dd className={`text-xl ${(available ?? 0) < 0 ? 'text-red-700' : ''}`}>
+              {money(available)}
+            </dd>
+          </div>
         </dl>
+        {combined && (section.entities ?? []).length > 0 ? (
+          <table className="mt-4 w-full text-sm">
+            <thead><tr className="border-b text-stone-500"><Th>ישות</Th><Th>יתרת עו״ש</Th><Th>נכון ל</Th><Th>מסגרת</Th><Th>פנוי עד המסגרת</Th></tr></thead>
+            <tbody>
+              {(section.entities ?? []).map((entity, index) => (
+                <tr key={`${entity.entity}-${index}`} className="border-b border-stone-100">
+                  <td className="py-2">{entity.entity}</td>
+                  <td className="py-2">
+                    {money(entity.balance)}
+                    {entity.balance_source && entity.balance_source !== 'accounts' ? (
+                      <div className="text-xs text-stone-500">{BALANCE_SOURCES[entity.balance_source] ?? entity.balance_source}</div>
+                    ) : null}
+                  </td>
+                  <td className="py-2">{entity.as_of ?? '—'}</td>
+                  <td className="py-2">{money(entity.limit)}</td>
+                  <td className="py-2">{money(entity.available_to_limit)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : null}
         {section.balance_note ? <p className="mt-3 text-sm text-amber-800">{section.balance_note}</p> : null}
         {section.months && section.months.length > 0 ? (
           <table className="mt-4 w-full text-sm">
@@ -194,7 +245,7 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
                   <td className="py-2">{item.date}</td>
                   <td className="py-2">{item.label}{item.note ? <span className="mr-2 text-xs text-stone-500">{item.note}</span> : null}</td>
                   {combined ? <td className="py-2">{item.entity}</td> : null}
-                  <td className="py-2">{money(item.amount)}</td>
+                  <td className="py-2">{upcomingAmount(item)}</td>
                 </tr>
               ))}
             </tbody>

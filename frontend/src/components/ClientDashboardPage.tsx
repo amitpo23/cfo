@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
   BudgetEditor, FILING_PAGE_SIZE, FilingReport, FilingRulesCard, LineDraft, PlanPayload,
-  ReviewItem, ReviewList, budgetLinesPayload, customRulesPayload, linesFromPayload,
+  ReviewItem, ReviewList, budgetLinesPayload, customRulesPayload, firstPlanMonth, lineDefaultsFromPayload,
+  linesFromPayload,
 } from './dashboardFiling';
 import {
   EntityLiquidity, Forecast, ForecastPanel, LiquidityPanel, Parameters, ParametersCard,
   ShareLinksCard, money, parametersFromPayload,
 } from './dashboardTabs';
+import TabErrorBoundary from './TabErrorBoundary';
 
 type CashMonth = {
   month: string;
@@ -34,8 +36,8 @@ type BudgetMonth = {
   source?: string | null;
   source_label?: string | null;
   blocked?: boolean;
-  categories: BudgetLine[];
-  totals: { revenue: BudgetCompare; costs: BudgetCompare };
+  categories?: BudgetLine[] | null;
+  totals?: { revenue?: BudgetCompare | null; costs?: BudgetCompare | null } | null;
 };
 
 type PnlMonth = {
@@ -102,6 +104,12 @@ type DashboardView = {
   error?: { message_he?: string };
 };
 
+// /d/<slug>?tab=bva opens a tab directly (the legacy /budget page links here).
+function tabFromLocation(): TabId {
+  const wanted = new URLSearchParams(window.location.search).get('tab');
+  return TABS.find((item) => item.id === wanted)?.id ?? 'status';
+}
+
 function slugFromLocation(): string {
   const parts = window.location.pathname.replace(/\/+$/, '').split('/');
   return parts[2] || '';
@@ -134,7 +142,10 @@ function varianceCell(row: BudgetCompare): string {
   return `${money(row.variance)}${pct}`;
 }
 
-function BudgetRow({ label, row, strong }: { label: string; row: BudgetCompare; strong?: boolean }) {
+const NO_COMPARE: BudgetCompare = { budget: null, actual: null, variance: null, variance_pct: null };
+
+function BudgetRow({ label, row: given, strong }: { label: string; row: BudgetCompare | null | undefined; strong?: boolean }) {
+  const row = given ?? NO_COMPARE;
   return (
     <tr className={`border-b border-stone-100 ${strong ? 'font-medium' : ''}`}>
       <td className="py-2">{label}</td>
@@ -183,9 +194,9 @@ function PnlMonths({ months }: { months: PnlMonth[] }) {
   );
 }
 
-function BudgetVsActual({ section }: { section: NonNullable<DashboardView['budget_vs_actual']> }) {
+export function BudgetVsActual({ section }: { section: NonNullable<DashboardView['budget_vs_actual']> }) {
   const months = section.months ?? [];
-  const visible = months.filter((month) => month.categories.length > 0);
+  const visible = months.filter((month) => (month.categories ?? []).length > 0);
   return (
     <section className="rounded-xl bg-white p-5 shadow-sm">
       <h2 className="text-lg font-medium">תקציב מול ביצוע</h2>
@@ -209,15 +220,15 @@ function BudgetVsActual({ section }: { section: NonNullable<DashboardView['budge
                   {month.blocked ? <span className="ms-2 text-xs text-amber-700">· סטייה בשכר ובספקים מוסתרת: יותר מ־5,000 ₪ לבירור</span> : null}
                 </td>
               </tr>
-              {month.categories.map((line) => (
+              {(month.categories ?? []).map((line) => (
                 <BudgetRow
                   key={`${line.kind}-${line.category}`}
-                  label={`${line.kind === 'revenue' ? 'הכנסה' : 'הוצאה'} · ${line.category_he}${line.blocked ? ' (סטייה מוסתרת)' : ''}`}
+                  label={`${line.kind === 'revenue' ? 'הכנסה' : 'הוצאה'} · ${line.category_he || line.category}${line.blocked ? ' (סטייה מוסתרת)' : ''}`}
                   row={line}
                 />
               ))}
-              <BudgetRow label='סה"כ הכנסות' row={month.totals.revenue} strong />
-              <BudgetRow label='סה"כ הוצאות' row={month.totals.costs} strong />
+              <BudgetRow label='סה"כ הכנסות' row={month.totals?.revenue} strong />
+              <BudgetRow label='סה"כ הוצאות' row={month.totals?.costs} strong />
             </tbody>
           ))}
         </table>
@@ -262,7 +273,7 @@ export default function ClientDashboardPage() {
   const [ruleSeed, setRuleSeed] = useState({ text: '', nonce: 0 });
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<TabId>('status');
+  const [tab, setTab] = useState<TabId>(tabFromLocation);
   const [scope, setScope] = useState('combined');
 
   useEffect(() => {
@@ -286,32 +297,41 @@ export default function ClientDashboardPage() {
 
     async function loadEditor(dashboardId: number) {
       const headers = authHeaders();
-      const [viewResponse, planResponse, filingResponse] = await Promise.all([
-        fetch(`/api/dashboards/${dashboardId}/view`, { headers }),
-        fetch(`/api/dashboards/${dashboardId}/plan`, { headers }),
-        fetch(`/api/dashboards/${dashboardId}/filing?page=1&page_size=${FILING_PAGE_SIZE}`, { headers }),
-      ]);
-      const viewBody = (await viewResponse.json().catch(() => ({}))) as DashboardView;
-      const planBody = (await planResponse.json().catch(() => ({}))) as {
-        version?: string | null;
-        payload?: PlanPayload | null;
-        error?: { message_he?: string };
-      };
-      const filingBody = (await filingResponse.json().catch(() => ({}))) as FilingReport & {
-        error?: { message_he?: string };
-      };
-      if (cancelled) return;
-      if (!viewResponse.ok) {
-        setError(viewBody.error?.message_he || 'הדשבורד לא נמצא');
-        return;
-      }
-      setView(viewBody);
-      if (planResponse.ok) {
+      // The three requests run together, and each one is shown when it arrives:
+      // the page does not wait for the filing report to show the view.
+      const viewTask = (async () => {
+        const viewResponse = await fetch(`/api/dashboards/${dashboardId}/view`, { headers });
+        const viewBody = (await viewResponse.json().catch(() => ({}))) as DashboardView;
+        if (cancelled) return;
+        if (!viewResponse.ok) {
+          setError(viewBody.error?.message_he || 'הדשבורד לא נמצא');
+          return;
+        }
+        setView(viewBody);
+      })();
+      const planTask = (async () => {
+        const planResponse = await fetch(`/api/dashboards/${dashboardId}/plan`, { headers });
+        const planBody = (await planResponse.json().catch(() => ({}))) as {
+          version?: string | null;
+          payload?: PlanPayload | null;
+          error?: { message_he?: string };
+        };
+        if (cancelled || !planResponse.ok) return;
         const payload = planBody.payload && typeof planBody.payload === 'object' ? planBody.payload : {};
         setPlan({ version: planBody.version ?? null, payload });
         setLines(linesFromPayload(payload));
-      }
-      if (filingResponse.ok) setFiling(filingBody);
+        const first = firstPlanMonth(payload, currentMonth());
+        if (first) setMonth(first);
+      })();
+      const filingTask = (async () => {
+        const filingResponse = await fetch(`/api/dashboards/${dashboardId}/filing?page=1&page_size=${FILING_PAGE_SIZE}`, { headers });
+        const filingBody = (await filingResponse.json().catch(() => ({}))) as FilingReport & {
+          error?: { message_he?: string };
+        };
+        if (cancelled || !filingResponse.ok) return;
+        setFiling(filingBody);
+      })();
+      await Promise.all([viewTask, planTask, filingTask]);
     }
 
     async function load() {
@@ -487,6 +507,7 @@ export default function ClientDashboardPage() {
                 קוזזו {view.combined.intercompany_removed.pairs} העברות בין-חברתיות ({money(view.combined.intercompany_removed.inflows)}).
               </p>
             ) : null}
+            <TabErrorBoundary tab={`${tab}:${scope}`}>
             <div className="mt-6 grid gap-6">
               {tab === 'status' ? (
                 <>
@@ -529,6 +550,7 @@ export default function ClientDashboardPage() {
                       canEdit={editor.canEdit}
                       categories={filing.budget_categories}
                       lines={lines}
+                      lineDefaults={lineDefaultsFromPayload(plan?.payload)}
                       month={month}
                       onMonth={setMonth}
                       onLines={setLines}
@@ -542,7 +564,9 @@ export default function ClientDashboardPage() {
                   ) : null}
                 </>
               ) : null}
+              {tab === 'budget' && editor && !filing ? <p className="text-stone-500">טוען את התקציב…</p> : null}
             </div>
+            </TabErrorBoundary>
           </>
         ) : null}
       </div>
@@ -563,10 +587,12 @@ export type TabId = (typeof TABS)[number]['id'];
 function StatusKpis({ view, reviewCount }: { view: DashboardView; reviewCount: number | null }) {
   const liquidity = view.liquidity;
   const balance = liquidity ? (liquidity.position ? liquidity.position.balance : liquidity.balance) : null;
+  const partial = !liquidity?.position && (balance === null || balance === undefined)
+    && liquidity?.balance_known !== null && liquidity?.balance_known !== undefined;
   const items = [
     { label: 'הכנסות בתקופה', value: money(view.pnl?.total_revenue) },
     { label: 'הוצאות בתקופה', value: money(view.pnl?.total_expenses) },
-    { label: 'יתרת עו״ש', value: money(balance ?? null) },
+    { label: 'יתרת עו״ש', value: partial ? `${money(liquidity?.balance_known)} (חלקי)` : money(balance ?? null) },
     { label: 'התחייבויות ידועות', value: money(liquidity?.debts_known_total ?? null) },
     ...(reviewCount === null ? [] : [{ label: 'תנועות לבירור', value: String(reviewCount) }]),
   ];
