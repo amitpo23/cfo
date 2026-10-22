@@ -3,6 +3,10 @@ import {
   BudgetEditor, FILING_PAGE_SIZE, FilingReport, FilingRulesCard, LineDraft, PlanPayload,
   ReviewItem, ReviewList, budgetLinesPayload, customRulesPayload, linesFromPayload,
 } from './dashboardFiling';
+import {
+  EntityLiquidity, Forecast, ForecastPanel, LiquidityPanel, Parameters, ParametersCard,
+  ShareLinksCard, money, parametersFromPayload,
+} from './dashboardTabs';
 
 type CashMonth = {
   month: string;
@@ -84,6 +88,17 @@ type DashboardView = {
     months?: BudgetMonth[];
     message?: string | null;
   } | null;
+  liquidity?: EntityLiquidity | null;
+  forecast?: Forecast | null;
+  entities?: { label: string | null; role: string; view: DashboardView }[];
+  combined?: {
+    pnl?: DashboardView['pnl'];
+    cashflow?: DashboardView['cashflow'];
+    budget_vs_actual?: DashboardView['budget_vs_actual'];
+    liquidity?: EntityLiquidity | null;
+    forecast?: Forecast | null;
+    intercompany_removed?: { pairs: number; inflows: number; outflows: number };
+  };
   error?: { message_he?: string };
 };
 
@@ -92,10 +107,6 @@ function slugFromLocation(): string {
   return parts[2] || '';
 }
 
-function money(value: number | null | undefined): string {
-  if (value === null || value === undefined) return 'לא ידוע';
-  return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(value);
-}
 
 function ActivityNotes({ quality }: { quality: ActivityQuality | null | undefined }) {
   const notes = quality?.notes ?? [];
@@ -220,6 +231,7 @@ type EditorContext = {
   id: number;
   role: string;
   canEdit: boolean;
+  title?: string;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -250,6 +262,8 @@ export default function ClientDashboardPage() {
   const [ruleSeed, setRuleSeed] = useState({ text: '', nonce: 0 });
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [tab, setTab] = useState<TabId>('status');
+  const [scope, setScope] = useState('combined');
 
   useEffect(() => {
     const slug = slugFromLocation();
@@ -312,9 +326,9 @@ export default function ClientDashboardPage() {
       if (localStorage.getItem('auth_token')) {
         const meta = await fetch(`/api/dashboards/by-slug/${slug}`, { headers: authHeaders() });
         if (meta.ok) {
-          const dashboard = (await meta.json()) as { id: number; role: string; can_edit: boolean };
+          const dashboard = (await meta.json()) as { id: number; role: string; can_edit: boolean; title?: string };
           if (cancelled) return;
-          setEditor({ id: dashboard.id, role: dashboard.role, canEdit: dashboard.can_edit });
+          setEditor({ id: dashboard.id, role: dashboard.role, canEdit: dashboard.can_edit, title: dashboard.title });
           await loadEditor(dashboard.id);
           return;
         }
@@ -406,20 +420,27 @@ export default function ClientDashboardPage() {
     void savePayload({ ...plan.payload, statusDecisions: decisions }, false);
   }
 
-  const months = view?.cashflow?.months ?? [];
-  const pnl = view?.pnl;
-  const coverageNote = view?.cashflow?.coverage?.message || '';
-  const pendingMonths = view?.cashflow?.pending?.months ?? [];
-  const cardMonths = view?.card_breakdown?.months ?? [];
-  const activityQuality = view?.cashflow?.activity_quality;
-  const emptyPeriodNote = view?.cashflow?.message || 'אין תנועות בנק בתקופה.';
-  const emptyPeriodRepeatsCoverage = coverageNote !== '' && emptyPeriodNote === coverageNote;
+  function saveParameters(next: Parameters) {
+    if (!plan) return;
+    void savePayload({ ...plan.payload, statusParameters: next }, false);
+  }
+
+  const entities = view?.entities ?? [];
+  const multi = entities.length > 1;
+  const scoped: DashboardView | null = !view ? null : !multi ? view : scope === 'combined' ? {
+    pnl: view.combined?.pnl,
+    cashflow: view.combined?.cashflow,
+    budget_vs_actual: view.combined?.budget_vs_actual,
+    liquidity: view.combined?.liquidity,
+    forecast: view.combined?.forecast,
+  } : entities[Number(scope)]?.view ?? view;
+  const parameters = parametersFromPayload(plan?.payload);
 
   return (
     <main dir="rtl" className="min-h-screen bg-stone-50 text-stone-900">
       <div className="mx-auto max-w-5xl px-4 py-8">
         <p className="text-sm text-stone-500">רצף</p>
-        <h1 className="mt-1 text-2xl font-semibold">דשבורד לקוח</h1>
+        <h1 className="mt-1 text-2xl font-semibold">{editor?.title || 'דשבורד לקוח'}</h1>
         {editor ? (
           <p className="mt-1 text-sm text-stone-500">
             {ROLE_LABELS[editor.role] || editor.role}
@@ -429,133 +450,243 @@ export default function ClientDashboardPage() {
         {notice ? <p className="mt-3 text-sm text-stone-700">{notice}</p> : null}
         {error ? <p className="mt-8 text-stone-700">{error}</p> : null}
         {!error && !view ? <p className="mt-8 text-stone-500">טוען נתונים…</p> : null}
-        {view ? (
-          <div className="mt-8 grid gap-6">
-            {editor && filing ? (
-              <BudgetEditor
-                canEdit={editor.canEdit}
-                categories={filing.budget_categories}
-                lines={lines}
-                month={month}
-                onMonth={setMonth}
-                onLines={setLines}
-                onSave={saveBudget}
-                saving={saving}
-              />
-            ) : null}
-            <section className="rounded-xl bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-medium">רווח והפסד</h2>
-              {pnl?.status === 'unknown' ? (
-                <p className="mt-3 text-stone-600">{pnl.message}</p>
-              ) : (
-                <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <div>
-                    <dt className="text-sm text-stone-500">הכנסות</dt>
-                    <dd className="text-xl">{money(pnl?.total_revenue)}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-sm text-stone-500">הוצאות</dt>
-                    <dd className="text-xl">{money(pnl?.total_expenses)}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-sm text-stone-500">רווח לפני מס</dt>
-                    <dd className="text-xl">{money(pnl?.net_income_before_tax)}</dd>
-                  </div>
-                </dl>
-              )}
-              {pnl?.status === 'ready' && pnl.months ? <PnlMonths months={pnl.months} /> : null}
-              {pnl?.status === 'ready' && pnl.message ? (
-                <p className="mt-3 text-sm text-stone-500">{pnl.message}</p>
-              ) : null}
-            </section>
-            {view.budget_vs_actual ? <BudgetVsActual section={view.budget_vs_actual} /> : null}
-            {editor && filing ? (
-              <FilingRulesCard
-                canEdit={editor.canEdit}
-                rules={filing.rules}
-                categories={filing.categories}
-                seed={ruleSeed}
-                saving={saving}
-                onSave={saveRules}
-              />
-            ) : null}
-            {editor && filing ? (
-              <ReviewList
-                canEdit={editor.canEdit}
-                report={filing}
-                saving={saving}
-                onPage={(page) => { void reloadFiling(page); }}
-                onApprove={approve}
-                onCreateRule={(description) => setRuleSeed({ text: description.slice(0, 80), nonce: Date.now() })}
-              />
-            ) : null}
-            <section className="rounded-xl bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-medium">תזרים</h2>
-              {months.length === 0 ? (
-                emptyPeriodRepeatsCoverage ? null : (
-                  <p className="mt-3 text-stone-600">{emptyPeriodNote}</p>
-                )
-              ) : (
-                <table className="mt-4 w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-stone-500">
-                      <th className="py-2 text-right font-medium">חודש</th>
-                      <th className="py-2 text-right font-medium">כניסות</th>
-                      <th className="py-2 text-right font-medium">יציאות</th>
-                      <th className="py-2 text-right font-medium">נטו</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {months.map((cashMonth) => (
-                      <tr key={cashMonth.month} className="border-b border-stone-100">
-                        <td className="py-2">{cashMonth.month}</td>
-                        <td className="py-2">{money(cashMonth.inflows)}</td>
-                        <td className="py-2">{money(cashMonth.outflows)}</td>
-                        <td className="py-2">{money(cashMonth.net_flow)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-              {coverageNote ? (
-                <p className="mt-3 text-sm text-stone-600">{coverageNote}</p>
-              ) : null}
-              <p className="mt-3 text-sm text-stone-500">התזרים כולל רק תנועות שנרשמו בבנק (BOOKED). חיובי כרטיסי האשראי נספרים פעם אחת, כחיוב החודשי בעו״ש.</p>
-              {pendingMonths.length > 0 ? (
-                <div className="mt-3 text-sm text-stone-600">
-                  <p>{view.cashflow?.pending?.message}</p>
-                  <ul className="mt-1">
-                    {pendingMonths.map((month) => (
-                      <li key={month.month}>
-                        {month.month}: נכנס {money(month.inflows)} · יצא {money(month.outflows)} ({month.count})
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              <ActivityNotes quality={activityQuality} />
-            </section>
-            {cardMonths.length > 0 ? (
-              <section className="rounded-xl bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-medium">פירוט כרטיסי אשראי</h2>
-                {cardMonths.map((month) => (
-                  <div key={month.month} className="mt-3 text-sm">
-                    <p className="font-medium">{month.month} · {money(month.total)}</p>
-                    <ul className="mt-1 text-stone-600">
-                      {month.merchants.map((item) => (
-                        <li key={item.merchant}>{item.merchant}: {money(item.amount)}</li>
-                      ))}
-                    </ul>
-                  </div>
+        {view && scoped ? (
+          <>
+            <nav className="mt-6 flex flex-wrap gap-1 border-b border-stone-200" role="tablist">
+              {TABS.filter((item) => item.id !== 'budget' || editor).map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === item.id}
+                  className={`px-3 py-2 text-sm ${tab === item.id ? 'border-b-2 border-stone-900 font-medium' : 'text-stone-600'}`}
+                  onClick={() => setTab(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+            {multi ? (
+              <div className="mt-3 flex flex-wrap gap-2 text-sm" role="radiogroup" aria-label="ישות">
+                {[{ key: 'combined', label: 'מאוחד' }, ...entities.map((entity, index) => ({ key: String(index), label: entity.label || `ישות ${index + 1}` }))].map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={scope === option.key}
+                    className={`rounded-full border px-3 py-1 ${scope === option.key ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-300'}`}
+                    onClick={() => setScope(option.key)}
+                  >
+                    {option.label}
+                  </button>
                 ))}
-                {view.card_breakdown?.message ? (
-                  <p className="mt-3 text-sm text-stone-500">{view.card_breakdown.message}</p>
-                ) : null}
-              </section>
+              </div>
             ) : null}
-          </div>
+            {multi && scope === 'combined' && view.combined?.intercompany_removed?.pairs ? (
+              <p className="mt-2 text-sm text-stone-500">
+                קוזזו {view.combined.intercompany_removed.pairs} העברות בין-חברתיות ({money(view.combined.intercompany_removed.inflows)}).
+              </p>
+            ) : null}
+            <div className="mt-6 grid gap-6">
+              {tab === 'status' ? (
+                <>
+                  <StatusKpis view={scoped} reviewCount={filing?.review.total ?? null} />
+                  <PnlCard pnl={scoped.pnl} />
+                  <CashflowCard view={scoped} />
+                  {editor && filing ? (
+                    <ReviewList
+                      canEdit={editor.canEdit}
+                      report={filing}
+                      saving={saving}
+                      onPage={(page) => { void reloadFiling(page); }}
+                      onApprove={approve}
+                      onCreateRule={(description) => setRuleSeed({ text: description.slice(0, 80), nonce: Date.now() })}
+                    />
+                  ) : null}
+                  {editor && filing ? (
+                    <FilingRulesCard
+                      canEdit={editor.canEdit}
+                      rules={filing.rules}
+                      categories={filing.categories}
+                      seed={ruleSeed}
+                      saving={saving}
+                      onSave={saveRules}
+                      manifest={filing.builtin_manifest}
+                    />
+                  ) : null}
+                  <CardBreakdown view={scoped} />
+                </>
+              ) : null}
+              {tab === 'bva' ? (
+                scoped.budget_vs_actual ? <BudgetVsActual section={scoped.budget_vs_actual} /> : <p className="text-stone-600">אין נתוני תקציב.</p>
+              ) : null}
+              {tab === 'liquidity' ? <LiquidityPanel section={scoped.liquidity} /> : null}
+              {tab === 'forecast' ? <ForecastPanel forecast={scoped.forecast} /> : null}
+              {tab === 'budget' && editor ? (
+                <>
+                  {filing ? (
+                    <BudgetEditor
+                      canEdit={editor.canEdit}
+                      categories={filing.budget_categories}
+                      lines={lines}
+                      month={month}
+                      onMonth={setMonth}
+                      onLines={setLines}
+                      onSave={saveBudget}
+                      saving={saving}
+                    />
+                  ) : null}
+                  <ParametersCard value={parameters} canEdit={editor.canEdit} saving={saving} onSave={saveParameters} />
+                  {editor.role === 'owner' ? (
+                    <ShareLinksCard dashboardId={editor.id} slug={slugFromLocation()} headers={authHeaders} />
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          </>
         ) : null}
       </div>
     </main>
+  );
+}
+
+const TABS = [
+  { id: 'status', label: 'תמונת מצב' },
+  { id: 'bva', label: 'תקציב מול ביצוע' },
+  { id: 'liquidity', label: 'נזילות והתחייבויות' },
+  { id: 'forecast', label: 'תחזית' },
+  { id: 'budget', label: 'תקציב ופרמטרים' },
+] as const;
+
+export type TabId = (typeof TABS)[number]['id'];
+
+function StatusKpis({ view, reviewCount }: { view: DashboardView; reviewCount: number | null }) {
+  const liquidity = view.liquidity;
+  const balance = liquidity ? (liquidity.position ? liquidity.position.balance : liquidity.balance) : null;
+  const items = [
+    { label: 'הכנסות בתקופה', value: money(view.pnl?.total_revenue) },
+    { label: 'הוצאות בתקופה', value: money(view.pnl?.total_expenses) },
+    { label: 'יתרת עו״ש', value: money(balance ?? null) },
+    { label: 'התחייבויות ידועות', value: money(liquidity?.debts_known_total ?? null) },
+    ...(reviewCount === null ? [] : [{ label: 'תנועות לבירור', value: String(reviewCount) }]),
+  ];
+  return (
+    <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      {items.map((item) => (
+        <div key={item.label} className="rounded-xl bg-white p-4 shadow-sm">
+          <p className="text-xs text-stone-500">{item.label}</p>
+          <p className="mt-1 text-lg">{item.value}</p>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function PnlCard({ pnl }: { pnl: DashboardView['pnl'] }) {
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">רווח והפסד</h2>
+      {pnl?.status === 'unknown' ? (
+        <p className="mt-3 text-stone-600">{pnl.message}</p>
+      ) : (
+        <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div>
+            <dt className="text-sm text-stone-500">הכנסות</dt>
+            <dd className="text-xl">{money(pnl?.total_revenue)}</dd>
+          </div>
+          <div>
+            <dt className="text-sm text-stone-500">הוצאות</dt>
+            <dd className="text-xl">{money(pnl?.total_expenses)}</dd>
+          </div>
+          <div>
+            <dt className="text-sm text-stone-500">רווח לפני מס</dt>
+            <dd className="text-xl">{money(pnl?.net_income_before_tax)}</dd>
+          </div>
+        </dl>
+      )}
+      {pnl?.status === 'ready' && pnl.months ? <PnlMonths months={pnl.months} /> : null}
+      {pnl?.status === 'ready' && pnl.message ? (
+        <p className="mt-3 text-sm text-stone-500">{pnl.message}</p>
+      ) : null}
+    </section>
+  );
+}
+
+function CashflowCard({ view }: { view: DashboardView }) {
+  const months = view.cashflow?.months ?? [];
+  const coverageNote = view.cashflow?.coverage?.message || '';
+  const pendingMonths = view.cashflow?.pending?.months ?? [];
+  const emptyPeriodNote = view.cashflow?.message || 'אין תנועות בנק בתקופה.';
+  const emptyPeriodRepeatsCoverage = coverageNote !== '' && emptyPeriodNote === coverageNote;
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">תזרים</h2>
+      {months.length === 0 ? (
+        emptyPeriodRepeatsCoverage ? null : (
+          <p className="mt-3 text-stone-600">{emptyPeriodNote}</p>
+        )
+      ) : (
+        <table className="mt-4 w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <th className="py-2 text-right font-medium">חודש</th>
+              <th className="py-2 text-right font-medium">כניסות</th>
+              <th className="py-2 text-right font-medium">יציאות</th>
+              <th className="py-2 text-right font-medium">נטו</th>
+            </tr>
+          </thead>
+          <tbody>
+            {months.map((cashMonth) => (
+              <tr key={cashMonth.month} className="border-b border-stone-100">
+                <td className="py-2">{cashMonth.month}</td>
+                <td className="py-2">{money(cashMonth.inflows)}</td>
+                <td className="py-2">{money(cashMonth.outflows)}</td>
+                <td className="py-2">{money(cashMonth.net_flow)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {coverageNote ? (
+        <p className="mt-3 text-sm text-stone-600">{coverageNote}</p>
+      ) : null}
+      <p className="mt-3 text-sm text-stone-500">התזרים כולל רק תנועות שנרשמו בבנק (BOOKED). חיובי כרטיסי האשראי נספרים פעם אחת, כחיוב החודשי בעו״ש.</p>
+      {pendingMonths.length > 0 ? (
+        <div className="mt-3 text-sm text-stone-600">
+          <p>{view.cashflow?.pending?.message}</p>
+          <ul className="mt-1">
+            {pendingMonths.map((month) => (
+              <li key={month.month}>
+                {month.month}: נכנס {money(month.inflows)} · יצא {money(month.outflows)} ({month.count})
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <ActivityNotes quality={view.cashflow?.activity_quality} />
+    </section>
+  );
+}
+
+function CardBreakdown({ view }: { view: DashboardView }) {
+  const cardMonths = view.card_breakdown?.months ?? [];
+  if (cardMonths.length === 0) return null;
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">פירוט כרטיסי אשראי</h2>
+      {cardMonths.map((month) => (
+        <div key={month.month} className="mt-3 text-sm">
+          <p className="font-medium">{month.month} · {money(month.total)}</p>
+          <ul className="mt-1 text-stone-600">
+            {month.merchants.map((item) => (
+              <li key={item.merchant}>{item.merchant}: {money(item.amount)}</li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      {view.card_breakdown?.message ? (
+        <p className="mt-3 text-sm text-stone-500">{view.card_breakdown.message}</p>
+      ) : null}
+    </section>
   );
 }

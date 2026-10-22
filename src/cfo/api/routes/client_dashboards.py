@@ -76,6 +76,23 @@ class ShareBody(BaseModel):
     label: str | None = Field(default=None, max_length=255)
 
 
+class EntityBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    organization_id: int
+    label: str = Field(default="", max_length=255)
+
+
+class EntityAccountBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    account_id: int
+    display_label: str | None = Field(default=None, max_length=255)
+
+
+class EntityAccountsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    accounts: list[EntityAccountBody]
+
+
 class SessionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     token: str = Field(min_length=1, max_length=200)
@@ -250,6 +267,36 @@ def revoke_share_link(dashboard_id: int, link_id: int, db: Session = Depends(get
     except DashboardError as exc:
         return _error(exc)
     return Response(status_code=204)
+
+
+@router.get("/dashboards/{dashboard_id}/entities")
+def list_entities(dashboard_id: int, db: Session = Depends(get_db_session),
+                  user: User = Depends(get_current_user)):
+    try:
+        return {"entities": service.list_entities(db, user, dashboard_id), "provider_calls": 0}
+    except DashboardError as exc:
+        return _error(exc)
+
+
+@router.post("/dashboards/{dashboard_id}/entities", status_code=201)
+def add_entity(dashboard_id: int, body: EntityBody, db: Session = Depends(get_db_session),
+               user: User = Depends(get_current_user)):
+    try:
+        return service.add_entity(db, user, dashboard_id, organization_id=body.organization_id,
+                                  label=body.label)
+    except DashboardError as exc:
+        return _error(exc)
+
+
+@router.put("/dashboards/{dashboard_id}/entities/{entity_id}/accounts")
+def set_entity_accounts(dashboard_id: int, entity_id: int, body: EntityAccountsBody,
+                        db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    try:
+        return service.set_entity_accounts(
+            db, user, dashboard_id, entity_id, [item.model_dump() for item in body.accounts],
+        )
+    except DashboardError as exc:
+        return _error(exc)
 
 
 @router.get("/dashboards/{dashboard_id}/plan")

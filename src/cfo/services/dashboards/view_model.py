@@ -14,7 +14,7 @@ from ..bank_coverage import redact_public_coverage
 from ..financial_reports_service import FinancialReportsService
 from ..live_cash_flow_service import LiveCashFlowService
 from .. import bank_status
-from . import activity_quality, books, budget
+from . import activity_quality, books, budget, forecast, liquidity
 
 MAX_RANGE_DAYS = 366
 
@@ -28,7 +28,18 @@ def plan_payload(db, dashboard_id: int | None) -> dict | None:
     return row.payload if row is not None and isinstance(row.payload, dict) else None
 
 
-def build_view(db, organization_id: int, start: date, end: date, *, plan: dict | None = None) -> dict:
+def plan_budget_sums(plan: dict | None) -> dict | None:
+    """Monthly budget per kind from the plan's lines; None when the plan has none or is invalid."""
+    from .plan_budget import PlanBudgetError, monthly_line_sums, validate_budget_lines
+    try:
+        lines = validate_budget_lines(plan or {})
+    except PlanBudgetError:
+        return None
+    return monthly_line_sums(lines) if lines else None
+
+
+def build_view(db, organization_id: int, start: date, end: date, *, plan: dict | None = None,
+               entity_id: int | None = None, with_budget: bool = True) -> dict:
     if end < start:
         raise ValueError("end date is before the start date")
     if (end - start).days > MAX_RANGE_DAYS:
@@ -46,18 +57,28 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
         db, organization_id, start, end, books_known=pnl["status"] != "unknown",
         pnl_months=pnl.get("months"),
     )
+    position = liquidity.build_liquidity(db, organization_id, start, end, plan=plan, entity_id=entity_id)
+    outlook = forecast.build_forecast(
+        pnl.get("months") or [], as_of=end, plan=plan, debt_service=position["debt_service"],
+        budget_sums=plan_budget_sums(plan) if with_budget else None,
+        opening_balance=position["position"]["balance"],
+    )
     view = {
         "status": "unknown" if pnl["status"] == "unknown" and not cashflow.get("months") else "ready",
         "cashflow": cashflow,
         "pnl": pnl,
         "budget_vs_actual": budget_vs_actual,
         "card_breakdown": bank_status.card_breakdown(db, organization_id, start, end),
+        "liquidity": position,
+        "forecast": outlook,
         "provider_calls": 0,
         "freshness": {
             "cashflow": "books" if cashflow.get("months") else "unknown",
             "pnl": pnl["status"],
             "pnl_basis": pnl.get("basis"),
             "budget_vs_actual": budget_vs_actual["status"],
+            "liquidity": position["status"],
+            "forecast": outlook["status"],
             "published": False,
         },
     }
@@ -73,6 +94,9 @@ def redact_public_view(view: dict) -> dict:
     if "budget_vs_actual" in view:
         view = dict(view)
         view["budget_vs_actual"] = budget.redact_public(view["budget_vs_actual"])
+    if "liquidity" in view:
+        view = dict(view)
+        view["liquidity"] = liquidity.redact_public(view["liquidity"])
     cashflow = view.get("cashflow")
     if not isinstance(cashflow, dict) or "coverage" not in cashflow:
         return view

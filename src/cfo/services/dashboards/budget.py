@@ -29,6 +29,31 @@ _PUBLIC_LINE_KEYS = (
     "kind", "category", "category_he", "budget", "actual", "variance", "variance_pct",
 )
 _PUBLIC_TOTAL_KEYS = ("budget", "actual", "variance", "variance_pct")
+# A cash-basis month reports actuals by the tool's comparison rows
+# (``filing.PNL_ROWS``). Budget categories fold onto the same rows, as in the
+# tool's COMPARISON_ROWS, so a salary budget meets the payroll actual.
+CASH_ROW_FOR_CATEGORY = {
+    "sales": "revenue", "services": "revenue", "other_income": "revenue",
+    "interest_income": "revenue", "rent_income": "revenue",
+    "salaries": "payroll", "direct_labor": "payroll", "social_insurance_owner": "payroll",
+    "cost_of_goods": "suppliers", "materials": "suppliers",
+    "vehicle": "vehicles",
+    "rent": "overhead", "utilities": "overhead", "marketing": "overhead",
+    "insurance": "overhead", "office_supplies": "overhead", "professional_fees": "overhead",
+    "travel": "overhead", "hospitality": "overhead", "refreshments": "overhead",
+    "taxes": "overhead", "other": "overhead",
+    "bank_fees": "bank_fees",
+    "interest_expense": "interest",
+}
+
+
+def _fold_for_cash(planned: dict) -> dict:
+    """Budget of a cash-basis month keyed by comparison row. Unmapped keys (depreciation) stay."""
+    folded: dict = {}
+    for (kind, key), amount in planned.items():
+        ident = (kind, CASH_ROW_FOR_CATEGORY.get(key, key))
+        folded[ident] = round(folded.get(ident, 0.0) + amount, 2)
+    return folded
 
 
 def category_key(name: str) -> str:
@@ -285,6 +310,8 @@ def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_
             actuals = _cash_actuals(info)
         any_known = any_known or source is not None
         planned = budgets.get((year, month), {})
+        if source == "cash_basis":
+            planned = _fold_for_cash(planned)
         lines = []
         totals = {}
         for kind, total_name in (("revenue", "revenue"), ("cost", "costs")):
@@ -293,6 +320,8 @@ def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_
             kind_lines = []
             for key in keys:
                 actual = None if found is None else float(found.get(key, 0.0))
+                if source == "cash_basis" and key == "depreciation":
+                    actual = None  # not a cash movement; no actual from the bank
                 line = {"kind": kind, "category": key, "category_he": _cash_label(key)}
                 line.update(_compare(planned.get((kind, key)), actual))
                 if source == "cash_basis" and blocked and key in BLOCKABLE:

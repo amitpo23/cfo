@@ -5,6 +5,10 @@ The plan keeps the lines. ``budgets`` receives one sum per category per month,
 Rows this projection owns are marked ``notes = plan:<version>``. A later save
 drops plan-owned cells that the lines no longer contain. Rows that were never
 projected are left in place until a line claims that category and month.
+
+Financing lines (``FINANCING_CATEGORIES``: loan principal, CAPEX, funding
+received) are not P&L. They stay on the plan for the forecast and the
+liquidity tab and are never projected to ``budgets``.
 """
 from __future__ import annotations
 
@@ -19,6 +23,13 @@ MAX_LINES = 300
 MAX_MONTHS_PER_LINE = 36
 PLAN_NOTE_PREFIX = "plan:"
 _LABELS = FinancialReportsService.CATEGORY_HEBREW
+FINANCING = "financing"
+# Eliav tool kinds principal / capex / funding: cash, not P&L.
+FINANCING_CATEGORIES = {
+    "loan_principal": "החזרי קרן — הלוואות וליסינג",
+    "capex": "השקעות הוניות (CAPEX)",
+    "funding": "מימון שהתקבל",
+}
 
 
 class PlanBudgetError(ValueError):
@@ -33,12 +44,19 @@ def _invalid(message_he: str) -> PlanBudgetError:
 
 def _known_key(name: str) -> str:
     key = category_key(name)
+    if key in FINANCING_CATEGORIES:
+        return key
+    for code, label in FINANCING_CATEGORIES.items():
+        if label == name:
+            return code
     if key not in _LABELS:
         raise _invalid("קטגוריית התקציב אינה מוכרת")
     return key
 
 
 def _kind_for(key: str) -> str:
+    if key in FINANCING_CATEGORIES:
+        return FINANCING
     return "revenue" if key in REVENUE_KEYS else "cost"
 
 
@@ -123,6 +141,8 @@ def _non_negative(value, *, what: str) -> Decimal:
 def _sums(lines: list[dict]) -> dict[tuple[int, int, str], Decimal]:
     totals: dict[tuple[int, int, str], Decimal] = {}
     for line in lines:
+        if line["kind"] == FINANCING:
+            continue
         for month_key, cell in line["months"].items():
             year, month = int(month_key[:4]), int(month_key[5:])
             ident = (year, month, line["category"])
@@ -196,4 +216,23 @@ def budget_catalog() -> list[dict]:
     return [
         {"key": key, "label_he": _LABELS[key], "kind": _kind_for(key)}
         for key in keys
+    ] + [
+        {"key": key, "label_he": label, "kind": FINANCING}
+        for key, label in FINANCING_CATEGORIES.items()
     ]
+
+
+def category_label_he(key: str) -> str:
+    return FINANCING_CATEGORIES.get(key) or _LABELS.get(key, key)
+
+
+def monthly_line_sums(lines: list[dict] | None) -> dict[str, dict[str, float]]:
+    """{"YYYY-MM": {kind: Σ quantity×rate}} of validated lines. Depreciation is not cash."""
+    out: dict[str, dict[str, float]] = {}
+    for line in lines or []:
+        if line["category"] == "depreciation":
+            continue
+        for month_key, cell in line["months"].items():
+            slot = out.setdefault(month_key, {})
+            slot[line["kind"]] = round(slot.get(line["kind"], 0.0) + float(cell["amount"]), 2)
+    return out
