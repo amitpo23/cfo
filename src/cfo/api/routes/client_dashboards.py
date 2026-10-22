@@ -19,7 +19,7 @@ from ..dependencies import get_current_user
 from ...config import settings
 from ...database import get_db_session
 from ...models import DashboardRateLimit, PublishedSnapshot, User
-from ...services.dashboards import budget, service, view_model
+from ...services.dashboards import budget, multi_entity, service, view_model
 from ...services.dashboards.service import READ_ROLES, DashboardError
 
 router = APIRouter()
@@ -197,8 +197,8 @@ def dashboard_view(dashboard_id: int, start: date | None = None, end: date | Non
         row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
         window_end = end or date.today()
         window_start = start or date(window_end.year, 1, 1)
-        view = view_model.build_view(db, row.primary_organization_id, window_start, window_end,
-                                     plan=view_model.plan_payload(db, row.id))
+        view = multi_entity.build_dashboard_view(db, row, window_start, window_end,
+                                                 plan=view_model.plan_payload(db, row.id))
     except DashboardError as exc:
         return _error(exc)
     except ValueError as exc:
@@ -213,11 +213,13 @@ def publish_snapshot(dashboard_id: int, db: Session = Depends(get_db_session),
     try:
         row = service.get_dashboard(db, user, dashboard_id, allowed={"owner"})
         today = date.today()
-        view = view_model.build_view(db, row.primary_organization_id, date(today.year, 1, 1), today,
-                                     plan=view_model.plan_payload(db, row.id))
+        view = multi_entity.build_dashboard_view(db, row, date(today.year, 1, 1), today,
+                                                 plan=view_model.plan_payload(db, row.id))
         saved = view_model.publish_view(db, row, view, day=today)
     except DashboardError as exc:
         return _error(exc)
+    except ValueError as exc:
+        return _error(DashboardError(422, "books_partial", str(exc)))
     saved["provider_calls"] = 0
     return saved
 
@@ -459,9 +461,11 @@ def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get
         payload["source"] = "snapshot"
         return _public_response(payload)
     today = date.today()
-    view = view_model.redact_public_view(
-        view_model.build_view(db, dashboard.primary_organization_id, date(today.year, 1, 1), today,
-                              plan=view_model.plan_payload(db, dashboard.id))
-    )
+    try:
+        live = multi_entity.build_dashboard_view(db, dashboard, date(today.year, 1, 1), today,
+                                                 plan=view_model.plan_payload(db, dashboard.id))
+    except DashboardError as exc:
+        return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
+    view = view_model.redact_public_view(live)
     view["source"] = "live"
     return _public_response(view)

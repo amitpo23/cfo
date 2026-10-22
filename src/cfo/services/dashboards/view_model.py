@@ -68,6 +68,8 @@ def redact_public_view(view: dict) -> dict:
     """Remove internal ids and staff identity from a dashboard view before it is shown on /d/."""
     if not isinstance(view, dict):
         return view
+    if "entities" in view or "combined" in view or "office_organization_id" in view:
+        view = _redact_entities(view)
     if "budget_vs_actual" in view:
         view = dict(view)
         view["budget_vs_actual"] = budget.redact_public(view["budget_vs_actual"])
@@ -87,6 +89,30 @@ def redact_public_view(view: dict) -> dict:
     return copied
 
 
+def _redact_entities(view: dict) -> dict:
+    """Multi-entity views: no organization or account ids on /d/, each section redacted."""
+    copied = {key: value for key, value in view.items() if key != "office_organization_id"}
+    if isinstance(view.get("entities"), list):
+        copied["entities"] = [
+            {
+                "label": section.get("label"),
+                "role": section.get("role"),
+                "accounts": [
+                    {"display_label": account.get("display_label")}
+                    for account in section.get("accounts") or [] if isinstance(account, dict)
+                ],
+                "view": redact_public_view(section.get("view")),
+            }
+            for section in view["entities"] if isinstance(section, dict)
+        ]
+    if isinstance(view.get("combined"), dict):
+        combined = dict(view["combined"])
+        if "budget_vs_actual" in combined:
+            combined["budget_vs_actual"] = budget.redact_public(combined["budget_vs_actual"])
+        copied["combined"] = combined
+    return copied
+
+
 def publish_view(db, dashboard, view: dict, *, day: date | None = None) -> dict:
     """Store one snapshot per dashboard per day.
 
@@ -94,6 +120,9 @@ def publish_view(db, dashboard, view: dict, *, day: date | None = None) -> dict:
     """
     day = day or date.today()
     books.assert_publishable((view or {}).get("pnl"))
+    for section in (view or {}).get("entities") or []:
+        if isinstance(section, dict):
+            books.assert_publishable((section.get("view") or {}).get("pnl"))
     encoded = json.dumps(view, sort_keys=True, ensure_ascii=False, default=str)
     digest = hashlib.sha256(encoded.encode()).hexdigest()
     from ...models import PublishedSnapshot
