@@ -208,9 +208,10 @@ def test_office_window_is_shared_across_client_files(fresh_org, monkeypatch):
         "cfo.services.sumit_request_budget.paced_daily_limit",
         lambda **kwargs: kwargs["configured_daily"],
     )
-    from cfo.models import SumitCompany
+    from cfo.models import ProviderRequestBudget, SumitCompany
     db = SessionLocal()
     try:
+        db.query(ProviderRequestBudget).delete()
         db.add(SumitCompany(
             office_organization_id=office, company_id="11", name="א",
             target_organization_id=first, status="active",
@@ -222,11 +223,29 @@ def test_office_window_is_shared_across_client_files(fresh_org, monkeypatch):
         db.commit()
     finally:
         db.close()
-    from cfo.services.sumit_request_budget import SumitRequestBudgetExceeded
+    from cfo.services.sumit_request_budget import (
+        ACCOUNT_REQUEST_SCOPE,
+        SumitRequestBudgetExceeded,
+    )
     SumitRequestLimiter(first, per_minute_limit=10, daily_limit=10).claim("/one")
     SumitRequestLimiter(second, per_minute_limit=10, daily_limit=10).claim("/two")
-    with pytest.raises(SumitRequestBudgetExceeded, match="office monthly"):
+    # The account window is the same size and is claimed first, so the
+    # third request stops there. Both client files still moved the shared
+    # office counter.
+    with pytest.raises(SumitRequestBudgetExceeded, match="account monthly"):
         SumitRequestLimiter(first, per_minute_limit=10, daily_limit=10).claim("/three")
+    db = SessionLocal()
+    try:
+        office_used = db.query(ProviderRequestBudget.used).filter_by(
+            provider="sumit", scope_key=f"office:{office}", window_kind="month",
+        ).scalar()
+        account_used = db.query(ProviderRequestBudget.used).filter_by(
+            provider="sumit", scope_key=ACCOUNT_REQUEST_SCOPE, window_kind="month",
+        ).scalar()
+        assert office_used == 2
+        assert account_used == 2
+    finally:
+        db.close()
     record_sumit_call(
         organization_id=first, endpoint="/accounting/documents/list/",
         outcome="success", purpose="sync",
@@ -278,9 +297,10 @@ def test_office_paid_action_cap_is_ten_across_client_files(fresh_org, monkeypatc
         "cfo.services.sumit_quota.paced_daily_limit",
         lambda **kwargs: kwargs["configured_daily"],
     )
-    from cfo.models import SumitCompany
+    from cfo.models import ProviderRequestBudget, SumitCompany
     db = SessionLocal()
     try:
+        db.query(ProviderRequestBudget).delete()
         db.add(SumitCompany(
             office_organization_id=office, company_id="21", name="א",
             target_organization_id=first, status="active",
@@ -308,8 +328,23 @@ def test_office_paid_action_cap_is_ten_across_client_files(fresh_org, monkeypatc
         _claim(first)
     for _ in range(4):
         _claim(second)
-    with pytest.raises(SumitQuotaExhausted, match="office monthly paid-action"):
+    # Account is claimed before the office window and is also capped at 10,
+    # so the 11th stops on the account. The office counter still reached 10.
+    with pytest.raises(SumitQuotaExhausted, match="account monthly paid-action"):
         _claim(first)
+    from cfo.services.sumit_quota import ACCOUNT_PAID_SCOPE
+    db = SessionLocal()
+    try:
+        office_used = db.query(ProviderRequestBudget.used).filter_by(
+            provider="sumit", scope_key=f"paid:office:{office}", window_kind="month",
+        ).scalar()
+        account_used = db.query(ProviderRequestBudget.used).filter_by(
+            provider="sumit", scope_key=ACCOUNT_PAID_SCOPE, window_kind="month",
+        ).scalar()
+        assert office_used == 10
+        assert account_used == 10
+    finally:
+        db.close()
 
 
 class _Response:

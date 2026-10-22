@@ -139,6 +139,33 @@ def owner(client):
     return {"headers": {"Authorization": f"Bearer {data['access_token']}"}, "user": data["user"]}
 
 
+@pytest.fixture(scope="session")
+def platform_admin(client, owner):
+    """A platform SUPER_ADMIN. The on-demand SUMIT job routes run for every
+    organization, so an organization admin is not enough to trigger them."""
+    from cfo.auth import create_access_token
+    from cfo.database import SessionLocal
+    from cfo.models import User, UserRole
+
+    resp = client.post("/api/admin/auth/register", json={
+        "email": "platform@example.com", "password": "secret123", "full_name": "Platform",
+    })
+    assert resp.status_code == 201, resp.text
+    db = SessionLocal()
+    try:
+        user = db.get(User, resp.json()["user"]["id"])
+        user.role = UserRole.SUPER_ADMIN
+        db.commit()
+        token = create_access_token(data={
+            "sub": str(user.id), "role": UserRole.SUPER_ADMIN.value,
+            "org_id": user.organization_id,
+        })
+        org_id = user.organization_id
+    finally:
+        db.close()
+    return {"headers": {"Authorization": f"Bearer {token}"}, "org_id": org_id}
+
+
 _iso_counter = {"n": 0}
 
 

@@ -332,11 +332,32 @@ def test_sms_only_sent_when_red_and_opted_in(fresh_org, monkeypatch):
         assert result_red_disabled["channels"]["sms"]["reason"] == "org_disabled"
         assert sms_calls == []
 
-        # red + opted in -> SMS sent, one line
+        # red + opted in, including with the automatic flag on, still does
+        # not call SUMIT. The scheduled morning cycle uses this default.
+        from cfo.config import settings
         org.morning_brief_sms_enabled = True
         db.commit()
-        result_red_enabled = svc.persist_and_deliver(
+        monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
+        result_scheduled = svc.persist_and_deliver(
             db, org_id, TODAY + timedelta(days=2), _minimal_brief(org_id, status="red"))
+        assert result_scheduled["channels"]["sms"]["status"] == "skipped"
+        assert result_scheduled["channels"]["sms"]["reason"] == "sumit_automatic_calls_disabled"
+        assert sms_calls == []
+
+        # explicit opt-in still needs the flag
+        monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", False)
+        result_opt_in_flag_off = svc.persist_and_deliver(
+            db, org_id, TODAY + timedelta(days=3), _minimal_brief(org_id, status="red"),
+            allow_sumit_sms=True,
+        )
+        assert result_opt_in_flag_off["channels"]["sms"]["reason"] == "sumit_automatic_calls_disabled"
+        assert sms_calls == []
+
+        monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
+        result_red_enabled = svc.persist_and_deliver(
+            db, org_id, TODAY + timedelta(days=4), _minimal_brief(org_id, status="red"),
+            allow_sumit_sms=True,
+        )
         assert result_red_enabled["channels"]["sms"]["status"] == "sent"
         assert sms_calls == ["0500000000"]
     finally:

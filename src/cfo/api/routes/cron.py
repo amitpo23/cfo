@@ -1,8 +1,10 @@
 """
 Scheduled jobs endpoint, invoked by Vercel Cron.
 
-Not behind user auth — protected by CRON_SECRET instead (Vercel sends
-"Authorization: Bearer <CRON_SECRET>" automatically when the env var is set).
+Routes that can call SUMIT are not on the Vercel schedule. They require a
+platform SUPER_ADMIN JWT and still return a no-op while
+SUMIT_AUTOMATIC_CALLS_ENABLED is false. The remaining crons are protected by
+CRON_SECRET (Vercel sends "Authorization: Bearer <CRON_SECRET>").
 """
 import asyncio
 import logging
@@ -41,7 +43,7 @@ from ...services.email_sender import send_email_smtp
 # attribute for tests/test_shaam_reminder.py's monkeypatch target; the actual
 # call now happens inside run_daily_close_step via its own import.
 from ...services.shaam_reminder import ensure_shaam_renewal_reminder
-from ..dependencies import sumit_for_org
+from ..dependencies import get_super_admin, sumit_for_org
 from ...integrations.sumit_models import SMSRequest
 
 logger = logging.getLogger(__name__)
@@ -585,13 +587,39 @@ def _finish_periodic_provider_attempt(
 _of_budget_gate = _daily_budget_gate
 
 
-@router.get("/cron/sync-sumit", dependencies=[Depends(_verify_cron_secret)])
+def _sumit_automatic_calls_skipped() -> Optional[dict]:
+    """No-op payload when automatic SUMIT work is not explicitly enabled."""
+    if settings.sumit_automatic_calls_enabled:
+        return None
+    return {
+        "status": "ok",
+        "skipped": "sumit_automatic_calls_disabled",
+        "synced": 0,
+        "refreshed": 0,
+        "results": [],
+    }
+
+
+# These routes used to be Vercel crons. Each one runs for every organization,
+# so an organization admin (any self-registered tenant) must not trigger it:
+# only a platform SUPER_ADMIN can, and the automatic-calls flag still refuses
+# the provider call.
+_ADMIN_ON_DEMAND = [Depends(get_super_admin)]
+
+
+@router.get("/cron/sync-sumit", dependencies=_ADMIN_ON_DEMAND)
 async def scheduled_sync_sumit(db: Session = Depends(get_db_session)):
     """Daily: run a sync for every organization with an active SUMIT integration.
 
     Open Finance is intentionally excluded here -- see /cron/sync-open-finance,
     which enforces its own daily call budget (RSF-020/021).
+
+    Unscheduled. Even a manual hit does not call SUMIT unless
+    ``SUMIT_AUTOMATIC_CALLS_ENABLED`` is set.
     """
+    skipped = _sumit_automatic_calls_skipped()
+    if skipped is not None:
+        return skipped
     repaired_roster = repair_missing_client_roster(db)
     targets = {
         (conn.organization_id, conn.source)
@@ -625,7 +653,7 @@ async def scheduled_sync_sumit(db: Session = Depends(get_db_session)):
     return {"synced": len(results), "repaired_roster": repaired_roster, "results": results}
 
 
-@router.get("/cron/refresh-sumit-quota", dependencies=[Depends(_verify_cron_secret)])
+@router.get("/cron/refresh-sumit-quota", dependencies=_ADMIN_ON_DEMAND)
 async def scheduled_refresh_sumit_quota(db: Session = Depends(get_db_session)):
     """W2.1 (אישור בעלים 20/08/2026): רענון יומי של מכסת הפעולות-בתשלום.
 
@@ -633,7 +661,14 @@ async def scheduled_refresh_sumit_quota(db: Session = Depends(get_db_session)):
     (≈30 בחודש). בלי מדידה טרייה — כל פעולה בתשלום חסומה fail-closed,
     ולכן זה ה-cron שמחזיק את הזמינות של `getpdf`/`getdetails`/יצירת
     מסמכים. שער עמיד: רענון אחד ליום פר-ארגון גם אם ה-cron נורה פעמיים.
+
+    With automatic calls disabled the route still answers 200 and does
+    not build a SUMIT client. Paid actions stay fail-closed until a
+    fresh quota reading exists.
     """
+    skipped = _sumit_automatic_calls_skipped()
+    if skipped is not None:
+        return skipped
     from ...database import SessionLocal
     from ...services.sumit_quota import refresh_quota_measurement
     from ...services.sumit_request_budget import (
@@ -758,7 +793,7 @@ async def scheduled_sync_open_finance(db: Session = Depends(get_db_session)):
     return {"synced": len(results), "results": results}
 
 
-@router.get("/cron/sync", dependencies=[Depends(_verify_cron_secret)])
+@router.get("/cron/sync", dependencies=_ADMIN_ON_DEMAND)
 async def scheduled_sync(db: Session = Depends(get_db_session)):
     """Legacy alias, kept for backward compatibility with existing Vercel Cron
     config during rollout -- SUMIT-only (see /cron/sync-sumit). Open Finance
@@ -766,13 +801,16 @@ async def scheduled_sync(db: Session = Depends(get_db_session)):
     return await scheduled_sync_sumit(db)
 
 
-@router.get("/cron/enrich-expenses", dependencies=[Depends(_verify_cron_secret)])
+@router.get("/cron/enrich-expenses", dependencies=_ADMIN_ON_DEMAND)
 async def scheduled_enrich_expenses(db: Session = Depends(get_db_session)):
     """העשרה יומית של הוצאות (שם ספק + ח.פ) מ-SUMIT, באצווה חסומת-קצב.
 
     ה-DB claim מתבצע לפני בניית הקונקטור וחוסם ניסיון נוסף ל-20 שעות, גם
     אם הניסיון הראשון נכשל או הגיע ל-rate-limit.
     """
+    skipped = _sumit_automatic_calls_skipped()
+    if skipped is not None:
+        return skipped
     from ...services.expense_filing_service import ExpenseFilingService
 
     targets = {
@@ -831,7 +869,7 @@ async def scheduled_enrich_expenses(db: Session = Depends(get_db_session)):
     return {"enriched_orgs": len(results), "results": results}
 
 
-@router.get("/cron/process-ocr", dependencies=[Depends(_verify_cron_secret)])
+@router.get("/cron/process-ocr", dependencies=_ADMIN_ON_DEMAND)
 async def scheduled_process_ocr(db: Session = Depends(get_db_session)):
     """Daily OCR processing after provider sync/enrichment (02:45 UTC).
     
@@ -841,6 +879,9 @@ async def scheduled_process_ocr(db: Session = Depends(get_db_session)):
     """
     from ...services.expense_ocr_scheduler import ExpenseOCRScheduler
 
+    skipped = _sumit_automatic_calls_skipped()
+    if skipped is not None:
+        return skipped
     if not settings.ocr_llm_enabled:
         return {
             "status": "skipped",
@@ -920,7 +961,7 @@ async def scheduled_process_ocr(db: Session = Depends(get_db_session)):
     }
 
 
-@router.get("/cron/collection-reminders", dependencies=[Depends(_verify_cron_secret)])
+@router.get("/cron/collection-reminders", dependencies=_ADMIN_ON_DEMAND)
 async def run_collection_reminders(db: Session = Depends(get_db_session)):
     orgs = db.query(Organization).filter(
         Organization.collection_reminders_enabled.is_(True)
@@ -931,6 +972,7 @@ async def run_collection_reminders(db: Session = Depends(get_db_session)):
         "email_sent": 0,
         "failed": 0,
         "skipped_no_sumit": 0,
+        "skipped_sumit_automatic_disabled": 0,
         "delivery_attempts": 0,
         "budget_skipped": 0,
     }
@@ -974,16 +1016,22 @@ async def run_collection_reminders(db: Session = Depends(get_db_session)):
                     )
                 continue
             planned = _limit_reminder_deliveries(planned, claimed)
-            sumit = sumit_for_org(db, org.id)
+            # SMS is a SUMIT paid call. Email stays on the local SMTP path.
+            automatic_sumit = bool(settings.sumit_automatic_calls_enabled)
+            sumit = sumit_for_org(db, org.id) if automatic_sumit else None
 
             async def email_sender(to, subject, body):
                 return await send_email_smtp(to, subject, body, settings)
 
             if sumit is None:
-                # אין SUMIT לארגון — מייל בלבד (SMS ידלג כי אין שולח)
+                # אין SUMIT לארגון — מייל בלבד (SMS ידלג כי אין שולח).
+                # אותו דילוג כשהקריאות האוטומטיות כבויות: לא בונים לקוח.
                 async def sms_sender(phone, message):
                     return False
-                totals["skipped_no_sumit"] += 1
+                if automatic_sumit:
+                    totals["skipped_no_sumit"] += 1
+                else:
+                    totals["skipped_sumit_automatic_disabled"] += 1
             else:
                 async def sms_sender(phone, message, _s=org.collection_sms_sender, _c=sumit):
                     return bool(await _c.send_sms(SMSRequest(

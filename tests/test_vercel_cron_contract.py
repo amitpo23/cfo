@@ -127,15 +127,29 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # 10/09/2026 — הנחיית בעלים מפורשת: לעצור קריאות SUMIT אוטומטיות ולמנוע
 # חריגת מכסה/תשלום על קריאות. /api/cron/sync-sumit הוסר שוב מ-vercel.json.
 # שאר ה-crons נשארו (OF / בקרה מקומית / listquotas חינמית / תזכורות עם opt-in).
+#
+# 21/10/2026 — הנחיית בעלים שדורסת את "השאר את ה-cron וכבה בדגל":
+# refresh-sumit-quota ו-collection-reminders הוסרו מ-vercel.json. אין cron
+# שנוגע ב-SUMIT. הנתיבים נשארים לבקשת מנהל מפורשת, ועדיין נחסמים כש-
+# SUMIT_AUTOMATIC_CALLS_ENABLED כבוי. bookkeeper-morning נשאר מתוזמן;
+# ה-SMS שלו אינו קורא ל-SUMIT.
 
 EXPECTED_DAILY_SCHEDULES: dict[str, str] = {
     "/api/cron/sync-open-finance": "0 2 * * *",
     "/api/cron/bank-gap-scan": "15 3 * * *",
-    "/api/cron/refresh-sumit-quota": "30 3 * * *",
     "/api/cron/bookkeeper-morning": "45 3 * * *",
-    "/api/cron/collection-reminders": "0 4 * * *",
     "/api/cron/roster-health": "30 5 * * *",
     "/api/cron/channel-alerts": "0 6 * * *",
+}
+
+# These paths can reach SUMIT. None of them may appear in vercel.json crons.
+UNSCHEDULED_SUMIT_PATHS = {
+    "/api/cron/refresh-sumit-quota",
+    "/api/cron/collection-reminders",
+    "/api/cron/sync-sumit",
+    "/api/cron/sync",
+    "/api/cron/enrich-expenses",
+    "/api/cron/process-ocr",
 }
 
 
@@ -158,6 +172,7 @@ def _local_time(expression: str, *, year: int, month: int, day: int) -> datetime
 def test_vercel_crons_use_one_daily_utc_schedule_in_dependency_order():
     schedules = _cron_config()
     assert schedules == EXPECTED_DAILY_SCHEDULES
+    assert UNSCHEDULED_SUMIT_PATHS.isdisjoint(schedules)
 
     ordered_paths = list(EXPECTED_DAILY_SCHEDULES)
     utc_minutes = [

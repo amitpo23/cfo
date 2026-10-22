@@ -79,6 +79,9 @@ def test_same_burst_is_debounced_durably(monkeypatch):
 
 
 def test_handler_consults_the_durable_gate(monkeypatch):
+    # The automatic-calls flag is checked first; the budget gate is what is under test.
+    from cfo.config import settings
+    monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
     calls = []
     _patch_targeted_sync(monkeypatch, calls)
     monkeypatch.setattr(wds, "_resolve_sumit_org", lambda db, payload: 3)

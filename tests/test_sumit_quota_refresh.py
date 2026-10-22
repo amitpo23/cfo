@@ -141,12 +141,19 @@ def test_near_limit_measurement_creates_an_owner_insight(fresh_org):
         db.close()
 
 
-def test_refresh_cron_endpoint_is_secret_gated_and_idempotent(client, monkeypatch):
-    monkeypatch.setattr(settings, "cron_secret", "s3cret")
+def test_refresh_route_is_admin_only_and_noops_while_automatic_calls_are_off(platform_admin, client, owner):
     denied = client.get("/api/cron/refresh-sumit-quota")
     assert denied.status_code in (401, 403)
+    secret = client.get(
+        "/api/cron/refresh-sumit-quota",
+        headers={"Authorization": "Bearer test-cron-secret"},
+    )
+    assert secret.status_code == 401
 
-    headers = {"Authorization": "Bearer s3cret"}
-    first = client.get("/api/cron/refresh-sumit-quota", headers=headers)
+    first = client.get("/api/cron/refresh-sumit-quota", headers=platform_admin["headers"])
+    second = client.get("/api/cron/refresh-sumit-quota", headers=platform_admin["headers"])
     assert first.status_code == 200
-    assert "results" in first.json()
+    assert second.status_code == 200
+    assert first.json()["skipped"] == "sumit_automatic_calls_disabled"
+    assert first.json()["results"] == []
+    assert second.json()["results"] == []

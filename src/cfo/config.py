@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     # הנפקת מסמכים (פעולה בתשלום) כבויה ב-live עד שזה מופעל במפורש.
     # מספר ב-env לבדו אינו מפעיל אותה.
     sumit_document_issuance_enabled: bool = False
+    # Nothing calls SUMIT from a schedule unless this is turned on.
+    # Cron routes stay mounted and answer 200, but they do not open a
+    # provider client while the flag is off. Default is off: explicit
+    # control, not a deploy, is what starts automatic calls.
+    sumit_automatic_calls_enabled: bool = False
     # P0-A תיקון 3 (סקירת קודקס 23/08/2026): endpoints "inferred free"
     # אינם מאומתים ישירות — ההגנה היחידה הייתה התרעת 80%. בכל רענון
     # מכסה, delta-השימוש האמיתי מושווה מול מה שהמערכת תבעה. פער העולה

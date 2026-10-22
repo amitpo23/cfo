@@ -189,11 +189,13 @@ def test_cron_collection_requires_secret(client):
     assert r.status_code in (401, 403)
 
 
-def test_cron_collection_runs_for_enabled_orgs(client, monkeypatch):
-    from cfo.config import settings
-    monkeypatch.setattr(settings, "cron_secret", "testsecret", raising=False)
-    r = client.get("/api/cron/collection-reminders",
-                   headers={"Authorization": "Bearer testsecret"})
+def test_cron_collection_runs_for_an_admin_on_demand(platform_admin, client, owner):
+    denied = client.get(
+        "/api/cron/collection-reminders",
+        headers={"Authorization": "Bearer test-cron-secret"},
+    )
+    assert denied.status_code == 401
+    r = client.get("/api/cron/collection-reminders", headers=platform_admin["headers"])
     assert r.status_code == 200
     assert "summary" in r.json()
 

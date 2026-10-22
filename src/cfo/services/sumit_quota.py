@@ -228,6 +228,27 @@ def assert_paid_action_within_quota(
         )
 
 
+# Live exempt plan: 10 included actions for the whole account.
+LIVE_ACCOUNT_PAID_HARD_CAP = 10
+ACCOUNT_PAID_SCOPE = "paid:account"
+_TEST_ACCOUNT_PAID_HARD_CAP = 90
+
+
+def account_monthly_paid_limit() -> int:
+    """Shared monthly paid-action ceiling. Live never exceeds 10.
+
+    Document issuance stays closed until the flag is set, even when a
+    numeric limit is present. The test track keeps its own ceiling.
+    """
+    if settings.sumit_environment != "live":
+        configured = settings.sumit_test_monthly_paid_action_limit
+        return min(_TEST_ACCOUNT_PAID_HARD_CAP, max(0, int(configured)))
+    if not settings.sumit_document_issuance_enabled:
+        return 0
+    configured = settings.sumit_live_monthly_paid_action_limit
+    return min(LIVE_ACCOUNT_PAID_HARD_CAP, max(0, int(configured)))
+
+
 def _claim_monthly_paid_action(
     *, organization_id: int, endpoint: str, snapshot: QuotaSnapshot,
 ) -> None:
@@ -286,6 +307,22 @@ def _claim_monthly_paid_action(
                         "measurement was published while this claim was starting",
                     )
             _, day_start, month_start = _utc_windows(canonical_now)
+            # Same order as request claims: the account window is taken
+            # before any org, snapshot, or office window. A later failure
+            # rolls it back with the rest of this transaction.
+            account_claimed = SumitRequestLimiter._claim_window(
+                db,
+                scope_key=ACCOUNT_PAID_SCOPE,
+                organization_id=None,
+                window_kind="month",
+                window_start=month_start,
+                limit_value=account_monthly_paid_limit(),
+                now=canonical_now,
+            )
+            if not account_claimed:
+                raise SumitQuotaExhausted(
+                    f"SUMIT account monthly paid-action budget exceeded ({endpoint})",
+                )
             snapshot_claimed = SumitRequestLimiter._claim_window(
                 db,
                 scope_key=scope_key,
