@@ -90,6 +90,18 @@ type SourceItem = {
 
 type Sources = { status?: string; items?: SourceItem[]; stale_count?: number; rule?: string | null };
 
+type StatementCells = Record<string, number | null>;
+
+type CashStatement = {
+  status?: string;
+  months?: string[];
+  groups?: { id: string; label: string }[];
+  lines?: { id: string; label: string; group: string; review?: boolean; values: StatementCells; total: number }[];
+  totals?: Record<string, StatementCells>;
+  forecast?: { status?: string; months: string[]; rows: Record<string, StatementCells>; note: string } | null;
+  message?: string | null;
+};
+
 type PendingMonth = { month: string; inflows: number; outflows: number; count: number };
 
 type CardMonth = { month: string; total: number; merchants: { merchant: string; amount: number }[] };
@@ -130,6 +142,7 @@ type DashboardView = {
   liquidity?: EntityLiquidity | null;
   forecast?: Forecast | null;
   sources?: Sources | null;
+  cash_statement?: CashStatement | null;
   entities?: { label: string | null; role: string; view: DashboardView }[];
   combined?: {
     pnl?: DashboardView['pnl'];
@@ -139,6 +152,7 @@ type DashboardView = {
     forecast?: Forecast | null;
     intercompany_removed?: IntercompanyRemoved;
     sources?: Sources | null;
+    cash_statement?: CashStatement | null;
   };
   error?: { message_he?: string };
 };
@@ -363,6 +377,71 @@ export function SourcesCard({ sources }: { sources: Sources | null | undefined }
         </table>
       </div>
       {sources?.rule ? <p className="mt-2 text-xs text-stone-500">{sources.rule}</p> : null}
+    </section>
+  );
+}
+
+function cell(value: number | null | undefined): string {
+  return value === null || value === undefined ? 'לא ידוע' : money(value);
+}
+
+// Cash flow by line item × month: actual months from filed BOOKED rows, then the forecast months.
+export function CashStatementCard({ statement }: { statement: CashStatement | null | undefined }) {
+  const months = statement?.months ?? [];
+  if (!statement || months.length === 0 || statement.status !== 'ready') return null;
+  const lines = statement.lines ?? [];
+  const totals = statement.totals ?? {};
+  const forecast = statement.forecast && statement.forecast.months.length > 0 ? statement.forecast : null;
+  const forecastMonths = forecast?.months ?? [];
+  const blank = forecastMonths.map((month) => <td key={`f-${month}`} className="py-1" />);
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">דוח תזרים לפי סעיף וחודש</h2>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <th className="py-2 text-right font-medium">סעיף</th>
+              {months.map((month) => <th key={month} className="py-2 text-right font-medium">{month}</th>)}
+              {forecastMonths.map((month) => (
+                <th key={`f-${month}`} className="bg-stone-50 py-2 text-right font-medium">{month} (תחזית)</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(statement.groups ?? []).map((group) => {
+              const rows = lines.filter((line) => line.group === group.id);
+              if (rows.length === 0) return null;
+              const forecastRow = forecast?.rows[group.id];
+              return [
+                ...rows.map((line) => (
+                  <tr key={line.id} className="border-b border-stone-100">
+                    <td className={`py-1 ${line.review ? 'text-amber-700' : ''}`}>{line.label}</td>
+                    {months.map((month) => <td key={month} className="py-1">{cell(line.values[month])}</td>)}
+                    {blank}
+                  </tr>
+                )),
+                <tr key={`total-${group.id}`} className="border-b font-medium">
+                  <td className="py-1">סה״כ {group.label}</td>
+                  {months.map((month) => <td key={month} className="py-1">{cell(totals[group.id]?.[month])}</td>)}
+                  {forecastMonths.map((month) => (
+                    <td key={`f-${month}`} className="bg-stone-50 py-1">{forecastRow ? cell(forecastRow[month]) : ''}</td>
+                  ))}
+                </tr>,
+              ];
+            })}
+            <tr className="font-semibold">
+              <td className="py-2">תזרים נטו</td>
+              {months.map((month) => <td key={month} className="py-2">{cell(totals.net?.[month])}</td>)}
+              {forecastMonths.map((month) => (
+                <td key={`f-${month}`} className="bg-stone-50 py-2">{cell(forecast?.rows.net?.[month])}</td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {statement.message ? <p className="mt-2 text-xs text-stone-500">{statement.message}</p> : null}
+      {forecast ? <p className="mt-1 text-xs text-stone-500">{forecast.note}</p> : null}
     </section>
   );
 }
@@ -627,6 +706,7 @@ export default function ClientDashboardPage() {
     liquidity: view.combined?.liquidity,
     forecast: view.combined?.forecast,
     sources: view.combined?.sources,
+    cash_statement: view.combined?.cash_statement,
   } : entities[Number(scope)]?.view ?? view;
   const parameters = parametersFromPayload(plan?.payload);
 
@@ -685,6 +765,7 @@ export default function ClientDashboardPage() {
                   <PnlCard pnl={scoped.pnl} />
                   <JournalCard months={scoped.pnl?.months ?? []} />
                   <CashflowCard view={scoped} />
+                  <CashStatementCard statement={scoped.cash_statement} />
                   {multi && scope === 'combined' ? <IntercompanyCard removed={view.combined?.intercompany_removed} /> : null}
                   {editor && filing ? (
                     <ReviewList

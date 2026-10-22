@@ -17,12 +17,12 @@ const components = process.argv[2] || join(here, '..', 'src', 'components');
 const entry = `
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import { BudgetVsActual, IntercompanyCard, JournalCard, SourcesCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
+import { BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
 import { LiquidityPanel, OpeningBalanceCard, upcomingAmount, withOpeningBalance } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
-export { renderToStaticMarkup, createElement, BudgetVsActual, IntercompanyCard, JournalCard, SourcesCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
+export { renderToStaticMarkup, createElement, BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
   categoryLabel, pieSlices };
 `;
@@ -214,6 +214,23 @@ try {
     expect(markup.includes('עו״ש 8954') && markup.includes('2026-10-21 02:00') && markup.includes('עדכני (1 ימים)'), 'bank row');
     expect(markup.includes('פוד גרופ') && markup.includes('לא ידוע') && markup.includes('1 מקורות לא עדכניים'), 'entity / unknown / stale count');
     expect(html(ui.SourcesCard, { sources: { items: [] } }) === '', 'empty card rendered');
+  });
+
+  check('cash statement: lines by month, group totals, unknown month, forecast columns', () => {
+    const statement = {
+      status: 'ready', months: ['2026-07', '2026-08'],
+      groups: [{ id: 'operating_in', label: 'תפעולי — כניסות' }, { id: 'financing', label: 'מימון' }],
+      lines: [
+        { id: 'sales_cash', label: 'הפקדות מזומן (מכירות)', group: 'operating_in', values: { '2026-07': null, '2026-08': 11800 }, total: 11800 },
+        { id: 'loans_out', label: 'החזרי הלוואות ומימון', group: 'financing', values: { '2026-07': null, '2026-08': -2000 }, total: -2000 },
+      ],
+      totals: { operating_in: { '2026-07': null, '2026-08': 11800 }, financing: { '2026-07': null, '2026-08': -2000 }, net: { '2026-07': null, '2026-08': 9800 } },
+      forecast: { months: ['2026-11'], rows: { operating_in: { '2026-11': 10000 }, operating_out: { '2026-11': -8000 }, financing: { '2026-11': -1000 }, net: { '2026-11': 1000 } }, note: 'ללא מע״מ' },
+    };
+    const markup = html(ui.CashStatementCard, { statement });
+    expect(markup.includes('11,800') && markup.includes('9,800') && markup.includes('לא ידוע'), 'actual cells');
+    expect(markup.includes('2026-11 (תחזית)') && markup.includes('10,000') && markup.includes('ללא מע״מ'), 'forecast columns');
+    expect(html(ui.CashStatementCard, { statement: { status: 'unknown', months: [] } }) === '', 'unknown statement rendered');
   });
 
   const importedPlan = process.env.REZEF_IMPORTED_PLAN;

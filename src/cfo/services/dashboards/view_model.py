@@ -14,7 +14,7 @@ from ..bank_coverage import redact_public_coverage
 from ..financial_reports_service import FinancialReportsService
 from ..live_cash_flow_service import LiveCashFlowService
 from .. import bank_status
-from . import activity_quality, books, budget, forecast, freshness, liquidity
+from . import activity_quality, books, budget, cash_statement, forecast, freshness, liquidity
 
 MAX_RANGE_DAYS = 366
 
@@ -77,6 +77,7 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
         "liquidity": position,
         "forecast": outlook,
         "sources": freshness.build_freshness(db, organization_id),
+        "cash_statement": cash_statement.build_cash_statement(filed, start, end, outlook),
         "provider_calls": 0,
         "freshness": {
             "cashflow": "books" if cashflow.get("months") else "unknown",

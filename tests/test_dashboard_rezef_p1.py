@@ -240,3 +240,46 @@ def test_sources_of_an_organization_without_rows_are_unknown(fresh_org):
     with SessionLocal() as db:
         section = freshness.build_freshness(db, org["org_id"], today=date(2026, 10, 22))
     assert section["status"] == "unknown" and section["items"] == [] and section["provider_calls"] == 0
+
+
+# ------------------------------------------- G-21. cash flow by line × month
+
+def test_cash_statement_by_line_and_month_with_forecast(client, fresh_org, platform_admin):
+    dashboard_id, chef, food, chef_main = _ic_dashboard(client, platform_admin, fresh_org, "p1-cash-statement")
+    with SessionLocal() as db:
+        _bank(db, chef["org_id"], date(2026, 8, 3), 11800, "הפקדת מזומן")
+        _bank(db, chef["org_id"], date(2026, 8, 7), -40, "עמלת פעולה")
+        _bank(db, chef["org_id"], date(2026, 9, 7), -2000, "פרעון הלוואה")
+        db.commit()
+    view = _view(client, platform_admin["headers"], dashboard_id, "2026-08-01", "2026-09-30")
+    chef_statement = view["entities"][0]["view"]["cash_statement"]
+    assert chef_statement["months"] == ["2026-08", "2026-09"] and chef_statement["status"] == "ready"
+    lines = {line["id"]: line for line in chef_statement["lines"]}
+    assert lines["sales_cash"]["group"] == "operating_in"
+    assert lines["sales_cash"]["values"] == {"2026-08": 11800.0, "2026-09": 1180.0}
+    assert lines["bank_fees"]["group"] == "finance" and lines["bank_fees"]["values"]["2026-08"] == -40.0
+    assert lines["loans_out"]["group"] == "financing" and lines["loans_out"]["values"]["2026-09"] == -2000.0
+    totals = chef_statement["totals"]
+    assert totals["after_finance"]["2026-08"] == round(totals["operating"]["2026-08"] - 40, 2)
+    # The statement's net is the entity's cash flow net, month by month.
+    for month in view["entities"][0]["view"]["cashflow"]["months"]:
+        assert totals["net"][month["month"]] == month["net_flow"]
+    assert chef_statement["forecast"]["months"] == view["entities"][0]["view"]["forecast"]["months"]
+    assert "ללא מע״מ" in chef_statement["forecast"]["note"]
+
+    combined = view["combined"]["cash_statement"]
+    netting = next(line for line in combined["lines"] if line["id"] == "intercompany_netting")
+    # The 5,000 pair crosses the month: August's outflow and September's inflow leave the statement.
+    assert netting["values"] == {"2026-08": 5000.0, "2026-09": -5700.0 + 700.0}
+    for month in view["combined"]["cashflow"]["months"]:
+        assert combined["totals"]["net"][month["month"]] == month["net_flow"], month["month"]
+    assert combined["forecast"]["months"] == view["combined"]["forecast"]["months"]
+
+
+def test_cash_statement_month_without_bank_rows_is_unknown(fresh_org):
+    from cfo.services.dashboards import cash_statement, filing
+    rows = [(filing.Txn(1, 1, 1, "2026-08-03", 100.0, "הפקדת מזומן"), filing.Filed("sales_cash", "rule", "sales_cash"))]
+    section = cash_statement.build_cash_statement(rows, date(2026, 7, 1), date(2026, 8, 31))
+    assert section["lines"][0]["values"] == {"2026-07": None, "2026-08": 100.0}
+    assert section["totals"]["net"] == {"2026-07": None, "2026-08": 100.0}
+    assert cash_statement.build_cash_statement([], date(2026, 7, 1), date(2026, 7, 31))["status"] == "unknown"

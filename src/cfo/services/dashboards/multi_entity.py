@@ -14,7 +14,7 @@ from ...models import BankTransaction, ClientDashboard, DashboardEntity, Dashboa
 from .. import bank_status
 from ..office_access import classifying_office_id, office_manages
 from .service import DashboardError
-from . import filing, forecast, liquidity, view_model
+from . import cash_statement, filing, forecast, liquidity, view_model
 
 _MARKER = ("intercompany", "בין-חברתי", "בין חברתי")
 # The explicit intercompany rule (see ``_intercompany``).
@@ -128,17 +128,19 @@ def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | N
     position = liquidity.combine([
         {"label": section["label"], "liquidity": section["view"].get("liquidity")} for section in sections
     ])
+    # The plan budget is the group's budget, so the combined forecast uses all of it.
+    outlook = forecast.build_forecast(
+        forecast.combined_pnl_months(sections), as_of=end, plan=plan,
+        debt_service=position["debt_service"], budget_sums=view_model.plan_budget_sums(plan),
+        opening_balance=position["balance"],
+    )
     return {
         "pnl": _combine_pnl(views),
         "cashflow": _combine_cashflow(views, removed),
         "budget_vs_actual": _combine_budget(views),
         "liquidity": position,
-        # The plan budget is the group's budget, so the combined forecast uses all of it.
-        "forecast": forecast.build_forecast(
-            forecast.combined_pnl_months(sections), as_of=end, plan=plan,
-            debt_service=position["debt_service"], budget_sums=view_model.plan_budget_sums(plan),
-            opening_balance=position["balance"],
-        ),
+        "forecast": outlook,
+        "cash_statement": cash_statement.combine(sections, outlook, removed["by_month"]),
         "intercompany_removed": removed["summary"],
         "sources": _combine_sources(sections),
         "provider_calls": 0,
