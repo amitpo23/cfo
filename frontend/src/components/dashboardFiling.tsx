@@ -102,6 +102,56 @@ export function linesFromPayload(payload: PlanPayload): LineDraft[] {
   });
 }
 
+export type CellDraft = { quantity: string; rate: string };
+
+// The months a plan's lines have cells for. The editor opens on the current
+// month when the plan covers it, otherwise on the plan's nearest month.
+export function firstPlanMonth(payload: PlanPayload, current: string): string | null {
+  const months = new Set<string>();
+  for (const line of linesFromPayload(payload)) {
+    for (const key of Object.keys(line.months)) months.add(key);
+  }
+  if (months.size === 0 || months.has(current)) return null;
+  const sorted = [...months].sort();
+  const before = sorted.filter((key) => key <= current);
+  return before.length > 0 ? before[before.length - 1] : sorted[0];
+}
+
+// The tool's per-line defaults (eliavImport.lines[id].defaults): a rate or a
+// quantity without the other. They prefill a month the line has no cell for.
+export function lineDefaultsFromPayload(payload: PlanPayload | null | undefined): Record<string, CellDraft> {
+  const imported = payload?.eliavImport;
+  const lines = imported && typeof imported === 'object' ? (imported as Record<string, unknown>).lines : null;
+  if (!lines || typeof lines !== 'object') return {};
+  const out: Record<string, CellDraft> = {};
+  for (const [id, detail] of Object.entries(lines as Record<string, unknown>)) {
+    const defaults = detail && typeof detail === 'object' ? (detail as Record<string, unknown>).defaults : null;
+    if (!defaults || typeof defaults !== 'object') continue;
+    const typed = defaults as Record<string, unknown>;
+    const text = (value: unknown) => (typeof value === 'number' || typeof value === 'string' ? String(value) : '');
+    out[id] = { quantity: text(typed.quantity), rate: text(typed.rate) };
+  }
+  return out;
+}
+
+export function cellValue(cell: CellDraft | undefined): number | null {
+  if (!cell) return null;
+  const quantity = parseAmount(cell.quantity);
+  const rate = parseAmount(cell.rate);
+  if (quantity === null || rate === null) return null;
+  return quantity * rate;
+}
+
+export function yearMonths(month: string): string[] {
+  const year = month.slice(0, 4);
+  return Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`);
+}
+
+export function lineYearTotal(line: LineDraft, month: string): number | null {
+  const values = yearMonths(month).map((key) => cellValue(line.months[key])).filter((value): value is number => value !== null);
+  return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) : null;
+}
+
 export function customRulesPayload(rules: FilingRule[]): Record<string, unknown>[] {
   return rules.filter((rule) => rule.source === 'custom').map((rule) => ({
     id: rule.id,
@@ -121,12 +171,14 @@ function parseAmount(value: string): number | null {
   return parsed;
 }
 
-function cellAmount(cell: { quantity: string; rate: string } | undefined): string {
-  if (!cell) return '—';
-  const quantity = parseAmount(cell.quantity);
-  const rate = parseAmount(cell.rate);
-  if (quantity === null || rate === null) return '—';
-  return money(quantity * rate);
+function cellAmount(cell: CellDraft | undefined, defaults: CellDraft | undefined): string {
+  const value = cellValue(cell);
+  if (value !== null) return money(value);
+  const quantity = cell?.quantity.trim() || defaults?.quantity || '';
+  const rate = cell?.rate.trim() || defaults?.rate || '';
+  if (!quantity && rate) return 'חסרה כמות';
+  if (quantity && !rate) return 'חסר תעריף';
+  return 'אין תקציב';
 }
 
 export function budgetLinesPayload(lines: LineDraft[], categories: BudgetCategory[]): { lines: Record<string, unknown>[] } | { error: string } {
@@ -185,11 +237,7 @@ export function monthTotal(lines: LineDraft[], month: string, categories: Budget
   let total = 0;
   for (const line of lines) {
     if (kindByKey.get(line.category) !== kind) continue;
-    const cell = line.months[month];
-    if (!cell) continue;
-    const quantity = parseAmount(cell.quantity);
-    const rate = parseAmount(cell.rate);
-    if (quantity !== null && rate !== null) total += quantity * rate;
+    total += cellValue(line.months[month]) ?? 0;
   }
   return total;
 }
@@ -207,6 +255,7 @@ export function BudgetEditor({
   canEdit,
   categories,
   lines,
+  lineDefaults = {},
   month,
   onMonth,
   onLines,
@@ -216,6 +265,7 @@ export function BudgetEditor({
   canEdit: boolean;
   categories: BudgetCategory[];
   lines: LineDraft[];
+  lineDefaults?: Record<string, CellDraft>;
   month: string;
   onMonth: (month: string) => void;
   onLines: (lines: LineDraft[]) => void;
@@ -229,7 +279,11 @@ export function BudgetEditor({
   function updateCell(id: string, field: 'quantity' | 'rate', value: string) {
     onLines(lines.map((line) => {
       if (line.id !== id) return line;
-      const current = line.months[month] ?? { quantity: '', rate: '' };
+      // A month without a cell starts from the line's defaults (the tool's seed).
+      const current = line.months[month] ?? {
+        quantity: lineDefaults[line.id]?.quantity ?? '',
+        rate: lineDefaults[line.id]?.rate ?? '',
+      };
       return { ...line, months: { ...line.months, [month]: { ...current, [field]: value } } };
     }));
   }
@@ -274,17 +328,21 @@ export function BudgetEditor({
               <th className="py-2 text-right font-medium">כמות</th>
               <th className="py-2 text-right font-medium">תעריף</th>
               <th className="py-2 text-right font-medium">סכום</th>
+              <th className="py-2 text-right font-medium">סה״כ {month.slice(0, 4)}</th>
               {canEdit ? <th className="py-2 text-right font-medium"> </th> : null}
             </tr>
           </thead>
           <tbody>
             {groupedLines(lines).map(({ line, header }) => {
-              const cell = line.months[month] ?? { quantity: '', rate: '' };
+              const stored = line.months[month];
+              const cell = stored ?? { quantity: '', rate: '' };
+              const defaults = lineDefaults[line.id];
+              const yearTotal = lineYearTotal(line, month);
               return (
                 <Fragment key={line.id}>
                 {header ? (
                   <tr className="border-b bg-stone-50">
-                    <td className="py-2 font-medium" colSpan={canEdit ? 6 : 5}>{header}</td>
+                    <td className="py-2 font-medium" colSpan={canEdit ? 7 : 6}>{header}</td>
                   </tr>
                 ) : null}
                 <tr className="border-b border-stone-100">
@@ -319,6 +377,7 @@ export function BudgetEditor({
                       inputMode="decimal"
                       className="w-24 rounded border border-stone-200 px-2 py-1 text-left"
                       value={cell.quantity}
+                      placeholder={stored ? undefined : defaults?.quantity || undefined}
                       readOnly={!canEdit}
                       aria-label="כמות"
                       onChange={(event) => updateCell(line.id, 'quantity', event.target.value)}
@@ -330,12 +389,14 @@ export function BudgetEditor({
                       inputMode="decimal"
                       className="w-28 rounded border border-stone-200 px-2 py-1 text-left"
                       value={cell.rate}
+                      placeholder={stored ? undefined : defaults?.rate || undefined}
                       readOnly={!canEdit}
                       aria-label="תעריף"
                       onChange={(event) => updateCell(line.id, 'rate', event.target.value)}
                     />
                   </td>
-                  <td className="py-2">{cellAmount(cell)}</td>
+                  <td className={`py-2 ${cellValue(stored) === null ? 'text-stone-400' : ''}`}>{cellAmount(stored, defaults)}</td>
+                  <td className="py-2 text-stone-600">{yearTotal === null ? '—' : money(yearTotal)}</td>
                   {canEdit ? (
                     <td className="py-2">
                       <button
@@ -358,6 +419,34 @@ export function BudgetEditor({
         <p className="mt-3 text-sm text-stone-600">
           סה״כ {month}: הכנסות {money(monthTotal(lines, month, categories, 'revenue'))} · הוצאות {money(monthTotal(lines, month, categories, 'cost'))} · מימון {money(monthTotal(lines, month, categories, 'financing'))}
         </p>
+      ) : null}
+      {lines.length > 0 ? (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b text-stone-500">
+                <th className="py-1 text-right font-medium">{month.slice(0, 4)}</th>
+                {yearMonths(month).map((key) => (
+                  <th key={key} className="py-1 text-right font-medium">
+                    <button type="button" className={key === month ? 'font-semibold underline' : ''} onClick={() => onMonth(key)}>
+                      {key.slice(5)}
+                    </button>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {([['revenue', 'הכנסות'], ['cost', 'הוצאות'], ['financing', 'מימון']] as const).map(([kind, label]) => (
+                <tr key={kind} className="border-b border-stone-100">
+                  <td className="py-1">{label}</td>
+                  {yearMonths(month).map((key) => (
+                    <td key={key} className="py-1">{money(monthTotal(lines, key, categories, kind))}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : null}
       {canEdit ? (
         <button

@@ -217,7 +217,7 @@ def test_liquidity_reads_accounts_daily_balances_checks_and_debt_service(client,
         )
     assert section["provider_calls"] == 0
     assert section["position"] == {
-        "balance": -31873.87, "as_of": "2026-10-19", "limit": 15000.0,
+        "balance": -31873.87, "as_of": "2026-10-19", "balance_source": "accounts", "limit": 15000.0,
         "limit_source": "accounts.credit_limit", "available_to_limit": -16873.87,
     }
     # The manual account is not Open Finance and is not read without a binding.
@@ -234,7 +234,12 @@ def test_liquidity_reads_accounts_daily_balances_checks_and_debt_service(client,
     assert states == {"10005": "cleared", "10006": "future", "10009": "no_coverage", "10004": "not_found"}
     kinds = [item["kind"] for item in section["upcoming"]]
     assert kinds == ["loan_maturity", "check", "facility_expiry"]
-    assert section["upcoming"][0]["amount"] is None
+    # The maturity's amount is the loan's last known balance, labelled as such.
+    assert section["upcoming"][0]["amount"] == -62708.33
+    assert section["upcoming"][0]["amount_basis"] == "outstanding_balance"
+    assert "2026-10-14" in section["upcoming"][0]["note"]
+    # The facility expiry names no account, so nothing is filled in for it.
+    assert section["upcoming"][2]["amount"] is None and section["upcoming"][2]["note"] == "הסכום לא מתועד"
     assert section["debt_service"] == [{"month": "2026-10", "principal": 700.0, "interest": 50.0, "new_loans": 0.0}]
     debts = {d["label"]: d["amount"] for d in section["debts"]}
     # The credit-line account mirrors the overdraft and is not counted twice.

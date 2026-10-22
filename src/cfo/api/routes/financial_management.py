@@ -122,12 +122,39 @@ async def import_budget_excel(
 async def get_budget_vs_actual(
     year: Optional[int] = None,
     month: Optional[int] = None,
+    period: Optional[str] = Query(None, pattern="^(month|quarter|ytd|year)$"),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
 ):
-    """השוואת תקציב מול ביצוע"""
+    """השוואת תקציב מול ביצוע.
+
+    An organization with a client dashboard (/d/) reads the dashboard's own
+    comparison: the same budget lines and the same actuals as its "תקציב מול
+    ביצוע" tab, with Hebrew labels. Other organizations keep BudgetService.
+    """
+    from ...models import ClientDashboard
+    from ...services.budget_service import BudgetPeriod
+    from ...services.dashboards import budget as dashboard_budget, view_model
+    today = date.today()
+    dashboard = (
+        db.query(ClientDashboard)
+        .filter(ClientDashboard.primary_organization_id == org_id)
+        .order_by(ClientDashboard.id)
+        .first()
+    )
+    if dashboard is not None:
+        try:
+            summary = dashboard_budget.organization_summary(
+                db, org_id, year or today.year, month, period=period,
+                plan=view_model.plan_payload(db, dashboard.id), today=today,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        summary["dashboard_slug"] = dashboard.slug
+        return {"status": "success", "data": summary}
     service = BudgetService(db, organization_id=org_id)
-    summary = service.get_budget_vs_actual(year or date.today().year, month)
+    budget_period = BudgetPeriod.QUARTERLY if period == "quarter" else BudgetPeriod.MONTHLY
+    summary = service.get_budget_vs_actual(year or today.year, month, budget_period)
     return {"status": "success", "data": vars(summary)}
 
 

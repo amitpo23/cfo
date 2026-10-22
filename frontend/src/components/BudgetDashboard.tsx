@@ -19,10 +19,38 @@ import ExportButtons from './ExportButtons';
 interface BudgetComparison {
   category: string;
   planned: number;
-  actual: number;
-  variance: number;
-  variance_pct: number;
+  // null: the actual of the period is not known (not 0)
+  actual: number | null;
+  variance: number | null;
+  variance_pct: number | null;
   status: string;
+}
+
+type BudgetSummaryMeta = {
+  period?: string;
+  source?: string;
+  dashboardSlug?: string | null;
+  totalActual?: number | null;
+  message?: string | null;
+  months?: { month: string; source_label?: string | null }[];
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  on_track: 'בתקציב',
+  warning: 'קרוב לחריגה',
+  over_budget: 'חריגה',
+  under_budget: 'מתחת לתקציב',
+  critical: 'חריגה חמורה',
+  unknown: 'ביצוע לא ידוע',
+};
+
+// The period selector as query parameters of /financial/budget/vs-actual.
+export function periodParams(period: string, today: Date = new Date()): { year: number; month?: number; period: string } {
+  const year = today.getFullYear();
+  const month = today.getMonth() + 1;
+  if (period === 'current_quarter') return { year, month, period: 'quarter' };
+  if (period === 'ytd') return { year, period: 'ytd' };
+  return { year, month, period: 'month' };
 }
 
 interface BudgetAlert {
@@ -46,21 +74,36 @@ export const BudgetDashboard: React.FC = () => {
   });
 
   // Fetch budget vs actual — backend מחזיר {status, data: BudgetSummary}
-  const { data: budgetData, isLoading: loadingBudget } = useQuery({
+  const { data: budgetResult, isLoading: loadingBudget } = useQuery({
     queryKey: ['budget-vs-actual', selectedPeriod],
     queryFn: async () => {
-      const res = await api.get<{ status: string; data: any }>('/api/financial/budget/vs-actual');
-      const categories: any[] = res?.data?.categories ?? [];
-      return categories.map((c: any): BudgetComparison => ({
+      const res = await api.get<{ status: string; data: any }>('/api/financial/budget/vs-actual', {
+        params: periodParams(selectedPeriod),
+      });
+      const data = res?.data ?? {};
+      const summary: BudgetSummaryMeta = {
+        period: data.period,
+        source: data.source,
+        dashboardSlug: data.dashboard_slug ?? null,
+        totalActual: data.total_actual === undefined ? undefined : data.total_actual,
+        message: data.message ?? null,
+        months: Array.isArray(data.months) ? data.months : undefined,
+      };
+      const categories: any[] = data.categories ?? [];
+      const known = (value: unknown) => (typeof value === 'number' ? value : null);
+      const rows = categories.map((c: any): BudgetComparison => ({
         category: c.category_hebrew || c.category_name || c.category_id,
         planned: c.budget_amount ?? 0,
-        actual: c.actual_amount ?? 0,
-        variance: c.variance ?? 0,
-        variance_pct: c.variance_percentage ?? 0,
+        actual: data.source === 'dashboard' ? known(c.actual_amount) : (c.actual_amount ?? 0),
+        variance: data.source === 'dashboard' ? known(c.variance) : (c.variance ?? 0),
+        variance_pct: data.source === 'dashboard' ? known(c.variance_percentage) : (c.variance_percentage ?? 0),
         status: c.status,
       }));
+      return { rows, meta: summary };
     },
   });
+  const budgetData = budgetResult?.rows;
+  const meta: BudgetSummaryMeta = budgetResult?.meta ?? {};
 
   // Fetch budget alerts — backend מחזיר {status, data: [...]}
   const { data: alerts, isLoading: loadingAlerts } = useQuery({
@@ -100,15 +143,16 @@ export const BudgetDashboard: React.FC = () => {
   const totals = budgetData?.reduce(
     (acc, item) => ({
       planned: acc.planned + item.planned,
-      actual: acc.actual + item.actual,
+      actual: acc.actual + (item.actual ?? 0),
     }),
     { planned: 0, actual: 0 }
   ) || { planned: 0, actual: 0 };
+  const actualKnown = !(budgetData ?? []).some((item) => item.actual === null);
 
   const totalVariance = totals.planned - totals.actual;
   const totalVariancePct = totals.planned ? ((totalVariance / totals.planned) * 100) : 0;
 
-  const formatCurrency = (value: number) => `₪${value.toLocaleString()}`;
+  const formatCurrency = (value: number | null) => (value === null ? 'לא ידוע' : `₪${value.toLocaleString()}`);
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -143,7 +187,15 @@ export const BudgetDashboard: React.FC = () => {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">ניהול תקציב</h1>
-          <p className="text-gray-600 mt-1">מעקב ובקרה תקציבית</p>
+          <p className="text-gray-600 mt-1">מעקב ובקרה תקציבית{meta.period ? ` · ${meta.period}` : ''}</p>
+          {meta.source === 'dashboard' ? (
+            <p className="text-sm text-gray-500 mt-1">
+              התקציב והביצוע זהים ללשונית "תקציב מול ביצוע" בדשבורד
+              {meta.dashboardSlug ? (
+                <> · <a className="underline" href={`/d/${encodeURIComponent(meta.dashboardSlug)}?tab=bva`}>פתח בדשבורד</a></>
+              ) : null}
+            </p>
+          ) : null}
         </div>
         <div className="flex gap-4">
           <select
@@ -176,13 +228,13 @@ export const BudgetDashboard: React.FC = () => {
               planned: item.planned,
               actual: item.actual,
               variance: item.variance,
-              variance_pct: `${item.variance_pct.toFixed(1)}%`,
-              status: item.status,
+              variance_pct: item.variance_pct === null ? 'לא ידוע' : `${item.variance_pct.toFixed(1)}%`,
+              status: STATUS_LABELS[item.status] ?? item.status,
             }))}
             summary={[
               { label: 'תקציב מתוכנן', value: formatCurrency(totals.planned) },
-              { label: 'ביצוע בפועל', value: formatCurrency(totals.actual) },
-              { label: 'סטייה', value: formatCurrency(Math.abs(totalVariance)) },
+              { label: 'ביצוע בפועל', value: actualKnown ? formatCurrency(totals.actual) : 'לא ידוע' },
+              { label: 'סטייה', value: actualKnown ? formatCurrency(Math.abs(totalVariance)) : 'לא ידוע' },
             ]}
           />
         </div>
@@ -199,7 +251,7 @@ export const BudgetDashboard: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
           <h3 className="text-sm font-medium text-gray-500">ביצוע בפועל</h3>
           <p className="text-2xl font-bold text-gray-900 mt-2">
-            {formatCurrency(totals.actual)}
+            {actualKnown ? formatCurrency(totals.actual) : 'לא ידוע'}
           </p>
         </div>
         <div className={`rounded-xl shadow-sm p-6 border ${
@@ -209,10 +261,10 @@ export const BudgetDashboard: React.FC = () => {
           <p className={`text-2xl font-bold mt-2 ${
             totalVariance >= 0 ? 'text-green-700' : 'text-red-700'
           }`}>
-            {formatCurrency(Math.abs(totalVariance))} {totalVariance >= 0 ? '+' : '-'}
+            {actualKnown ? `${formatCurrency(Math.abs(totalVariance))} ${totalVariance >= 0 ? '+' : '-'}` : 'לא ידוע'}
           </p>
           <p className={`text-sm ${totalVariance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {totalVariancePct.toFixed(1)}%
+            {actualKnown ? `${totalVariancePct.toFixed(1)}%` : ''}
           </p>
         </div>
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
@@ -330,17 +382,17 @@ export const BudgetDashboard: React.FC = () => {
                     {formatCurrency(item.actual)}
                   </td>
                   <td className={`px-6 py-4 whitespace-nowrap text-sm font-medium ${
-                    item.variance >= 0 ? 'text-green-600' : 'text-red-600'
+                    (item.variance ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'
                   }`}>
-                    {formatCurrency(Math.abs(item.variance))}
+                    {formatCurrency(item.variance === null ? null : Math.abs(item.variance))}
                   </td>
                   <td className={`px-6 py-4 whitespace-nowrap text-sm ${
-                    item.variance_pct >= 0 ? 'text-green-600' : 'text-red-600'
+                    (item.variance_pct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'
                   }`}>
-                    {item.variance_pct.toFixed(1)}%
+                    {item.variance_pct === null ? '—' : `${item.variance_pct.toFixed(1)}%`}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
-                    {getStatusIcon(item.status)} {item.status}
+                    {getStatusIcon(item.status)} {STATUS_LABELS[item.status] ?? item.status}
                   </td>
                 </tr>
               ))}

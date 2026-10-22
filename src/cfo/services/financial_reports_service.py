@@ -23,6 +23,13 @@ from .vat_utils import invoice_counts, bill_counts, expense_counts
 logger = logging.getLogger(__name__)
 
 
+def _as_moment(value):
+    """A date or datetime as a naive datetime, for comparing with a DateTime column in Python."""
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    return datetime(value.year, value.month, value.day)
+
+
 class ReportPeriod(str, Enum):
     """תקופות דוח"""
     MONTHLY = "monthly"
@@ -235,8 +242,19 @@ class FinancialReportsService:
         'retained_earnings': 'עודפים'
     }
     
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, *, memoize: bool = False):
         self.db = db
+        # One request that asks for many windows (one per month) reads each
+        # organization's documents once. Off by default: a long-lived service
+        # must not serve stale rows.
+        self._memo: Optional[Dict[tuple, Any]] = {} if memoize else None
+
+    def _once(self, key: tuple, load):
+        if self._memo is None:
+            return load()
+        if key not in self._memo:
+            self._memo[key] = load()
+        return self._memo[key]
     
 
     # יחס מסמכים שמתחתיו הצד הדל אינו אמין. 1:5 הוא שמרני בכוונה —
@@ -1009,8 +1027,8 @@ class FinancialReportsService:
     ) -> List[ProfitLossItem]:
         """הכנסה נטו (subtotal) מחשבוניות ב-ledger, מקובצת לפי קטגוריה."""
         from ..models import Invoice
-        rows = self.db.query(Invoice).filter(
-            Invoice.organization_id == organization_id).all()
+        rows = self._once(("invoices", organization_id), lambda: self.db.query(Invoice).filter(
+            Invoice.organization_id == organization_id).all())
 
         def _bucket(lo, hi):
             sums: Dict[str, float] = {}
@@ -1039,8 +1057,10 @@ class FinancialReportsService:
         """הוצאה נטו מספקים (Bill.subtotal) והוצאות (Expense.amount), לפי קטגוריה.
         המגניטודה חיובית — מסמכים שמורים לעיתים בסימן שלילי (כסף יוצא)."""
         from ..models import Bill, Expense
-        bills = self.db.query(Bill).filter(Bill.organization_id == organization_id).all()
-        exps = self.db.query(Expense).filter(Expense.organization_id == organization_id).all()
+        bills = self._once(("bills", organization_id), lambda: self.db.query(Bill).filter(
+            Bill.organization_id == organization_id).all())
+        exps = self._once(("expenses", organization_id), lambda: self.db.query(Expense).filter(
+            Expense.organization_id == organization_id).all())
 
         def _bucket(lo, hi):
             sums: Dict[str, float] = {}
@@ -1083,11 +1103,11 @@ class FinancialReportsService:
 
     def _journal_sums(self, organization_id, lo, hi, account_type) -> Dict[str, float]:
         """Use the ledger's journal normalization for manual/payroll/imported entries."""
-        entries = (
+        entries = self._once(("journal", organization_id), lambda: (
             ledger_service._manual_entries(self.db, organization_id)
             + ledger_service._payroll_entries(self.db, organization_id)
             + ledger_service._imported_entries(self.db, organization_id)
-        )
+        ))
         sums: Dict[str, float] = {}
         for entry in entries:
             if entry.entry_date is None or not lo <= entry.entry_date <= hi:
@@ -1172,14 +1192,23 @@ class FinancialReportsService:
     def _manual_sums(self, organization_id, lo, hi, tx_type) -> Dict[str, float]:
         """סכומי תנועות ידניות (Transaction שאינו הד-מסמך של ledger) לפי קטגוריה.
         מונע ספירה כפולה: מסמך שכבר נספר ב-Invoice/Bill/Expense מדולג."""
-        ledger_ids = self._ledger_external_ids(organization_id)
+        ledger_ids = self._once(("ledger_ids", organization_id),
+                                lambda: self._ledger_external_ids(organization_id))
         hi_exclusive = hi + timedelta(days=1)
-        rows = self.db.query(Transaction).filter(
-            Transaction.organization_id == organization_id,
-            Transaction.transaction_type == tx_type,
-            Transaction.transaction_date >= lo,
-            Transaction.transaction_date < hi_exclusive,
-        ).all()
+        if self._memo is None:
+            rows = self.db.query(Transaction).filter(
+                Transaction.organization_id == organization_id,
+                Transaction.transaction_type == tx_type,
+                Transaction.transaction_date >= lo,
+                Transaction.transaction_date < hi_exclusive,
+            ).all()
+        else:
+            every = self._once(("transactions", organization_id, tx_type), lambda: self.db.query(Transaction).filter(
+                Transaction.organization_id == organization_id,
+                Transaction.transaction_type == tx_type,
+            ).all())
+            rows = [t for t in every if t.transaction_date is not None
+                    and _as_moment(lo) <= _as_moment(t.transaction_date) < _as_moment(hi_exclusive)]
         sums: Dict[str, float] = {}
         for t in rows:
             ext = str(t.external_id) if t.external_id else ""

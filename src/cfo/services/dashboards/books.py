@@ -125,22 +125,16 @@ def _ledger_month(reports: FinancialReportsService, organization_id: int, lo: da
     return revenue, costs
 
 
-def _has_documents(db, organization_id: int, lo: date, hi: date) -> bool:
-    """Any invoice, bill or expense dated in the window (the old P&L test)."""
-    return any((
-        db.query(Invoice.id).filter(
-            Invoice.organization_id == organization_id,
-            Invoice.issue_date >= lo, Invoice.issue_date <= hi,
-        ).first(),
-        db.query(Bill.id).filter(
-            Bill.organization_id == organization_id,
-            Bill.issue_date >= lo, Bill.issue_date <= hi,
-        ).first(),
-        db.query(Expense.id).filter(
-            Expense.organization_id == organization_id,
-            Expense.expense_date >= lo, Expense.expense_date <= hi,
-        ).first(),
-    ))
+def _document_months(db, organization_id: int, lo: date, hi: date) -> set[str]:
+    """"YYYY-MM" of every invoice, bill or expense dated in the window. Three queries for any window."""
+    months: set[str] = set()
+    for column, owner in ((Invoice.issue_date, Invoice.organization_id),
+                          (Bill.issue_date, Bill.organization_id),
+                          (Expense.expense_date, Expense.organization_id)):
+        for (day,) in db.query(column).filter(owner == organization_id, column >= lo, column <= hi).distinct():
+            if day is not None:
+                months.add(f"{day.year:04d}-{day.month:02d}")
+    return months
 
 
 def coverage_of(month: str, ledger_rev: float, ledger_cost: float, has_books: bool,
@@ -156,17 +150,21 @@ def coverage_of(month: str, ledger_rev: float, ledger_cost: float, has_books: bo
     return "partial"
 
 
-def monthly_pnl(db, organization_id: int, start: date, end: date, plan: dict | None = None) -> dict:
+def monthly_pnl(db, organization_id: int, start: date, end: date, plan: dict | None = None,
+                *, filed=None, reports: FinancialReportsService | None = None) -> dict:
+    """``filed`` is ``classified_bank`` of the same window when the caller has it already."""
     plan = plan if isinstance(plan, dict) else {}
     closed = {m for m in plan.get("booksClosedMonths") or [] if isinstance(m, str)}
-    reports = FinancialReportsService(db)
-    filed = classified_bank(db, organization_id, start, end, plan)
+    reports = reports or FinancialReportsService(db, memoize=True)
+    if filed is None:
+        filed = classified_bank(db, organization_id, start, end, plan)
+    documents = _document_months(db, organization_id, start, end)
     months = []
     for key, lo, hi in month_windows(start, end):
         items = [(t, f) for t, f in filed if lo.isoformat() <= t.date <= hi.isoformat()]
         bank = cash_basis_month(items) if items else None
         ledger_rev, ledger_cost = _ledger_month(reports, organization_id, lo, hi)
-        has_books = bool(ledger_rev) or bool(ledger_cost) or _has_documents(db, organization_id, lo, hi)
+        has_books = bool(ledger_rev) or bool(ledger_cost) or key in documents
         rev_total, cost_total = sum(ledger_rev.values()), sum(ledger_cost.values())
         coverage = coverage_of(key, rev_total, cost_total, has_books, bank, closed)
         if coverage in ("closed", "complete") and has_books:

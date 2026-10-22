@@ -52,12 +52,17 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
     cashflow["basis"] = "booked_only"
     cashflow["pending"] = bank_status.pending_summary(db, organization_id, start, end)
     cashflow = activity_quality.adjust_cashflow(db, organization_id, cashflow, plan)
-    pnl = _profit_and_loss(db, organization_id, start, end, plan=plan)
+    # One read of the organization's documents and one filing of its bank rows,
+    # shared by the P&L, budget vs actual and liquidity of this view.
+    reports = FinancialReportsService(db, memoize=True)
+    filed = books.classified_bank(db, organization_id, start, end, plan)
+    pnl = _profit_and_loss(db, organization_id, start, end, plan=plan, filed=filed, reports=reports)
     budget_vs_actual = budget.budget_vs_actual(
         db, organization_id, start, end, books_known=pnl["status"] != "unknown",
-        pnl_months=pnl.get("months"),
+        pnl_months=pnl.get("months"), reports=reports,
     )
-    position = liquidity.build_liquidity(db, organization_id, start, end, plan=plan, entity_id=entity_id)
+    position = liquidity.build_liquidity(db, organization_id, start, end, plan=plan, entity_id=entity_id,
+                                         classified=filed)
     outlook = forecast.build_forecast(
         pnl.get("months") or [], as_of=end, plan=plan, debt_service=position["debt_service"],
         budget_sums=plan_budget_sums(plan) if with_budget else None,
@@ -186,9 +191,11 @@ def publish_view(db, dashboard, view: dict, *, day: date | None = None) -> dict:
     }
 
 
-def _profit_and_loss(db, organization_id: int, start: date, end: date, *, plan: dict | None = None) -> dict:
+def _profit_and_loss(db, organization_id: int, start: date, end: date, *, plan: dict | None = None,
+                     filed=None, reports: FinancialReportsService | None = None) -> dict:
     """P&L of the window, one source per month (see ``books``)."""
-    monthly = books.monthly_pnl(db, organization_id, start, end, plan=plan)
+    reports = reports or FinancialReportsService(db, memoize=True)
+    monthly = books.monthly_pnl(db, organization_id, start, end, plan=plan, filed=filed, reports=reports)
     basis = monthly["basis"]
     if basis == "unknown":
         return {
@@ -202,7 +209,7 @@ def _profit_and_loss(db, organization_id: int, start: date, end: date, *, plan: 
             "message": "אין מסמכי הכנסה או הוצאה ואין תנועות בנק בתקופה — הרווח וההפסד לא ידוע.",
         }
     if basis == books.LEDGER:
-        report = FinancialReportsService(db).generate_profit_loss(
+        report = reports.generate_profit_loss(
             organization_id, start, end, compare_previous=False,
         )
         total_revenue = report.total_revenue
