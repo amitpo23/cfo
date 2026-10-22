@@ -11,6 +11,7 @@ from datetime import date
 from decimal import Decimal
 
 from ...models import BankTransaction, ClientDashboard, DashboardEntity, DashboardEntityAccount
+from .. import bank_status
 from ..office_access import classifying_office_id, office_manages
 from .service import DashboardError
 from . import view_model
@@ -42,7 +43,11 @@ def assert_same_office(db, dashboard: ClientDashboard, entities: list) -> int | 
     return office_id
 
 
-def build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date) -> dict:
+def build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date,
+                         *, plan: dict | None = None) -> dict:
+    """Every entity reads the dashboard plan. Filing decisions and rules carry their
+    own ``organizationId``. ``booksClosedMonths`` has no organization, so only the
+    primary organization treats those months as closed."""
     entities = (
         db.query(DashboardEntity)
         .filter_by(dashboard_id=dashboard.id)
@@ -60,7 +65,10 @@ def build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date)
             "label": entity.label,
             "role": entity.role,
             "accounts": _accounts(db, entity),
-            "view": view_model.build_view(db, entity.organization_id, start, end),
+            "view": view_model.build_view(
+                db, entity.organization_id, start, end,
+                plan=_plan_for(plan, entity.organization_id == dashboard.primary_organization_id),
+            ),
         })
     primary = next(
         (section["view"] for section in sections if section["role"] == "primary"),
@@ -73,6 +81,12 @@ def build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date)
     view["office_organization_id"] = office_id
     view["provider_calls"] = 0
     return view
+
+
+def _plan_for(plan: dict | None, primary: bool) -> dict | None:
+    if primary or not isinstance(plan, dict):
+        return plan
+    return {key: value for key, value in plan.items() if key != "booksClosedMonths"}
 
 
 class _Primary:
@@ -110,6 +124,7 @@ def _combine_pnl(views: list[dict]) -> dict:
     parts = [view.get("pnl") or {} for view in views]
     unknown = {
         "status": "unknown",
+        "basis": "unknown",
         "total_revenue": None,
         "total_expenses": None,
         "net_income_before_tax": None,
@@ -124,10 +139,12 @@ def _combine_pnl(views: list[dict]) -> dict:
         if any(value is None for value in values):
             return unknown
         totals[field] = round(sum(float(value) for value in values), 2)
+    bases = {part.get("basis") for part in parts}
     totals.update({
         "status": "ready",
+        "basis": bases.pop() if len(bases) == 1 else "mixed",
         "tax_expense": None,
-        "message": "סכום ספרי הישויות בדשבורד. מס לא חושב.",
+        "message": "סכום הרווח וההפסד של ישויות הדשבורד (כל ישות לפי המקור שלה בכל חודש). מס לא חושב.",
     })
     return totals
 
@@ -254,7 +271,14 @@ def _intercompany(db, org_ids: list[int], start: date, end: date) -> dict:
         BankTransaction.transaction_date >= start,
         BankTransaction.transaction_date <= end,
     ).all()
-    marked = [row for row in rows if _marked(row.description)]
+    # Same basis as the per-entity cash flow: BOOKED, not superseded, no card rows.
+    card_ids: set[int] = set()
+    for org_id in set(org_ids):
+        card_ids |= bank_status.card_account_ids(db, org_id)
+    marked = [
+        row for row in rows
+        if _marked(row.description) and bank_status.counts_in_cash_flow(row, card_ids)
+    ]
     used: set[int] = set()
     by_month: dict[str, dict] = {}
     pairs = 0

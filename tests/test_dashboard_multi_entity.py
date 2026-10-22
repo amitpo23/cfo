@@ -115,9 +115,16 @@ def test_combined_view_sums_entities_and_nets_intercompany(client, fresh_org):
     assert body["office_organization_id"] == office["org_id"]
     assert [entity["label"] for entity in body["entities"]] == ["השף", "פוד גרופ"]
     assert body["entities"][0]["view"]["pnl"]["total_revenue"] == 100
-    assert body["entities"][1]["view"]["pnl"]["total_revenue"] == 40
+    # Food's books have no costs against a classified supplier payment, so its
+    # month is cash basis (#47: one source per month, books must cover the bank).
+    food_pnl = body["entities"][1]["view"]["pnl"]
+    assert food_pnl["basis"] == "cash_basis"
     assert body["combined"]["pnl"]["status"] == "ready"
-    assert body["combined"]["pnl"]["total_revenue"] == 140
+    assert body["combined"]["pnl"]["basis"] == "mixed"
+    assert body["combined"]["pnl"]["total_revenue"] == round(100 + food_pnl["total_revenue"], 2)
+    assert body["combined"]["pnl"]["total_expenses"] == round(
+        body["entities"][0]["view"]["pnl"]["total_expenses"] + food_pnl["total_expenses"], 2,
+    )
     assert body["combined"]["provider_calls"] == 0
     august = body["combined"]["cashflow"]["months"][0]
     assert august["month"] == "2026-08"
@@ -219,3 +226,83 @@ def test_multi_entity_module_does_not_import_provider_clients():
             continue
         lowered = " ".join(names).lower()
         assert not any(word in lowered for word in banned)
+
+
+def _two_entities(db, dashboard_id, office_id, chef_id, food_id):
+    dashboard = db.get(ClientDashboard, dashboard_id)
+    dashboard.office_organization_id = office_id
+    db.add(DashboardEntity(
+        dashboard_id=dashboard_id, organization_id=food_id,
+        label="פוד גרופ", role="related",
+    ))
+    _roster(db, office_id, chef_id, "השף")
+    _roster(db, office_id, food_id, "פוד גרופ")
+
+
+def test_intercompany_pairs_use_the_booked_cash_basis(client, fresh_org):
+    chef = fresh_org()
+    food = fresh_org()
+    office = fresh_org()
+    dashboard_id = _create(client, chef["headers"], chef["org_id"], "eliav-ic-pending")
+    with SessionLocal() as db:
+        _two_entities(db, dashboard_id, office["org_id"], chef["org_id"], food["org_id"])
+        _books(db, chef["org_id"], "100.00", "500.00", None, "תקבול לקוח")
+        # A PENDING twin is not in either entity's cash flow, so it must not be netted.
+        db.add(BankTransaction(
+            organization_id=chef["org_id"], transaction_date=date(2026, 8, 15),
+            amount=Decimal("300.00"), description="העברה בין-חברתי",
+            source="open_finance", external_id="of-ic-chef", raw_data={"status": "PENDING"},
+        ))
+        db.add(BankTransaction(
+            organization_id=food["org_id"], transaction_date=date(2026, 8, 15),
+            amount=Decimal("-300.00"), description="העברה בין-חברתי",
+            source="open_finance", external_id="of-ic-food", raw_data={"status": "PENDING"},
+        ))
+        db.commit()
+    response = client.get(
+        f"/api/dashboards/{dashboard_id}/view",
+        headers=chef["headers"],
+        params={"start": "2026-08-01", "end": "2026-08-31"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["combined"]["intercompany_removed"]["pairs"] == 0
+    august = body["combined"]["cashflow"]["months"][0]
+    assert august["inflows"] == 500
+
+
+def test_snapshot_and_public_page_cover_every_entity_without_ids(client, fresh_org):
+    chef = fresh_org()
+    food = fresh_org()
+    office = fresh_org()
+    dashboard_id = _create(client, chef["headers"], chef["org_id"], "eliav-two-public")
+    client.patch(f"/api/dashboards/{dashboard_id}", headers=chef["headers"],
+                 json={"status": "active", "access_mode": "public"})
+    with SessionLocal() as db:
+        _two_entities(db, dashboard_id, office["org_id"], chef["org_id"], food["org_id"])
+        db.commit()
+    live = client.get("/api/public/d/eliav-two-public")
+    assert live.status_code == 200, live.text
+    assert live.json()["source"] == "live"
+    assert [entity["label"] for entity in live.json()["entities"]][1:] == ["פוד גרופ"]
+
+    published = client.post(f"/api/dashboards/{dashboard_id}/snapshots", headers=chef["headers"])
+    assert published.status_code == 201, published.text
+    public = client.get("/api/public/d/eliav-two-public")
+    assert public.status_code == 200, public.text
+    body = public.json()
+    assert body["source"] == "snapshot"
+    assert [entity["label"] for entity in body["entities"]][1:] == ["פוד גרופ"]
+    assert "combined" in body
+    assert "office_organization_id" not in body
+    for entity in body["entities"]:
+        assert "organization_id" not in entity
+        assert all("account_id" not in account for account in entity["accounts"])
+
+
+def test_closed_months_apply_to_the_primary_entity_only():
+    from cfo.services.dashboards.multi_entity import _plan_for
+    plan = {"booksClosedMonths": ["2026-08"], "statusRules": [{"id": "r"}]}
+    assert _plan_for(plan, True) is plan
+    assert _plan_for(plan, False) == {"statusRules": [{"id": "r"}]}
+    assert _plan_for(None, False) is None
