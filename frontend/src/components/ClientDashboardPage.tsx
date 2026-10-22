@@ -51,6 +51,16 @@ type PnlMonth = {
   unresolved_in?: number | null;
   unresolved_out?: number | null;
   blocked?: boolean;
+  journal?: JournalMonth | null;
+  journal_dedupe?: { rows_replaced: { id: string; label: string; bank_amount: number; journal_amount: number }[]; bank_dropped: number; journal_used: number } | null;
+};
+
+type JournalMonth = {
+  source_label: string;
+  lines: { code: string; label: string; row: string; amount: number }[];
+  entries: number;
+  unbalanced: number;
+  balance_only: number;
 };
 
 type PendingMonth = { month: string; inflows: number; outflows: number; count: number };
@@ -177,6 +187,7 @@ function PnlMonths({ months }: { months: PnlMonth[] }) {
             <td className="py-2">{month.month}</td>
             <td className="py-2 text-xs text-stone-600">
               {month.source === 'cash_basis' ? 'בסיס מזומן' : 'ספרים'}
+              {month.journal_dedupe ? ' + יומן SUMIT' : ''}
               {month.coverage_label ? ` · ${month.coverage_label}` : ''}
             </td>
             <td className="py-2">{money(month.revenue)}</td>
@@ -191,6 +202,52 @@ function PnlMonths({ months }: { months: PnlMonth[] }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+// The imported SUMIT journal (Food Group) by source account and month, and which
+// comparison rows of the cash-basis P&L it replaced (the bank amount of those rows is dropped).
+export function JournalCard({ months }: { months: PnlMonth[] }) {
+  const withJournal = months.filter((month) => month.journal && month.journal.lines.length > 0);
+  if (withJournal.length === 0) return null;
+  const codes = new Map<string, string>();
+  withJournal.forEach((month) => month.journal?.lines.forEach((line) => codes.set(line.code, line.label)));
+  const amount = (month: PnlMonth, code: string) => month.journal?.lines.find((line) => line.code === code)?.amount ?? null;
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">יומן SUMIT מיובא ברווח והפסד</h2>
+      <p className="mt-1 text-sm text-stone-500">
+        מיפוי טיוטה של כרטיסי המקור לשורות הרווח וההפסד (ללא מע״מ), לאישור מנהלת החשבונות. בחודש שבו ליומן יש סכום בשורה,
+        השורה נלקחת מהיומן וסכום הבנק שלה לא נספר, כדי שהוצאה ותשלומה לא ייספרו פעמיים.
+      </p>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <th className="py-2 text-right font-medium">כרטיס</th>
+              {withJournal.map((month) => <th key={month.month} className="py-2 text-right font-medium">{month.month}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {[...codes.entries()].map(([code, label]) => (
+              <tr key={code} className="border-b border-stone-100">
+                <td className="py-2">{label} <span className="text-xs text-stone-400">({code})</span></td>
+                {withJournal.map((month) => <td key={month.month} className="py-2">{money(amount(month, code))}</td>)}
+              </tr>
+            ))}
+            <tr className="text-stone-600">
+              <td className="py-2">סכום בנק שלא נספר</td>
+              {withJournal.map((month) => (
+                <td key={month.month} className="py-2">{month.journal_dedupe ? money(month.journal_dedupe.bank_dropped) : 'לא נכלל'}</td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-xs text-stone-500">
+        חודש בלי תנועות בנק אינו נכלל ברווח והפסד: ביומן אין כרטיסי הכנסה, ולכן הרווח וההפסד של החודש לא ידוע.
+      </p>
+    </section>
   );
 }
 
@@ -513,6 +570,7 @@ export default function ClientDashboardPage() {
                 <>
                   <StatusKpis view={scoped} reviewCount={filing?.review.total ?? null} />
                   <PnlCard pnl={scoped.pnl} />
+                  <JournalCard months={scoped.pnl?.months ?? []} />
                   <CashflowCard view={scoped} />
                   {editor && filing ? (
                     <ReviewList

@@ -17,12 +17,12 @@ const components = process.argv[2] || join(here, '..', 'src', 'components');
 const entry = `
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import { BudgetVsActual } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
+import { BudgetVsActual, JournalCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
 import { LiquidityPanel, OpeningBalanceCard, upcomingAmount, withOpeningBalance } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
-export { renderToStaticMarkup, createElement, BudgetVsActual, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
+export { renderToStaticMarkup, createElement, BudgetVsActual, JournalCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
   categoryLabel, pieSlices };
 `;
@@ -176,6 +176,22 @@ try {
     const panel = html(ui.LiquidityPanel, { section: { status: 'ready', position: { balance: -32099.5, as_of: '2026-10-13',
       balance_source: 'opening_balance', limit: 80000, limit_source: 'plan.liquidityEvidence', available_to_limit: 47900.5 } } });
     expect(panel.includes('יתרת פתיחה ידנית'), 'the balance source is not named');
+  });
+
+  check('journal card: source accounts by month and the bank amount not counted', () => {
+    const months = [
+      { month: '2026-07', source: null, revenue: null, costs: null, net: null,
+        journal: { source_label: 'יומן', lines: [{ code: '99002', label: 'ריבית', row: 'interest', amount: 300 }], entries: 1, unbalanced: 1, balance_only: 0 } },
+      { month: '2026-08', source: 'cash_basis', revenue: 10000, costs: 4872.46, net: 5127.54,
+        journal: { source_label: 'יומן', lines: [{ code: '90003', label: 'מזון וחומרי גלם', row: 'suppliers', amount: 3000 }], entries: 2, unbalanced: 0, balance_only: 1 },
+        journal_dedupe: { rows_replaced: [{ id: 'suppliers', label: 'ספקים', bank_amount: 5000, journal_amount: 3000 }], bank_dropped: 5000, journal_used: 3000 } },
+      { month: '2026-09', source: 'cash_basis', revenue: 1, costs: 1, net: 0 },
+    ];
+    const markup = html(ui.JournalCard, { months });
+    expect(markup.includes('מזון וחומרי גלם') && markup.includes('(90003)'), 'no source account row');
+    expect(markup.includes('5,000') && markup.includes('לא נכלל'), 'no dropped bank amount / excluded month');
+    expect(!markup.includes('2026-09'), 'a month without journal is shown');
+    expect(html(ui.JournalCard, { months: [months[2]] }) === '', 'card rendered without a journal');
   });
 
   const importedPlan = process.env.REZEF_IMPORTED_PLAN;

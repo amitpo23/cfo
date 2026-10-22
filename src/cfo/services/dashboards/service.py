@@ -250,6 +250,7 @@ def validate_filing_payload(payload: dict) -> None:
     _validate_parameters(payload.get("statusParameters"))
     _validate_evidence(payload.get("liquidityEvidence"))
     _validate_builtin_pin(payload.get("filingRulesBuiltin"))
+    _validate_journal_map(payload.get("journalAccountMap"))
     closed = payload.get("booksClosedMonths")
     if closed is not None:
         if not isinstance(closed, list) or not all(
@@ -366,6 +367,14 @@ def _opening_balances(payload) -> list:
     evidence = payload.get("liquidityEvidence") if isinstance(payload, dict) else None
     items = evidence.get("openingBalances") if isinstance(evidence, dict) else None
     return items if isinstance(items, list) else []
+
+
+def _validate_journal_map(value) -> None:
+    from .source_journal import JournalMapError, validate_account_map
+    try:
+        validate_account_map(value)
+    except JournalMapError:
+        raise _invalid_plan("מיפוי כרטיסי היומן לא תקין")
 
 
 def _validate_builtin_pin(pin) -> None:
