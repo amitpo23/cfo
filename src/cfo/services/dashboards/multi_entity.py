@@ -140,6 +140,24 @@ def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | N
             opening_balance=position["balance"],
         ),
         "intercompany_removed": removed["summary"],
+        "sources": _combine_sources(sections),
+        "provider_calls": 0,
+    }
+
+
+def _combine_sources(sections: list[dict]) -> dict:
+    """Every entity's sources in one table, each row naming its entity."""
+    items = []
+    rule = None
+    for section in sections:
+        own = (section["view"] or {}).get("sources") or {}
+        rule = rule or own.get("rule")
+        items.extend({**item, "entity": section["label"]} for item in own.get("items") or [])
+    return {
+        "status": "ready" if items else "unknown",
+        "items": items,
+        "stale_count": sum(1 for item in items if item.get("status") == "stale"),
+        "rule": rule,
         "provider_calls": 0,
     }
 

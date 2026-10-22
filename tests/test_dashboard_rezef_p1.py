@@ -187,3 +187,56 @@ def test_intercompany_window_and_accounts_come_from_the_plan(client, fresh_org, 
                               headers={**platform_admin["headers"], "If-Match": current["version"]},
                               json={"payload": {"intercompany": bad}})
         assert response.status_code == 422, bad
+
+
+# --------------------------------------------------- G-22. sources and freshness
+
+def test_sources_table_per_account_with_last_dates_counts_and_stale_flag(client, fresh_org, platform_admin):
+    from datetime import datetime, timedelta
+    from cfo.models import IntegrationConnection, Invoice
+    from cfo.services.dashboards import freshness
+    from tests.test_dashboard_eliav_ui_fixes import _account
+    dashboard_id, chef, food = _consolidated(client, platform_admin, fresh_org, "p1-sources")
+    today = date.today()
+    with SessionLocal() as db:
+        live = _account(db, chef["org_id"], "עו״ש 8954", 0).id
+        imported = _account(db, food["org_id"], "Imported bank 1662", None, source="reviewed_local_import").id
+        for days in (3, 1):
+            row = _bank(db, chef["org_id"], today - timedelta(days=days), 10, "הפקדת מזומן", account_id=live)
+            row.source, row.external_id, row.raw_data = "open_finance", f"of-{days}", {"status": "BOOKED"}
+        db.add(IntegrationConnection(organization_id=chef["org_id"], source="open_finance", status="active",
+                                     last_synced_at=datetime.utcnow() - timedelta(days=5)))
+        row = _bank(db, food["org_id"], today - timedelta(days=20), -5, "עמלה", account_id=imported)
+        row.source, row.external_id = "reviewed_local_import", "bank:1662:1"
+        db.add(Invoice(organization_id=chef["org_id"], invoice_number="A1", issue_date=today - timedelta(days=2),
+                       subtotal=Decimal("100"), tax=Decimal("18"), total=Decimal("118"), source="sumit"))
+        _journal(db, food["org_id"], today - timedelta(days=3), [("90003", 1, 0)], memo="x")
+        db.commit()
+        chef_sources = freshness.build_freshness(db, chef["org_id"], today=today)
+    bank = next(item for item in chef_sources["items"] if item["kind"] == "bank")
+    # A live feed is judged by its last successful sync (5 days > 2): stale, though the data is 1 day old.
+    assert (bank["label"], bank["rows"], bank["last_date"], bank["status"], bank["age_days"]) == (
+        "עו״ש 8954", 2, (today - timedelta(days=1)).isoformat(), "stale", 5)
+    invoices = next(item for item in chef_sources["items"] if item["kind"] == "invoices")
+    # SUMIT without any sync time: stale, never fresh by default.
+    assert invoices["rows"] == 1 and invoices["status"] == "stale" and invoices["last_sync"] is None
+
+    view = _view(client, platform_admin["headers"], dashboard_id, (today - timedelta(days=60)).isoformat(), today.isoformat())
+    food_sources = view["entities"][1]["view"]["sources"]["items"]
+    food_bank = next(item for item in food_sources if item["kind"] == "bank")
+    # An imported source is judged by its last row: 20 days > 14.
+    assert food_bank["status"] == "stale" and food_bank["age_days"] == 20 and food_bank["last_sync"] is not None
+    journal = next(item for item in food_sources if item["kind"] == "journal")
+    assert journal["status"] == "fresh" and journal["source"] == "reviewed_local_import"
+    combined = view["combined"]["sources"]
+    assert {item["entity"] for item in combined["items"]} == {view["entities"][0]["label"], "פוד גרופ"}
+    assert combined["stale_count"] == 3
+    assert freshness.redact_public(view["combined"]["sources"])["items"][0].get("account_id") is None
+
+
+def test_sources_of_an_organization_without_rows_are_unknown(fresh_org):
+    from cfo.services.dashboards import freshness
+    org = fresh_org()
+    with SessionLocal() as db:
+        section = freshness.build_freshness(db, org["org_id"], today=date(2026, 10, 22))
+    assert section["status"] == "unknown" and section["items"] == [] and section["provider_calls"] == 0

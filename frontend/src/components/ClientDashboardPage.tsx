@@ -73,6 +73,23 @@ type IntercompanyRemoved = {
   items?: { from: string | null; to: string | null; out_date: string; in_date: string; amount: number; days_apart: number }[];
 };
 
+type SourceItem = {
+  kind: string;
+  kind_label: string;
+  label: string | null;
+  source: string;
+  source_label: string;
+  last_date: string | null;
+  last_sync: string | null;
+  rows: number;
+  age_days: number | null;
+  status: 'fresh' | 'stale' | 'unknown';
+  status_label: string;
+  entity?: string | null;
+};
+
+type Sources = { status?: string; items?: SourceItem[]; stale_count?: number; rule?: string | null };
+
 type PendingMonth = { month: string; inflows: number; outflows: number; count: number };
 
 type CardMonth = { month: string; total: number; merchants: { merchant: string; amount: number }[] };
@@ -112,6 +129,7 @@ type DashboardView = {
   } | null;
   liquidity?: EntityLiquidity | null;
   forecast?: Forecast | null;
+  sources?: Sources | null;
   entities?: { label: string | null; role: string; view: DashboardView }[];
   combined?: {
     pnl?: DashboardView['pnl'];
@@ -120,6 +138,7 @@ type DashboardView = {
     liquidity?: EntityLiquidity | null;
     forecast?: Forecast | null;
     intercompany_removed?: IntercompanyRemoved;
+    sources?: Sources | null;
   };
   error?: { message_he?: string };
 };
@@ -296,6 +315,54 @@ export function IntercompanyCard({ removed }: { removed: IntercompanyRemoved | n
           </tbody>
         </table>
       ) : null}
+    </section>
+  );
+}
+
+const STATUS_TONE: Record<string, string> = { fresh: 'text-emerald-700', stale: 'text-amber-700', unknown: 'text-stone-500' };
+
+// Sources and freshness: one row per bank account and per books source.
+export function SourcesCard({ sources }: { sources: Sources | null | undefined }) {
+  const items = sources?.items ?? [];
+  if (items.length === 0) return null;
+  const withEntity = items.some((item) => item.entity);
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">מקורות ורעננות</h2>
+      {sources?.stale_count ? (
+        <p className="mt-1 text-sm text-amber-700">{sources.stale_count} מקורות לא עדכניים.</p>
+      ) : null}
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              {withEntity ? <th className="py-2 text-right font-medium">ישות</th> : null}
+              <th className="py-2 text-right font-medium">מקור</th>
+              <th className="py-2 text-right font-medium">חשבון / סוג</th>
+              <th className="py-2 text-right font-medium">תנועה אחרונה</th>
+              <th className="py-2 text-right font-medium">סנכרון / יבוא אחרון</th>
+              <th className="py-2 text-right font-medium">שורות</th>
+              <th className="py-2 text-right font-medium">מצב</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={`${item.entity ?? ''}-${item.kind}-${item.label ?? ''}-${item.source}`} className="border-b border-stone-100">
+                {withEntity ? <td className="py-2">{item.entity ?? '—'}</td> : null}
+                <td className="py-2">{item.source_label}</td>
+                <td className="py-2">{item.kind === 'bank' ? item.label : item.kind_label}</td>
+                <td className="py-2">{item.last_date ?? 'לא ידוע'}</td>
+                <td className="py-2">{item.last_sync ? item.last_sync.slice(0, 16).replace('T', ' ') : 'לא ידוע'}</td>
+                <td className="py-2">{item.rows.toLocaleString('he-IL')}</td>
+                <td className={`py-2 ${STATUS_TONE[item.status] ?? ''}`}>
+                  {item.status_label}{item.age_days !== null ? ` (${item.age_days} ימים)` : ''}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {sources?.rule ? <p className="mt-2 text-xs text-stone-500">{sources.rule}</p> : null}
     </section>
   );
 }
@@ -559,6 +626,7 @@ export default function ClientDashboardPage() {
     budget_vs_actual: view.combined?.budget_vs_actual,
     liquidity: view.combined?.liquidity,
     forecast: view.combined?.forecast,
+    sources: view.combined?.sources,
   } : entities[Number(scope)]?.view ?? view;
   const parameters = parametersFromPayload(plan?.payload);
 
@@ -613,6 +681,7 @@ export default function ClientDashboardPage() {
               {tab === 'status' ? (
                 <>
                   <StatusKpis view={scoped} reviewCount={filing?.review.total ?? null} />
+                  <SourcesCard sources={scoped.sources} />
                   <PnlCard pnl={scoped.pnl} />
                   <JournalCard months={scoped.pnl?.months ?? []} />
                   <CashflowCard view={scoped} />

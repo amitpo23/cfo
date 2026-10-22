@@ -17,12 +17,12 @@ const components = process.argv[2] || join(here, '..', 'src', 'components');
 const entry = `
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import { BudgetVsActual, IntercompanyCard, JournalCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
+import { BudgetVsActual, IntercompanyCard, JournalCard, SourcesCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
 import { LiquidityPanel, OpeningBalanceCard, upcomingAmount, withOpeningBalance } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
-export { renderToStaticMarkup, createElement, BudgetVsActual, IntercompanyCard, JournalCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
+export { renderToStaticMarkup, createElement, BudgetVsActual, IntercompanyCard, JournalCard, SourcesCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
   categoryLabel, pieSlices };
 `;
@@ -201,6 +201,19 @@ try {
     expect(markup.includes('5,000') && markup.includes('עד 4 ימים') && markup.includes('2026-09-02 (3 ימים)'), 'pairs or rule missing');
     const old = html(ui.IntercompanyCard, { removed: { pairs: 0, inflows: 0, outflows: 0 } });
     expect(old.includes('קוזזו 0'), 'the older shape does not render');
+  });
+
+  check('sources card: per account, stale flag, entity column in the combined view', () => {
+    const sources = { stale_count: 1, rule: 'כלל רעננות', items: [
+      { kind: 'bank', kind_label: 'תנועות בנק', label: 'עו״ש 8954', source: 'open_finance', source_label: 'Open Finance', last_date: '2026-10-20',
+        last_sync: '2026-10-21T02:00:35', rows: 1234, age_days: 1, status: 'fresh', status_label: 'עדכני', entity: 'השף' },
+      { kind: 'journal', kind_label: 'יומן', label: 'יומן', source: 'reviewed_local_import', source_label: 'יבוא מקומי שנבדק', last_date: null,
+        last_sync: null, rows: 0, age_days: null, status: 'unknown', status_label: 'לא ידוע', entity: 'פוד גרופ' },
+    ] };
+    const markup = html(ui.SourcesCard, { sources });
+    expect(markup.includes('עו״ש 8954') && markup.includes('2026-10-21 02:00') && markup.includes('עדכני (1 ימים)'), 'bank row');
+    expect(markup.includes('פוד גרופ') && markup.includes('לא ידוע') && markup.includes('1 מקורות לא עדכניים'), 'entity / unknown / stale count');
+    expect(html(ui.SourcesCard, { sources: { items: [] } }) === '', 'empty card rendered');
   });
 
   const importedPlan = process.env.REZEF_IMPORTED_PLAN;
