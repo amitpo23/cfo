@@ -160,6 +160,15 @@ def create_dashboard(body: DashboardCreate, db: Session = Depends(get_db_session
     return {"id": row.id, "slug": row.slug, "status": row.status, "provider_calls": 0}
 
 
+@router.get("/dashboards/by-slug/{slug}")
+def read_dashboard_by_slug(slug: str, db: Session = Depends(get_db_session),
+                           user: User = Depends(get_current_user)):
+    try:
+        return service.dashboard_by_slug(db, user, slug)
+    except DashboardError as exc:
+        return _error(exc)
+
+
 @router.get("/dashboards/{dashboard_id}")
 def read_dashboard(dashboard_id: int, db: Session = Depends(get_db_session),
                    user: User = Depends(get_current_user)):
@@ -262,6 +271,15 @@ def save_plan(dashboard_id: int, body: PlanBody, db: Session = Depends(get_db_se
     response = JSONResponse(plan)
     response.headers["ETag"] = f'"{plan["version"]}"'
     return response
+
+
+@router.get("/dashboards/{dashboard_id}/filing")
+def read_filing(dashboard_id: int, page: int = 1, page_size: int = 50,
+                db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    try:
+        return service.read_filing(db, user, dashboard_id, page=page, page_size=page_size)
+    except DashboardError as exc:
+        return _error(exc)
 
 
 @router.get("/dashboards/{dashboard_id}/budget")

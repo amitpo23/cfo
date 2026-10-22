@@ -58,6 +58,11 @@ def classified_bank(db, organization_id: int, start: date, end: date, plan: dict
     """BOOKED cash rows of the window with their filing result."""
     plan = plan if isinstance(plan, dict) else {}
     rows = cashflow_row_objects(db, organization_id, start, end)
+    # The cash flow drops admin-confirmed duplicates; the cash-basis P&L must too.
+    from .activity_quality import confirmed_drop_ids
+    dropped = confirmed_drop_ids(rows, plan)
+    if dropped:
+        rows = [row for row in rows if row.id not in dropped]
     inv_rows = (
         db.query(Invoice)
         .filter(
