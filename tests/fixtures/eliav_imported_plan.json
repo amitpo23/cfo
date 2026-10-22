@@ -1,0 +1,2782 @@
+{
+ "budgetLines": [
+  {
+   "category": "capex",
+   "group": "השקעות ומימון",
+   "id": "capex",
+   "kind": "financing",
+   "label": "רכישת ציוד ושיפורים",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "funding",
+   "group": "השקעות ומימון",
+   "id": "capital_injection",
+   "kind": "financing",
+   "label": "השקעות בעלים",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "depreciation",
+   "group": "רכבים",
+   "id": "car_10_depreciation",
+   "kind": "cost",
+   "label": "רכב — depreciation",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_10_fuel",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "ק״מ × ₪ לק״מ"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_10_insurance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "interest_expense",
+   "group": "רכבים",
+   "id": "car_10_interest",
+   "kind": "cost",
+   "label": "רכב — interest",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_10_license",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_10_maintenance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "רכבים",
+   "id": "car_10_principal",
+   "kind": "financing",
+   "label": "רכב — principal",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_10_rental",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "depreciation",
+   "group": "רכבים",
+   "id": "car_1_depreciation",
+   "kind": "cost",
+   "label": "רכב — depreciation",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_1_fuel",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "ק״מ × ₪ לק״מ"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_1_insurance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "interest_expense",
+   "group": "רכבים",
+   "id": "car_1_interest",
+   "kind": "cost",
+   "label": "רכב — interest",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_1_license",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_1_maintenance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "רכבים",
+   "id": "car_1_principal",
+   "kind": "financing",
+   "label": "רכב — principal",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_1_rental",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "depreciation",
+   "group": "רכבים",
+   "id": "car_2_depreciation",
+   "kind": "cost",
+   "label": "רכב — depreciation",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_2_fuel",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "ק״מ × ₪ לק״מ"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_2_insurance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "interest_expense",
+   "group": "רכבים",
+   "id": "car_2_interest",
+   "kind": "cost",
+   "label": "רכב — interest",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_2_license",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_2_maintenance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "רכבים",
+   "id": "car_2_principal",
+   "kind": "financing",
+   "label": "רכב — principal",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_2_rental",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "depreciation",
+   "group": "רכבים",
+   "id": "car_3_depreciation",
+   "kind": "cost",
+   "label": "רכב — depreciation",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_3_fuel",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "ק״מ × ₪ לק״מ"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_3_insurance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "interest_expense",
+   "group": "רכבים",
+   "id": "car_3_interest",
+   "kind": "cost",
+   "label": "רכב — interest",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_3_license",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_3_maintenance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "רכבים",
+   "id": "car_3_principal",
+   "kind": "financing",
+   "label": "רכב — principal",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_3_rental",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "depreciation",
+   "group": "רכבים",
+   "id": "car_4_depreciation",
+   "kind": "cost",
+   "label": "רכב — depreciation",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_4_fuel",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "ק״מ × ₪ לק״מ"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_4_insurance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "interest_expense",
+   "group": "רכבים",
+   "id": "car_4_interest",
+   "kind": "cost",
+   "label": "רכב — interest",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_4_license",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_4_maintenance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "רכבים",
+   "id": "car_4_principal",
+   "kind": "financing",
+   "label": "רכב — principal",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_4_rental",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "depreciation",
+   "group": "רכבים",
+   "id": "car_5_depreciation",
+   "kind": "cost",
+   "label": "רכב — depreciation",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_5_fuel",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "ק״מ × ₪ לק״מ"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_5_insurance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "interest_expense",
+   "group": "רכבים",
+   "id": "car_5_interest",
+   "kind": "cost",
+   "label": "רכב — interest",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_5_license",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_5_maintenance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "רכבים",
+   "id": "car_5_principal",
+   "kind": "financing",
+   "label": "רכב — principal",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_5_rental",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "depreciation",
+   "group": "רכבים",
+   "id": "car_6_depreciation",
+   "kind": "cost",
+   "label": "רכב — depreciation",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_6_fuel",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "ק״מ × ₪ לק״מ"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_6_insurance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "interest_expense",
+   "group": "רכבים",
+   "id": "car_6_interest",
+   "kind": "cost",
+   "label": "רכב — interest",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_6_license",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_6_maintenance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "רכבים",
+   "id": "car_6_principal",
+   "kind": "financing",
+   "label": "רכב — principal",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_6_rental",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "depreciation",
+   "group": "רכבים",
+   "id": "car_7_depreciation",
+   "kind": "cost",
+   "label": "רכב — depreciation",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_7_fuel",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "ק״מ × ₪ לק״מ"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_7_insurance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "interest_expense",
+   "group": "רכבים",
+   "id": "car_7_interest",
+   "kind": "cost",
+   "label": "רכב — interest",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_7_license",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_7_maintenance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "רכבים",
+   "id": "car_7_principal",
+   "kind": "financing",
+   "label": "רכב — principal",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_7_rental",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "depreciation",
+   "group": "רכבים",
+   "id": "car_8_depreciation",
+   "kind": "cost",
+   "label": "רכב — depreciation",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_8_fuel",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "ק״מ × ₪ לק״מ"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_8_insurance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "interest_expense",
+   "group": "רכבים",
+   "id": "car_8_interest",
+   "kind": "cost",
+   "label": "רכב — interest",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_8_license",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_8_maintenance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "רכבים",
+   "id": "car_8_principal",
+   "kind": "financing",
+   "label": "רכב — principal",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_8_rental",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "depreciation",
+   "group": "רכבים",
+   "id": "car_9_depreciation",
+   "kind": "cost",
+   "label": "רכב — depreciation",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_9_fuel",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "ק״מ × ₪ לק״מ"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_9_insurance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "interest_expense",
+   "group": "רכבים",
+   "id": "car_9_interest",
+   "kind": "cost",
+   "label": "רכב — interest",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_9_license",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "שנה / 12"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_9_maintenance",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "רכבים",
+   "id": "car_9_principal",
+   "kind": "financing",
+   "label": "רכב — principal",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "vehicle",
+   "group": "רכבים",
+   "id": "car_9_rental",
+   "kind": "cost",
+   "label": "רכב — expense",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "employer_burden",
+   "kind": "cost",
+   "label": "עלויות מעסיק והפרשות",
+   "months": {},
+   "unit": "בסיס שכר × שיעור עלות"
+  },
+  {
+   "category": "interest_expense",
+   "group": "השקעות ומימון",
+   "id": "loan_interest",
+   "kind": "cost",
+   "label": "ריבית הלוואות",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "loan_principal",
+   "group": "השקעות ומימון",
+   "id": "loan_principal",
+   "kind": "financing",
+   "label": "החזרי קרן הלוואות",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "funding",
+   "group": "השקעות ומימון",
+   "id": "new_loans",
+   "kind": "financing",
+   "label": "קבלת הלוואות חדשות",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_accounting",
+   "kind": "cost",
+   "label": "הנהלת חשבונות וביקורת",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "bank_fees",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_bank_fees",
+   "kind": "cost",
+   "label": "עמלות בנק וסליקה",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_business_insurance",
+   "kind": "cost",
+   "label": "ביטוח עסק",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_electricity",
+   "kind": "cost",
+   "label": "חשמל",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_gas",
+   "kind": "cost",
+   "label": "גז",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_legal",
+   "kind": "cost",
+   "label": "משפטיות וייעוץ",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_licenses",
+   "kind": "cost",
+   "label": "רישיונות וכשרות",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_marketing",
+   "kind": "cost",
+   "label": "שיווק",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_municipal",
+   "kind": "cost",
+   "label": "ארנונה",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_office",
+   "kind": "cost",
+   "label": "ציוד משרדי",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_other",
+   "kind": "cost",
+   "label": "הוצאות אחרות",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_rent",
+   "kind": "cost",
+   "label": "שכירות",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_software",
+   "kind": "cost",
+   "label": "תוכנות",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_telecom",
+   "kind": "cost",
+   "label": "טלפון ואינטרנט",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "other",
+   "group": "הנהלה וכלליות",
+   "id": "overhead_water",
+   "kind": "cost",
+   "label": "מים",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "sales",
+   "group": "הכנסות",
+   "id": "rev_cargo",
+   "kind": "revenue",
+   "label": "הכנסות קרגו / חברות אחרות",
+   "months": {},
+   "unit": "חבילות"
+  },
+  {
+   "category": "sales",
+   "group": "הכנסות",
+   "id": "rev_chef",
+   "kind": "revenue",
+   "label": "הכנסות שף ומלונות",
+   "months": {},
+   "unit": "ימי שירות"
+  },
+  {
+   "category": "sales",
+   "group": "הכנסות",
+   "id": "rev_kexpress",
+   "kind": "revenue",
+   "label": "הכנסות ק. אקספרס",
+   "months": {},
+   "unit": "חבילות"
+  },
+  {
+   "category": "sales",
+   "group": "הכנסות",
+   "id": "rev_pizza",
+   "kind": "revenue",
+   "label": "מכירות פיצה",
+   "months": {},
+   "unit": "הזמנות"
+  },
+  {
+   "category": "cost_of_goods",
+   "group": "ספקים",
+   "id": "supplier_1",
+   "kind": "cost",
+   "label": "פז גז",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "cost_of_goods",
+   "group": "ספקים",
+   "id": "supplier_10",
+   "kind": "cost",
+   "label": "שלטים + בונים",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "cost_of_goods",
+   "group": "ספקים",
+   "id": "supplier_2",
+   "kind": "cost",
+   "label": "גד",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "cost_of_goods",
+   "group": "ספקים",
+   "id": "supplier_3",
+   "kind": "cost",
+   "label": "א.א",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "cost_of_goods",
+   "group": "ספקים",
+   "id": "supplier_4",
+   "kind": "cost",
+   "label": "באבא בורקס",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "cost_of_goods",
+   "group": "ספקים",
+   "id": "supplier_5",
+   "kind": "cost",
+   "label": "פיצה מרקט",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "cost_of_goods",
+   "group": "ספקים",
+   "id": "supplier_6",
+   "kind": "cost",
+   "label": "ביסקוטי",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "cost_of_goods",
+   "group": "ספקים",
+   "id": "supplier_7",
+   "kind": "cost",
+   "label": "פרש פסטה",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "cost_of_goods",
+   "group": "ספקים",
+   "id": "supplier_8",
+   "kind": "cost",
+   "label": "וואלי מרקט",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "cost_of_goods",
+   "group": "ספקים",
+   "id": "supplier_9",
+   "kind": "cost",
+   "label": "יהודה בוגנים",
+   "months": {},
+   "unit": "חודש"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_01",
+   "kind": "cost",
+   "label": "עובד 1",
+   "months": {},
+   "unit": "שעות"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_02",
+   "kind": "cost",
+   "label": "עובד 2",
+   "months": {},
+   "unit": "שעות"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_03",
+   "kind": "cost",
+   "label": "עובד 3",
+   "months": {},
+   "unit": "שעות"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_04",
+   "kind": "cost",
+   "label": "עובד 4",
+   "months": {},
+   "unit": "שעות"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_05",
+   "kind": "cost",
+   "label": "עובד 5",
+   "months": {
+    "2026-01": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-02": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-03": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-04": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-05": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-06": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-07": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-08": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-09": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-10": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-11": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2026-12": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2027-01": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2027-02": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2027-03": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2027-04": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2027-05": {
+     "quantity": 1,
+     "rate": 700
+    },
+    "2027-06": {
+     "quantity": 1,
+     "rate": 700
+    }
+   },
+   "unit": "חודש"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_06",
+   "kind": "cost",
+   "label": "עובד 6",
+   "months": {
+    "2026-01": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-02": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-03": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-04": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-05": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-06": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-07": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-08": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-09": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-10": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-11": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2026-12": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2027-01": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2027-02": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2027-03": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2027-04": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2027-05": {
+     "quantity": 1,
+     "rate": 9000
+    },
+    "2027-06": {
+     "quantity": 1,
+     "rate": 9000
+    }
+   },
+   "unit": "חודש"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_07",
+   "kind": "cost",
+   "label": "עובד 7",
+   "months": {},
+   "unit": "חבילות"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_08",
+   "kind": "cost",
+   "label": "עובד 8",
+   "months": {
+    "2026-01": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-02": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-03": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-04": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-05": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-06": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-07": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-08": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-09": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-10": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-11": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2026-12": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2027-01": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2027-02": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2027-03": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2027-04": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2027-05": {
+     "quantity": 1,
+     "rate": 10000
+    },
+    "2027-06": {
+     "quantity": 1,
+     "rate": 10000
+    }
+   },
+   "unit": "חודש"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_09",
+   "kind": "cost",
+   "label": "עובד 9",
+   "months": {},
+   "unit": "חבילות"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_10",
+   "kind": "cost",
+   "label": "עובד 10",
+   "months": {},
+   "unit": "חבילות"
+  },
+  {
+   "category": "salaries",
+   "group": "כוח אדם",
+   "id": "wage_11",
+   "kind": "cost",
+   "label": "עובד 11",
+   "months": {
+    "2026-01": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-02": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-03": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-04": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-05": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-06": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-07": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-08": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-09": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-10": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-11": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2026-12": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2027-01": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2027-02": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2027-03": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2027-04": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2027-05": {
+     "quantity": 1,
+     "rate": 30000
+    },
+    "2027-06": {
+     "quantity": 1,
+     "rate": 30000
+    }
+   },
+   "unit": "חודש"
+  },
+  {
+   "category": "capex",
+   "group": "השקעות ומימון",
+   "id": "working_capital",
+   "kind": "financing",
+   "label": "גידול במלאי ולקוחות בניכוי ספקים",
+   "months": {},
+   "unit": "חודש"
+  }
+ ],
+ "eliavImport": {
+  "groups": {
+   "הכנסות": "sales",
+   "הנהלה וכלליות": "other",
+   "השקעות ומימון": "interest_expense",
+   "כוח אדם": "salaries",
+   "ספקים": "cost_of_goods",
+   "רכבים": "vehicle"
+  },
+  "lines": {
+   "capex": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "השקעות ומימון",
+    "kind": "capex",
+    "unit": "חודש"
+   },
+   "capital_injection": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "השקעות ומימון",
+    "kind": "funding",
+    "unit": "חודש"
+   },
+   "car_10_depreciation": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "depreciation",
+    "unit": "חודש"
+   },
+   "car_10_fuel": {
+    "activity": "common",
+    "custom": false,
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "ק״מ × ₪ לק״מ"
+   },
+   "car_10_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_10_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "car_10_license": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_10_maintenance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_10_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "car_10_rental": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_1_depreciation": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "depreciation",
+    "unit": "חודש"
+   },
+   "car_1_fuel": {
+    "activity": "common",
+    "custom": false,
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "ק״מ × ₪ לק״מ"
+   },
+   "car_1_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_1_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "car_1_license": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_1_maintenance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_1_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "car_1_rental": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_2_depreciation": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "depreciation",
+    "unit": "חודש"
+   },
+   "car_2_fuel": {
+    "activity": "common",
+    "custom": false,
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "ק״מ × ₪ לק״מ"
+   },
+   "car_2_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_2_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "car_2_license": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_2_maintenance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_2_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "car_2_rental": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_3_depreciation": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "depreciation",
+    "unit": "חודש"
+   },
+   "car_3_fuel": {
+    "activity": "common",
+    "custom": false,
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "ק״מ × ₪ לק״מ"
+   },
+   "car_3_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_3_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "car_3_license": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_3_maintenance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_3_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "car_3_rental": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_4_depreciation": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "depreciation",
+    "unit": "חודש"
+   },
+   "car_4_fuel": {
+    "activity": "common",
+    "custom": false,
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "ק״מ × ₪ לק״מ"
+   },
+   "car_4_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_4_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "car_4_license": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_4_maintenance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_4_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "car_4_rental": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_5_depreciation": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "depreciation",
+    "unit": "חודש"
+   },
+   "car_5_fuel": {
+    "activity": "common",
+    "custom": false,
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "ק״מ × ₪ לק״מ"
+   },
+   "car_5_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_5_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "car_5_license": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_5_maintenance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_5_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "car_5_rental": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_6_depreciation": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "depreciation",
+    "unit": "חודש"
+   },
+   "car_6_fuel": {
+    "activity": "common",
+    "custom": false,
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "ק״מ × ₪ לק״מ"
+   },
+   "car_6_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_6_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "car_6_license": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_6_maintenance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_6_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "car_6_rental": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_7_depreciation": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "depreciation",
+    "unit": "חודש"
+   },
+   "car_7_fuel": {
+    "activity": "common",
+    "custom": false,
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "ק״מ × ₪ לק״מ"
+   },
+   "car_7_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_7_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "car_7_license": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_7_maintenance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_7_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "car_7_rental": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_8_depreciation": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "depreciation",
+    "unit": "חודש"
+   },
+   "car_8_fuel": {
+    "activity": "common",
+    "custom": false,
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "ק״מ × ₪ לק״מ"
+   },
+   "car_8_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_8_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "car_8_license": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_8_maintenance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_8_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "car_8_rental": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_9_depreciation": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "depreciation",
+    "unit": "חודש"
+   },
+   "car_9_fuel": {
+    "activity": "common",
+    "custom": false,
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "ק״מ × ₪ לק״מ"
+   },
+   "car_9_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_9_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "car_9_license": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 0.08333333333333333,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "שנה / 12"
+   },
+   "car_9_maintenance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "car_9_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "car_9_rental": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "רכבים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "employer_burden": {
+    "activity": "common",
+    "custom": false,
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "בסיס שכר × שיעור עלות"
+   },
+   "loan_interest": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "השקעות ומימון",
+    "kind": "interest",
+    "unit": "חודש"
+   },
+   "loan_principal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "השקעות ומימון",
+    "kind": "principal",
+    "unit": "חודש"
+   },
+   "new_loans": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "השקעות ומימון",
+    "kind": "funding",
+    "unit": "חודש"
+   },
+   "overhead_accounting": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_bank_fees": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_business_insurance": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_electricity": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_gas": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_legal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_licenses": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_marketing": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_municipal": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_office": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_other": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_rent": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_software": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_telecom": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "overhead_water": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "הנהלה וכלליות",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "rev_cargo": {
+    "activity": "deliveries",
+    "custom": false,
+    "group": "הכנסות",
+    "kind": "revenue",
+    "unit": "חבילות"
+   },
+   "rev_chef": {
+    "activity": "chef",
+    "custom": false,
+    "group": "הכנסות",
+    "kind": "revenue",
+    "unit": "ימי שירות"
+   },
+   "rev_kexpress": {
+    "activity": "deliveries",
+    "custom": false,
+    "group": "הכנסות",
+    "kind": "revenue",
+    "unit": "חבילות"
+   },
+   "rev_pizza": {
+    "activity": "pizza",
+    "custom": false,
+    "group": "הכנסות",
+    "kind": "revenue",
+    "unit": "הזמנות"
+   },
+   "supplier_1": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "ספקים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "supplier_10": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "ספקים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "supplier_2": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "ספקים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "supplier_3": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "ספקים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "supplier_4": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "ספקים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "supplier_5": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "ספקים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "supplier_6": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "ספקים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "supplier_7": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "ספקים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "supplier_8": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "ספקים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "supplier_9": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "ספקים",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "wage_01": {
+    "activity": "pizza",
+    "custom": false,
+    "defaults": {
+     "quantity": null,
+     "rate": 57
+    },
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "שעות"
+   },
+   "wage_02": {
+    "activity": "pizza",
+    "custom": false,
+    "defaults": {
+     "quantity": null,
+     "rate": 60
+    },
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "שעות"
+   },
+   "wage_03": {
+    "activity": "pizza",
+    "custom": false,
+    "defaults": {
+     "quantity": null,
+     "rate": 40
+    },
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "שעות"
+   },
+   "wage_04": {
+    "activity": "pizza",
+    "custom": false,
+    "defaults": {
+     "quantity": null,
+     "rate": 50
+    },
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "שעות"
+   },
+   "wage_05": {
+    "activity": "pizza",
+    "custom": false,
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "wage_06": {
+    "activity": "pizza",
+    "custom": false,
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "wage_07": {
+    "activity": "deliveries",
+    "custom": false,
+    "defaults": {
+     "quantity": null,
+     "rate": 5
+    },
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "חבילות"
+   },
+   "wage_08": {
+    "activity": "deliveries",
+    "custom": false,
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "wage_09": {
+    "activity": "deliveries",
+    "custom": false,
+    "defaults": {
+     "quantity": null,
+     "rate": 7
+    },
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "חבילות"
+   },
+   "wage_10": {
+    "activity": "deliveries",
+    "custom": false,
+    "defaults": {
+     "quantity": null,
+     "rate": 5
+    },
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "חבילות"
+   },
+   "wage_11": {
+    "activity": "common",
+    "custom": false,
+    "group": "כוח אדם",
+    "kind": "expense",
+    "unit": "חודש"
+   },
+   "working_capital": {
+    "activity": "common",
+    "custom": false,
+    "defaults": {
+     "quantity": 1,
+     "rate": null
+    },
+    "group": "השקעות ומימון",
+    "kind": "capex",
+    "unit": "חודש"
+   }
+  },
+  "otherScenarios": {},
+  "scenario": "בסיס"
+ },
+ "source": "eliav-tool",
+ "sourceVersion": "budget-seed-c90ff6841fb2",
+ "statusDecisionExceptions": [],
+ "statusDecisions": {},
+ "statusParameters": {
+  "scenario": "בסיס"
+ },
+ "statusRules": []
+}

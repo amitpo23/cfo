@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..dependencies import get_db, get_current_org_id, require_admin
+from ..dependencies import get_db, get_current_org_id, get_current_user, require_admin
 from ...models import BankTransaction
 from ...services import (
     BudgetService,
@@ -118,35 +118,42 @@ async def import_budget_excel(
     return {"status": "success", "data": result}
 
 
-@router.get("/budget/vs-actual")
-async def get_budget_vs_actual(
-    year: Optional[int] = None,
-    month: Optional[int] = None,
-    period: Optional[str] = Query(None, pattern="^(month|quarter|ytd|year)$"),
-    db: Session = Depends(get_db),
-    org_id: int = Depends(get_current_org_id),
-):
-    """השוואת תקציב מול ביצוע.
-
-    An organization with a client dashboard (/d/) reads the dashboard's own
-    comparison: the same budget lines and the same actuals as its "תקציב מול
-    ביצוע" tab, with Hebrew labels. Other organizations keep BudgetService.
-    """
+def _org_dashboard(db: Session, org_id: int):
     from ...models import ClientDashboard
-    from ...services.budget_service import BudgetPeriod
-    from ...services.dashboards import budget as dashboard_budget, view_model
-    today = date.today()
-    dashboard = (
+    return (
         db.query(ClientDashboard)
         .filter(ClientDashboard.primary_organization_id == org_id)
         .order_by(ClientDashboard.id)
         .first()
     )
+
+
+@router.get("/budget/vs-actual")
+async def get_budget_vs_actual(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    period: Optional[str] = Query(None, pattern="^(month|quarter|ytd|year)$"),
+    scope: Optional[str] = Query(None, pattern="^(combined|primary)$"),
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+    user=Depends(get_current_user),
+):
+    """השוואת תקציב מול ביצוע.
+
+    An organization with a client dashboard (/d/) reads the dashboard's own
+    comparison (``dashboard_budget.dashboard_summary``): the same view call and
+    window as its "תקציב מול ביצוע" tab, consolidated when the dashboard has
+    several entities, with the scope named in ``scope_label``. Other
+    organizations keep BudgetService.
+    """
+    from ...services.budget_service import BudgetPeriod
+    from ...services.dashboards import budget as dashboard_budget
+    today = date.today()
+    dashboard = _org_dashboard(db, org_id)
     if dashboard is not None:
         try:
-            summary = dashboard_budget.organization_summary(
-                db, org_id, year or today.year, month, period=period,
-                plan=view_model.plan_payload(db, dashboard.id), today=today,
+            summary = dashboard_budget.dashboard_summary(
+                db, user, dashboard, year or today.year, month, period=period, scope=scope, today=today,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc))
@@ -161,10 +168,25 @@ async def get_budget_vs_actual(
 @router.get("/budget/alerts")
 async def get_budget_alerts(
     threshold_pct: float = Query(80, ge=0, le=100),
+    scope: Optional[str] = Query(None, pattern="^(combined|primary)$"),
     db: Session = Depends(get_db),
     org_id: int = Depends(get_current_org_id),
+    user=Depends(get_current_user),
 ):
-    """קבלת התראות תקציב"""
+    """קבלת התראות תקציב.
+
+    A dashboard organization: alerts of this month from the same figures as
+    /budget/vs-actual (a cost line that used ``threshold_pct`` of its budget),
+    each with its Hebrew label.
+    """
+    from ...services.dashboards import budget as dashboard_budget
+    dashboard = _org_dashboard(db, org_id)
+    if dashboard is not None:
+        today = date.today()
+        summary = dashboard_budget.dashboard_summary(
+            db, user, dashboard, today.year, today.month, period="month", scope=scope, today=today,
+        )
+        return {"status": "success", "data": dashboard_budget.summary_alerts(summary, threshold_pct)}
     service = BudgetService(db, organization_id=org_id)
     alerts = service.get_budget_alerts(threshold_pct)
     return {"status": "success", "data": [vars(a) for a in alerts]}

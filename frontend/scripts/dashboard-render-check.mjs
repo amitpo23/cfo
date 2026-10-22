@@ -2,7 +2,9 @@
 // sends, and fails on a render error or a missing value. Run from the repo:
 //   node frontend/scripts/dashboard-render-check.mjs
 // tests/test_dashboard_ui_render.py runs it when frontend/node_modules exists.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+// With REZEF_IMPORTED_PLAN=<plan.json> (the payload the Eliav import writes,
+// tests/fixtures/eliav_imported_plan.json) it also checks the budget editor on it.
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -16,10 +18,13 @@ const entry = `
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { BudgetVsActual } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
-import { LiquidityPanel, upcomingAmount } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
-import { BudgetEditor, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
-export { renderToStaticMarkup, createElement, BudgetVsActual, LiquidityPanel, upcomingAmount,
-  BudgetEditor, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload };
+import { LiquidityPanel, OpeningBalanceCard, upcomingAmount, withOpeningBalance } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
+import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
+import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
+import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
+export { renderToStaticMarkup, createElement, BudgetVsActual, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
+  BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
+  categoryLabel, pieSlices };
 `;
 
 const dir = mkdtempSync(join(tmpdir(), 'dashboard-render-'));
@@ -129,6 +134,85 @@ try {
     expect(ui.firstPlanMonth(payload, '2026-10') === '2026-06', 'nearest earlier month');
     expect(ui.firstPlanMonth(payload, '2025-10') === '2026-01', 'first month');
   });
+  check('category keys have Hebrew labels', () => {
+    expect(ui.categoryLabel('salaries') === 'משכורות', 'salaries');
+    expect(ui.categoryLabel('payroll') === 'כוח אדם', 'payroll');
+    expect(ui.categoryLabel('salaries', 'שכר') === 'שכר', 'the server label wins');
+    expect(ui.categoryLabel('salaries', 'salaries') === 'משכורות', 'a raw key from the server is not a label');
+    expect(ui.categoryLabel('no_such_key') === 'no_such_key', 'unknown keys stay as sent');
+  });
+
+  check('pie: positive slices, small ones folded, labels only on large slices', () => {
+    const rows = [
+      { category: 'משכורות', planned: 49700 }, { category: 'שכירות', planned: 12000 },
+      { category: 'a', planned: 500 }, { category: 'b', planned: 400 }, { category: 'c', planned: 0 },
+      { category: 'd', planned: -10 }, { category: 'e', planned: 300 }, { category: 'f', planned: 200 },
+      { category: 'g', planned: 100 }, { category: 'h', planned: 50 },
+    ];
+    const slices = ui.pieSlices(rows);
+    expect(slices.length <= 6, `too many slices: ${slices.length}`);
+    expect(slices[0].name === 'משכורות', 'largest first');
+    expect(slices.every((slice) => slice.value > 0), 'no zero or negative slice');
+    const other = slices.find((slice) => slice.name === 'אחר');
+    expect(other && Math.abs(other.value - 350) < 0.01, 'the small slices fold into אחר');
+    expect(Math.abs(slices.reduce((sum, slice) => sum + slice.value, 0) - 63250) < 0.01, 'the total is kept');
+  });
+
+  check('opening balance: one per entity, the rest of the evidence kept, card renders', () => {
+    const payload = { budgetLines: [], liquidityEvidence: { facilities: [{ label: 'מסגרת', limit: 80000 }],
+      openingBalances: [{ organizationId: 6, date: '2026-07-01', amount: 1, source: 'ישן' },
+        { organizationId: 2, date: '2026-07-01', amount: 5, source: 'שף' }] } };
+    const item = { organizationId: 6, date: '2026-07-31', amount: -30000, source: 'דף בנק' };
+    const next = ui.withOpeningBalance(payload, 6, item);
+    const items = next.liquidityEvidence.openingBalances;
+    expect(items.length === 2 && items.some((row) => row.source === 'שף') && items.some((row) => row.amount === -30000), 'replace one entity');
+    expect(next.liquidityEvidence.facilities.length === 1 && next.budgetLines, 'the rest of the plan is kept');
+    expect(ui.withOpeningBalance(next, 6, null).liquidityEvidence.openingBalances.length === 1, 'remove');
+    const markup = html(ui.OpeningBalanceCard, {
+      entities: [{ organization_id: 2, label: 'השף' }, { organization_id: 6, label: 'פוד גרופ' }],
+      items, saving: false, onSave: () => {},
+    });
+    expect(markup.includes('יתרת פתיחה ידנית') && markup.includes('value="-30000"'), 'the card does not show the saved balance');
+    const panel = html(ui.LiquidityPanel, { section: { status: 'ready', position: { balance: -32099.5, as_of: '2026-10-13',
+      balance_source: 'opening_balance', limit: 80000, limit_source: 'plan.liquidityEvidence', available_to_limit: 47900.5 } } });
+    expect(panel.includes('יתרת פתיחה ידנית'), 'the balance source is not named');
+  });
+
+  const importedPlan = process.env.REZEF_IMPORTED_PLAN;
+  if (importedPlan) {
+    check('imported plan: payroll 49,700 a month, defaults shown, save without loss', () => {
+      const payload = JSON.parse(readFileSync(importedPlan, 'utf8'));
+      const stored = payload.budgetLines;
+      const kinds = new Map(stored.map((line) => [line.category, line.kind]));
+      const categories = [...kinds].map(([key, kind]) => ({ key, label_he: key, kind }));
+      const lines = ui.linesFromPayload(payload);
+      expect(lines.length === stored.length, `${lines.length} of ${stored.length} lines read`);
+      for (let index = 0; index < 18; index += 1) {
+        const month = `${2026 + Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}`;
+        const cost = ui.monthTotal(lines, month, categories, 'cost');
+        expect(Math.abs(cost - 49700) < 0.005, `${month}: cost ${cost}, not 49,700`);
+      }
+      const markup = html(ui.BudgetEditor, {
+        canEdit: true, lines, lineDefaults: ui.lineDefaultsFromPayload(payload), month: '2026-10', categories,
+        onMonth: () => {}, onLines: () => {}, onSave: () => {}, saving: false,
+      });
+      expect(markup.includes('49,700'), 'no 49,700 total');
+      expect(markup.includes('30,000') && markup.includes('9,000'), 'a payroll line amount is missing');
+      expect(markup.includes('value="30000"') && markup.includes('value="1"'), 'quantity/rate inputs are empty');
+      expect(/יש סכום ל-4 מתוך 127/.test(markup), 'the budgeted-lines count is missing');
+      expect(markup.includes('חסר תעריף · כמות 1 מהכלי'), 'a quantity-only seed line reads as empty');
+      expect(markup.includes('חסרה כמות · תעריף'), 'a rate-only seed line reads as empty');
+      const built = ui.budgetLinesPayload(lines, categories);
+      expect(!built.error, built.error);
+      const canonical = (rows) => JSON.stringify([...rows].sort((a, b) => (a.id < b.id ? -1 : 1)),
+        (_key, value) => (value && typeof value === 'object' && !Array.isArray(value)
+          ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1))) : value));
+      expect(canonical(built.lines) === canonical(stored), 'the save payload differs from the stored lines');
+      // A field the editor does not know survives the save.
+      const extended = ui.linesFromPayload({ budgetLines: [{ ...stored[0], note: 'נשמר' }] });
+      expect(ui.budgetLinesPayload(extended, categories).lines[0].note === 'נשמר', 'an unknown line field was dropped');
+    });
+  }
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

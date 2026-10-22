@@ -223,7 +223,8 @@ def budget_catalog() -> list[dict]:
 
 
 def category_label_he(key: str) -> str:
-    return FINANCING_CATEGORIES.get(key) or _LABELS.get(key, key)
+    from ..category_labels import hebrew
+    return FINANCING_CATEGORIES.get(key) or _LABELS.get(key) or hebrew(key)
 
 
 def monthly_line_sums(lines: list[dict] | None) -> dict[str, dict[str, float]]:

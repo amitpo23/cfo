@@ -99,6 +99,7 @@ const BALANCE_SOURCES: Record<string, string> = {
   accounts: 'יתרת חשבון',
   imported_running_balance: 'יתרה רצה בדף הבנק המיובא',
   mixed: 'יתרת חשבון ודף בנק מיובא',
+  opening_balance: 'יתרת פתיחה ידנית ותנועות הבנק שאחריה',
 };
 
 // The amount column of an upcoming date: the documented amount, else what the
@@ -371,6 +372,107 @@ export function ParametersCard({
           </button>
         ) : null}
       </div>
+    </Card>
+  );
+}
+
+export type OpeningBalance = {
+  organizationId: number; accountId?: number | null; date: string; amount: number; source: string; note?: string | null;
+};
+
+// The opening balances of plan.liquidityEvidence (the tool's openingBalance).
+export function openingBalancesFromPayload(payload: Record<string, unknown> | null | undefined): OpeningBalance[] {
+  const evidence = payload?.liquidityEvidence;
+  const items = evidence && typeof evidence === 'object' ? (evidence as Record<string, unknown>).openingBalances : null;
+  return Array.isArray(items) ? items.filter((item): item is OpeningBalance => !!item && typeof item === 'object') : [];
+}
+
+// The payload with one entity's opening balance replaced (null removes it).
+export function withOpeningBalance(
+  payload: Record<string, unknown>, organizationId: number, item: OpeningBalance | null,
+): Record<string, unknown> {
+  const evidence = payload.liquidityEvidence && typeof payload.liquidityEvidence === 'object'
+    ? payload.liquidityEvidence as Record<string, unknown> : {};
+  const others = openingBalancesFromPayload(payload).filter((row) => row.organizationId !== organizationId || row.accountId);
+  return { ...payload, liquidityEvidence: { ...evidence, openingBalances: item ? [...others, item] : others } };
+}
+
+// A dated opening balance for an imported bank account whose file has no
+// balance column: the closing balance of one day from a bank statement. The
+// balance is that amount plus the BOOKED rows after the day. Owner only.
+export function OpeningBalanceCard({
+  entities, items, saving, onSave,
+}: {
+  entities: { organization_id: number; label: string | null }[];
+  items: OpeningBalance[];
+  saving: boolean;
+  onSave: (organizationId: number, item: OpeningBalance | null) => void;
+}) {
+  const [orgId, setOrgId] = useState<number | null>(entities[entities.length - 1]?.organization_id ?? null);
+  const current = items.find((item) => item.organizationId === orgId && !item.accountId) ?? null;
+  const [date, setDate] = useState(current?.date ?? '');
+  const [amount, setAmount] = useState(current ? String(current.amount) : '');
+  const [source, setSource] = useState(current?.source ?? '');
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setDate(current?.date ?? '');
+    setAmount(current ? String(current.amount) : '');
+    setSource(current?.source ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId, items]);
+
+  function save() {
+    if (orgId === null) return;
+    const value = Number(amount.replace(/,/g, ''));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !amount.trim() || !Number.isFinite(value) || !source.trim()) {
+      setError('יש למלא תאריך, סכום (אפשר שלילי) ומקור — למשל "דף בנק ליום …"');
+      return;
+    }
+    setError(null);
+    onSave(orgId, { organizationId: orgId, date, amount: value, source: source.trim() });
+  }
+
+  return (
+    <Card title="יתרת פתיחה ידנית">
+      <p className="mt-2 text-sm text-stone-600">
+        לחשבון בנק שיובא מקובץ בלי עמודת יתרה. מזינים את יתרת סוף היום מדף בנק, והיתרה מחושבת כיתרה הזו ועוד תנועות הבנק שאחרי התאריך. רק בעלי הדשבורד יכולים לשנות אותה.
+      </p>
+      <div className="mt-3 flex flex-wrap items-end gap-3 text-sm">
+        <label className="text-stone-600">
+          ישות
+          <select className="mt-1 block rounded border border-stone-300 px-2 py-1" value={orgId ?? ''}
+            onChange={(event) => setOrgId(Number(event.target.value))}>
+            {entities.map((entity) => (
+              <option key={entity.organization_id} value={entity.organization_id}>{entity.label ?? entity.organization_id}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-stone-600">
+          יתרת סוף יום בתאריך
+          <input type="date" dir="ltr" className="mt-1 block rounded border border-stone-300 px-2 py-1" value={date}
+            onChange={(event) => setDate(event.target.value)} />
+        </label>
+        <label className="text-stone-600">
+          סכום (₪)
+          <input dir="ltr" inputMode="decimal" className="mt-1 block w-32 rounded border border-stone-300 px-2 py-1 text-left"
+            value={amount} onChange={(event) => setAmount(event.target.value)} />
+        </label>
+        <label className="text-stone-600">
+          מקור
+          <input className="mt-1 block w-56 rounded border border-stone-300 px-2 py-1" value={source}
+            placeholder="דף בנק 1662 ליום …" onChange={(event) => setSource(event.target.value)} />
+        </label>
+        <button type="button" className="rounded bg-stone-900 px-3 py-1 text-white disabled:opacity-50" disabled={saving} onClick={save}>
+          שמור יתרת פתיחה
+        </button>
+        {current ? (
+          <button type="button" className="rounded border border-stone-300 px-3 py-1 disabled:opacity-50" disabled={saving}
+            onClick={() => orgId !== null && onSave(orgId, null)}>
+            הסר
+          </button>
+        ) : null}
+      </div>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
     </Card>
   );
 }
