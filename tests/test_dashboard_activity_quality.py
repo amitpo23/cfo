@@ -99,6 +99,25 @@ def test_two_booked_journal_and_internet_rows_warn_until_confirmed():
     assert any("שאושרו" in note["message_he"] for note in confirmed.notes)
 
 
+def test_a_confirmed_pair_that_cannot_be_a_duplicate_is_refused():
+    keep = _txn(id=1, amount=Decimal("500.00"), content_fingerprint="a")
+    other_amount = _txn(id=2, amount=Decimal("90000.00"), content_fingerprint="b")
+    other_account = _txn(id=3, amount=Decimal("500.00"), account_id=11, content_fingerprint="c")
+    far = _txn(id=4, amount=Decimal("500.00"), transaction_date=date(2026, 9, 30), content_fingerprint="d")
+    outcome = classify(
+        [keep, other_amount, other_account, far],
+        confirmed_pairs=[(1, 2), (1, 3), (1, 4)],
+    )
+    assert outcome.drop_ids == set()
+    refused = next(item for item in outcome.warnings if item["code"] == "refused_dedupe_pair")
+    assert refused["message_he"].startswith("3 ")
+    from cfo.services.dashboards.activity_quality import confirmed_drop_ids
+    payload = {"dedupePairs": [[1, 2], [1, 3], [1, 4]]}
+    assert confirmed_drop_ids([keep, other_amount, other_account, far], payload) == set()
+    same = _txn(id=5, amount=Decimal("500.00"), transaction_date=date(2026, 8, 12), content_fingerprint="e")
+    assert confirmed_drop_ids([keep, same], {"dedupePairs": [[1, 5]]}) == {5}
+
+
 def test_loan_reference_with_another_amount_is_not_a_pair():
     pending = _txn(
         id=1, status="PENDING", amount=Decimal("-1375.31"), description="חיוב בגין פרעון",
@@ -340,6 +359,13 @@ def test_dashboard_drops_only_a_confirmed_pair_and_warns_on_the_card_bill(client
         row = db.query(BankTransaction).filter_by(external_id="journal-booked").one()
         assert row.superseded_by_id is None
         assert row.content_fingerprint is None
+        # The cash-basis P&L reads the same row set as the cash flow.
+        from cfo.services.dashboards import books
+        plan = saved.json()["payload"]
+        filed = books.classified_bank(db, owner["org_id"], date(2026, 8, 1), date(2026, 8, 31), plan)
+        filed_ids = {txn.id for txn, _result in filed}
+        assert journal_id not in filed_ids
+        assert internet_id in filed_ids
 
 
 def test_report_csv_lists_journal_and_internet_transfer(fresh_org, tmp_path):

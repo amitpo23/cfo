@@ -8,6 +8,12 @@ It lists suspected pairs (including העברת יומן against העברה בא�
 only pairs an admin confirmed in ``payload.dedupePairs``, and warns when a
 month's card transactions and the checking-account card bill differ by more
 than 1%.
+
+A confirmed pair is applied only when it could be a duplicate: same
+organization, same account, same amount, at most five days apart. Any other
+pair is refused with a warning, so a plan edit cannot erase an arbitrary
+bank row. The same drops apply to the cash-basis P&L (``books``), so cash
+flow and P&L read one row set.
 """
 from __future__ import annotations
 
@@ -144,11 +150,15 @@ def classify(
     drop_ids: set[int] = set()
     missing = 0
     confirmed_rows: list[tuple[Txn, Txn]] = []
+    refused = 0
     for keep_id, drop_id in confirmed:
         keep = by_id.get(keep_id)
         drop = by_id.get(drop_id)
         if keep is None or drop is None:
             missing += 1
+            continue
+        if not could_be_duplicates(keep, drop):
+            refused += 1
             continue
         drop_ids.add(drop_id)
         confirmed_rows.append((keep, drop))
@@ -173,6 +183,14 @@ def classify(
             continue
         pairs.append(_pair_row(keep, drop, "confirmed", "confirmed"))
 
+    if refused:
+        warnings.append({
+            "code": "refused_dedupe_pair",
+            "message_he": (
+                f"{refused} זוגות dedupePairs אינם באותו חשבון, באותו סכום ובטווח של חמישה ימים, "
+                "ולא הוחלו."
+            ),
+        })
     if missing:
         warnings.append({
             "code": "unmatched_dedupe_pair",
@@ -192,6 +210,32 @@ def classify(
         billing_cycles=cycles,
         drop_ids=drop_ids,
     )
+
+
+def could_be_duplicates(keep, drop) -> bool:
+    """Same org, same account, same amount, at most REF_WINDOW_DAYS apart."""
+    if keep.organization_id != drop.organization_id:
+        return False
+    if keep.account_id is None or keep.account_id != drop.account_id:
+        return False
+    if _q(keep.amount) != _q(drop.amount):
+        return False
+    return abs((keep.transaction_date - drop.transaction_date).days) <= REF_WINDOW_DAYS
+
+
+def confirmed_drop_ids(rows, plan_payload: dict | None) -> set[int]:
+    """Ids among ``rows`` removed by a valid confirmed pair whose keep row is also present."""
+    confirmed, _warnings = parse_confirmed_pairs(plan_payload)
+    if not confirmed:
+        return set()
+    by_id = {row.id: row for row in rows}
+    drops: set[int] = set()
+    for keep_id, drop_id in confirmed:
+        keep = by_id.get(keep_id)
+        drop = by_id.get(drop_id)
+        if keep is not None and drop is not None and could_be_duplicates(keep, drop):
+            drops.add(drop_id)
+    return drops
 
 
 def adjust_cashflow(db, organization_id: int, cashflow: dict, plan_payload: dict | None) -> dict:
