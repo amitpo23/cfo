@@ -18,12 +18,12 @@ const entry = `
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
-import { LiquidityEvidenceCard, LiquidityPanel, OpeningBalanceCard, draftFromItem, evidenceItems, itemFromDraft, upcomingAmount, withEvidenceItem, withOpeningBalance } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
+import { LiquidityEvidenceCard, LiquidityPanel, OpeningBalanceCard, draftFromItem, evidenceItems, itemFromDraft, upcomingAmount, withEvidenceItem, withOpeningBalance, ZReportsCard, withZReport, zReportsFromPayload } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
 export { renderToStaticMarkup, createElement, BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
-  LiquidityEvidenceCard, draftFromItem, evidenceItems, itemFromDraft, withEvidenceItem,
+  LiquidityEvidenceCard, draftFromItem, evidenceItems, itemFromDraft, withEvidenceItem, ZReportsCard, withZReport, zReportsFromPayload,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
   categoryLabel, pieSlices };
 `;
@@ -256,6 +256,19 @@ try {
     expect('error' in ui.itemFromDraft('events', { ...ui.draftFromItem('events', null), label: 'x', date: '31/10/2026' }, null), 'a bad date is accepted');
     const markup = html(ui.LiquidityEvidenceCard, { entities: [{ organization_id: 6, label: 'פוד גרופ' }], payload: added, saving: false, onSave: () => {} });
     expect(markup.includes('ראיות נזילות') && markup.includes('מסגרות (0)') && markup.includes('צ׳קים דחויים (1)'), 'card');
+  });
+
+  check('Z reports: one per entity and month, other keys kept, card renders', () => {
+    const payload = { liquidityEvidence: { openingBalances: [{ organizationId: 6 }] },
+      zReports: [{ organizationId: 6, month: '2026-08', revenueExVat: 52126.2, source: 'Z' }] };
+    const next = ui.withZReport(payload, 6, '2026-07', { organizationId: 6, month: '2026-07', revenueExVat: 76510.82, source: 'Z' });
+    expect(ui.zReportsFromPayload(next).map((item) => item.month).join() === '2026-07,2026-08', 'not added in order');
+    expect(next.liquidityEvidence === payload.liquidityEvidence, 'evidence lost');
+    const replaced = ui.withZReport(next, 6, '2026-08', { organizationId: 6, month: '2026-08', revenueExVat: 1, source: 'Z2' });
+    expect(ui.zReportsFromPayload(replaced).length === 2 && ui.zReportsFromPayload(replaced)[1].revenueExVat === 1, 'not replaced');
+    expect(ui.zReportsFromPayload(ui.withZReport(replaced, 6, '2026-07', null)).length === 1, 'not removed');
+    const markup = html(ui.ZReportsCard, { entities: [{ organization_id: 6, label: 'פוד גרופ' }], items: ui.zReportsFromPayload(next), saving: false, onSave: () => {} });
+    expect(markup.includes('הכנסות פיצה מדוחות Z') && markup.includes('76,511') && markup.includes('פוד גרופ'), 'card');
   });
 
   const importedPlan = process.env.REZEF_IMPORTED_PLAN;

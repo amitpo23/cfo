@@ -6,7 +6,8 @@ import {
 } from './dashboardFiling';
 import {
   EntityLiquidity, Forecast, ForecastPanel, LiquidityEvidenceCard, LiquidityPanel, Parameters, ParametersCard,
-  OpeningBalanceCard, ShareLinksCard, money, openingBalancesFromPayload, parametersFromPayload, withOpeningBalance,
+  OpeningBalanceCard, ShareLinksCard, ZReportsCard, money, openingBalancesFromPayload, parametersFromPayload, withOpeningBalance,
+  withZReport, zReportsFromPayload,
 } from './dashboardTabs';
 import TabErrorBoundary from './TabErrorBoundary';
 
@@ -52,6 +53,7 @@ type PnlMonth = {
   unresolved_out?: number | null;
   blocked?: boolean;
   journal?: JournalMonth | null;
+  z_dedupe?: { revenue_ex_vat: number; bank_till_dropped: number; source: string } | null;
   journal_dedupe?: { rows_replaced: { id: string; label: string; bank_amount: number; journal_amount: number }[]; bank_dropped: number; journal_used: number } | null;
 };
 
@@ -231,6 +233,7 @@ function PnlMonths({ months }: { months: PnlMonth[] }) {
             <td className="py-2 text-xs text-stone-600">
               {month.source === 'cash_basis' ? 'בסיס מזומן' : 'ספרים'}
               {month.journal_dedupe ? ' + יומן SUMIT' : ''}
+              {month.z_dedupe ? ' + דוח Z' : ''}
               {month.coverage_label ? ` · ${month.coverage_label}` : ''}
             </td>
             <td className="py-2">{money(month.revenue)}</td>
@@ -828,6 +831,14 @@ export default function ClientDashboardPage() {
                     />
                   ) : null}
                   <ParametersCard value={parameters} canEdit={editor.canEdit} saving={saving} onSave={saveParameters} />
+                  {editor.role === 'owner' && plan && filing ? (
+                    <ZReportsCard
+                      entities={filing.entities ?? []}
+                      items={zReportsFromPayload(plan.payload)}
+                      saving={saving}
+                      onSave={(organizationId, zMonth, item) => void savePayload(withZReport(plan.payload, organizationId, zMonth, item), false)}
+                    />
+                  ) : null}
                   {editor.role === 'owner' ? (
                     <ShareLinksCard dashboardId={editor.id} slug={slugFromLocation()} headers={authHeaders} />
                   ) : null}

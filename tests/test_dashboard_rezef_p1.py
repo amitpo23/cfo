@@ -316,3 +316,92 @@ def test_only_the_owner_may_change_liquidity_evidence(client, fresh_org, platfor
     assert _put(client, accountant["headers"], dashboard_id, {**stored, "liquidityEvidence": deleted}).status_code == 403
     view = _view(client, platform_admin["headers"], dashboard_id, "2026-10-01", "2026-10-31")
     assert any(item.get("check") == "10005" for item in view["entities"][1]["view"]["liquidity"]["checks"])
+
+
+# ------------------------------------------------ G-20. pizza revenue from Z reports
+
+def test_z_report_replaces_the_bank_till_takings_in_the_revenue(client, fresh_org, platform_admin):
+    dashboard_id, chef, food = _consolidated(client, platform_admin, fresh_org, "p1-z")
+    with SessionLocal() as db:
+        _bank(db, food["org_id"], date(2026, 8, 5), 11800, "הפקדת מזומן")
+        _bank(db, food["org_id"], date(2026, 8, 6), 23600, "סליקה ויזה")
+        _bank(db, food["org_id"], date(2026, 8, 7), 1180, "הפקדת שיק")
+        _bank(db, food["org_id"], date(2026, 8, 9), -1180, "בזק")
+        _bank(db, food["org_id"], date(2026, 9, 5), 5900, "הפקדת מזומן")
+        _bank(db, chef["org_id"], date(2026, 8, 5), 2360, "הפקדת מזומן")
+        db.commit()
+    _save(client, platform_admin["headers"], dashboard_id, {"zReports": [
+        {"organizationId": food["org_id"], "month": "2026-08", "revenueExVat": 52126.2,
+         "totalInclVat": 61509, "cashNet": 21658, "cardNet": 39851, "source": "דוח Z אוגוסט"},
+        {"organizationId": food["org_id"], "month": "2026-07", "revenueExVat": 76510.82, "source": "דוח Z יולי"},
+    ]})
+    view = _view(client, platform_admin["headers"], dashboard_id, "2026-07-01", "2026-09-30")
+    pnl = view["entities"][1]["view"]["pnl"]
+    august = _month(pnl, "2026-08")
+    # 52,126.20 from Z + the check 1,180 / 1.18; the bank's 11,800 + 23,600 till takings are dropped.
+    assert _line(august, "revenue")["amount"] == round(52126.2 + 1000, 2)
+    assert _line(august, "revenue")["source"] == "z_report"
+    assert august["revenue"] == round(52126.2 + 1000, 2) and august["costs"] == 1000.0
+    assert august["z_dedupe"]["bank_till_dropped"] == 30000.0
+    assert "דוח Z" in august["source_label"]
+    assert august["z_report"]["total_incl_vat"] == 61509
+    # September has no Z report: the bank stays. July has no bank rows: unknown, the Z is still listed.
+    assert _month(pnl, "2026-09")["revenue"] == 5000.0 and _month(pnl, "2026-09")["z_report"] is None
+    july = _month(pnl, "2026-07")
+    assert july["source"] is None and july["z_report"]["revenue_ex_vat"] == 76510.82
+    # The chef's months do not read Food Group's Z reports.
+    assert all(month["z_report"] is None for month in view["entities"][0]["view"]["pnl"]["months"])
+    assert view["combined"]["pnl"]["total_revenue"] == round(
+        pnl["total_revenue"] + view["entities"][0]["view"]["pnl"]["total_revenue"], 2)
+
+
+def test_z_reports_are_validated_and_owner_only(client, fresh_org, platform_admin):
+    from tests.test_dashboard_eliav_ui_r2 import _member, _put
+    dashboard_id, chef, food = _consolidated(client, platform_admin, fresh_org, "p1-z-role")
+    accountant = fresh_org()
+    _member(dashboard_id, accountant["org_id"], "accountant")
+    good = {"organizationId": food["org_id"], "month": "2026-08", "revenueExVat": 100.0, "source": "Z"}
+    for bad in ([{**good, "month": "2026-13"}], [{**good, "revenueExVat": -1}], [{**good, "source": ""}],
+                [good, good], [{**good, "extra": 1}], [{**good, "organizationId": None}]):
+        assert _put(client, platform_admin["headers"], dashboard_id, {"zReports": bad}).status_code == 422, bad
+    denied = _put(client, accountant["headers"], dashboard_id, {"zReports": [good]})
+    assert denied.status_code == 403 and denied.json()["error"]["code"] == "z_reports_forbidden"
+    assert _put(client, platform_admin["headers"], dashboard_id, {"zReports": [good]}).status_code == 200
+
+
+def test_import_script_reads_the_tool_file_and_merges_months(client, fresh_org, platform_admin, tmp_path, capsys):
+    import importlib.util
+    import json
+    from pathlib import Path
+    from cfo.models import User
+    repo = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("import_z_reports", repo / "scripts" / "import_z_reports.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    dashboard_id, chef, food = _consolidated(client, platform_admin, fresh_org, "p1-z-import")
+    _save(client, platform_admin["headers"], dashboard_id, {
+        "zReports": [{"organizationId": food["org_id"], "month": "2026-06", "revenueExVat": 1.0, "source": "ידני"},
+                     {"organizationId": food["org_id"], "month": "2026-08", "revenueExVat": 2.0, "source": "ידני"}],
+        "statusParameters": {"scenario": "בסיס"},
+    })
+    document = {"pizza_z": [
+        {"month": "2026-07", "revenue_ex_vat": 76510.82, "total_net_vat_included": 90283, "cash_net": 44745, "card_net": 45538},
+        {"month": "2026-08", "revenue_ex_vat": 52126.2, "total_net_vat_included": 61509, "cash_net": 21658, "card_net": 39851},
+    ]}
+    path = tmp_path / "reviewed-evidence.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with SessionLocal() as db:
+        user_id = db.query(User).filter(User.email == "platform@example.com").one().id
+    args = ["--dashboard-id", str(dashboard_id), "--organization-id", str(food["org_id"]), "--user-id", str(user_id),
+            "--file", str(path), "--source", "דוחות Z מאומתים"]
+    assert module.main(args) == 0
+    assert "לא נכתב דבר" in capsys.readouterr().out
+    before = client.get(f"/api/dashboards/{dashboard_id}/plan", headers=platform_admin["headers"]).json()["payload"]
+    assert [item["month"] for item in before["zReports"]] == ["2026-06", "2026-08"]
+    assert module.main([*args, "--apply"]) == 0
+    after = client.get(f"/api/dashboards/{dashboard_id}/plan", headers=platform_admin["headers"]).json()["payload"]
+    assert [(item["month"], item["revenueExVat"]) for item in after["zReports"]] == [
+        ("2026-06", 1.0), ("2026-07", 76510.82), ("2026-08", 52126.2)]
+    assert after["statusParameters"] == {"scenario": "בסיס"}
+    assert module.main([*args, "--apply"]) == 0
+    assert "אין שינויים" in capsys.readouterr().out

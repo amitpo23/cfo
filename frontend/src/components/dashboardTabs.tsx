@@ -700,6 +700,137 @@ export function LiquidityEvidenceCard({
   );
 }
 
+export type ZReport = {
+  organizationId: number; month: string; revenueExVat: number; totalInclVat?: number | null;
+  cashNet?: number | null; cardNet?: number | null; source: string; note?: string | null;
+};
+
+export function zReportsFromPayload(payload: Record<string, unknown> | null | undefined): ZReport[] {
+  const items = payload?.zReports;
+  return Array.isArray(items) ? items.filter((item): item is ZReport => !!item && typeof item === 'object') : [];
+}
+
+// The payload with one organization-month Z report replaced or added (null removes it).
+// Every other plan key is kept.
+export function withZReport(
+  payload: Record<string, unknown>, organizationId: number, month: string, item: ZReport | null,
+): Record<string, unknown> {
+  const others = zReportsFromPayload(payload).filter((row) => row.organizationId !== organizationId || row.month !== month);
+  const next = item ? [...others, item] : others;
+  next.sort((a, b) => a.organizationId - b.organizationId || a.month.localeCompare(b.month));
+  return { ...payload, zReports: next };
+}
+
+// Pizza revenue from a reviewed Z report, per entity and month. Owner only. In the
+// cash-basis P&L the Z total replaces the bank's card settlements and cash deposits.
+export function ZReportsCard({
+  entities, items, saving, onSave,
+}: {
+  entities: { organization_id: number; label: string | null }[];
+  items: ZReport[];
+  saving: boolean;
+  onSave: (organizationId: number, month: string, item: ZReport | null) => void;
+}) {
+  const [orgId, setOrgId] = useState<number | null>(entities[entities.length - 1]?.organization_id ?? null);
+  const [month, setMonth] = useState('');
+  const [revenue, setRevenue] = useState('');
+  const [total, setTotal] = useState('');
+  const [source, setSource] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const label = (id: number) => entities.find((entity) => entity.organization_id === id)?.label ?? String(id);
+
+  function edit(item: ZReport) {
+    setOrgId(item.organizationId);
+    setMonth(item.month);
+    setRevenue(String(item.revenueExVat));
+    setTotal(item.totalInclVat === null || item.totalInclVat === undefined ? '' : String(item.totalInclVat));
+    setSource(item.source);
+  }
+
+  function save() {
+    if (orgId === null) return;
+    const value = Number(revenue.replace(/,/g, ''));
+    const gross = total.trim() ? Number(total.replace(/,/g, '')) : null;
+    if (!/^20\d{2}-(0[1-9]|1[0-2])$/.test(month) || !revenue.trim() || !Number.isFinite(value) || value < 0
+      || (gross !== null && (!Number.isFinite(gross) || gross < 0)) || !source.trim()) {
+      setError('יש למלא חודש, הכנסה ללא מע״מ (לא שלילית) ומקור — למשל "דוח Z חודשי של הקופה"');
+      return;
+    }
+    setError(null);
+    const original = items.find((item) => item.organizationId === orgId && item.month === month);
+    onSave(orgId, month, { ...(original ?? {}), organizationId: orgId, month, revenueExVat: value, totalInclVat: gross, source: source.trim() });
+  }
+
+  return (
+    <Card title="הכנסות פיצה מדוחות Z">
+      <p className="mt-2 text-sm text-stone-600">
+        סכום חודשי מדוח Z מאומת של הקופה. בחודש שיש לו דוח Z, ההכנסה ברווח והפסד היא סכום ה-Z, וסליקת האשראי והפקדות המזומן בבנק לא נספרות שוב. רק בעלי הדשבורד יכולים לשנות.
+      </p>
+      {items.length > 0 ? (
+        <table className="mt-3 w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <Th>ישות</Th><Th>חודש</Th><Th>ללא מע״מ</Th><Th>כולל מע״מ</Th><Th>מקור</Th><Th />
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={`${item.organizationId}-${item.month}`} className="border-b border-stone-100">
+                <td className="py-1">{label(item.organizationId)}</td>
+                <td className="py-1">{item.month}</td>
+                <td className="py-1">{money(item.revenueExVat)}</td>
+                <td className="py-1">{money(item.totalInclVat ?? null)}</td>
+                <td className="py-1 text-xs text-stone-500">{item.source}</td>
+                <td className="py-1 whitespace-nowrap">
+                  <button type="button" className="underline" onClick={() => edit(item)}>ערוך</button>
+                  {' · '}
+                  <button type="button" className="text-red-700 underline disabled:opacity-50" disabled={saving}
+                    onClick={() => onSave(item.organizationId, item.month, null)}>מחק</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <p className="mt-3 text-sm text-stone-500">לא הוזנו דוחות Z.</p>}
+      <div className="mt-3 flex flex-wrap items-end gap-3 text-sm">
+        <label className="text-stone-600">
+          ישות
+          <select className="mt-1 block rounded border border-stone-300 px-2 py-1" value={orgId ?? ''}
+            onChange={(event) => setOrgId(Number(event.target.value))}>
+            {entities.map((entity) => (
+              <option key={entity.organization_id} value={entity.organization_id}>{entity.label ?? entity.organization_id}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-stone-600">
+          חודש
+          <input type="month" dir="ltr" className="mt-1 block rounded border border-stone-300 px-2 py-1" value={month}
+            onChange={(event) => setMonth(event.target.value)} />
+        </label>
+        <label className="text-stone-600">
+          הכנסה ללא מע״מ (₪)
+          <input dir="ltr" inputMode="decimal" className="mt-1 block w-32 rounded border border-stone-300 px-2 py-1"
+            value={revenue} onChange={(event) => setRevenue(event.target.value)} />
+        </label>
+        <label className="text-stone-600">
+          כולל מע״מ (₪, רשות)
+          <input dir="ltr" inputMode="decimal" className="mt-1 block w-32 rounded border border-stone-300 px-2 py-1"
+            value={total} onChange={(event) => setTotal(event.target.value)} />
+        </label>
+        <label className="text-stone-600">
+          מקור
+          <input className="mt-1 block w-56 rounded border border-stone-300 px-2 py-1" value={source}
+            placeholder="דוח Z חודשי של הקופה" onChange={(event) => setSource(event.target.value)} />
+        </label>
+        <button type="button" className="rounded bg-stone-900 px-3 py-1 text-white disabled:opacity-50" disabled={saving} onClick={save}>
+          שמור דוח Z
+        </button>
+      </div>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </Card>
+  );
+}
+
 type ShareLink = { id: number; label: string | null; revoked_at: string | null; expires_at: string | null; use_count: number };
 
 export function ShareLinksCard({ dashboardId, slug, headers }: { dashboardId: number; slug: string; headers: () => HeadersInit }) {

@@ -252,6 +252,7 @@ def validate_filing_payload(payload: dict) -> None:
     _validate_builtin_pin(payload.get("filingRulesBuiltin"))
     _validate_journal_map(payload.get("journalAccountMap"))
     _validate_intercompany(payload.get("intercompany"))
+    _validate_z_reports(payload.get("zReports"))
     closed = payload.get("booksClosedMonths")
     if closed is not None:
         if not isinstance(closed, list) or not all(
@@ -397,6 +398,14 @@ def _validate_intercompany(value) -> None:
         raise _invalid_plan("הגדרות הקיזוז הבין-חברתי לא תקינות")
 
 
+def _validate_z_reports(value) -> None:
+    from .z_reports import ZReportError, validate_z_reports
+    try:
+        validate_z_reports(value)
+    except ZReportError:
+        raise _invalid_plan("דוחות ה-Z לא תקינים: ארגון, חודש YYYY-MM, הכנסה ללא מע״מ ומקור לכל חודש")
+
+
 def _validate_journal_map(value) -> None:
     from .source_journal import JournalMapError, validate_account_map
     try:
@@ -436,6 +445,9 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
         raise DashboardError(403, "opening_balance_forbidden", "רק בעלי הדשבורד או מנהל יכולים להזין יתרת פתיחה")
     if _evidence(payload) != _evidence(stored) and role_for(db, user, row) not in EVIDENCE_ROLES:
         raise DashboardError(403, "liquidity_evidence_forbidden", "רק בעלי הדשבורד או מנהל יכולים לשנות ראיות נזילות")
+    if (payload.get("zReports") or None) != ((stored or {}).get("zReports") or None) \
+            and role_for(db, user, row) not in EVIDENCE_ROLES:
+        raise DashboardError(403, "z_reports_forbidden", "רק בעלי הדשבורד או מנהל יכולים להזין דוחות Z")
     expected = if_match.strip().strip('"')
     if current is None:
         if expected not in {"null", "*"}:

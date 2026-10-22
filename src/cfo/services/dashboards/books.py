@@ -16,7 +16,9 @@ Coverage of a month:
 An import-only client's reviewed SUMIT journal (``source_journal``) feeds the
 cash-basis month: a comparison row the journal covers that month takes the
 journal amount and drops the bank amount of the row (no double counting of an
-expense and its payment). A books month does not read it.
+expense and its payment). Z reports on the plan (``z_reports``) replace the
+bank's card settlements and cash deposits in the revenue row. A books month
+reads neither.
 
 No provider calls. Reads only.
 """
@@ -27,7 +29,7 @@ from datetime import date, timedelta
 from ...models import Bill, Expense, Invoice
 from ..bank_coverage import cashflow_row_objects
 from ..financial_reports_service import FinancialReportsService
-from . import filing, source_journal
+from . import filing, source_journal, z_reports
 
 BOOKS_COVERAGE_MIN = 0.8
 LEDGER = "ledger"
@@ -165,6 +167,7 @@ def monthly_pnl(db, organization_id: int, start: date, end: date, plan: dict | N
         filed = classified_bank(db, organization_id, start, end, plan)
     documents = _document_months(db, organization_id, start, end)
     journal = source_journal.journal_months(db, organization_id, start, end, plan)
+    z_months = z_reports.for_organization(plan, organization_id)
     months = []
     for key, lo, hi in month_windows(start, end):
         items = [(t, f) for t, f in filed if lo.isoformat() <= t.date <= hi.isoformat()]
@@ -172,6 +175,7 @@ def monthly_pnl(db, organization_id: int, start: date, end: date, plan: dict | N
         if bank is not None:
             # The coverage test compares the books with the bank alone.
             cash = source_journal.merge_into_cash_month(bank, journal.get(key))
+            cash = z_reports.merge_into_cash_month(cash, z_months.get(key))
         else:
             cash = None
         ledger_rev, ledger_cost = _ledger_month(reports, organization_id, lo, hi)
@@ -190,6 +194,8 @@ def monthly_pnl(db, organization_id: int, start: date, end: date, plan: dict | N
             detail = {k: cash[k] for k in ("lines", "unresolved_in", "unresolved_out", "review_out", "by_category")}
             if "journal" in cash:
                 detail["journal_dedupe"] = cash["journal"]
+            if "z_report" in cash:
+                detail["z_dedupe"] = cash["z_report"]
             blocked = cash["blocked"]
         else:
             source = None
@@ -212,10 +218,14 @@ def monthly_pnl(db, organization_id: int, start: date, end: date, plan: dict | N
             "net": None if revenue is None else _r(revenue - costs),
             "blocked": blocked,
             "journal": source_journal.summary(journal.get(key)),
+            "z_report": z_reports.summary(z_months.get(key)),
             **detail,
         })
-        if source == CASH_BASIS and "journal_dedupe" in detail:
-            months[-1]["source_label"] = SOURCE_LABELS[CASH_BASIS] + " + " + source_journal.SOURCE_LABEL
+        if source == CASH_BASIS:
+            extra = [label for flag, label in (("journal_dedupe", source_journal.SOURCE_LABEL),
+                                               ("z_dedupe", z_reports.SOURCE_LABEL)) if flag in detail]
+            if extra:
+                months[-1]["source_label"] = " + ".join([SOURCE_LABELS[CASH_BASIS], *extra])
     known = [m for m in months if m["source"]]
     sources = {m["source"] for m in known}
     return {
