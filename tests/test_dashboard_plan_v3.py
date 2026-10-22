@@ -262,3 +262,45 @@ def test_plan_v3_modules_do_not_import_a_provider():
                     names.extend(alias.name for alias in node.names)
                 blob = " ".join(names)
                 assert not any(word in blob for word in banned), path
+
+
+def test_removed_lines_drop_their_budget_rows_and_manual_rows_stay(client, fresh_org):
+    owner = fresh_org()
+    dashboard_id = _create(client, owner["headers"], owner["org_id"], f"plan-trim-{owner['org_id']}")
+    manual = client.put(f"/api/dashboards/{dashboard_id}/budget", headers=owner["headers"], json={"rows": [
+        {"year": 2026, "month": 1, "category": "insurance", "budgeted_amount": 7, "notes": "ידני"},
+    ]})
+    assert manual.status_code == 200, manual.text
+    first = _put(client, owner["headers"], dashboard_id, _plan(), "0")
+    assert first.status_code == 200, first.text
+    trimmed = _put(client, owner["headers"], dashboard_id, _plan(lines=[
+        {"group": "הפעלה", "category": "שכירות", "month": "2026-03", "amount": "900"},
+    ]), "1")
+    assert trimmed.status_code == 200, trimmed.text
+    with SessionLocal() as db:
+        rows = db.query(Budget).filter_by(organization_id=owner["org_id"]).all()
+        keys = {(row.year, row.month, row.category_name): row for row in rows}
+        assert (2026, 3, "marketing") not in keys
+        assert keys[(2026, 3, "rent")].budgeted_amount == Decimal("900.00")
+        assert keys[(2026, 3, "rent")].notes == f"plan:{dashboard_id}-2"
+        assert keys[(2026, 1, "insurance")].notes == "ידני"
+
+
+def test_a_stored_plan_that_v3_would_truncate_is_not_overwritten(client, fresh_org):
+    owner = fresh_org()
+    dashboard_id = _create(client, owner["headers"], owner["org_id"], f"plan-legacy-{owner['org_id']}")
+    loose = client.put(
+        f"/api/dashboards/{dashboard_id}/plan",
+        headers={**owner["headers"], "If-Match": "null"},
+        json={"payload": {"statusParameters": {"scenario": "base"}, "booksClosedMonths": ["2026-01"]}},
+    )
+    assert loose.status_code == 200, loose.text
+    read = client.get(f"/api/dashboards/{dashboard_id}/plan/v3", headers=owner["headers"])
+    assert read.json()["plan"] is None
+    refused = _put(client, owner["headers"], dashboard_id, _plan(), read.headers["etag"])
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "plan_schema_mismatch"
+    with SessionLocal() as db:
+        stored = db.get(DashboardPlan, dashboard_id)
+        assert stored.payload["statusParameters"] == {"scenario": "base"}
+        assert db.query(Budget).filter_by(organization_id=owner["org_id"]).count() == 0

@@ -6,7 +6,13 @@ checked by ``validate_filing_payload`` (the same rules as the loose plan
 API). ``bankDecisions`` are derived and are rejected rather than stored.
 Saving projects ``budgetLines`` into the organization's ``budgets`` rows and
 creates any missing group/category rows in the same transaction as the plan
-revision and its audit row.
+revision and its audit row. Projected rows are marked ``notes = plan:<version>``
+(the same marker as the loose plan projection); a later save deletes
+plan-owned rows that the new lines no longer contain.
+
+A save never silently drops data: if the stored plan carries fields or
+budget lines that version 3 does not keep (an older or imported shape), the
+save is refused with 409 ``plan_schema_mismatch``.
 
 Write access reuses the dashboard plan roles: owner (the organization admin),
 accountant, and client_editor. Viewers (``client_viewer``) can read.
@@ -22,8 +28,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import (
-    BaseModel, ConfigDict, Field, ValidationError, field_serializer, field_validator,
-    model_validator,
+    BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_serializer,
+    field_validator, model_validator,
 )
 from sqlalchemy.exc import IntegrityError
 
@@ -39,6 +45,8 @@ SCHEMA_VERSION = 3
 _MONTH = re.compile(r"^(?:20\d{2}|2100)-(?:0[1-9]|1[0-2])$")
 _MAX_AMOUNT = Decimal("9999999999.99")
 _NO_PREVIOUS = "0"
+PLAN_NOTE_PREFIX = "plan:"
+_V3_KEYS = {"budgetLines", "statusDecisions", "statusRules", "booksClosedMonths", "notes"}
 
 
 class BudgetLineV3(BaseModel):
@@ -102,6 +110,9 @@ class DashboardPlanV3(BaseModel):
         return self
 
 
+_LINES = TypeAdapter(list[BudgetLineV3])
+
+
 def read_plan(db, user: User, dashboard_id: int) -> dict:
     row = get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
     current = db.get(DashboardPlan, row.id)
@@ -125,9 +136,12 @@ def save_plan(db, user: User, dashboard_id: int, payload: object, if_match: str 
     plan = parse_plan(payload)
     current = db.get(DashboardPlan, row.id)
     previous, revision = _claim_revision(db, row.id, current, token)
+    _refuse_lossy_overwrite(current)
     stored = plan.model_dump(mode="json")
     try:
-        categories_created = _project(db, row.primary_organization_id, plan)
+        categories_created = _project(
+            db, row.primary_organization_id, plan, _version_token(row.id, revision),
+        )
         current = _write_plan(
             db, current, dashboard_id=row.id, user_id=user.id,
             previous=previous, revision=revision, stored=stored,
@@ -208,6 +222,29 @@ def _validation_message(exc: ValidationError) -> str:
     if loc and loc[-1] == "month":
         return "החודש חייב להיות בפורמט YYYY-MM"
     return "התוכנית אינה תקינה"
+
+
+def _refuse_lossy_overwrite(current: DashboardPlan | None) -> None:
+    """The stored plan must fit version 3, or the save would drop data."""
+    if current is None or not isinstance(current.payload, dict):
+        return
+    payload = current.payload
+    dropped = sorted(
+        key for key, value in payload.items()
+        if key not in _V3_KEYS and value not in (None, "", [], {})
+    )
+    lines_ok = True
+    if payload.get("budgetLines"):
+        try:
+            _LINES.validate_python(payload.get("budgetLines"))
+        except ValidationError:
+            lines_ok = False
+    if dropped or not lines_ok:
+        detail = ", ".join(dropped + ([] if lines_ok else ["budgetLines"]))
+        raise DashboardError(
+            409, "plan_schema_mismatch",
+            f"התוכנית השמורה אינה בגרסה 3 ושמירה הייתה מוחקת שדות: {detail}",
+        )
 
 
 def _match_token(if_match: str | None) -> str:
@@ -297,16 +334,24 @@ def _write_plan(db, current, *, dashboard_id: int, user_id: int, previous: str,
     return current
 
 
-def _project(db, organization_id: int, plan: DashboardPlanV3) -> int:
+def _project(db, organization_id: int, plan: DashboardPlanV3, version: str) -> int:
     created = 0
     groups: dict[str, Category] = {}
+    kept: set[int] = set()
     for line in plan.budgetLines:
         if line.group not in groups:
             groups[line.group], was_new = _ensure_group(db, organization_id, line.group)
             created += int(was_new)
         leaf, was_new = _ensure_leaf(db, organization_id, groups[line.group], line.category)
         created += int(was_new)
-        _upsert_budget(db, organization_id, leaf, line)
+        kept.add(_upsert_budget(db, organization_id, leaf, line, version).id)
+    for row in db.query(Budget).filter(
+        Budget.organization_id == organization_id,
+        Budget.notes.like(f"{PLAN_NOTE_PREFIX}%"),
+    ).all():
+        if row.id not in kept:
+            db.delete(row)
+    db.flush()
     return created
 
 
@@ -356,7 +401,7 @@ def _ensure_leaf(db, organization_id: int, parent: Category, name: str) -> tuple
     return row, True
 
 
-def _upsert_budget(db, organization_id: int, leaf: Category, line: BudgetLineV3) -> None:
+def _upsert_budget(db, organization_id: int, leaf: Category, line: BudgetLineV3, version: str) -> Budget:
     year_text, month_text = line.month.split("-")
     year, month = int(year_text), int(month_text)
     key = category_key(line.category)
@@ -381,8 +426,10 @@ def _upsert_budget(db, organization_id: int, leaf: Category, line: BudgetLineV3)
     target.category_id = leaf.id
     target.category_name = key
     target.budgeted_amount = line.amount
+    target.notes = f"{PLAN_NOTE_PREFIX}{version}"
     target.updated_at = datetime.utcnow()
     db.flush()
+    return target
 
 
 def _latest(rows: list[Budget]) -> Budget | None:
