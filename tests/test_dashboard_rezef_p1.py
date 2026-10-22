@@ -126,3 +126,64 @@ def test_journal_of_other_sources_and_books_months_is_not_read(fresh_org):
     assert source_journal.default_line("10001") is None and source_journal.default_line("50001") is None
     assert source_journal.default_line("90512") == ("overhead", "אחזקה, הקמה ותפעול")
     assert Decimal("0") == source_journal._amount("not a number")
+
+
+# ------------------------------------------------ G-26. intercompany netting rule
+
+def _ic_dashboard(client, platform_admin, fresh_org, slug):
+    from tests.test_dashboard_eliav_ui_fixes import _account
+    dashboard_id, chef, food = _consolidated(client, platform_admin, fresh_org, slug)
+    with SessionLocal() as db:
+        chef_main = _account(db, chef["org_id"], "עו״ש 8954", 0).id
+        chef_other = _account(db, chef["org_id"], "עו״ש אחר", 0).id
+        food_main = _account(db, food["org_id"], "Imported bank 1662", None, source="reviewed_local_import").id
+        # 1. Food Group pays the chef 5,000 on 30.8; the chef receives it on 2.9 (3 days): netted.
+        _bank(db, food["org_id"], date(2026, 8, 30), -5000, "העברה לשף", account_id=food_main)
+        _bank(db, chef["org_id"], date(2026, 9, 2), 5000, "העברה מבנק הפועלים", account_id=chef_main)
+        # 2. Same amount, 6 days apart: outside the window.
+        _bank(db, food["org_id"], date(2026, 9, 10), -2000, "העברה לשף", account_id=food_main)
+        _bank(db, chef["org_id"], date(2026, 9, 16), 2000, "העברה", account_id=chef_main)
+        # 3. A cash sale of the chef equal to a Food Group transfer: a sale is not netted.
+        _bank(db, food["org_id"], date(2026, 9, 20), -1180, "העברה לספק", account_id=food_main)
+        _bank(db, chef["org_id"], date(2026, 9, 20), 1180, "הפקדת מזומן", account_id=chef_main)
+        # 4. Two inflows equal to one outflow: the closer one is taken, once.
+        _bank(db, food["org_id"], date(2026, 9, 24), -700, "העברה לשף", account_id=food_main)
+        _bank(db, chef["org_id"], date(2026, 9, 21), 700, "העברה", account_id=chef_other)
+        _bank(db, chef["org_id"], date(2026, 9, 25), 700, "העברה", account_id=chef_main)
+        db.commit()
+    return dashboard_id, chef, food, chef_main
+
+
+def test_intercompany_rule_amount_window_category_and_one_use(client, fresh_org, platform_admin):
+    dashboard_id, chef, food, chef_main = _ic_dashboard(client, platform_admin, fresh_org, "p1-ic")
+    view = _view(client, platform_admin["headers"], dashboard_id, "2026-08-01", "2026-09-30")
+    removed = view["combined"]["intercompany_removed"]
+    assert removed["pairs"] == 2 and removed["amount"] == 5700.0
+    assert removed["window_days"] == 4 and "4 ימים" in removed["rule"]
+    chef_label = view["entities"][0]["label"]
+    assert [(item["from"], item["to"], item["amount"], item["days_apart"]) for item in removed["items"]] == [
+        ("פוד גרופ", chef_label, 5000.0, 3), ("פוד גרופ", chef_label, 700.0, 1),
+    ]
+    assert removed["items"][1]["in_date"] == "2026-09-25"
+    # Each side leaves its own month.
+    combined = {m["month"]: m for m in view["combined"]["cashflow"]["months"]}
+    entity = [{m["month"]: m for m in section["view"]["cashflow"]["months"]} for section in view["entities"]]
+    assert combined["2026-08"]["outflows"] == round(entity[1]["2026-08"]["outflows"] - 5000, 2)
+    assert combined["2026-09"]["inflows"] == round(
+        entity[0]["2026-09"]["inflows"] + entity[1].get("2026-09", {"inflows": 0})["inflows"] - 5700, 2)
+
+
+def test_intercompany_window_and_accounts_come_from_the_plan(client, fresh_org, platform_admin):
+    dashboard_id, chef, food, chef_main = _ic_dashboard(client, platform_admin, fresh_org, "p1-ic-plan")
+    _save(client, platform_admin["headers"], dashboard_id, {"intercompany": {"windowDays": 6, "accountIds": [chef_main]}})
+    view = _view(client, platform_admin["headers"], dashboard_id, "2026-08-01", "2026-09-30")
+    removed = view["combined"]["intercompany_removed"]
+    # 6 days: the 2,000 pair is netted. Only the chef's main account: the 700 on 25.9.
+    assert sorted(item["amount"] for item in removed["items"]) == [700.0, 2000.0, 5000.0]
+    assert removed["items"][-1]["in_date"] == "2026-09-25"
+    current = client.get(f"/api/dashboards/{dashboard_id}/plan", headers=platform_admin["headers"]).json()
+    for bad in ({"windowDays": 30}, {"accountIds": ["35"]}, {"other": 1}, {"windowDays": True}):
+        response = client.put(f"/api/dashboards/{dashboard_id}/plan",
+                              headers={**platform_admin["headers"], "If-Match": current["version"]},
+                              json={"payload": {"intercompany": bad}})
+        assert response.status_code == 422, bad

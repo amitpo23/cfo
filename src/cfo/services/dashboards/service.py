@@ -251,6 +251,7 @@ def validate_filing_payload(payload: dict) -> None:
     _validate_evidence(payload.get("liquidityEvidence"))
     _validate_builtin_pin(payload.get("filingRulesBuiltin"))
     _validate_journal_map(payload.get("journalAccountMap"))
+    _validate_intercompany(payload.get("intercompany"))
     closed = payload.get("booksClosedMonths")
     if closed is not None:
         if not isinstance(closed, list) or not all(
@@ -367,6 +368,25 @@ def _opening_balances(payload) -> list:
     evidence = payload.get("liquidityEvidence") if isinstance(payload, dict) else None
     items = evidence.get("openingBalances") if isinstance(evidence, dict) else None
     return items if isinstance(items, list) else []
+
+
+def _validate_intercompany(value) -> None:
+    """``plan.intercompany``: the netting window (0–10 days) and the counterparty accounts."""
+    if value is None:
+        return
+    from .multi_entity import IC_MAX_WINDOW_DAYS
+    ok = isinstance(value, dict) and not set(value) - {"windowDays", "accountIds", "note"}
+    window = value.get("windowDays") if ok else None
+    if ok and window is not None:
+        ok = not isinstance(window, bool) and isinstance(window, int) and 0 <= window <= IC_MAX_WINDOW_DAYS
+    accounts = value.get("accountIds") if ok else None
+    if ok and accounts is not None:
+        ok = isinstance(accounts, list) and len(accounts) <= 50 and all(
+            isinstance(item, int) and not isinstance(item, bool) for item in accounts)
+    if ok:
+        ok = _short_text(value.get("note"), limit=300)
+    if not ok:
+        raise _invalid_plan("הגדרות הקיזוז הבין-חברתי לא תקינות")
 
 
 def _validate_journal_map(value) -> None:

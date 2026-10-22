@@ -63,6 +63,16 @@ type JournalMonth = {
   balance_only: number;
 };
 
+type IntercompanyRemoved = {
+  pairs: number;
+  inflows: number;
+  outflows: number;
+  amount?: number;
+  window_days?: number;
+  rule?: string;
+  items?: { from: string | null; to: string | null; out_date: string; in_date: string; amount: number; days_apart: number }[];
+};
+
 type PendingMonth = { month: string; inflows: number; outflows: number; count: number };
 
 type CardMonth = { month: string; total: number; merchants: { merchant: string; amount: number }[] };
@@ -109,7 +119,7 @@ type DashboardView = {
     budget_vs_actual?: DashboardView['budget_vs_actual'];
     liquidity?: EntityLiquidity | null;
     forecast?: Forecast | null;
-    intercompany_removed?: { pairs: number; inflows: number; outflows: number };
+    intercompany_removed?: IntercompanyRemoved;
   };
   error?: { message_he?: string };
 };
@@ -247,6 +257,45 @@ export function JournalCard({ months }: { months: PnlMonth[] }) {
       <p className="mt-2 text-xs text-stone-500">
         חודש בלי תנועות בנק אינו נכלל ברווח והפסד: ביומן אין כרטיסי הכנסה, ולכן הרווח וההפסד של החודש לא ידוע.
       </p>
+    </section>
+  );
+}
+
+// The intercompany transfers netted out of the consolidated cash flow, and the rule that matched them.
+export function IntercompanyCard({ removed }: { removed: IntercompanyRemoved | null | undefined }) {
+  if (!removed) return null;
+  const items = removed.items ?? [];
+  return (
+    <section className="rounded-xl bg-white p-5 shadow-sm">
+      <h2 className="text-lg font-medium">קיזוז בין-חברתי</h2>
+      <p className="mt-2 text-sm">
+        קוזזו {removed.pairs} העברות בסך {money(removed.amount ?? removed.inflows)} מהכניסות ומהיציאות של התזרים המאוחד.
+      </p>
+      {removed.rule ? <p className="mt-1 text-xs text-stone-500">{removed.rule}</p> : null}
+      {items.length > 0 ? (
+        <table className="mt-3 w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <th className="py-2 text-right font-medium">מ-</th>
+              <th className="py-2 text-right font-medium">אל</th>
+              <th className="py-2 text-right font-medium">יציאה</th>
+              <th className="py-2 text-right font-medium">כניסה</th>
+              <th className="py-2 text-right font-medium">סכום</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={`${item.out_date}-${item.in_date}-${item.amount}-${item.from}`} className="border-b border-stone-100">
+                <td className="py-2">{item.from ?? '—'}</td>
+                <td className="py-2">{item.to ?? '—'}</td>
+                <td className="py-2">{item.out_date}</td>
+                <td className="py-2">{item.in_date}{item.days_apart ? ` (${item.days_apart} ימים)` : ''}</td>
+                <td className="py-2">{money(item.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
     </section>
   );
 }
@@ -559,11 +608,6 @@ export default function ClientDashboardPage() {
                 ))}
               </div>
             ) : null}
-            {multi && scope === 'combined' && view.combined?.intercompany_removed?.pairs ? (
-              <p className="mt-2 text-sm text-stone-500">
-                קוזזו {view.combined.intercompany_removed.pairs} העברות בין-חברתיות ({money(view.combined.intercompany_removed.inflows)}).
-              </p>
-            ) : null}
             <TabErrorBoundary tab={`${tab}:${scope}`}>
             <div className="mt-6 grid gap-6">
               {tab === 'status' ? (
@@ -572,6 +616,7 @@ export default function ClientDashboardPage() {
                   <PnlCard pnl={scoped.pnl} />
                   <JournalCard months={scoped.pnl?.months ?? []} />
                   <CashflowCard view={scoped} />
+                  {multi && scope === 'combined' ? <IntercompanyCard removed={view.combined?.intercompany_removed} /> : null}
                   {editor && filing ? (
                     <ReviewList
                       canEdit={editor.canEdit}

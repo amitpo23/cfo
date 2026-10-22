@@ -17,12 +17,12 @@ const components = process.argv[2] || join(here, '..', 'src', 'components');
 const entry = `
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import { BudgetVsActual, JournalCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
+import { BudgetVsActual, IntercompanyCard, JournalCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
 import { LiquidityPanel, OpeningBalanceCard, upcomingAmount, withOpeningBalance } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
-export { renderToStaticMarkup, createElement, BudgetVsActual, JournalCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
+export { renderToStaticMarkup, createElement, BudgetVsActual, IntercompanyCard, JournalCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
   categoryLabel, pieSlices };
 `;
@@ -192,6 +192,15 @@ try {
     expect(markup.includes('5,000') && markup.includes('לא נכלל'), 'no dropped bank amount / excluded month');
     expect(!markup.includes('2026-09'), 'a month without journal is shown');
     expect(html(ui.JournalCard, { months: [months[2]] }) === '', 'card rendered without a journal');
+  });
+
+  check('intercompany card: netted amount, rule and pairs', () => {
+    const removed = { pairs: 1, inflows: 5000, outflows: 5000, amount: 5000, window_days: 4, rule: 'קיזוז בין-חברתי: עד 4 ימים',
+      items: [{ from: 'פוד גרופ', to: 'השף', out_date: '2026-08-30', in_date: '2026-09-02', amount: 5000, days_apart: 3 }] };
+    const markup = html(ui.IntercompanyCard, { removed });
+    expect(markup.includes('5,000') && markup.includes('עד 4 ימים') && markup.includes('2026-09-02 (3 ימים)'), 'pairs or rule missing');
+    const old = html(ui.IntercompanyCard, { removed: { pairs: 0, inflows: 0, outflows: 0 } });
+    expect(old.includes('קוזזו 0'), 'the older shape does not render');
   });
 
   const importedPlan = process.env.REZEF_IMPORTED_PLAN;
