@@ -14,7 +14,7 @@ from ...models import BankTransaction, ClientDashboard, DashboardEntity, Dashboa
 from .. import bank_status
 from ..office_access import classifying_office_id, office_manages
 from .service import DashboardError
-from . import view_model
+from . import forecast, liquidity, view_model
 
 _MARKER = ("intercompany", "בין-חברתי", "בין חברתי")
 _PAIR_TOLERANCE = Decimal("0.005")
@@ -68,13 +68,15 @@ def build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date,
             "view": view_model.build_view(
                 db, entity.organization_id, start, end,
                 plan=_plan_for(plan, entity.organization_id == dashboard.primary_organization_id),
+                entity_id=getattr(entity, "id", None) or None,
+                with_budget=entity.organization_id == dashboard.primary_organization_id,
             ),
         })
     primary = next(
         (section["view"] for section in sections if section["role"] == "primary"),
         sections[0]["view"],
     )
-    combined = _combine(db, sections, start, end)
+    combined = _combine(db, sections, start, end, plan=plan)
     view = dict(primary)
     view["entities"] = sections
     view["combined"] = combined
@@ -107,14 +109,24 @@ def _accounts(db, entity) -> list[dict]:
     ]
 
 
-def _combine(db, sections: list[dict], start: date, end: date) -> dict:
+def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | None = None) -> dict:
     views = [section["view"] for section in sections]
     org_ids = [section["organization_id"] for section in sections]
     removed = _intercompany(db, org_ids, start, end)
+    position = liquidity.combine([
+        {"label": section["label"], "liquidity": section["view"].get("liquidity")} for section in sections
+    ])
     return {
         "pnl": _combine_pnl(views),
         "cashflow": _combine_cashflow(views, removed),
         "budget_vs_actual": _combine_budget(views),
+        "liquidity": position,
+        # The plan budget is the group's budget, so the combined forecast uses all of it.
+        "forecast": forecast.build_forecast(
+            forecast.combined_pnl_months(sections), as_of=end, plan=plan,
+            debt_service=position["debt_service"], budget_sums=view_model.plan_budget_sums(plan),
+            opening_balance=position["balance"],
+        ),
         "intercompany_removed": removed["summary"],
         "provider_calls": 0,
     }

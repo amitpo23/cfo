@@ -113,6 +113,48 @@ RULES: list[tuple[str, callable]] = [
     ("suppliers_direct", lambda d, a: a < 0),
 ]
 
+# Direction each built-in rule tests (amount sign in the lambdas above).
+RULE_DIRECTIONS = {
+    "intercompany": "both", "sales_card": "in", "card_bills": "out", "check_discounting": "both",
+    "loans_in": "in", "loans_out": "both", "interest": "both", "bank_fees": "both",
+    "tax_refund": "in", "sales_cash": "in", "customer_checks": "in", "reversal": "in",
+    "bank_journal": "in", "supplier_checks": "out", "national_insurance": "both",
+    "pension_insurance": "both", "fuel_energy": "both", "vehicles": "both", "office": "both",
+    "cash_withdrawals": "both", "transfers_out": "out", "other_in": "in", "suppliers_direct": "out",
+}
+FALLBACK_RULES = frozenset({"other_in", "suppliers_direct"})
+_PATTERN_KEY = {"sales_card": "card_issuers_in", "card_bills": "card_issuers_out", "intercompany": "food_group"}
+
+
+def builtin_rules_manifest() -> dict:
+    """The 23 built-in rules of the tool as data, in the tool's order, with one hash.
+
+    Intercompany first (it is tested before the others), then ``RULES``. The
+    two fallback rules have no keyword: they take any inflow / outflow left.
+    A plan may pin this hash (``filingRulesBuiltin``) so a later code change to
+    a rule shows up on the dashboard instead of silently refiling history.
+    """
+    import hashlib
+    import json
+
+    rules = []
+    for category in ["intercompany", *[name for name, _test in RULES]]:
+        pattern = _R.get(_PATTERN_KEY.get(category, category))
+        rules.append({
+            "id": category,
+            "category": category,
+            "label": CATEGORIES[category]["label"],
+            "field": "counterparty" if category == "intercompany" else "description",
+            "direction": RULE_DIRECTIONS[category],
+            "pattern": pattern.pattern if pattern is not None else "",
+            "fallback": category in FALLBACK_RULES,
+        })
+    digest = hashlib.sha256(
+        json.dumps(rules, ensure_ascii=False, sort_keys=True).encode(),
+    ).hexdigest()
+    return {"count": len(rules), "sha256": digest, "rules": rules}
+
+
 # Intercompany shortcut of the tool: chef checking account 35 or Food Group org 6.
 CHEF_ORG, CHEF_ACCOUNT, FOOD_GROUP_ORG = 2, 35, 6
 

@@ -34,8 +34,8 @@ from ...models import (
 from .budget import category_key, category_label
 from .filing import DECISION_CATEGORIES
 from .plan_budget import (
-    PLAN_NOTE_PREFIX, PlanBudgetError, budget_catalog, project_budget_lines,
-    validate_budget_lines,
+    FINANCING_CATEGORIES, PLAN_NOTE_PREFIX, PlanBudgetError, budget_catalog,
+    project_budget_lines, validate_budget_lines,
 )
 from .service import PLAN_LIMIT_BYTES, DashboardError, validate_filing_payload
 
@@ -58,7 +58,7 @@ PASSTHROUGH = (
     "rateAssumptions", "incomingAllocations", "invoiceDecisions",
     "discountInvoiceLinks",
 )
-LINE_KEYS = {"id", "label", "group", "kind", "activity", "unit", "custom", "category"}
+LINE_KEYS = {"id", "label", "group", "kind", "activity", "unit", "custom", "category", "defaults"}
 CELL_KEYS = {"quantity", "rate"}
 DECISION_KEYS = {
     "category", "action", "ruleCategory", "organizationId", "date", "amount",
@@ -69,13 +69,31 @@ RULE_KEYS = {
     "id", "contains", "field", "direction", "organizationId", "category", "updatedAt",
 }
 RULE_REQUIRED = RULE_KEYS - {"updatedAt"}
-PARAMETER_KEYS = {"scenario", "horizon", "growth", "vat"}
+PARAMETER_KEYS = {
+    "scenario", "horizon", "growth", "vat",
+    # the tool's own names (lib/budget-model.js DEFAULT_PARAMETERS)
+    "horizonMonths", "revenueGrowthPct", "costGrowthPct", "vatRate",
+}
 PAYROLL_KEYS = {"id", "label", "monthly", "group"}
 # Same field and direction values as the filing rules (filing._custom_match).
 RULE_FIELDS = {"description", "counterparty", "any"}
 RULE_DIRECTIONS = {"in", "out", "both"}
-# Eliav line kind -> plan_budget kind.
-LINE_KINDS = {"revenue": "revenue", "expense": "cost"}
+# Eliav line kind -> plan_budget kind. Principal, CAPEX and funding are cash, not P&L.
+LINE_KINDS = {
+    "revenue": "revenue", "expense": "cost", "interest": "cost", "depreciation": "cost",
+    "principal": "financing", "capex": "financing", "funding": "financing",
+}
+# A kind that fixes the category whatever the group is.
+KIND_CATEGORY = {
+    "interest": "interest_expense",
+    "depreciation": "depreciation",
+    "principal": "loan_principal",
+    "capex": "capex",
+    "funding": "funding",
+}
+# Seed lines whose category is not their group's (the tool's COMPARISON_ROWS).
+SEED_CATEGORY = {"overhead_bank_fees": "bank_fees"}
+SEED_SCENARIO = "בסיס"
 # Eliav group -> default P&L category key. A line may name its own ``category``.
 GROUPS = {
     "הכנסות": "sales",
@@ -178,7 +196,7 @@ def _line(raw: dict, *, custom: bool) -> dict:
         _reject("invalid_plan", f"סוג שורה לא מוכר: {kind}")
     category = raw.get("category")
     if category is None:
-        category = GROUPS[group]
+        category = KIND_CATEGORY.get(kind) or GROUPS[group]
     if not isinstance(category, str) or category_key(category) not in CATALOG:
         _reject("unknown_category", f"קטגוריית תקציב לא מוכרת בשורה {line_id}")
     category = category_key(category)
@@ -188,7 +206,14 @@ def _line(raw: dict, *, custom: bool) -> dict:
     unit = raw.get("unit") or "יחידה"
     if not isinstance(activity, str) or not isinstance(unit, str):
         _reject("invalid_plan", "activity ו-unit חייבים להיות טקסט")
-    return {
+    defaults = raw.get("defaults")
+    if defaults is not None:
+        if not isinstance(defaults, dict) or set(defaults) - CELL_KEYS:
+            _reject("unknown_field", f"ברירת מחדל לא תקינה בשורה {line_id}")
+        for value in defaults.values():
+            if value is not None:
+                _as_decimal(value, label="defaults", allow_negative=False)
+    out = {
         "id": line_id.strip(),
         "label": label.strip(),
         "group": group,
@@ -199,6 +224,9 @@ def _line(raw: dict, *, custom: bool) -> dict:
         "category": category,
         "cells": {},
     }
+    if defaults is not None:
+        out["defaults"] = dict(defaults)
+    return out
 
 
 def _apply_cell(line: dict, key: str, cell) -> None:
@@ -370,6 +398,8 @@ def monthly_totals(lines: list[dict]) -> list[dict]:
     totals: dict[tuple[str, str], Decimal] = {}
     for line in lines:
         key = category_key(str(line.get("category") or ""))
+        if key in FINANCING_CATEGORIES:
+            continue  # not projected to ``budgets``
         for month, cell in (line.get("months") or {}).items():
             amount = (
                 _as_decimal(cell["quantity"], label="quantity", allow_negative=False)
@@ -404,6 +434,9 @@ def _canonical_lines(catalog: dict[str, dict], scenario: str) -> tuple[list[dict
             "category": line["category"],
             "kind": CATALOG[line["category"]],
             "months": months,
+            # display only; PUT /plan ignores them and the editor keeps them
+            "group": line["group"],
+            "unit": line["unit"],
         })
         detail[line["id"]] = {
             "group": line["group"],
@@ -412,6 +445,8 @@ def _canonical_lines(catalog: dict[str, dict], scenario: str) -> tuple[list[dict
             "unit": line["unit"],
             "custom": line["custom"],
         }
+        if "defaults" in line:
+            detail[line["id"]]["defaults"] = line["defaults"]
     return lines, detail, others
 
 
@@ -562,7 +597,12 @@ def _same_hash(revision, digest: str) -> bool:
     return f"sha256:{digest}" in revision.change_summary
 
 
-def prepare_import(db, dashboard_id: int, document: dict) -> dict:
+# With ``budget_only`` the import owns only these keys; filing decisions and
+# rules already saved in Rezef are kept.
+BUDGET_ONLY_KEYS = ("source", "sourceVersion", "budgetLines", "eliavImport")
+
+
+def prepare_import(db, dashboard_id: int, document: dict, *, budget_only: bool = False) -> dict:
     """Validate and diff. Does not write."""
     dashboard = db.get(ClientDashboard, dashboard_id)
     if dashboard is None:
@@ -576,9 +616,19 @@ def prepare_import(db, dashboard_id: int, document: dict) -> dict:
         data, source_version=source_version, applied=applied, rejected=rejected, rules=rules,
     )
     current = db.get(DashboardPlan, dashboard.id)
-    if current is not None and isinstance(current.payload, dict):
+    existing = current.payload if current is not None and isinstance(current.payload, dict) else {}
+    if budget_only:
+        owned = {key: payload[key] for key in BUDGET_ONLY_KEYS if key in payload}
+        parameters = existing.get("statusParameters")
+        if isinstance(parameters, dict) or payload.get("statusParameters"):
+            owned["statusParameters"] = {
+                **(parameters if isinstance(parameters, dict) else {}),
+                **(payload.get("statusParameters") or {}),
+            }
+        payload = owned
+    if existing:
         # Keys the import does not own (booksClosedMonths, dedupePairs, ...) stay.
-        payload = {**current.payload, **payload}
+        payload = {**existing, **payload}
         payload.pop("schemaVersion", None)
     lines = _editor_accepts(payload)
     totals = monthly_totals(payload["budgetLines"])
@@ -600,6 +650,7 @@ def prepare_import(db, dashboard_id: int, document: dict) -> dict:
         "rejected": rejected,
         "rules": rules,
         "budget_diff": [] if idempotent else _diff(before, totals),
+        "budget_only": budget_only,
     }
 
 
@@ -613,6 +664,7 @@ def _result(prepared: dict, *, applied: bool) -> dict:
         "budget_lines": len(prepared["payload"]["budgetLines"]),
         "scenario": prepared["scenario"],
         "other_scenarios": sorted(prepared["payload"]["eliavImport"]["otherScenarios"]),
+        "budget_only": prepared.get("budget_only", False),
         "decisions_applied": len(prepared["applied"]),
         "decisions_rejected": len(prepared["rejected"]),
         "rules": len(prepared["rules"]),
@@ -623,8 +675,9 @@ def _result(prepared: dict, *, applied: bool) -> dict:
     }
 
 
-def import_plan(db, dashboard_id: int, document: dict, *, apply: bool) -> dict:
-    prepared = prepare_import(db, dashboard_id, document)
+def import_plan(db, dashboard_id: int, document: dict, *, apply: bool,
+                budget_only: bool = False) -> dict:
+    prepared = prepare_import(db, dashboard_id, document, budget_only=budget_only)
     if not apply or prepared["idempotent"]:
         return _result(prepared, applied=False)
     _write(db, prepared)
@@ -789,3 +842,55 @@ def render_report(report: dict) -> str:
         )
     lines.append("תוצאה: תקין" if report["ok"] else "תוצאה: לא תואם")
     return "\n".join(lines)
+
+
+SEED_DROPPED_KEYS = {"source", "note", "vehicle", "declaredMarketValue", "paymentTerms"}
+
+
+def seed_export(seed: list, months: list[str], *, scenario: str = SEED_SCENARIO,
+                version: str | None = None) -> dict:
+    """An import document from the tool's ``lib/budget-seed.json``.
+
+    Every seed line becomes a canonical line. A line with both a default
+    quantity and a default rate gets that cell in every month of ``months``
+    (the tool applies seed defaults to any month). Lines with a missing
+    quantity or rate get no cells: the tool shows them as "no budget" too.
+    Their partial defaults are kept under ``eliavImport.lines[id].defaults``.
+    Seed-only fields (vehicle details, notes, payment terms) are not plan data
+    and are dropped; the seed file stays the archive.
+    """
+    if not isinstance(seed, list):
+        _reject("invalid_plan", "קובץ ה-seed חייב להיות רשימה")
+    for month in months:
+        if not MONTH_KEY.fullmatch(str(month)):
+            _reject("invalid_plan", f"חודש לא תקין: {month}")
+    lines, budgets = [], {}
+    for raw in seed:
+        if not isinstance(raw, dict):
+            _reject("invalid_plan", "שורת seed חייבת להיות אובייקט")
+        unknown = set(raw) - LINE_KEYS - CELL_KEYS - SEED_DROPPED_KEYS
+        if unknown:
+            _reject("unknown_field", f"שדה לא מוכר ב-seed: {sorted(unknown)[0]}")
+        line = {key: raw[key] for key in ("id", "label", "group", "kind", "activity", "unit") if key in raw}
+        if raw.get("id") in SEED_CATEGORY:
+            line["category"] = SEED_CATEGORY[raw["id"]]
+        quantity, rate = raw.get("quantity"), raw.get("rate")
+        if quantity is not None and rate is not None:
+            for month in months:
+                budgets.setdefault(f"{month}|{scenario}", {})[raw["id"]] = {
+                    "quantity": quantity, "rate": rate,
+                }
+        elif quantity is not None or rate is not None:
+            line["defaults"] = {"quantity": quantity, "rate": rate}
+        lines.append(line)
+    digest = hashlib.sha256(
+        json.dumps(seed, sort_keys=True, ensure_ascii=False).encode(),
+    ).hexdigest()[:12]
+    return {
+        "version": version or f"budget-seed-{digest}",
+        "data": {
+            "lines": lines,
+            "budgets": budgets,
+            "statusParameters": {"scenario": scenario},
+        },
+    }

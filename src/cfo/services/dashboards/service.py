@@ -247,12 +247,121 @@ def validate_filing_payload(payload: dict) -> None:
                 raise _invalid_plan("שדה הכלל אינו מוכר")
             if rule.get("direction", "both") not in _RULE_DIRECTIONS:
                 raise _invalid_plan("כיוון הכלל אינו מוכר")
+    _validate_parameters(payload.get("statusParameters"))
+    _validate_evidence(payload.get("liquidityEvidence"))
+    _validate_builtin_pin(payload.get("filingRulesBuiltin"))
     closed = payload.get("booksClosedMonths")
     if closed is not None:
         if not isinstance(closed, list) or not all(
             isinstance(m, str) and re.fullmatch(r"20\d{2}-(0[1-9]|1[0-2])", m) for m in closed
         ):
             raise _invalid_plan("רשימת החודשים הסגורים לא תקינה")
+
+
+_DATE_RE = re.compile(r"^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
+_PARAMETER_KEYS = {
+    "scenario", "horizonMonths", "revenueGrowthPct", "costGrowthPct", "vatRate",
+    # older import names, kept as sent
+    "horizon", "growth", "vat",
+}
+EVIDENCE_LIMIT = 200
+_EVIDENCE_KINDS = {"facilities", "loans", "checks", "events"}
+
+
+def _number(value, *, low: float, high: float) -> bool:
+    return (not isinstance(value, bool) and isinstance(value, (int, float))
+            and low <= value <= high)
+
+
+def _validate_parameters(parameters) -> None:
+    """The tool's budget parameters: scenario, horizon 1–12, growth %, VAT 0–0.3."""
+    if parameters is None:
+        return
+    if not isinstance(parameters, dict) or set(parameters) - _PARAMETER_KEYS:
+        raise _invalid_plan("פרמטרי התקציב לא תקינים")
+    scenario = parameters.get("scenario")
+    if scenario is not None and (not isinstance(scenario, str) or not scenario.strip() or len(scenario) > 80):
+        raise _invalid_plan("שם התרחיש לא תקין")
+    if "horizonMonths" in parameters and not (
+        _number(parameters["horizonMonths"], low=1, high=12) and float(parameters["horizonMonths"]).is_integer()
+    ):
+        raise _invalid_plan("אופק התחזית חייב להיות 1 עד 12 חודשים")
+    for key in ("revenueGrowthPct", "costGrowthPct"):
+        if key in parameters and not _number(parameters[key], low=-50, high=50):
+            raise _invalid_plan("אחוז הצמיחה החודשי חייב להיות בין ‎-50 ל-50")
+    if "vatRate" in parameters and not _number(parameters["vatRate"], low=0, high=0.3):
+        raise _invalid_plan("שיעור המע״מ חייב להיות בין 0 ל-0.3")
+
+
+def _optional_amount(value, *, allow_negative: bool = False) -> bool:
+    if value is None:
+        return True
+    return _number(value, low=-MAX_PLAN_AMOUNT if allow_negative else 0, high=MAX_PLAN_AMOUNT)
+
+
+def _optional_date(value) -> bool:
+    return value is None or (isinstance(value, str) and bool(_DATE_RE.fullmatch(value)))
+
+
+def _short_text(value, *, required: bool = False, limit: int = 120) -> bool:
+    if value is None:
+        return not required
+    return isinstance(value, str) and (bool(value.strip()) or not required) and len(value) <= limit
+
+
+def _validate_evidence(evidence) -> None:
+    """Dated liquidity evidence the bank feed does not carry (the tool's
+    liquidity-evidence.json): credit facilities, loans, post-dated checks, events.
+    An unknown amount is ``null``, never 0."""
+    if evidence is None:
+        return
+    if not isinstance(evidence, dict) or set(evidence) - (_EVIDENCE_KINDS | {"observedAt", "source"}):
+        raise _invalid_plan("ראיות הנזילות לא תקינות")
+    if not _short_text(evidence.get("source"), limit=300) or not _short_text(evidence.get("observedAt"), limit=40):
+        raise _invalid_plan("ראיות הנזילות לא תקינות")
+    for kind in _EVIDENCE_KINDS:
+        items = evidence.get(kind)
+        if items is None:
+            continue
+        if not isinstance(items, list) or len(items) > EVIDENCE_LIMIT:
+            raise _invalid_plan(f"אפשר לשמור עד {EVIDENCE_LIMIT} פריטים בכל סוג ראיה")
+        for item in items:
+            if not isinstance(item, dict):
+                raise _invalid_plan("פריט ראיה לא תקין")
+            org = item.get("organizationId")
+            if org is not None and (isinstance(org, bool) or not isinstance(org, int)):
+                raise _invalid_plan("לפריט ראיה ארגון לא תקין")
+            ok = _short_text(item.get("note"), limit=300) and _short_text(item.get("source"), limit=300)
+            if kind == "facilities":
+                ok = ok and _short_text(item.get("label"), required=True) and _optional_amount(item.get("limit")) \
+                    and _optional_date(item.get("validFrom")) and _optional_date(item.get("validTo"))
+            elif kind == "loans":
+                ok = ok and _short_text(item.get("label"), required=True) and _optional_amount(item.get("balance")) \
+                    and _optional_date(item.get("asOf")) and _optional_date(item.get("maturity"))
+            elif kind == "checks":
+                ok = ok and _short_text(item.get("check"), required=True, limit=40) \
+                    and _optional_date(item.get("date")) and item.get("date") is not None \
+                    and _number(item.get("amount"), low=0.01, high=MAX_PLAN_AMOUNT) \
+                    and _short_text(item.get("payee"))
+            else:
+                ok = ok and _short_text(item.get("label"), required=True) and item.get("date") is not None \
+                    and _optional_date(item.get("date")) and _optional_amount(item.get("amount"), allow_negative=True) \
+                    and _short_text(item.get("kind"), limit=40)
+            if not ok:
+                raise _invalid_plan("פריט ראיה לא תקין")
+
+
+def _validate_builtin_pin(pin) -> None:
+    if pin is None:
+        return
+    from .filing import CATEGORIES
+    if not isinstance(pin, dict) or not re.fullmatch(r"[0-9a-f]{64}", str(pin.get("sha256") or "")):
+        raise _invalid_plan("קיבוע הכללים המובנים לא תקין")
+    rules = pin.get("rules")
+    if not isinstance(rules, list) or len(rules) > 50 or any(
+        not isinstance(rule, dict) or rule.get("category") not in CATEGORIES for rule in rules
+    ):
+        raise _invalid_plan("קיבוע הכללים המובנים לא תקין")
 
 
 def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | None) -> dict:
@@ -348,14 +457,24 @@ def read_filing(db, user: User, dashboard_id: int, *, page: int, page_size: int)
     from ..bank_status import card_account_ids, counts_in_cash_flow
     from .filing_report import build_filing_report
     from .plan_budget import budget_catalog
+    from .multi_entity import assert_same_office
     current = db.get(DashboardPlan, row.id)
     payload = current.payload if current is not None and isinstance(current.payload, dict) else {}
-    org_id = row.primary_organization_id
-    card_ids = card_account_ids(db, org_id)
+    # Every entity of the dashboard: the tool files the chef and Food Group together.
+    entities = (
+        db.query(DashboardEntity).filter_by(dashboard_id=row.id).order_by(DashboardEntity.id).all()
+    )
+    if len(entities) > 1:
+        assert_same_office(db, row, entities)
+    labels = {entity.organization_id: entity.label for entity in entities}
+    org_ids = sorted(labels) or [row.primary_organization_id]
+    card_ids: set[int] = set()
+    for org_id in org_ids:
+        card_ids |= card_account_ids(db, org_id)
     bank_rows = (
         db.query(BankTransaction)
         .filter(
-            BankTransaction.organization_id == org_id,
+            BankTransaction.organization_id.in_(org_ids),
             BankTransaction.superseded_by_id.is_(None),
         )
         .order_by(BankTransaction.transaction_date.desc(), BankTransaction.id.desc())
@@ -369,12 +488,17 @@ def read_filing(db, user: User, dashboard_id: int, *, page: int, page_size: int)
             "date": invoice.issue_date.isoformat(),
             "total": float(invoice.total or 0),
         }
-        for invoice in db.query(Invoice).filter(Invoice.organization_id == org_id).all()
+        for invoice in db.query(Invoice).filter(Invoice.organization_id.in_(org_ids)).all()
         if invoice.issue_date is not None
     ]
     report = build_filing_report(
         visible, payload, page=page, page_size=page_size, invoices=invoices,
     )
+    for item in report["review"]["items"]:
+        item["entity"] = labels.get(item["organization_id"])
+    report["entities"] = [
+        {"organization_id": org_id, "label": labels.get(org_id)} for org_id in org_ids
+    ]
     role = role_for(db, user, row)
     report["role"] = role
     report["can_edit"] = role in PLAN_ROLES
@@ -447,3 +571,95 @@ def failure_window_start(now: datetime | None = None) -> datetime:
 
 def link_cookie_lifetime() -> timedelta:
     return timedelta(days=30)
+
+
+MAX_ENTITY_ACCOUNTS = 50
+
+
+def _entity_out(db, entity: DashboardEntity) -> dict:
+    from ...models import DashboardEntityAccount
+    accounts = db.query(DashboardEntityAccount).filter_by(entity_id=entity.id).all()
+    return {
+        "id": entity.id, "organization_id": entity.organization_id, "label": entity.label,
+        "role": entity.role,
+        "accounts": [
+            {"account_id": row.account_id, "display_label": row.display_label}
+            for row in sorted(accounts, key=lambda row: row.account_id)
+        ],
+    }
+
+
+def list_entities(db, user: User, dashboard_id: int) -> list[dict]:
+    row = get_dashboard(db, user, dashboard_id, allowed={"owner"})
+    entities = db.query(DashboardEntity).filter_by(dashboard_id=row.id).order_by(DashboardEntity.id).all()
+    return [_entity_out(db, entity) for entity in entities]
+
+
+def add_entity(db, user: User, dashboard_id: int, *, organization_id: int, label: str) -> dict:
+    """Add a related organization (Food Group next to the chef). Same office only."""
+    from .multi_entity import assert_same_office
+    row = get_dashboard(db, user, dashboard_id, allowed={"owner"})
+    org = db.get(Organization, organization_id)
+    if org is None or not org.is_active or not _can_access_org(
+        db, user, organization_id, row.office_organization_id,
+    ):
+        raise not_found()
+    if db.query(DashboardEntity).filter_by(dashboard_id=row.id, organization_id=organization_id).first():
+        raise DashboardError(409, "entity_exists", "הישות כבר מחוברת לדשבורד")
+    entity = DashboardEntity(
+        dashboard_id=row.id, organization_id=organization_id,
+        label=(label or org.name).strip()[:255], role="related",
+    )
+    existing = db.query(DashboardEntity).filter_by(dashboard_id=row.id).all()
+    try:
+        assert_same_office(db, row, [*existing, entity])
+    except DashboardError:
+        db.rollback()
+        raise
+    db.add(entity)
+    db.flush()
+    db.add(AuditLog(
+        user_id=user.id, organization_id=row.primary_organization_id,
+        action="ADD_DASHBOARD_ENTITY", entity_type="DashboardEntity", entity_id=entity.id,
+        details={"dashboard_id": row.id, "organization_id": organization_id, "provider_calls": 0},
+    ))
+    db.commit()
+    return _entity_out(db, entity)
+
+
+def set_entity_accounts(db, user: User, dashboard_id: int, entity_id: int, accounts: list[dict]) -> dict:
+    """Bind bank and card accounts to an entity. The set replaces the previous one.
+
+    A bound entity reads liquidity from these accounts only. Every account must
+    belong to the entity's organization.
+    """
+    from ...models import Account, DashboardEntityAccount
+    row = get_dashboard(db, user, dashboard_id, allowed={"owner"})
+    entity = db.get(DashboardEntity, entity_id)
+    if entity is None or entity.dashboard_id != row.id:
+        raise not_found()
+    if len(accounts) > MAX_ENTITY_ACCOUNTS:
+        raise DashboardError(422, "too_many_accounts", f"אפשר לחבר עד {MAX_ENTITY_ACCOUNTS} חשבונות")
+    wanted: dict[int, str | None] = {}
+    for item in accounts:
+        account = db.get(Account, item["account_id"])
+        if account is None or account.organization_id != entity.organization_id:
+            raise DashboardError(422, "account_not_in_entity", "החשבון אינו שייך לישות")
+        label = item.get("display_label")
+        wanted[account.id] = label.strip()[:255] if isinstance(label, str) and label.strip() else account.name
+    current = {r.account_id: r for r in db.query(DashboardEntityAccount).filter_by(entity_id=entity.id).all()}
+    for account_id, binding in current.items():
+        if account_id not in wanted:
+            db.delete(binding)
+    for account_id, label in wanted.items():
+        if account_id in current:
+            current[account_id].display_label = label
+        else:
+            db.add(DashboardEntityAccount(entity_id=entity.id, account_id=account_id, display_label=label))
+    db.add(AuditLog(
+        user_id=user.id, organization_id=row.primary_organization_id,
+        action="BIND_DASHBOARD_ACCOUNTS", entity_type="DashboardEntity", entity_id=entity.id,
+        details={"account_ids": sorted(wanted), "provider_calls": 0},
+    ))
+    db.commit()
+    return _entity_out(db, entity)

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 
 export type FilingRule = {
   id: string;
@@ -12,6 +12,7 @@ export type FilingRule = {
   match_count: number;
   overridden: number;
   total: number;
+  fallback?: boolean;
 };
 
 export type ReviewItem = {
@@ -21,11 +22,12 @@ export type ReviewItem = {
   description: string;
   counterparty: string;
   amount: number;
+  entity?: string | null;
   filed_by: { reason_he: string; note?: string | null };
 };
 
 export type FilingCategory = { key: string; label_he: string };
-export type BudgetCategory = { key: string; label_he: string; kind: 'revenue' | 'cost' };
+export type BudgetCategory = { key: string; label_he: string; kind: 'revenue' | 'cost' | 'financing' };
 
 export type FilingReport = {
   rules: FilingRule[];
@@ -33,6 +35,8 @@ export type FilingReport = {
   categories: FilingCategory[];
   budget_categories: BudgetCategory[];
   unmatched_decisions?: { transaction_id: string; reason: string }[];
+  builtin_manifest?: { count: number; sha256: string; pinned_sha256: string | null; in_sync: boolean | null };
+  entities?: { organization_id: number; label: string | null }[];
   can_edit: boolean;
 };
 
@@ -40,6 +44,8 @@ export type LineDraft = {
   id: string;
   label: string;
   category: string;
+  group?: string;
+  unit?: string;
   months: Record<string, { quantity: string; rate: string }>;
 };
 
@@ -85,7 +91,14 @@ export function linesFromPayload(payload: PlanPayload): LineDraft[] {
         };
       }
     }
-    return [{ id: row.id, label: row.label, category: row.category, months }];
+    return [{
+      id: row.id,
+      label: row.label,
+      category: row.category,
+      ...(typeof row.group === 'string' ? { group: row.group } : {}),
+      ...(typeof row.unit === 'string' ? { unit: row.unit } : {}),
+      months,
+    }];
   });
 }
 
@@ -139,9 +152,46 @@ export function budgetLinesPayload(lines: LineDraft[], categories: BudgetCategor
       category: line.category,
       kind: kindByKey.get(line.category),
       months,
+      ...(line.group ? { group: line.group } : {}),
+      ...(line.unit ? { unit: line.unit } : {}),
     });
   }
   return { lines: payload };
+}
+
+const NO_GROUP = 'שורות נוספות';
+
+// Lines of one group together, in the order each group first appears.
+export function groupedLines(lines: LineDraft[]): { line: LineDraft; header: string | null }[] {
+  const order: string[] = [];
+  const byGroup = new Map<string, LineDraft[]>();
+  for (const line of lines) {
+    const group = line.group || NO_GROUP;
+    if (!byGroup.has(group)) {
+      byGroup.set(group, []);
+      order.push(group);
+    }
+    byGroup.get(group)?.push(line);
+  }
+  const showHeaders = order.length > 1 || order[0] !== NO_GROUP;
+  return order.flatMap((group) => (byGroup.get(group) ?? []).map((line, index) => ({
+    line,
+    header: showHeaders && index === 0 ? group : null,
+  })));
+}
+
+export function monthTotal(lines: LineDraft[], month: string, categories: BudgetCategory[], kind: BudgetCategory['kind']): number {
+  const kindByKey = new Map(categories.map((category) => [category.key, category.kind]));
+  let total = 0;
+  for (const line of lines) {
+    if (kindByKey.get(line.category) !== kind) continue;
+    const cell = line.months[month];
+    if (!cell) continue;
+    const quantity = parseAmount(cell.quantity);
+    const rate = parseAmount(cell.rate);
+    if (quantity !== null && rate !== null) total += quantity * rate;
+  }
+  return total;
 }
 
 function Card({ title, children }: { title: string; children: ReactNode }) {
@@ -228,10 +278,16 @@ export function BudgetEditor({
             </tr>
           </thead>
           <tbody>
-            {lines.map((line) => {
+            {groupedLines(lines).map(({ line, header }) => {
               const cell = line.months[month] ?? { quantity: '', rate: '' };
               return (
-                <tr key={line.id} className="border-b border-stone-100">
+                <Fragment key={line.id}>
+                {header ? (
+                  <tr className="border-b bg-stone-50">
+                    <td className="py-2 font-medium" colSpan={canEdit ? 6 : 5}>{header}</td>
+                  </tr>
+                ) : null}
+                <tr className="border-b border-stone-100">
                   <td className="py-2">
                     <input
                       className="w-full rounded border border-stone-200 px-2 py-1"
@@ -292,11 +348,17 @@ export function BudgetEditor({
                     </td>
                   ) : null}
                 </tr>
+                </Fragment>
               );
             })}
           </tbody>
         </table>
       )}
+      {lines.length > 0 ? (
+        <p className="mt-3 text-sm text-stone-600">
+          סה״כ {month}: הכנסות {money(monthTotal(lines, month, categories, 'revenue'))} · הוצאות {money(monthTotal(lines, month, categories, 'cost'))} · מימון {money(monthTotal(lines, month, categories, 'financing'))}
+        </p>
+      ) : null}
       {canEdit ? (
         <button
           type="button"
@@ -318,7 +380,9 @@ export function FilingRulesCard({
   seed,
   saving,
   onSave,
+  manifest,
 }: {
+  manifest?: FilingReport['builtin_manifest'];
   canEdit: boolean;
   rules: FilingRule[];
   categories: FilingCategory[];
@@ -355,6 +419,11 @@ export function FilingRulesCard({
 
   return (
     <Card title="כללי תיוק">
+      <p className="mt-3 text-sm text-stone-600">
+        סדר העדיפות: החלטת מנהל ← כלל מותאם ← כלל מובנה. {rules.filter((rule) => rule.source === 'builtin').length} כללים מובנים, {rules.filter((rule) => rule.source === 'custom').length} מותאמים.
+        {manifest?.in_sync === false ? ' הכללים המובנים השתנו מאז שקובעו בתוכנית — יש לבדוק את הסיווג מחדש.' : ''}
+        {manifest?.in_sync === true ? ' הכללים המובנים תואמים לקיבוע בתוכנית.' : ''}
+      </p>
       <table className="mt-4 w-full text-sm">
         <thead>
           <tr className="border-b text-stone-500">
@@ -373,7 +442,7 @@ export function FilingRulesCard({
                 <span className="mr-2 text-stone-500">{rule.source === 'custom' ? 'מותאם' : 'מובנה'}</span>
               </td>
               <td className="py-2">
-                «{rule.contains}» · {fieldLabel(rule.field)} · {directionLabel(rule.direction)}
+                {rule.fallback ? 'כל תנועה שלא נתפסה בכלל קודם' : `«${rule.contains}»`} · {fieldLabel(rule.field)} · {directionLabel(rule.direction)}
                 {rule.overridden > 0 ? <span className="mr-2 text-stone-500">נדרס {rule.overridden}</span> : null}
               </td>
               <td className="py-2">{rule.match_count}</td>
@@ -459,6 +528,7 @@ function ReviewRow({
     <tr className="border-b border-stone-100 align-top">
       <td className="py-2">{item.date}</td>
       <td className="py-2">
+        {item.entity ? <div className="text-xs text-stone-500">{item.entity}</div> : null}
         <div>{description}</div>
         {item.counterparty && item.counterparty !== item.description ? <div className="text-stone-500">{item.counterparty}</div> : null}
       </td>

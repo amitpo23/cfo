@@ -41,6 +41,19 @@ def build_filing_report(
             if key in filing.DECISION_CATEGORIES
         ],
         "unmatched_decisions": _unmatched(decisions, paired),
+        "builtin_manifest": _manifest_status(payload),
+    }
+
+
+def _manifest_status(payload: dict) -> dict:
+    manifest = filing.builtin_rules_manifest()
+    pinned = payload.get("filingRulesBuiltin")
+    pinned_sha = pinned.get("sha256") if isinstance(pinned, dict) else None
+    return {
+        "count": manifest["count"],
+        "sha256": manifest["sha256"],
+        "pinned_sha256": pinned_sha,
+        "in_sync": None if pinned_sha is None else pinned_sha == manifest["sha256"],
     }
 
 
@@ -79,7 +92,8 @@ def _builtin_rules(paired: list[tuple]) -> list[dict]:
         if category in seen:
             continue
         keywords = _keywords(category)
-        if not keywords:
+        fallback = category in filing.FALLBACK_RULES
+        if not keywords and not fallback:
             continue
         seen.add(category)
         meta = filing.CATEGORIES.get(category, {})
@@ -104,6 +118,7 @@ def _builtin_rules(paired: list[tuple]) -> list[dict]:
             "match_count": len(matches),
             "overridden": overridden,
             "total": _total(matches),
+            "fallback": fallback,
         })
     return listed
 

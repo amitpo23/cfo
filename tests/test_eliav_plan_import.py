@@ -114,6 +114,7 @@ def test_apply_is_idempotent_and_keeps_line_detail(client, fresh_org):
                 "2026-08": {"quantity": 1, "rate": 30000},
                 "2026-09": {"quantity": 1, "rate": 30000},
             },
+            "group": "כוח אדם", "unit": "חודש",
         }
         assert plan.payload["eliavImport"]["lines"]["wage_eliav"]["group"] == "כוח אדם"
         revision = db.get(DashboardPlanRevision, plan.version)
