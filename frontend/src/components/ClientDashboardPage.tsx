@@ -102,7 +102,7 @@ type CashStatement = {
   groups?: { id: string; label: string }[];
   lines?: { id: string; label: string; group: string; review?: boolean; values: StatementCells; total: number }[];
   totals?: Record<string, StatementCells>;
-  forecast?: { status?: string; months: string[]; rows: Record<string, StatementCells>; note: string } | null;
+  forecast?: { status?: string; months: string[]; rows: Record<string, StatementCells>; note: string; line_items?: boolean; line_note?: string } | null;
   message?: string | null;
   netting_note?: string | null;
   scope?: Record<string, { label: string; entities: string[]; missing: string[] }>;
@@ -425,7 +425,10 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
   const totals = statement.totals ?? {};
   const forecast = statement.forecast && statement.forecast.months.length > 0 ? statement.forecast : null;
   const forecastMonths = forecast?.months ?? [];
-  const blank = forecastMonths.map((month) => <td key={`f-${month}`} className="py-1" />);
+  // The forecast has group totals only: a line's forecast cell says so instead of staying empty.
+  const blank = forecastMonths.map((month) => (
+    <td key={`f-${month}`} className="bg-stone-50 py-1 text-stone-400" title="תחזית לפי קבוצה בלבד">—</td>
+  ));
   return (
     <section className="rounded-xl bg-white p-5 shadow-sm">
       <h2 className="text-lg font-medium">דוח תזרים לפי סעיף וחודש</h2>
@@ -462,7 +465,9 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
                   <td className="py-1">סה״כ {group.label}</td>
                   {months.map((month) => <td key={month} className="py-1">{cell(totals[group.id]?.[month])}</td>)}
                   {forecastMonths.map((month) => (
-                    <td key={`f-${month}`} className="bg-stone-50 py-1">{forecastRow ? cell(forecastRow[month]) : ''}</td>
+                    <td key={`f-${month}`} className={`bg-stone-50 py-1 ${forecastRow ? '' : 'font-normal text-stone-400'}`}>
+                      {forecastRow ? cell(forecastRow[month]) : 'לא נחזה'}
+                    </td>
                   ))}
                 </tr>,
               ];
@@ -481,6 +486,11 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
       {statement.netting_note ? <p className="mt-1 text-xs text-stone-500">{statement.netting_note}</p> : null}
       {statement.scope_note ? <p className="mt-1 text-xs text-amber-800">{statement.scope_note}</p> : null}
       {forecast ? <p className="mt-1 text-xs text-stone-500">{forecast.note}</p> : null}
+      {forecast ? (
+        <p className="mt-1 text-xs text-stone-500">
+          {forecast.line_note || 'התחזית מחושבת לפי קבוצה בלבד, בלי פירוט לפי סעיף.'}
+        </p>
+      ) : null}
     </section>
   );
 }

@@ -34,6 +34,10 @@ NETTING_NOTE = (
     "שתי שורות הקיזוז מראות כמה הוסר בכל חודש; בנטו הן מתקזזות, כמו ההעברות עצמן."
 )
 FORECAST_NOTE = "תחזית: תקציב אם יש, אחרת מגמה. ללא מע״מ — קירוב, לא מצטרף לביצוע."
+FORECAST_LINE_NOTE = (
+    "התחזית מחושבת לפי קבוצה בלבד: כניסות תפעוליות (הכנסות), יציאות תפעוליות (הוצאות) והחזרי קרן. "
+    "אין לה פירוט לפי סעיף, ולכן תאי הסעיפים בעמודות התחזית ריקים (—). מימון שוטף ופנימי לא נחזים."
+)
 
 
 def _r(value: float) -> float:
@@ -136,6 +140,8 @@ def _forecast_columns(forecast: dict | None) -> dict | None:
         "months": list(forecast["months"]),
         "rows": rows,
         "note": FORECAST_NOTE,
+        "line_items": False,
+        "line_note": FORECAST_LINE_NOTE,
     }
 
 

@@ -266,6 +266,10 @@ def test_cash_statement_by_line_and_month_with_forecast(client, fresh_org, platf
         assert totals["net"][month["month"]] == month["net_flow"]
     assert chef_statement["forecast"]["months"] == view["entities"][0]["view"]["forecast"]["months"]
     assert "ללא מע״מ" in chef_statement["forecast"]["note"]
+    # The forecast has group totals only; the statement says so instead of leaving lines blank.
+    assert chef_statement["forecast"]["line_items"] is False
+    assert set(chef_statement["forecast"]["rows"]) == {"operating_in", "operating_out", "financing", "net"}
+    assert "לפי קבוצה" in chef_statement["forecast"]["line_note"]
 
     combined = view["combined"]["cash_statement"]
     lines = {line["id"]: line for line in combined["lines"]}

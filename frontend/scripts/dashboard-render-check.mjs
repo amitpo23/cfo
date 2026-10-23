@@ -249,6 +249,8 @@ try {
     const markup = html(ui.CashStatementCard, { statement });
     expect(markup.includes('11,800') && markup.includes('9,800') && markup.includes('לא ידוע'), 'actual cells');
     expect(markup.includes('2026-11 (תחזית)') && markup.includes('10,000') && markup.includes('ללא מע״מ'), 'forecast columns');
+    // Line cells under the forecast are marked, not blank, and the note says why.
+    expect(markup.includes('title="תחזית לפי קבוצה בלבד">—</td>') && markup.includes('לפי קבוצה בלבד'), 'forecast line cells unlabelled');
     expect(html(ui.CashStatementCard, { statement: { status: 'unknown', months: [] } }) === '', 'unknown statement rendered');
   });
 
