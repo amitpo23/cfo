@@ -436,3 +436,28 @@ def test_iso_week_follows_israel_time_and_starts_on_monday():
     assert iso_week(sunday_run)[0] == "2026-W43"
     assert iso_week(monday)[0] == "2026-W44"
     assert iso_week(sunday_run)[1] == datetime(2026, 10, 18, 21, 0, tzinfo=timezone.utc)
+
+
+def test_admin_status_shows_calls_left_and_the_last_weekly_pull(
+    client, clean_budgets, monkeypatch, platform_admin,
+):
+    _arm_weekly_pull(monkeypatch, claims_per_org=2)
+    path = "/api/admin/cost-protection-status"
+
+    before = client.get(path, headers=platform_admin["headers"]).json()["sumit"]["weekly_pull"]
+    assert before["enabled"] is True and before["last_pull"] is None
+    assert before["quota"]["used"] == 0 and before["quota"]["reserve_for_on_demand"] == 10
+    assert before["provider_calls"] == 0
+
+    week = client.get(WEEKLY, headers=CRON_HEADERS).json()["week"]
+    after = client.get(path, headers=platform_admin["headers"]).json()
+    pull = after["sumit"]["weekly_pull"]
+    assert pull["last_pull"]["week"] == week
+    assert pull["last_pull"]["calls_used"] == 2
+    assert pull["quota"]["remaining"] == pull["quota"]["limit"] - 2
+    assert after["open_finance"]["scheduled_sync_enabled"] is False
+    assert after["channels"]["whatsapp_push_enabled"] is False
+
+
+def test_admin_status_is_super_admin_only(client, owner):
+    assert client.get("/api/admin/cost-protection-status", headers=owner["headers"]).status_code in (401, 403)

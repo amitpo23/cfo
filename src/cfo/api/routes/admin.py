@@ -3261,6 +3261,7 @@ async def resolve_ownership_review(
 @router.get("/cost-protection-status", tags=["Admin"])
 async def cost_protection_status(
     current_user: User = Depends(get_super_admin),
+    db: Session = Depends(get_db_session),
 ):
     """ערכי-האמת של הגנות-העלות כפי שה-runtime באמת רואה אותם (30/08/2026).
 
@@ -3270,6 +3271,7 @@ async def cost_protection_status(
     """
     from ...config import settings as live_settings
     from ...services.sumit_request_budget import SumitRequestLimiter
+    from ...services.sumit_weekly_pull import weekly_pull_status
 
     limiter = SumitRequestLimiter(current_user.organization_id or 1)
     return {
@@ -3289,8 +3291,15 @@ async def cost_protection_status(
             "sync_min_interval_hours": live_settings.sumit_sync_min_interval_hours,
             "effective_per_minute_limit": limiter.per_minute_limit,
             "effective_daily_limit": limiter.daily_limit,
+            # הכרעת בעלים 23/10/2026: יתרת התקרה החודשית של החשבון והמשיכה
+            # השבועית האחרונה. קריאת DB בלבד.
+            "weekly_pull": weekly_pull_status(db),
         },
         "open_finance": {
             "sync_min_interval_hours": live_settings.of_sync_min_interval_hours,
+            "scheduled_sync_enabled": live_settings.open_finance_scheduled_sync_enabled,
+        },
+        "channels": {
+            "whatsapp_push_enabled": live_settings.whatsapp_push_enabled,
         },
     }

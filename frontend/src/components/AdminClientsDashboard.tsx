@@ -100,6 +100,36 @@ interface AdminResponse {
   clients: AdminClient[];
 }
 
+// SUMIT budget strip (owner decision 2026-10-23): calls left in the account's
+// monthly window and the last weekly pull. SUPER_ADMIN only; hidden otherwise.
+interface SumitWeeklyPull {
+  enabled: boolean;
+  schedule: string;
+  this_week: string;
+  quota: { limit: number; used: number; remaining: number; reserve_for_on_demand: number };
+  last_pull: { week: string; claimed_at: string | null; calls_used: number } | null;
+}
+
+function SumitBudgetStrip() {
+  const [pull, setPull] = useState<SumitWeeklyPull | null>(null);
+  useEffect(() => {
+    api.get<any>('/admin/cost-protection-status')
+      .then((status) => setPull(status?.sumit?.weekly_pull ?? null))
+      .catch(() => setPull(null));
+  }, []);
+  if (!pull) return null;
+  const { quota, last_pull: last } = pull;
+  return (
+    <div className="mb-4 p-3 rounded-lg bg-indigo-50 border border-indigo-200 text-sm text-indigo-900">
+      SUMIT: נותרו {quota.remaining} מתוך {quota.limit} קריאות החודש
+      ({quota.reserve_for_on_demand} שמורות לבקשות ידניות).
+      {' '}משיכה שבועית: {pull.enabled ? 'פעילה' : 'כבויה'}
+      {' · '}
+      {last ? `אחרונה ${last.week} (${last.calls_used} קריאות)` : 'טרם בוצעה'}
+    </div>
+  );
+}
+
 export default function AdminClientsDashboard() {
   const [data, setData] = useState<AdminResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -335,6 +365,8 @@ export default function AdminClientsDashboard() {
         להוספת תיק-לקוח חדש, הגדרת מפתח SUMIT של המשרד, וסנכרון רוחבי — ראו{' '}
         <Link to="/office" className="text-indigo-600 hover:underline font-medium">ניהול משרד</Link>.
       </div>
+
+      <SumitBudgetStrip />
 
       {error && <div className="mb-4 p-3 rounded-lg bg-red-50 text-red-800 text-sm">{error}</div>}
 
