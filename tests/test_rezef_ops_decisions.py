@@ -530,3 +530,19 @@ def test_a_five_day_old_import_is_aging(fresh_org):
     item = section["items"][0]
     assert (item["status"], item["status_label"]) == ("aging", "מתיישן")
     assert section["aging_count"] == 1 and section["stale_count"] == 0
+
+
+# ------------------------------------------------- 4. portal runbooks rule
+
+def test_agents_md_allows_only_the_approved_portal_runbooks_with_a_go_per_final_save():
+    text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    section = text.split("## פורטל SUMIT", 1)[1].split("\n## ", 1)[0]
+    for runbook in (
+        "cfo:close-batch", "cfo:export-to-hashavshevet", "cfo:find-duplicate-transactions",
+        "cfo:month-end-review", "sumit-file-expenses",
+    ):
+        assert runbook in section, runbook
+    assert "שמירה כמסמך סופי" in section and "GO מפורש של עמית בכל" in section
+    assert "50 קריאות בחודש לכל החשבון" in section
+    for flag in ("OPEN_FINANCE_SCHEDULED_SYNC_ENABLED", "WHATSAPP_PUSH_ENABLED", "SUMIT_WEEKLY_PULL_ENABLED"):
+        assert flag in text, flag

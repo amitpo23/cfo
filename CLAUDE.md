@@ -12,6 +12,11 @@ FastAPI backend ב-`src/cfo/`, React frontend ב-`frontend/`, פרוד ב-cfo-2.
 - **אימות משולש**: כל פלט דיווח לרשויות ≥3 בדיקות בלתי-תלויות (`filing_verification`).
 - **honest-null**: אין מספרים מומצאים; עמימות = תור הכרעה, לא ניחוש.
 - **אפס אוטונומיה בבלתי-הפיך**: סגירת מנה/שידור/תשלום — רק באישור בעלים.
+- **runbooks בפורטל SUMIT** (הכרעת בעלים 23/10/2026): סוכן ה-CFO רשאי להריץ את
+  ה-runbooks המאושרים מראש (close-batch, export-to-hashavshevet,
+  find-duplicate-transactions, month-end-review, sumit-file-expenses) בתוך מגבלות
+  ה-API; כל "שמירה כמסמך סופי" דורשת GO מפורש של עמית בכל פעם. פירוט, תזמונים
+  ודגלים: `AGENTS.md`.
 - **משמעת עלויות API**: קריאות SUMIT/OF רק כשחייבים; שערי sync יומיים קשיחים (20h) — לא לעקוף. **חוק קשיח, בכל הארגונים ובכל המערכת** (הנחיית בעלים חוזרת, 17–18/08/2026, אחרי חיוב אמיתי של אלפי שקלים): כל בנייה של `SumitIntegration` בקוד הייצור **חייבת** `request_limiter=SumitRequestLimiter(...)` אמיתי — לא `None`, לא מחלקת-דמה. נאכף מבנית (לא רק בבדיקה) בשתי שכבות בלתי-תלויות:
   1. **רגע הרשת** — `_make_request`/`_post_binary` ב-`sumit_integration.py` מסרבים fail-closed (`SumitRequestBudgetRequired`) אם `request_limiter is None`, גם אם הבנייה עקפה את זה.
   2. **מכסה מהספק** — `assert_paid_action_within_quota` (`sumit_quota.py`) חוסם פעולה בתשלום בלי מדידה טרייה; מדידה לא-ידועה אינה מכסה פנויה.
