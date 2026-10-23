@@ -461,3 +461,72 @@ def test_admin_status_shows_calls_left_and_the_last_weekly_pull(
 
 def test_admin_status_is_super_admin_only(client, owner):
     assert client.get("/api/admin/cost-protection-status", headers=owner["headers"]).status_code in (401, 403)
+
+
+# ------------------------------------------------- freshness thresholds
+
+@pytest.mark.parametrize("age, status", [
+    (0, "fresh"), (3, "fresh"), (4, "aging"), (7, "aging"), (8, "stale"),
+    (10, "stale"), (12, "stale"), (30, "stale"),
+])
+def test_freshness_thresholds_live_in_one_place(age, status):
+    from cfo.services.dashboards import freshness
+
+    assert freshness.FRESHNESS_THRESHOLDS == (("fresh", 3), ("aging", 7))
+    assert freshness.age_status(age) == status
+
+
+def test_ten_to_twelve_day_old_food_group_import_is_not_labelled_fresh(fresh_org):
+    from datetime import date, timedelta
+    from decimal import Decimal
+
+    from cfo.database import SessionLocal
+    from cfo.models import BankTransaction, JournalEntry
+    from cfo.services.dashboards import freshness
+
+    org_id = fresh_org()["org_id"]
+    today = date(2026, 10, 23)
+    with SessionLocal() as db:
+        db.add(BankTransaction(
+            organization_id=org_id, transaction_date=today - timedelta(days=10),
+            amount=Decimal("-5"), description="עמלה", source="reviewed_local_import",
+            external_id="ops-fg-bank-1",
+        ))
+        db.add(JournalEntry(
+            organization_id=org_id, entry_date=today - timedelta(days=12),
+            source="reviewed_local_import", memo="פוד גרופ",
+        ))
+        db.commit()
+        section = freshness.build_freshness(db, org_id, today=today)
+
+    by_kind = {item["kind"]: item for item in section["items"]}
+    for kind, age in (("bank", 10), ("journal", 12)):
+        item = by_kind[kind]
+        assert (item["age_days"], item["status"], item["status_label"]) == (age, "stale", "לא עדכני")
+        assert item["status_label"] != "עדכני"
+    assert section["stale_count"] == 2
+    assert "עד 3 ימים" in section["rule"] and "עד 7 ימים" in section["rule"]
+
+
+def test_a_five_day_old_import_is_aging(fresh_org):
+    from datetime import date, timedelta
+    from decimal import Decimal
+
+    from cfo.database import SessionLocal
+    from cfo.models import BankTransaction
+    from cfo.services.dashboards import freshness
+
+    org_id = fresh_org()["org_id"]
+    today = date(2026, 10, 23)
+    with SessionLocal() as db:
+        db.add(BankTransaction(
+            organization_id=org_id, transaction_date=today - timedelta(days=5),
+            amount=Decimal("-5"), description="עמלה", source="reviewed_local_import",
+            external_id="ops-fg-bank-2",
+        ))
+        db.commit()
+        section = freshness.build_freshness(db, org_id, today=today)
+
+    item = section["items"][0]
+    assert (item["status"], item["status_label"]) == ("aging", "מתיישן")
+    assert section["aging_count"] == 1 and section["stale_count"] == 0

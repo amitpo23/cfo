@@ -214,9 +214,11 @@ def test_sources_table_per_account_with_last_dates_counts_and_stale_flag(client,
         db.commit()
         chef_sources = freshness.build_freshness(db, chef["org_id"], today=today)
     bank = next(item for item in chef_sources["items"] if item["kind"] == "bank")
-    # A live feed is judged by its last successful sync (5 days > 2): stale, though the data is 1 day old.
+    # A live feed is judged by its last successful sync (5 days: over 3, within 7): aging,
+    # though the data is 1 day old.
     assert (bank["label"], bank["rows"], bank["last_date"], bank["status"], bank["age_days"]) == (
-        "עו״ש 8954", 2, (today - timedelta(days=1)).isoformat(), "stale", 5)
+        "עו״ש 8954", 2, (today - timedelta(days=1)).isoformat(), "aging", 5)
+    assert bank["status_label"] == "מתיישן"
     invoices = next(item for item in chef_sources["items"] if item["kind"] == "invoices")
     # SUMIT without any sync time: stale, never fresh by default.
     assert invoices["rows"] == 1 and invoices["status"] == "stale" and invoices["last_sync"] is None
@@ -224,13 +226,13 @@ def test_sources_table_per_account_with_last_dates_counts_and_stale_flag(client,
     view = _view(client, platform_admin["headers"], dashboard_id, (today - timedelta(days=60)).isoformat(), today.isoformat())
     food_sources = view["entities"][1]["view"]["sources"]["items"]
     food_bank = next(item for item in food_sources if item["kind"] == "bank")
-    # An imported source is judged by its last row: 20 days > 14.
+    # An imported source is judged by its last row: 20 days > 7.
     assert food_bank["status"] == "stale" and food_bank["age_days"] == 20 and food_bank["last_sync"] is not None
     journal = next(item for item in food_sources if item["kind"] == "journal")
     assert journal["status"] == "fresh" and journal["source"] == "reviewed_local_import"
     combined = view["combined"]["sources"]
     assert {item["entity"] for item in combined["items"]} == {view["entities"][0]["label"], "פוד גרופ"}
-    assert combined["stale_count"] == 3
+    assert combined["stale_count"] == 2 and combined["aging_count"] == 1
     assert freshness.redact_public(view["combined"]["sources"])["items"][0].get("account_id") is None
 
 
