@@ -252,6 +252,19 @@ try {
     expect(html(ui.CashStatementCard, { statement: { status: 'unknown', months: [] } }) === '', 'unknown statement rendered');
   });
 
+  check('cash statement: a month one entity knows is labelled, a month none knows stays unknown', () => {
+    const statement = {
+      status: 'ready', months: ['2026-05', '2026-06'], groups: [{ id: 'operating_in', label: 'תפעולי — כניסות' }],
+      lines: [{ id: 'sales_cash', label: 'הפקדות מזומן', group: 'operating_in', values: { '2026-05': null, '2026-06': 11800 }, total: 11800 }],
+      totals: { operating_in: { '2026-05': null, '2026-06': 11800 }, net: { '2026-05': null, '2026-06': 11800 } },
+      scope: { '2026-06': { label: 'שף בלבד', entities: ['שף'], missing: ['פוד גרופ'] } },
+      scope_note: 'חודש שמסומן "בלבד"; 2026-06: שף בלבד (פוד גרופ — אין תנועות בנק).',
+    };
+    const markup = html(ui.CashStatementCard, { statement });
+    expect(markup.includes('שף בלבד') && markup.includes('11,800') && markup.includes('לא ידוע'), 'partial month label or unknown month');
+    expect(markup.includes('פוד גרופ — אין תנועות בנק'), 'scope note');
+  });
+
   check('liquidity evidence form: add, edit, delete keep openingBalances and unknown keys', () => {
     const opening = [{ organizationId: 6, date: '2026-07-31', amount: -30000, source: 'דף בנק' }];
     const payload = { budgetLines: [{ id: 'x' }], somethingNew: { a: 1 },

@@ -136,7 +136,7 @@ def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | N
     )
     return {
         "pnl": _combine_pnl(views),
-        "cashflow": _combine_cashflow(views, removed),
+        "cashflow": _combine_cashflow(sections, removed),
         "budget_vs_actual": _combine_budget(views),
         "liquidity": position,
         "forecast": outlook,
@@ -193,7 +193,12 @@ def _combine_pnl(views: list[dict]) -> dict:
     return totals
 
 
-def _combine_cashflow(views: list[dict], removed: dict) -> dict:
+def _combine_cashflow(sections: list[dict], removed: dict) -> dict:
+    """Each month labels which entities it sums (``scope_label``): a month only the chef
+    has bank rows in is the chef's alone, and a month no entity has rows in is unknown,
+    not the zeros a single entity's cash flow fills in."""
+    views = [section["view"] for section in sections]
+    labels = [section["label"] for section in sections]
     slots: dict[str, dict] = {}
     reported = 0
     for view in views:
@@ -211,9 +216,18 @@ def _combine_cashflow(views: list[dict], removed: dict) -> dict:
             "months": [],
             "message": "אין תנועות בנק בישויות הדשבורד בחלון הזה.",
         }
+    known_by = cash_statement.known_entities(sections, sorted(slots))
+    scope = cash_statement.scope_of(known_by, labels)
+    with_statement = any((view.get("cash_statement") or {}).get("months") for view in views)
     cumulative = 0.0
     months_out = []
     for month in sorted(slots):
+        if with_statement and not known_by[month]:
+            months_out.append({
+                "month": month, "inflows": None, "outflows": None, "net_flow": None,
+                "cumulative": cumulative, "scope_label": "אין תנועות בנק",
+            })
+            continue
         cut = removed["by_month"].get(month, {"inflows": 0.0, "outflows": 0.0})
         inflows = round(slots[month]["inflows"] - cut["inflows"], 2)
         outflows = round(slots[month]["outflows"] - cut["outflows"], 2)
@@ -231,6 +245,7 @@ def _combine_cashflow(views: list[dict], removed: dict) -> dict:
             "outflows": outflows,
             "net_flow": net,
             "cumulative": cumulative,
+            "scope_label": scope[month]["label"] if month in scope else None,
         })
     return {"status": "ready", "months": months_out, "message": None}
 

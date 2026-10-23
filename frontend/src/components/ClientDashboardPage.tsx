@@ -13,9 +13,10 @@ import TabErrorBoundary from './TabErrorBoundary';
 
 type CashMonth = {
   month: string;
-  inflows: number;
-  outflows: number;
-  net_flow: number;
+  inflows: number | null;
+  outflows: number | null;
+  net_flow: number | null;
+  scope_label?: string | null;
 };
 
 type BudgetCompare = {
@@ -104,6 +105,8 @@ type CashStatement = {
   forecast?: { status?: string; months: string[]; rows: Record<string, StatementCells>; note: string } | null;
   message?: string | null;
   netting_note?: string | null;
+  scope?: Record<string, { label: string; entities: string[]; missing: string[] }>;
+  scope_note?: string | null;
 };
 
 type PendingMonth = { month: string; inflows: number; outflows: number; count: number };
@@ -431,7 +434,12 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
           <thead>
             <tr className="border-b text-stone-500">
               <th className="py-2 text-right font-medium">סעיף</th>
-              {months.map((month) => <th key={month} className="py-2 text-right font-medium">{month}</th>)}
+              {months.map((month) => (
+                <th key={month} className="py-2 text-right font-medium">
+                  {month}
+                  {statement.scope?.[month] ? <div className="text-[11px] font-normal text-amber-700">{statement.scope[month].label}</div> : null}
+                </th>
+              ))}
               {forecastMonths.map((month) => (
                 <th key={`f-${month}`} className="bg-stone-50 py-2 text-right font-medium">{month} (תחזית)</th>
               ))}
@@ -471,6 +479,7 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
       </div>
       {statement.message ? <p className="mt-2 text-xs text-stone-500">{statement.message}</p> : null}
       {statement.netting_note ? <p className="mt-1 text-xs text-stone-500">{statement.netting_note}</p> : null}
+      {statement.scope_note ? <p className="mt-1 text-xs text-amber-800">{statement.scope_note}</p> : null}
       {forecast ? <p className="mt-1 text-xs text-stone-500">{forecast.note}</p> : null}
     </section>
   );
@@ -971,7 +980,10 @@ function CashflowCard({ view }: { view: DashboardView }) {
           <tbody>
             {months.map((cashMonth) => (
               <tr key={cashMonth.month} className="border-b border-stone-100">
-                <td className="py-2">{cashMonth.month}</td>
+                <td className="py-2">
+                  {cashMonth.month}
+                  {cashMonth.scope_label ? <span className="ms-2 text-xs text-amber-700">{cashMonth.scope_label}</span> : null}
+                </td>
                 <td className="py-2">{money(cashMonth.inflows)}</td>
                 <td className="py-2">{money(cashMonth.outflows)}</td>
                 <td className="py-2">{money(cashMonth.net_flow)}</td>
