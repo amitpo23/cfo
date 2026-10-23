@@ -24,6 +24,15 @@ GROUPS = (
     ("financing", "מימון (הלוואות, ניכיון, בעלים)"),
     ("internal", "פנימי ומסים"),
 )
+NETTING_LINES = (
+    ("intercompany_netting_in", "inflows", -1, "קיזוז בין-חברתי — כניסות שקוזזו (מאוחד)"),
+    ("intercompany_netting_out", "outflows", 1, "קיזוז בין-חברתי — יציאות שקוזזו (מאוחד)"),
+)
+NETTING_IDS = frozenset(line_id for line_id, *_ in NETTING_LINES)
+NETTING_NOTE = (
+    "העברות בין-חברתיות שקוזזו כבר הוסרו מהכניסות ומהיציאות של התזרים המאוחד. "
+    "שתי שורות הקיזוז מראות כמה הוסר בכל חודש; בנטו הן מתקזזות, כמו ההעברות עצמן."
+)
 FORECAST_NOTE = "תחזית: תקציב אם יש, אחרת מגמה. ללא מע״מ — קירוב, לא מצטרף לביצוע."
 
 
@@ -137,23 +146,22 @@ def combine(sections: list[dict], forecast: dict | None = None, netted: dict | N
                 cell = line["values"].get(month)
                 if month in known:
                     slot["values"][month] = _r((slot["values"][month] or 0.0) + (cell or 0.0))
-    # The intercompany netting of the combined cash flow, as its own internal line, so the
-    # statement's net equals the combined cash flow: - netted inflows + netted outflows.
+    # The intercompany netting of the combined cash flow, as two internal lines: the netted
+    # inflows (minus) and the netted outflows (plus). One line of outflows - inflows read 0
+    # whenever both sides of a pair fell in the same month, so the netting looked absent.
+    # Together they keep the statement's net equal to the combined cash flow.
     if netted and any(netted.get(month) for month in months):
-        values = {}
-        for month in months:
-            cut = netted.get(month) or {}
-            values[month] = None if month not in known else _r(
-                float(cut.get("outflows") or 0) - float(cut.get("inflows") or 0))
-        index["intercompany_netting"] = {
-            "id": "intercompany_netting", "label": "קיזוז בין-חברתי (מאוחד)", "group": "internal",
-            "review": False, "values": values, "total": 0.0,
-        }
+        for line_id, side, sign, label in NETTING_LINES:
+            index[line_id] = {
+                "id": line_id, "label": label, "group": "internal", "review": False, "total": 0.0,
+                "values": {month: None if month not in known else _r(sign * float((netted.get(month) or {}).get(side) or 0))
+                           for month in months},
+            }
     # A line's group follows the combined sign (an operating line may flip).
     lines = []
     for line in index.values():
         line["total"] = _r(sum(line["values"][month] or 0.0 for month in months))
-        if line["id"] != "intercompany_netting":
+        if line["id"] not in NETTING_IDS:
             line["group"] = _group(line["id"], line["total"])
         lines.append(line)
     lines.sort(key=lambda line: ([g for g, _ in GROUPS].index(line["group"]), -abs(line["total"])))
@@ -176,5 +184,6 @@ def combine(sections: list[dict], forecast: dict | None = None, netted: dict | N
         "forecast": _forecast_columns(forecast),
         "basis": "booked_only",
         "message": parts[0].get("message"),
+        "netting_note": NETTING_NOTE if any(line["id"] in NETTING_IDS for line in lines) else None,
         "provider_calls": 0,
     }

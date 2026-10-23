@@ -73,6 +73,7 @@ type IntercompanyRemoved = {
   window_days?: number;
   rule?: string;
   items?: { from: string | null; to: string | null; out_date: string; in_date: string; amount: number; days_apart: number }[];
+  by_month?: Record<string, { inflows: number; outflows: number }>;
 };
 
 type SourceItem = {
@@ -102,6 +103,7 @@ type CashStatement = {
   totals?: Record<string, StatementCells>;
   forecast?: { status?: string; months: string[]; rows: Record<string, StatementCells>; note: string } | null;
   message?: string | null;
+  netting_note?: string | null;
 };
 
 type PendingMonth = { month: string; inflows: number; outflows: number; count: number };
@@ -301,6 +303,7 @@ export function JournalCard({ months }: { months: PnlMonth[] }) {
 export function IntercompanyCard({ removed }: { removed: IntercompanyRemoved | null | undefined }) {
   if (!removed) return null;
   const items = removed.items ?? [];
+  const byMonth = Object.entries(removed.by_month ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return (
     <section className="rounded-xl bg-white p-5 shadow-sm">
       <h2 className="text-lg font-medium">קיזוז בין-חברתי</h2>
@@ -308,6 +311,29 @@ export function IntercompanyCard({ removed }: { removed: IntercompanyRemoved | n
         קוזזו {removed.pairs} העברות בסך {money(removed.amount ?? removed.inflows)} מהכניסות ומהיציאות של התזרים המאוחד.
       </p>
       {removed.rule ? <p className="mt-1 text-xs text-stone-500">{removed.rule}</p> : null}
+      {byMonth.length > 0 ? (
+        <table className="mt-3 w-full text-sm">
+          <thead>
+            <tr className="border-b text-stone-500">
+              <th className="py-2 text-right font-medium">חודש</th>
+              <th className="py-2 text-right font-medium">כניסות שקוזזו</th>
+              <th className="py-2 text-right font-medium">יציאות שקוזזו</th>
+            </tr>
+          </thead>
+          <tbody>
+            {byMonth.map(([month, cut]) => (
+              <tr key={month} className="border-b border-stone-100">
+                <td className="py-2">{month}</td>
+                <td className="py-2">{money(cut.inflows)}</td>
+                <td className="py-2">{money(cut.outflows)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {byMonth.length > 0 ? (
+        <p className="mt-1 text-xs text-stone-500">הסכומים כבר הוסרו מהכניסות ומהיציאות של התזרים המאוחד, כל צד בחודש שבו נרשם בבנק.</p>
+      ) : null}
       {items.length > 0 ? (
         <table className="mt-3 w-full text-sm">
           <thead>
@@ -444,6 +470,7 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
         </table>
       </div>
       {statement.message ? <p className="mt-2 text-xs text-stone-500">{statement.message}</p> : null}
+      {statement.netting_note ? <p className="mt-1 text-xs text-stone-500">{statement.netting_note}</p> : null}
       {forecast ? <p className="mt-1 text-xs text-stone-500">{forecast.note}</p> : null}
     </section>
   );

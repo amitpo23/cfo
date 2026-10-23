@@ -394,7 +394,8 @@ def _intercompany(db, org_ids: list[int], start: date, end: date, plan: dict | N
     settings = intercompany_settings(plan)
     empty = {
         "summary": {"pairs": 0, "inflows": 0.0, "outflows": 0.0, "amount": 0.0,
-                    "window_days": settings["window_days"], "rule": IC_RULE_HE, "items": []},
+                    "window_days": settings["window_days"], "rule": IC_RULE_HE, "items": [],
+                    "by_month": {}},
         "by_month": {},
     }
     if len(set(org_ids)) < 2:
@@ -449,5 +450,6 @@ def _intercompany(db, org_ids: list[int], start: date, end: date, plan: dict | N
         "outflows": round(float(total), 2),
         "amount": round(float(total), 2),
         "items": items,
+        "by_month": {month: dict(by_month[month]) for month in sorted(by_month)},
     })
     return {"summary": summary, "by_month": by_month}

@@ -204,6 +204,24 @@ try {
     expect(old.includes('קוזזו 0'), 'the older shape does not render');
   });
 
+  check('intercompany: netted amounts per month on both sides, never a bare 0 line', () => {
+    const removed = { pairs: 2, inflows: 35000, outflows: 35000, amount: 35000,
+      by_month: { '2026-09': { inflows: 30000, outflows: 30000 }, '2026-08': { inflows: 5000, outflows: 5000 } } };
+    const card = html(ui.IntercompanyCard, { removed });
+    expect(card.includes('כניסות שקוזזו') && card.includes('30,000') && card.indexOf('2026-08') < card.indexOf('2026-09'), 'per month table');
+    const statement = {
+      status: 'ready', months: ['2026-09'], groups: [{ id: 'internal', label: 'פנימי ומסים' }],
+      lines: [
+        { id: 'intercompany_netting_in', label: 'קיזוז בין-חברתי — כניסות שקוזזו (מאוחד)', group: 'internal', values: { '2026-09': -30000 }, total: -30000 },
+        { id: 'intercompany_netting_out', label: 'קיזוז בין-חברתי — יציאות שקוזזו (מאוחד)', group: 'internal', values: { '2026-09': 30000 }, total: 30000 },
+      ],
+      totals: { internal: { '2026-09': 0 }, net: { '2026-09': 0 } }, netting_note: 'כבר הוסרו מהכניסות',
+    };
+    const markup = html(ui.CashStatementCard, { statement });
+    expect(markup.includes('-30,000') || markup.includes('‎-30,000') || markup.includes('−30,000'), 'netted inflows line');
+    expect(markup.includes('כבר הוסרו מהכניסות'), 'netting note');
+  });
+
   check('sources card: per account, stale flag, entity column in the combined view', () => {
     const sources = { stale_count: 1, rule: 'כלל רעננות', items: [
       { kind: 'bank', kind_label: 'תנועות בנק', label: 'עו״ש 8954', source: 'open_finance', source_label: 'Open Finance', last_date: '2026-10-20',

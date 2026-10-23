@@ -268,12 +268,44 @@ def test_cash_statement_by_line_and_month_with_forecast(client, fresh_org, platf
     assert "ללא מע״מ" in chef_statement["forecast"]["note"]
 
     combined = view["combined"]["cash_statement"]
-    netting = next(line for line in combined["lines"] if line["id"] == "intercompany_netting")
+    lines = {line["id"]: line for line in combined["lines"]}
     # The 5,000 pair crosses the month: August's outflow and September's inflow leave the statement.
-    assert netting["values"] == {"2026-08": 5000.0, "2026-09": -5700.0 + 700.0}
+    # The 700 pair is inside September. Each side is its own line, so neither shows as 0.
+    assert lines["intercompany_netting_in"]["values"] == {"2026-08": 0.0, "2026-09": -5700.0}  # 5,000 + 700
+    assert lines["intercompany_netting_out"]["values"] == {"2026-08": 5000.0, "2026-09": 700.0}
+    assert lines["intercompany_netting_in"]["total"] == -5700.0 and lines["intercompany_netting_out"]["total"] == 5700.0
+    assert "intercompany_netting" not in lines
+    assert view["combined"]["intercompany_removed"]["by_month"] == {
+        "2026-08": {"inflows": 0.0, "outflows": 5000.0}, "2026-09": {"inflows": 5700.0, "outflows": 700.0},
+    }
     for month in view["combined"]["cashflow"]["months"]:
         assert combined["totals"]["net"][month["month"]] == month["net_flow"], month["month"]
     assert combined["forecast"]["months"] == view["combined"]["forecast"]["months"]
+
+
+def _section(label, values):
+    """One entity's cash statement: a single transfer line, every month known."""
+    months = sorted(values)
+    return {"label": label, "view": {"cash_statement": {
+        "months": months,
+        "lines": [{"id": "intercompany", "label": "בין-חברתי", "group": "internal", "review": False,
+                   "values": dict(values), "total": sum(values.values())}],
+        "totals": {"net": dict(values)},
+    }}}
+
+
+def test_netting_inside_one_month_is_shown_on_both_lines_not_as_zero():
+    from cfo.services.dashboards import cash_statement
+    # The chef sends 30,000 to Food Group on 3.8; Food Group receives it on 4.8: both sides in August.
+    sections = [_section("שף", {"2026-08": -30000.0}), _section("פוד גרופ", {"2026-08": 30000.0})]
+    netted = {"2026-08": {"inflows": 30000.0, "outflows": 30000.0}}
+    statement = cash_statement.combine(sections, None, netted)
+    lines = {line["id"]: line for line in statement["lines"]}
+    assert lines["intercompany_netting_in"]["values"] == {"2026-08": -30000.0}
+    assert lines["intercompany_netting_out"]["values"] == {"2026-08": 30000.0}
+    # The net is unchanged: the two sides cancel, as the transfers themselves do.
+    assert statement["totals"]["net"] == {"2026-08": 0.0}
+    assert "כבר הוסרו" in statement["netting_note"]
 
 
 def test_cash_statement_month_without_bank_rows_is_unknown(fresh_org):
