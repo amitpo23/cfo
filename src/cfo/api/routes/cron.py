@@ -5,6 +5,11 @@ Routes that can call SUMIT are not on the Vercel schedule. They require a
 platform SUPER_ADMIN JWT and still return a no-op while
 SUMIT_AUTOMATIC_CALLS_ENABLED is false. The remaining crons are protected by
 CRON_SECRET (Vercel sends "Authorization: Bearer <CRON_SECRET>").
+
+The one exception is /cron/sumit-weekly-pull (owner decision 2026-10-23): at
+most one read-only pull per ISO week, default off behind
+SUMIT_WEEKLY_PULL_ENABLED, and skipped when it would eat into the calls kept
+for on-demand admin work.
 """
 import asyncio
 import logging
@@ -113,11 +118,14 @@ def _of_consent_gate(db: Session, org_id: int) -> Optional[dict]:
 SUMIT_INTER_ORG_STAGGER_SECONDS = 65
 
 
-async def _run_sync_targets(db: Session, targets: set) -> list:
+async def _run_sync_targets(db: Session, targets: set, *, pull_expenses: bool = True) -> list:
     """Shared sync loop for a set of (org_id, source) targets. Used by both the
     SUMIT (hourly) and Open Finance (daily-budgeted) cron routes so each keeps
     its own call-frequency policy while sharing the run/automation/roster
-    bookkeeping (RSF-020: split cron paths, one engine loop)."""
+    bookkeeping (RSF-020: split cron paths, one engine loop).
+
+    ``pull_expenses=False`` (the weekly pull) skips the pending-expense pull,
+    which can reach paid document endpoints."""
     results = []
     sumit_targets_started = 0
     for org_id, source in sorted(targets):
@@ -151,7 +159,7 @@ async def _run_sync_targets(db: Session, targets: set) -> list:
             result["automation"] = await run_post_sync_tasks(
                 db, org_id, sources=[resolved], resume_onboarding=True
             )
-            if resolved == "sumit":
+            if resolved == "sumit" and pull_expenses:
                 # משיכת הוצאות ממתינות — בלעדיה טבלת ההוצאות מפגרת אחרי SUMIT
                 # (אודיט תאימות 2026-07-05: פיגור ~43 מסמכים). כשל כאן נרשם
                 # בתוצאה ולא מפיל את הארגון/הריצה.
@@ -752,6 +760,107 @@ async def scheduled_refresh_sumit_quota(db: Session = Depends(get_db_session)):
                 "reason": str(exc)[:300],
             })
     return {"refreshed": len(targets), "results": results}
+
+
+@router.get("/cron/sumit-weekly-pull", dependencies=[Depends(_verify_cron_secret)])
+async def scheduled_sumit_weekly_pull(db: Session = Depends(get_db_session)):
+    """Weekly: one read-only SUMIT pull for all organizations combined.
+
+    Owner decision 2026-10-23. Sunday 05:00 Asia/Jerusalem (03:00 UTC on
+    Vercel). Gates, in order, before any SUMIT client exists:
+    ``SUMIT_WEEKLY_PULL_ENABLED`` (default off); the account's calls left
+    this month minus the on-demand reserve must cover the estimate; one
+    durable claim per ISO week. Then the existing per-org and per-key daily
+    gates. The run itself is under ``scheduled_pull_guard``: the account
+    ceiling is lowered by the reserve and only free read endpoints pass.
+    """
+    from ...database import SessionLocal
+    from ...services import sumit_weekly_pull as weekly
+    from ...services.sumit_request_budget import _db_now, scheduled_pull_guard
+
+    if not settings.sumit_weekly_pull_enabled:
+        return {
+            "status": "ok",
+            "skipped": "sumit_weekly_pull_disabled",
+            "synced": 0,
+            "results": [],
+        }
+
+    targets = {
+        (conn.organization_id, conn.source)
+        for conn in db.query(IntegrationConnection).filter(
+            IntegrationConnection.status == "active",
+            IntegrationConnection.source == "sumit",
+        ).all()
+    }
+    targets.update((org_id, src) for org_id, src in roster_sync_targets(db) if src == "sumit")
+    if settings.sumit_api_key:
+        targets.add((1, "sumit"))
+    if not targets:
+        return {"status": "ok", "skipped": "no_sumit_targets", "synced": 0, "results": []}
+
+    budget_db = SessionLocal()
+    try:
+        with budget_db.begin():
+            now = _db_now(budget_db)
+            quota = weekly.quota_view(budget_db, now=now)
+            skipped = weekly.quota_skip(quota, len(targets))
+            if skipped is None:
+                claimed, week_key = weekly.claim_week(budget_db, now=now)
+    finally:
+        budget_db.close()
+    if skipped is not None:
+        logger.warning(
+            "SUMIT weekly pull skipped: estimated %s calls, %s available after the reserve",
+            skipped["estimated_calls"], quota.available_for_pull,
+        )
+        return skipped
+    if not claimed:
+        return {
+            "status": "ok",
+            "skipped": "already_pulled_this_week",
+            "week": week_key,
+            "quota": quota.as_dict(),
+            "results": [],
+        }
+
+    results = []
+    to_run = set()
+    for org_id, source in sorted(targets):
+        gated = _daily_budget_gate(db, org_id, source)
+        if gated:
+            results.append(gated)
+            continue
+        key_gated = _per_key_daily_gate(db, org_id)
+        if key_gated:
+            results.append(key_gated)
+            continue
+        to_run.add((org_id, source))
+
+    with scheduled_pull_guard(reserve=quota.reserve):
+        results.extend(await _run_sync_targets(db, to_run, pull_expenses=False))
+
+    after_db = SessionLocal()
+    try:
+        with after_db.begin():
+            used_after = weekly.account_month_used(after_db)
+            calls_used = max(0, used_after - quota.used)
+            weekly.record_calls_used(after_db, now=now, calls_used=calls_used)
+    finally:
+        after_db.close()
+    logger.info(
+        "SUMIT weekly pull %s: %s targets, %s calls used, %s of %s used this month",
+        week_key, len(to_run), calls_used, used_after, quota.limit,
+    )
+    return {
+        "status": "ok",
+        "week": week_key,
+        "synced": len(to_run),
+        "calls_used": calls_used,
+        "quota_before": quota.as_dict(),
+        "month_used_after": used_after,
+        "results": results,
+    }
 
 
 @router.get("/cron/sync-open-finance", dependencies=[Depends(_verify_cron_secret)])

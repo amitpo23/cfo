@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 from calendar import monthrange
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 
 from sqlalchemy import func, text
@@ -198,6 +200,35 @@ LIVE_ACCOUNT_REQUEST_HARD_CAP = 50
 ACCOUNT_REQUEST_SCOPE = "sumit:account"
 # The test track's own monthly ceiling. Not a live allowance.
 _TEST_ACCOUNT_REQUEST_HARD_CAP = 200
+
+
+# Weekly pull guard (owner decision 2026-10-23). While a scheduled pull runs,
+# the account window is claimed against ``limit - reserve`` so the pull can
+# never spend the calls kept for on-demand admin work, and only read
+# endpoints that are not paid actions may be requested.
+_ACCOUNT_RESERVE: ContextVar[int] = ContextVar("sumit_account_reserve", default=0)
+_READ_ONLY: ContextVar[bool] = ContextVar("sumit_read_only", default=False)
+
+
+@contextmanager
+def scheduled_pull_guard(*, reserve: int):
+    """Lower the account ceiling by ``reserve`` and refuse non-read endpoints."""
+    reserve_token = _ACCOUNT_RESERVE.set(max(0, int(reserve)))
+    read_only_token = _READ_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _READ_ONLY.reset(read_only_token)
+        _ACCOUNT_RESERVE.reset(reserve_token)
+
+
+def account_month_used(db, *, now: datetime | None = None) -> int:
+    """Calls already claimed in this calendar month by the whole account."""
+    moment = now or _db_now(db)
+    _, _, month_start = _utc_windows(moment)
+    return SumitRequestLimiter._window_used(
+        db, scope_key=ACCOUNT_REQUEST_SCOPE, window_kind="month", window_start=month_start,
+    )
 
 
 def account_monthly_request_limit() -> int:
@@ -424,6 +455,13 @@ class SumitRequestLimiter:
         `endpoint` is accepted for call-site diagnostics but deliberately not
         persisted; request bodies and credentials never enter this table.
         """
+        if _READ_ONLY.get():
+            from ..integrations.sumit_integration import FREE_ENDPOINTS
+
+            if (endpoint or "").split("?", 1)[0] not in FREE_ENDPOINTS:
+                raise SumitRequestBudgetExceeded(
+                    "SUMIT scheduled pull is read-only; endpoint refused",
+                )
         del endpoint
         # פר-ארגון (הכרעת בעלים 19/08): מכסת מסלול הבדיקות של SUMIT היא
         # ~400 לכל עסק, ולכן 200 לכל ארגון הם שולי ביטחון של 50% — לא
@@ -448,7 +486,9 @@ class SumitRequestLimiter:
                     organization_id=None,
                     window_kind="month",
                     window_start=month_start,
-                    limit_value=account_monthly_request_limit(),
+                    limit_value=max(
+                        0, account_monthly_request_limit() - _ACCOUNT_RESERVE.get(),
+                    ),
                     now=now,
                 )
                 if not account_ok:

@@ -73,6 +73,10 @@
     {
       "path": "/api/cron/roster-health",
       "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/cron/sumit-weekly-pull",
+      "schedule": "0 3 * * 0"
     }
   ]
 }

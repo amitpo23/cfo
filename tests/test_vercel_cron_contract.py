@@ -140,6 +140,10 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # לריצה בלתי-מאוישת כל עוד OPEN_FINANCE_SCHEDULED_SYNC_ENABLED כבוי.
 # התרעות הוואטסאפ היומיות כבויות: /api/cron/channel-alerts (06:00) הוסר
 # מ-vercel.json; push יזום לוואטסאפ מדולג כל עוד WHATSAPP_PUSH_ENABLED כבוי.
+# SUMIT: משיכה מתוזמנת אחת בשבוע (כל הארגונים, קריאה בלבד) —
+# /api/cron/sumit-weekly-pull, יום א' 05:00 שעון ישראל = 03:00 UTC (בקיץ
+# 06:00; השער השבועי העמיד מונע ריצה כפולה). כבויה עד SUMIT_WEEKLY_PULL_ENABLED,
+# ומדלגת אם לא נשארות לפחות 10 קריאות מתוך תקרת ה-50 החודשית לבקשות ידניות.
 
 EXPECTED_DAILY_SCHEDULES: dict[str, str] = {
     "/api/cron/bank-gap-scan": "15 3 * * *",
@@ -155,6 +159,11 @@ UNSCHEDULED_SUMIT_PATHS = {
     "/api/cron/sync",
     "/api/cron/enrich-expenses",
     "/api/cron/process-ocr",
+}
+
+# Owner decision 2026-10-23: the only SUMIT path on the schedule, weekly.
+EXPECTED_WEEKLY_SCHEDULES: dict[str, str] = {
+    "/api/cron/sumit-weekly-pull": "0 3 * * 0",
 }
 
 # Owner decision 2026-10-23: off the schedule. The routes stay mounted.
@@ -181,10 +190,11 @@ def _local_time(expression: str, *, year: int, month: int, day: int) -> datetime
 
 
 def test_vercel_crons_use_one_daily_utc_schedule_in_dependency_order():
-    schedules = _cron_config()
-    assert schedules == EXPECTED_DAILY_SCHEDULES
-    assert UNSCHEDULED_SUMIT_PATHS.isdisjoint(schedules)
-    assert UNSCHEDULED_BY_OWNER_DECISION.isdisjoint(schedules)
+    all_schedules = _cron_config()
+    assert all_schedules == {**EXPECTED_DAILY_SCHEDULES, **EXPECTED_WEEKLY_SCHEDULES}
+    schedules = {path: all_schedules[path] for path in EXPECTED_DAILY_SCHEDULES}
+    assert UNSCHEDULED_SUMIT_PATHS.isdisjoint(all_schedules)
+    assert UNSCHEDULED_BY_OWNER_DECISION.isdisjoint(all_schedules)
 
     ordered_paths = list(EXPECTED_DAILY_SCHEDULES)
     utc_minutes = [
@@ -200,12 +210,22 @@ def test_morning_cycle_finishes_before_0800_israel_in_winter_and_summer():
     # במקום להניח שהוא תמיד נוכח.
     schedules = _cron_config()
     if "/api/cron/bookkeeper-morning" not in schedules:
-        assert schedules == EXPECTED_DAILY_SCHEDULES
+        assert schedules == {**EXPECTED_DAILY_SCHEDULES, **EXPECTED_WEEKLY_SCHEDULES}
         return
     schedule = schedules["/api/cron/bookkeeper-morning"]
     for year, month, day in ((2026, 1, 15), (2026, 7, 15)):
         local = _local_time(schedule, year=year, month=month, day=day)
         assert (local.hour, local.minute) <= (6, 45)
+
+
+def test_sumit_weekly_pull_runs_sunday_0500_israel_in_winter():
+    minute, hour, dom, month, dow = EXPECTED_WEEKLY_SCHEDULES["/api/cron/sumit-weekly-pull"].split()
+    assert (dom, month, dow) == ("*", "*", "0")
+    # 2026-01-04 is a Sunday; Israel is UTC+2 in winter, UTC+3 in summer.
+    winter = datetime(2026, 1, 4, int(hour), int(minute), tzinfo=timezone.utc).astimezone(ISRAEL)
+    summer = datetime(2026, 7, 5, int(hour), int(minute), tzinfo=timezone.utc).astimezone(ISRAEL)
+    assert (winter.weekday(), winter.hour, winter.minute) == (6, 5, 0)
+    assert (summer.weekday(), summer.hour) == (6, 6)
 
 
 def test_every_deployed_cron_route_rejects_missing_secret(client):
