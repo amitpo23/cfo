@@ -247,6 +247,11 @@ class Settings(BaseSettings):
     # OF syncs are capped to at most one *successful full* sync per org per
     # this many hours (daily-ish, not hourly).
     of_sync_min_interval_hours: int = 20
+    # הכרעת בעלים 23/10/2026: רענון Open Finance הלילי (02:00) כבוי. ה-cron
+    # הוסר מ-vercel.json, ו-/cron/sync-open-finance מסרב לריצה בלתי-מאוישת
+    # כל עוד הדגל כבוי. רענון ידני/מאושר (POST /sync/run, זרימת ה-consent)
+    # אינו תלוי בדגל הזה.
+    open_finance_scheduled_sync_enabled: bool = False
     # SUMIT bills API overage to the CLIENT company's own payment method
     # (incident 2026-07-17: daily ILS 62.23 invoices to org 2's business).
     # Scheduled SUMIT syncs are therefore code-gated to one successful full

@@ -134,8 +134,12 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # SUMIT_AUTOMATIC_CALLS_ENABLED כבוי. bookkeeper-morning נשאר מתוזמן;
 # ה-SMS שלו אינו קורא ל-SUMIT.
 
+#
+# 23/10/2026 — הכרעות בעלים (Rezef ops guardrails): רענון Open Finance
+# הלילי כבוי. /api/cron/sync-open-finance הוסר מ-vercel.json, והנתיב מסרב
+# לריצה בלתי-מאוישת כל עוד OPEN_FINANCE_SCHEDULED_SYNC_ENABLED כבוי.
+
 EXPECTED_DAILY_SCHEDULES: dict[str, str] = {
-    "/api/cron/sync-open-finance": "0 2 * * *",
     "/api/cron/bank-gap-scan": "15 3 * * *",
     "/api/cron/bookkeeper-morning": "45 3 * * *",
     "/api/cron/roster-health": "30 5 * * *",
@@ -150,6 +154,11 @@ UNSCHEDULED_SUMIT_PATHS = {
     "/api/cron/sync",
     "/api/cron/enrich-expenses",
     "/api/cron/process-ocr",
+}
+
+# Owner decision 2026-10-23: off the schedule. The routes stay mounted.
+UNSCHEDULED_BY_OWNER_DECISION = {
+    "/api/cron/sync-open-finance",
 }
 
 
@@ -173,6 +182,7 @@ def test_vercel_crons_use_one_daily_utc_schedule_in_dependency_order():
     schedules = _cron_config()
     assert schedules == EXPECTED_DAILY_SCHEDULES
     assert UNSCHEDULED_SUMIT_PATHS.isdisjoint(schedules)
+    assert UNSCHEDULED_BY_OWNER_DECISION.isdisjoint(schedules)
 
     ordered_paths = list(EXPECTED_DAILY_SCHEDULES)
     utc_minutes = [

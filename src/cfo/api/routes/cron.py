@@ -759,7 +759,19 @@ async def scheduled_sync_open_finance(db: Session = Depends(get_db_session)):
     """Daily: run a sync for every organization with an active Open Finance
     integration, gated to at most one successful full sync per org per
     OF_SYNC_MIN_INTERVAL_HOURS (default 20h) to stay well inside the ~500/month
-    call budget (RSF-025)."""
+    call budget (RSF-025).
+
+    Owner decision 2026-10-23: the nightly refresh is off. The route is no
+    longer on the Vercel schedule and refuses unattended runs unless
+    ``OPEN_FINANCE_SCHEDULED_SYNC_ENABLED`` is set. Manual refresh paths do
+    not go through this route."""
+    if not settings.open_finance_scheduled_sync_enabled:
+        return {
+            "status": "ok",
+            "skipped": "open_finance_scheduled_sync_disabled",
+            "synced": 0,
+            "results": [],
+        }
     targets = {
         (conn.organization_id, conn.source)
         for conn in db.query(IntegrationConnection).filter(
