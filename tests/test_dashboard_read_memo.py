@@ -93,3 +93,22 @@ def test_the_view_is_sent_compressed_to_a_client_that_accepts_gzip(client, fresh
     plain = client.get(f"/api/dashboards/{dashboard_id}/view", headers={**platform_admin["headers"], "Accept-Encoding": "identity"},
                        params={"start": "2026-06-01", "end": "2026-09-30"})
     assert plain.headers.get("content-encoding") is None and plain.json() == response.json()
+
+
+def test_the_view_reports_its_build_time_and_query_count(client, fresh_org, platform_admin, caplog):
+    import json
+    import logging
+    dashboard_id = _two_entity_dashboard(client, platform_admin, fresh_org, "view-timing")
+    with caplog.at_level(logging.INFO, logger="cfo.api.routes.client_dashboards"):
+        response = client.get(f"/api/dashboards/{dashboard_id}/view", headers=platform_admin["headers"],
+                              params={"start": "2026-06-01", "end": "2026-09-30"})
+    assert response.status_code == 200
+    timing = response.headers["server-timing"]
+    assert timing.startswith("build;dur=") and 'db;desc="queries=' in timing
+    queries = int(timing.split('queries=')[1].rstrip('"'))
+    assert 0 < queries <= QUERY_CEILING
+    [line] = [record.getMessage() for record in caplog.records if record.getMessage().startswith("dashboard_view ")]
+    event = json.loads(line.split(" ", 1)[1])
+    assert event["route"] == "view" and event["entities"] == 2 and event["queries"] == queries
+    # No user identity and no amounts in the log line.
+    assert set(event) == {"route", "dashboard_id", "entities", "ms", "queries"}
