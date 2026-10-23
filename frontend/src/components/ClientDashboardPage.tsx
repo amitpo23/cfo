@@ -10,6 +10,7 @@ import {
   withZReport, zReportsFromPayload,
 } from './dashboardTabs';
 import TabErrorBoundary from './TabErrorBoundary';
+import { DashboardFrame, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs } from './dashboardUi';
 
 type CashMonth = {
   month: string;
@@ -208,10 +209,10 @@ function BudgetRow({ label, row: given, strong }: { label: string; row: BudgetCo
   const row = given ?? NO_COMPARE;
   return (
     <tr className={`border-b border-stone-100 ${strong ? 'font-medium' : ''}`}>
-      <td className="py-2">{label}</td>
+      <td>{label}</td>
       <td className={`py-2 ${row.budget === null ? 'text-stone-400' : ''}`}>{budgetCell(row.budget)}</td>
-      <td className="py-2">{money(row.actual)}</td>
-      <td className="py-2">{varianceCell(row)}</td>
+      <td>{money(row.actual)}</td>
+      <td>{varianceCell(row)}</td>
     </tr>
   );
 }
@@ -220,30 +221,30 @@ function PnlMonths({ months }: { months: PnlMonth[] }) {
   const known = months.filter((month) => month.source);
   if (known.length === 0) return null;
   return (
-    <table className="mt-4 w-full text-sm">
+    <table className="mt-4 d-table">
       <thead>
-        <tr className="border-b text-stone-500">
-          <th className="py-2 text-right font-medium">חודש</th>
-          <th className="py-2 text-right font-medium">מקור</th>
-          <th className="py-2 text-right font-medium">הכנסות</th>
-          <th className="py-2 text-right font-medium">הוצאות</th>
-          <th className="py-2 text-right font-medium">תוצאה</th>
-          <th className="py-2 text-right font-medium">לבירור (נכנס / יצא)</th>
+        <tr>
+          <th>חודש</th>
+          <th>מקור</th>
+          <th>הכנסות</th>
+          <th>הוצאות</th>
+          <th>תוצאה</th>
+          <th>לבירור (נכנס / יצא)</th>
         </tr>
       </thead>
       <tbody>
         {known.map((month) => (
-          <tr key={month.month} className="border-b border-stone-100">
-            <td className="py-2">{month.month}</td>
+          <tr key={month.month}>
+            <td>{month.month}</td>
             <td className="py-2 text-xs text-stone-600">
               {month.source === 'cash_basis' ? 'בסיס מזומן' : 'ספרים'}
               {month.journal_dedupe ? ' + יומן SUMIT' : ''}
               {month.z_dedupe ? ' + דוח Z' : ''}
               {month.coverage_label ? ` · ${month.coverage_label}` : ''}
             </td>
-            <td className="py-2">{money(month.revenue)}</td>
-            <td className="py-2">{money(month.costs)}</td>
-            <td className="py-2">{money(month.net)}</td>
+            <td>{money(month.revenue)}</td>
+            <td>{money(month.costs)}</td>
+            <td>{money(month.net)}</td>
             <td className={`py-2 ${month.blocked ? 'text-amber-700' : 'text-stone-500'}`}>
               {month.source === 'cash_basis'
                 ? `${money(month.unresolved_in ?? null)} / ${money(month.unresolved_out ?? null)}`
@@ -265,29 +266,29 @@ export function JournalCard({ months }: { months: PnlMonth[] }) {
   withJournal.forEach((month) => month.journal?.lines.forEach((line) => codes.set(line.code, line.label)));
   const amount = (month: PnlMonth, code: string) => month.journal?.lines.find((line) => line.code === code)?.amount ?? null;
   return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">יומן SUMIT מיובא ברווח והפסד</h2>
+    <section className="d-card">
+      <h2>יומן SUMIT מיובא ברווח והפסד</h2>
       <p className="mt-1 text-sm text-stone-500">
         מיפוי טיוטה של כרטיסי המקור לשורות הרווח וההפסד (ללא מע״מ), לאישור מנהלת החשבונות. בחודש שבו ליומן יש סכום בשורה,
         השורה נלקחת מהיומן וסכום הבנק שלה לא נספר, כדי שהוצאה ותשלומה לא ייספרו פעמיים.
       </p>
       <div className="mt-3 overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="d-table">
           <thead>
-            <tr className="border-b text-stone-500">
-              <th className="py-2 text-right font-medium">כרטיס</th>
-              {withJournal.map((month) => <th key={month.month} className="py-2 text-right font-medium">{month.month}</th>)}
+            <tr>
+              <th>כרטיס</th>
+              {withJournal.map((month) => <th key={month.month}>{month.month}</th>)}
             </tr>
           </thead>
           <tbody>
             {[...codes.entries()].map(([code, label]) => (
-              <tr key={code} className="border-b border-stone-100">
-                <td className="py-2">{label} <span className="text-xs text-stone-400">({code})</span></td>
+              <tr key={code}>
+                <td>{label} <span className="text-xs text-stone-400">({code})</span></td>
                 {withJournal.map((month) => <td key={month.month} className="py-2">{money(amount(month, code))}</td>)}
               </tr>
             ))}
             <tr className="text-stone-600">
-              <td className="py-2">סכום בנק שלא נספר</td>
+              <td>סכום בנק שלא נספר</td>
               {withJournal.map((month) => (
                 <td key={month.month} className="py-2">{month.journal_dedupe ? money(month.journal_dedupe.bank_dropped) : 'לא נכלל'}</td>
               ))}
@@ -308,27 +309,27 @@ export function IntercompanyCard({ removed }: { removed: IntercompanyRemoved | n
   const items = removed.items ?? [];
   const byMonth = Object.entries(removed.by_month ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">קיזוז בין-חברתי</h2>
+    <section className="d-card">
+      <h2>קיזוז בין-חברתי</h2>
       <p className="mt-2 text-sm">
         קוזזו {removed.pairs} העברות בסך {money(removed.amount ?? removed.inflows)} מהכניסות ומהיציאות של התזרים המאוחד.
       </p>
       {removed.rule ? <p className="mt-1 text-xs text-stone-500">{removed.rule}</p> : null}
       {byMonth.length > 0 ? (
-        <table className="mt-3 w-full text-sm">
+        <table className="mt-3 d-table">
           <thead>
-            <tr className="border-b text-stone-500">
-              <th className="py-2 text-right font-medium">חודש</th>
-              <th className="py-2 text-right font-medium">כניסות שקוזזו</th>
-              <th className="py-2 text-right font-medium">יציאות שקוזזו</th>
+            <tr>
+              <th>חודש</th>
+              <th>כניסות שקוזזו</th>
+              <th>יציאות שקוזזו</th>
             </tr>
           </thead>
           <tbody>
             {byMonth.map(([month, cut]) => (
-              <tr key={month} className="border-b border-stone-100">
-                <td className="py-2">{month}</td>
-                <td className="py-2">{money(cut.inflows)}</td>
-                <td className="py-2">{money(cut.outflows)}</td>
+              <tr key={month}>
+                <td>{month}</td>
+                <td>{money(cut.inflows)}</td>
+                <td>{money(cut.outflows)}</td>
               </tr>
             ))}
           </tbody>
@@ -338,24 +339,24 @@ export function IntercompanyCard({ removed }: { removed: IntercompanyRemoved | n
         <p className="mt-1 text-xs text-stone-500">הסכומים כבר הוסרו מהכניסות ומהיציאות של התזרים המאוחד, כל צד בחודש שבו נרשם בבנק.</p>
       ) : null}
       {items.length > 0 ? (
-        <table className="mt-3 w-full text-sm">
+        <table className="mt-3 d-table">
           <thead>
-            <tr className="border-b text-stone-500">
-              <th className="py-2 text-right font-medium">מ-</th>
-              <th className="py-2 text-right font-medium">אל</th>
-              <th className="py-2 text-right font-medium">יציאה</th>
-              <th className="py-2 text-right font-medium">כניסה</th>
-              <th className="py-2 text-right font-medium">סכום</th>
+            <tr>
+              <th>מ-</th>
+              <th>אל</th>
+              <th>יציאה</th>
+              <th>כניסה</th>
+              <th>סכום</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
-              <tr key={`${item.out_date}-${item.in_date}-${item.amount}-${item.from}`} className="border-b border-stone-100">
-                <td className="py-2">{item.from ?? '—'}</td>
-                <td className="py-2">{item.to ?? '—'}</td>
-                <td className="py-2">{item.out_date}</td>
-                <td className="py-2">{item.in_date}{item.days_apart ? ` (${item.days_apart} ימים)` : ''}</td>
-                <td className="py-2">{money(item.amount)}</td>
+              <tr key={`${item.out_date}-${item.in_date}-${item.amount}-${item.from}`}>
+                <td>{item.from ?? '—'}</td>
+                <td>{item.to ?? '—'}</td>
+                <td>{item.out_date}</td>
+                <td>{item.in_date}{item.days_apart ? ` (${item.days_apart} ימים)` : ''}</td>
+                <td>{money(item.amount)}</td>
               </tr>
             ))}
           </tbody>
@@ -373,33 +374,33 @@ export function SourcesCard({ sources }: { sources: Sources | null | undefined }
   if (items.length === 0) return null;
   const withEntity = items.some((item) => item.entity);
   return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">מקורות ורעננות</h2>
+    <section className="d-card">
+      <h2>מקורות ורעננות</h2>
       {sources?.stale_count ? (
         <p className="mt-1 text-sm text-amber-700">{sources.stale_count} מקורות לא עדכניים.</p>
       ) : null}
       <div className="mt-3 overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="d-table">
           <thead>
-            <tr className="border-b text-stone-500">
-              {withEntity ? <th className="py-2 text-right font-medium">ישות</th> : null}
-              <th className="py-2 text-right font-medium">מקור</th>
-              <th className="py-2 text-right font-medium">חשבון / סוג</th>
-              <th className="py-2 text-right font-medium">תנועה אחרונה</th>
-              <th className="py-2 text-right font-medium">סנכרון / יבוא אחרון</th>
-              <th className="py-2 text-right font-medium">שורות</th>
-              <th className="py-2 text-right font-medium">מצב</th>
+            <tr>
+              {withEntity ? <th>ישות</th> : null}
+              <th>מקור</th>
+              <th>חשבון / סוג</th>
+              <th>תנועה אחרונה</th>
+              <th>סנכרון / יבוא אחרון</th>
+              <th>שורות</th>
+              <th>מצב</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
-              <tr key={`${item.entity ?? ''}-${item.kind}-${item.label ?? ''}-${item.source}`} className="border-b border-stone-100">
-                {withEntity ? <td className="py-2">{item.entity ?? '—'}</td> : null}
-                <td className="py-2">{item.source_label}</td>
-                <td className="py-2">{item.kind === 'bank' ? item.label : item.kind_label}</td>
-                <td className="py-2">{item.last_date ?? 'לא ידוע'}</td>
-                <td className="py-2">{item.last_sync ? item.last_sync.slice(0, 16).replace('T', ' ') : 'לא ידוע'}</td>
-                <td className="py-2">{item.rows.toLocaleString('he-IL')}</td>
+              <tr key={`${item.entity ?? ''}-${item.kind}-${item.label ?? ''}-${item.source}`}>
+                {withEntity ? <td>{item.entity ?? '—'}</td> : null}
+                <td>{item.source_label}</td>
+                <td>{item.kind === 'bank' ? item.label : item.kind_label}</td>
+                <td>{item.last_date ?? 'לא ידוע'}</td>
+                <td>{item.last_sync ? item.last_sync.slice(0, 16).replace('T', ' ') : 'לא ידוע'}</td>
+                <td>{item.rows.toLocaleString('he-IL')}</td>
                 <td className={`py-2 ${STATUS_TONE[item.status] ?? ''}`}>
                   {item.status_label}{item.age_days !== null ? ` (${item.age_days} ימים)` : ''}
                 </td>
@@ -430,15 +431,15 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
     <td key={`f-${month}`} className="bg-stone-50 py-1 text-stone-400" title="תחזית לפי קבוצה בלבד">—</td>
   ));
   return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">דוח תזרים לפי סעיף וחודש</h2>
+    <section className="d-card">
+      <h2>דוח תזרים לפי סעיף וחודש</h2>
       <div className="mt-3 overflow-x-auto">
-        <table className="w-full text-xs">
+        <table className="d-table">
           <thead>
-            <tr className="border-b text-stone-500">
-              <th className="py-2 text-right font-medium">סעיף</th>
+            <tr>
+              <th>סעיף</th>
               {months.map((month) => (
-                <th key={month} className="py-2 text-right font-medium">
+                <th key={month}>
                   {month}
                   {statement.scope?.[month] ? <div className="text-[11px] font-normal text-amber-700">{statement.scope[month].label}</div> : null}
                 </th>
@@ -455,15 +456,15 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
               const forecastRow = forecast?.rows[group.id];
               return [
                 ...rows.map((line) => (
-                  <tr key={line.id} className="border-b border-stone-100">
+                  <tr key={line.id}>
                     <td className={`py-1 ${line.review ? 'text-amber-700' : ''}`}>{line.label}</td>
-                    {months.map((month) => <td key={month} className="py-1">{cell(line.values[month])}</td>)}
+                    {months.map((month) => <td key={month}>{cell(line.values[month])}</td>)}
                     {blank}
                   </tr>
                 )),
                 <tr key={`total-${group.id}`} className="border-b font-medium">
-                  <td className="py-1">סה״כ {group.label}</td>
-                  {months.map((month) => <td key={month} className="py-1">{cell(totals[group.id]?.[month])}</td>)}
+                  <td>סה״כ {group.label}</td>
+                  {months.map((month) => <td key={month}>{cell(totals[group.id]?.[month])}</td>)}
                   {forecastMonths.map((month) => (
                     <td key={`f-${month}`} className={`bg-stone-50 py-1 ${forecastRow ? '' : 'font-normal text-stone-400'}`}>
                       {forecastRow ? cell(forecastRow[month]) : 'לא נחזה'}
@@ -473,8 +474,8 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
               ];
             })}
             <tr className="font-semibold">
-              <td className="py-2">תזרים נטו</td>
-              {months.map((month) => <td key={month} className="py-2">{cell(totals.net?.[month])}</td>)}
+              <td>תזרים נטו</td>
+              {months.map((month) => <td key={month}>{cell(totals.net?.[month])}</td>)}
               {forecastMonths.map((month) => (
                 <td key={`f-${month}`} className="bg-stone-50 py-2">{cell(forecast?.rows.net?.[month])}</td>
               ))}
@@ -499,17 +500,17 @@ export function BudgetVsActual({ section }: { section: NonNullable<DashboardView
   const months = section.months ?? [];
   const visible = months.filter((month) => (month.categories ?? []).length > 0);
   return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">תקציב מול ביצוע</h2>
+    <section className="d-card">
+      <h2>תקציב מול ביצוע</h2>
       {!section.has_budget ? <p className="mt-3 text-stone-600">לא הוזן תקציב לתקופה.</p> : null}
       {visible.length === 0 ? null : (
-        <table className="mt-4 w-full text-sm">
+        <table className="mt-4 d-table">
           <thead>
-            <tr className="border-b text-stone-500">
-              <th className="py-2 text-right font-medium">קטגוריה</th>
-              <th className="py-2 text-right font-medium">תקציב</th>
-              <th className="py-2 text-right font-medium">ביצוע</th>
-              <th className="py-2 text-right font-medium">סטייה</th>
+            <tr>
+              <th>קטגוריה</th>
+              <th>תקציב</th>
+              <th>ביצוע</th>
+              <th>סטייה</th>
             </tr>
           </thead>
           {visible.map((month) => (
@@ -576,6 +577,8 @@ export default function ClientDashboardPage() {
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<TabId>(tabFromLocation);
   const [scope, setScope] = useState('combined');
+  // The title from the last visit, shown with the skeleton before the first request returns.
+  const [cachedTitle] = useState(() => sessionStorage.getItem(`rezef:d:title:${slugFromLocation()}`));
 
   useEffect(() => {
     const slug = slugFromLocation();
@@ -650,6 +653,7 @@ export default function ClientDashboardPage() {
           const dashboard = (await meta.json()) as { id: number; role: string; can_edit: boolean; title?: string };
           if (cancelled) return;
           setEditor({ id: dashboard.id, role: dashboard.role, canEdit: dashboard.can_edit, title: dashboard.title });
+          if (dashboard.title) sessionStorage.setItem(`rezef:d:title:${slug}`, dashboard.title);
           await loadEditor(dashboard.id);
           return;
         }
@@ -760,53 +764,29 @@ export default function ClientDashboardPage() {
   const parameters = parametersFromPayload(plan?.payload);
 
   return (
-    <main dir="rtl" className="min-h-screen bg-stone-50 text-stone-900">
-      <div className="mx-auto max-w-5xl px-4 py-8">
-        <p className="text-sm text-stone-500">רצף</p>
-        <h1 className="mt-1 text-2xl font-semibold">{editor?.title || 'דשבורד לקוח'}</h1>
-        {editor ? (
-          <p className="mt-1 text-sm text-stone-500">
-            {ROLE_LABELS[editor.role] || editor.role}
-            {editor.canEdit ? ' · אפשר לערוך' : ' · צפייה בלבד'}
-          </p>
-        ) : null}
-        {notice ? <p className="mt-3 text-sm text-stone-700">{notice}</p> : null}
-        {error ? <p className="mt-8 text-stone-700">{error}</p> : null}
-        {!error && !view ? <p className="mt-8 text-stone-500">טוען נתונים…</p> : null}
+    <DashboardFrame
+      title={editor?.title || cachedTitle || 'דשבורד לקוח'}
+      subtitle={editor ? `${ROLE_LABELS[editor.role] || editor.role}${editor.canEdit ? ' · אפשר לערוך' : ' · צפייה בלבד'}` : null}
+    >
+        {notice ? <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">{notice}</p> : null}
+        {error ? <div className="mt-6"><EmptyState title={error}>בדקו את הקישור, או בקשו קישור חדש מבעלי הדשבורד.</EmptyState></div> : null}
+        {!error && !view ? <DashboardSkeleton /> : null}
         {view && scoped ? (
           <>
-            <nav className="mt-6 flex flex-wrap gap-1 border-b border-stone-200" role="tablist">
-              {TABS.filter((item) => item.id !== 'budget' || editor).map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === item.id}
-                  className={`px-3 py-2 text-sm ${tab === item.id ? 'border-b-2 border-stone-900 font-medium' : 'text-stone-600'}`}
-                  onClick={() => setTab(item.id)}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </nav>
+            <StatusTabs tabs={TABS.filter((item) => item.id !== 'budget' || editor)} active={tab} onSelect={setTab} />
             {multi ? (
-              <div className="mt-3 flex flex-wrap gap-2 text-sm" role="radiogroup" aria-label="ישות">
-                {[{ key: 'combined', label: 'מאוחד' }, ...entities.map((entity, index) => ({ key: String(index), label: entity.label || `ישות ${index + 1}` }))].map((option) => (
-                  <button
-                    key={option.key}
-                    type="button"
-                    role="radio"
-                    aria-checked={scope === option.key}
-                    className={`rounded-full border px-3 py-1 ${scope === option.key ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-300'}`}
-                    onClick={() => setScope(option.key)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
+              <FilterBar>
+                <Segmented
+                  label="ישות"
+                  value={scope}
+                  onChange={setScope}
+                  options={[{ key: 'combined', label: 'מאוחד' }, ...entities.map((entity, index) => ({ key: String(index), label: entity.label || `ישות ${index + 1}` }))]}
+                />
+                {view.source === 'snapshot' ? <span className="text-xs text-stone-500">תמונת מצב שפורסמה</span> : null}
+              </FilterBar>
             ) : null}
             <TabErrorBoundary tab={`${tab}:${scope}`}>
-            <div className="mt-6 grid gap-6">
+            <div id="dashboard-panel" role="tabpanel" aria-labelledby={`tab-${tab}`} className="mt-4 grid gap-4">
               {tab === 'status' ? (
                 <>
                   <StatusKpis view={scoped} reviewCount={filing?.review.total ?? null} />
@@ -841,7 +821,7 @@ export default function ClientDashboardPage() {
                 </>
               ) : null}
               {tab === 'bva' ? (
-                scoped.budget_vs_actual ? <BudgetVsActual section={scoped.budget_vs_actual} /> : <p className="text-stone-600">אין נתוני תקציב.</p>
+                scoped.budget_vs_actual ? <BudgetVsActual section={scoped.budget_vs_actual} /> : <EmptyState title="אין נתוני תקציב">אפשר להזין תקציב בלשונית "תקציב ופרמטרים".</EmptyState>
               ) : null}
               {tab === 'liquidity' ? <LiquidityPanel section={scoped.liquidity} /> : null}
               {tab === 'liquidity' && editor?.role === 'owner' && plan && filing ? (
@@ -890,13 +870,12 @@ export default function ClientDashboardPage() {
                   ) : null}
                 </>
               ) : null}
-              {tab === 'budget' && editor && !filing ? <p className="text-stone-500">טוען את התקציב…</p> : null}
+              {tab === 'budget' && editor && !filing ? <DashboardSkeleton /> : null}
             </div>
             </TabErrorBoundary>
           </>
         ) : null}
-      </div>
-    </main>
+    </DashboardFrame>
   );
 }
 
@@ -920,24 +899,15 @@ function StatusKpis({ view, reviewCount }: { view: DashboardView; reviewCount: n
     { label: 'הוצאות בתקופה', value: money(view.pnl?.total_expenses) },
     { label: 'יתרת עו״ש', value: partial ? `${money(liquidity?.balance_known)} (חלקי)` : money(balance ?? null) },
     { label: 'התחייבויות ידועות', value: money(liquidity?.debts_known_total ?? null) },
-    ...(reviewCount === null ? [] : [{ label: 'תנועות לבירור', value: String(reviewCount) }]),
+    ...(reviewCount === null ? [] : [{ label: 'תנועות לבירור', value: String(reviewCount), tone: reviewCount > 0 ? 'warn' as const : null }]),
   ];
-  return (
-    <section className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-      {items.map((item) => (
-        <div key={item.label} className="rounded-xl bg-white p-4 shadow-sm">
-          <p className="text-xs text-stone-500">{item.label}</p>
-          <p className="mt-1 text-lg">{item.value}</p>
-        </div>
-      ))}
-    </section>
-  );
+  return <KpiCards items={items} />;
 }
 
 function PnlCard({ pnl }: { pnl: DashboardView['pnl'] }) {
   return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">רווח והפסד</h2>
+    <section className="d-card">
+      <h2>רווח והפסד</h2>
       {pnl?.status === 'unknown' ? (
         <p className="mt-3 text-stone-600">{pnl.message}</p>
       ) : (
@@ -971,32 +941,32 @@ function CashflowCard({ view }: { view: DashboardView }) {
   const emptyPeriodNote = view.cashflow?.message || 'אין תנועות בנק בתקופה.';
   const emptyPeriodRepeatsCoverage = coverageNote !== '' && emptyPeriodNote === coverageNote;
   return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">תזרים</h2>
+    <section className="d-card">
+      <h2>תזרים</h2>
       {months.length === 0 ? (
         emptyPeriodRepeatsCoverage ? null : (
           <p className="mt-3 text-stone-600">{emptyPeriodNote}</p>
         )
       ) : (
-        <table className="mt-4 w-full text-sm">
+        <table className="mt-4 d-table">
           <thead>
-            <tr className="border-b text-stone-500">
-              <th className="py-2 text-right font-medium">חודש</th>
-              <th className="py-2 text-right font-medium">כניסות</th>
-              <th className="py-2 text-right font-medium">יציאות</th>
-              <th className="py-2 text-right font-medium">נטו</th>
+            <tr>
+              <th>חודש</th>
+              <th>כניסות</th>
+              <th>יציאות</th>
+              <th>נטו</th>
             </tr>
           </thead>
           <tbody>
             {months.map((cashMonth) => (
-              <tr key={cashMonth.month} className="border-b border-stone-100">
-                <td className="py-2">
+              <tr key={cashMonth.month}>
+                <td>
                   {cashMonth.month}
                   {cashMonth.scope_label ? <span className="ms-2 text-xs text-amber-700">{cashMonth.scope_label}</span> : null}
                 </td>
-                <td className="py-2">{money(cashMonth.inflows)}</td>
-                <td className="py-2">{money(cashMonth.outflows)}</td>
-                <td className="py-2">{money(cashMonth.net_flow)}</td>
+                <td>{money(cashMonth.inflows)}</td>
+                <td>{money(cashMonth.outflows)}</td>
+                <td>{money(cashMonth.net_flow)}</td>
               </tr>
             ))}
           </tbody>
@@ -1027,8 +997,8 @@ function CardBreakdown({ view }: { view: DashboardView }) {
   const cardMonths = view.card_breakdown?.months ?? [];
   if (cardMonths.length === 0) return null;
   return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">פירוט כרטיסי אשראי</h2>
+    <section className="d-card">
+      <h2>פירוט כרטיסי אשראי</h2>
       {cardMonths.map((month) => (
         <div key={month.month} className="mt-3 text-sm">
           <p className="font-medium">{month.month} · {money(month.total)}</p>

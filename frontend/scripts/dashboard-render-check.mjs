@@ -20,12 +20,13 @@ import { createElement } from 'react';
 import { BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
 import { LiquidityEvidenceCard, LiquidityPanel, OpeningBalanceCard, draftFromItem, evidenceItems, itemFromDraft, upcomingAmount, withEvidenceItem, withOpeningBalance, ZReportsCard, withZReport, zReportsFromPayload } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
+import { DashboardFrame, DashboardSkeleton, EmptyState, KpiCards, StatusTabs } from ${JSON.stringify(join(components, 'dashboardUi.tsx'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
 export { renderToStaticMarkup, createElement, BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
   LiquidityEvidenceCard, draftFromItem, evidenceItems, itemFromDraft, withEvidenceItem, ZReportsCard, withZReport, zReportsFromPayload,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
-  categoryLabel, pieSlices };
+  categoryLabel, pieSlices, DashboardFrame, DashboardSkeleton, EmptyState, KpiCards, StatusTabs };
 `;
 
 const dir = mkdtempSync(join(tmpdir(), 'dashboard-render-'));
@@ -265,6 +266,18 @@ try {
     const markup = html(ui.CashStatementCard, { statement });
     expect(markup.includes('שף בלבד') && markup.includes('11,800') && markup.includes('לא ידוע'), 'partial month label or unknown month');
     expect(markup.includes('פוד גרופ — אין תנועות בנק'), 'scope note');
+  });
+
+  check('frame, status tabs, KPI cards, skeleton and empty state', () => {
+    const frame = html(ui.DashboardFrame, { title: 'שף אליהב', subtitle: 'בעלים', children: 'x' });
+    expect(frame.includes('dir="rtl"') && frame.includes('bg-navy-900') && frame.includes('שף אליהב'), 'navy frame');
+    const tabs = html(ui.StatusTabs, { tabs: [{ id: 'status', label: 'תמונת מצב' }, { id: 'bva', label: 'תקציב' }], active: 'bva', onSelect: () => {} });
+    expect(tabs.includes('role="tablist"') && tabs.includes('aria-selected="true"') && tabs.includes('aria-controls="dashboard-panel"'), 'tabs aria');
+    const kpis = html(ui.KpiCards, { items: [{ label: 'הכנסות', value: 'לא ידוע' }, { label: 'לבירור', value: '12', tone: 'warn', note: 'דורש החלטה' }] });
+    expect(kpis.includes('text-stone-400') && kpis.includes('text-amber-700'), 'unknown KPI muted, warn note');
+    const skeleton = html(ui.DashboardSkeleton, {});
+    expect(skeleton.includes('role="status"') && skeleton.includes('טוען') && skeleton.includes('motion-reduce:animate-none'), 'skeleton');
+    expect(html(ui.EmptyState, { title: 'אין נתונים', children: 'הסבר' }).includes('הסבר'), 'empty state');
   });
 
   check('liquidity evidence form: add, edit, delete keep openingBalances and unknown keys', () => {

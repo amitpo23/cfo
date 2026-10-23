@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { EmptyState } from './dashboardUi';
 
 // The Eliav tool's tabs inside /d/: liquidity and obligations, forecast,
 // budget parameters and share links. Unknown amounts are shown as "לא ידוע".
@@ -77,15 +78,15 @@ export function money(value: number | null | undefined): string {
 
 function Card({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">{title}</h2>
+    <section className="d-card">
+      <h2>{title}</h2>
       {children}
     </section>
   );
 }
 
 function Th({ children }: { children?: ReactNode }) {
-  return <th className="py-2 text-right font-medium">{children}</th>;
+  return <th>{children}</th>;
 }
 
 const CHECK_STATES: Record<string, string> = {
@@ -149,21 +150,21 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
           </div>
         </dl>
         {combined && (section.entities ?? []).length > 0 ? (
-          <table className="mt-4 w-full text-sm">
-            <thead><tr className="border-b text-stone-500"><Th>ישות</Th><Th>יתרת עו״ש</Th><Th>נכון ל</Th><Th>מסגרת</Th><Th>פנוי עד המסגרת</Th></tr></thead>
+          <table className="mt-4 d-table">
+            <thead><tr><Th>ישות</Th><Th>יתרת עו״ש</Th><Th>נכון ל</Th><Th>מסגרת</Th><Th>פנוי עד המסגרת</Th></tr></thead>
             <tbody>
               {(section.entities ?? []).map((entity, index) => (
-                <tr key={`${entity.entity}-${index}`} className="border-b border-stone-100">
-                  <td className="py-2">{entity.entity}</td>
-                  <td className="py-2">
+                <tr key={`${entity.entity}-${index}`}>
+                  <td>{entity.entity}</td>
+                  <td>
                     {money(entity.balance)}
                     {entity.balance_source && entity.balance_source !== 'accounts' ? (
                       <div className="text-xs text-stone-500">{BALANCE_SOURCES[entity.balance_source] ?? entity.balance_source}</div>
                     ) : null}
                   </td>
-                  <td className="py-2">{entity.as_of ?? '—'}</td>
-                  <td className="py-2">{money(entity.limit)}</td>
-                  <td className="py-2">{money(entity.available_to_limit)}</td>
+                  <td>{entity.as_of ?? '—'}</td>
+                  <td>{money(entity.limit)}</td>
+                  <td>{money(entity.available_to_limit)}</td>
                 </tr>
               ))}
             </tbody>
@@ -171,17 +172,17 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
         ) : null}
         {section.balance_note ? <p className="mt-3 text-sm text-amber-800">{section.balance_note}</p> : null}
         {section.months && section.months.length > 0 ? (
-          <table className="mt-4 w-full text-sm">
-            <thead><tr className="border-b text-stone-500"><Th>חודש</Th><Th>ימים</Th><Th>שפל</Th><Th>ימי מינוס</Th><Th>ימים מעבר למסגרת</Th><Th>סוף חודש</Th></tr></thead>
+          <table className="mt-4 d-table">
+            <thead><tr><Th>חודש</Th><Th>ימים</Th><Th>שפל</Th><Th>ימי מינוס</Th><Th>ימים מעבר למסגרת</Th><Th>סוף חודש</Th></tr></thead>
             <tbody>
               {section.months.map((month) => (
-                <tr key={month.month} className="border-b border-stone-100">
-                  <td className="py-2">{month.month}</td>
-                  <td className="py-2">{month.days}</td>
-                  <td className="py-2">{money(month.min)}</td>
-                  <td className="py-2">{month.negative_days}</td>
-                  <td className="py-2">{month.beyond_limit_days ?? 'לא ידוע'}</td>
-                  <td className="py-2">{money(month.last)}</td>
+                <tr key={month.month}>
+                  <td>{month.month}</td>
+                  <td>{month.days}</td>
+                  <td>{money(month.min)}</td>
+                  <td>{month.negative_days}</td>
+                  <td>{month.beyond_limit_days ?? 'לא ידוע'}</td>
+                  <td>{money(month.last)}</td>
                 </tr>
               ))}
             </tbody>
@@ -200,36 +201,36 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
       </Card>
       <Card title="התחייבויות והלוואות">
         {(section.debts ?? []).length === 0 ? <p className="mt-3 text-stone-600">אין התחייבויות ידועות.</p> : (
-          <table className="mt-4 w-full text-sm">
-            <thead><tr className="border-b text-stone-500"><Th>התחייבות</Th>{combined ? <Th>ישות</Th> : null}<Th>סכום</Th><Th>נכון ל</Th></tr></thead>
+          <table className="mt-4 d-table">
+            <thead><tr><Th>התחייבות</Th>{combined ? <Th>ישות</Th> : null}<Th>סכום</Th><Th>נכון ל</Th></tr></thead>
             <tbody>
               {(section.debts ?? []).map((debt, index) => (
-                <tr key={`${debt.label}-${index}`} className="border-b border-stone-100">
-                  <td className="py-2">{debt.label}{debt.note ? <span className="mr-2 text-xs text-stone-500">{debt.note}</span> : null}</td>
-                  {combined ? <td className="py-2">{debt.entity}</td> : null}
-                  <td className="py-2">{money(debt.amount)}</td>
-                  <td className="py-2">{debt.as_of ?? '—'}</td>
+                <tr key={`${debt.label}-${index}`}>
+                  <td>{debt.label}{debt.note ? <span className="mr-2 text-xs text-stone-500">{debt.note}</span> : null}</td>
+                  {combined ? <td>{debt.entity}</td> : null}
+                  <td>{money(debt.amount)}</td>
+                  <td>{debt.as_of ?? '—'}</td>
                 </tr>
               ))}
               <tr className="font-medium">
-                <td className="py-2">סה״כ ידוע</td>
+                <td>סה״כ ידוע</td>
                 {combined ? <td /> : null}
-                <td className="py-2">{money(section.debts_known_total)}</td>
+                <td>{money(section.debts_known_total)}</td>
                 <td className="py-2 text-xs text-stone-500">{section.debts_complete ? '' : 'חלק מהסכומים לא ידועים'}</td>
               </tr>
             </tbody>
           </table>
         )}
         {(section.debt_service ?? []).some((row) => row.principal || row.interest || row.new_loans) ? (
-          <table className="mt-4 w-full text-sm">
-            <thead><tr className="border-b text-stone-500"><Th>חודש</Th><Th>החזרי קרן</Th><Th>ריבית</Th><Th>הלוואות חדשות</Th></tr></thead>
+          <table className="mt-4 d-table">
+            <thead><tr><Th>חודש</Th><Th>החזרי קרן</Th><Th>ריבית</Th><Th>הלוואות חדשות</Th></tr></thead>
             <tbody>
               {(section.debt_service ?? []).map((row) => (
-                <tr key={row.month} className="border-b border-stone-100">
-                  <td className="py-2">{row.month}</td>
-                  <td className="py-2">{money(row.principal)}</td>
-                  <td className="py-2">{money(row.interest)}</td>
-                  <td className="py-2">{money(row.new_loans)}</td>
+                <tr key={row.month}>
+                  <td>{row.month}</td>
+                  <td>{money(row.principal)}</td>
+                  <td>{money(row.interest)}</td>
+                  <td>{money(row.new_loans)}</td>
                 </tr>
               ))}
             </tbody>
@@ -238,15 +239,15 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
       </Card>
       <Card title="מועדים קרובים">
         {(section.upcoming ?? []).length === 0 ? <p className="mt-3 text-stone-600">אין מועדים ידועים.</p> : (
-          <table className="mt-4 w-full text-sm">
-            <thead><tr className="border-b text-stone-500"><Th>תאריך</Th><Th>מה</Th>{combined ? <Th>ישות</Th> : null}<Th>סכום</Th></tr></thead>
+          <table className="mt-4 d-table">
+            <thead><tr><Th>תאריך</Th><Th>מה</Th>{combined ? <Th>ישות</Th> : null}<Th>סכום</Th></tr></thead>
             <tbody>
               {(section.upcoming ?? []).map((item, index) => (
-                <tr key={`${item.date}-${index}`} className="border-b border-stone-100">
-                  <td className="py-2">{item.date}</td>
-                  <td className="py-2">{item.label}{item.note ? <span className="mr-2 text-xs text-stone-500">{item.note}</span> : null}</td>
-                  {combined ? <td className="py-2">{item.entity}</td> : null}
-                  <td className="py-2">{upcomingAmount(item)}</td>
+                <tr key={`${item.date}-${index}`}>
+                  <td>{item.date}</td>
+                  <td>{item.label}{item.note ? <span className="mr-2 text-xs text-stone-500">{item.note}</span> : null}</td>
+                  {combined ? <td>{item.entity}</td> : null}
+                  <td>{upcomingAmount(item)}</td>
                 </tr>
               ))}
             </tbody>
@@ -256,15 +257,15 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
           <>
             <h3 className="mt-4 font-medium">צ׳קים דחויים</h3>
             <table className="mt-2 w-full text-sm">
-              <thead><tr className="border-b text-stone-500"><Th>צ׳ק</Th><Th>תאריך</Th><Th>מוטב</Th><Th>סכום</Th><Th>מצב</Th></tr></thead>
+              <thead><tr><Th>צ׳ק</Th><Th>תאריך</Th><Th>מוטב</Th><Th>סכום</Th><Th>מצב</Th></tr></thead>
               <tbody>
                 {section.checks.map((check) => (
-                  <tr key={`${check.check}-${check.date}`} className="border-b border-stone-100">
-                    <td className="py-2">{check.check}</td>
-                    <td className="py-2">{check.date}</td>
-                    <td className="py-2">{check.payee}</td>
-                    <td className="py-2">{money(check.amount)}</td>
-                    <td className="py-2">{CHECK_STATES[check.state] ?? check.state}{check.cleared_on ? ` · ${check.cleared_on}` : ''}</td>
+                  <tr key={`${check.check}-${check.date}`}>
+                    <td>{check.check}</td>
+                    <td>{check.date}</td>
+                    <td>{check.payee}</td>
+                    <td>{money(check.amount)}</td>
+                    <td>{CHECK_STATES[check.state] ?? check.state}{check.cleared_on ? ` · ${check.cleared_on}` : ''}</td>
                   </tr>
                 ))}
               </tbody>
@@ -280,23 +281,27 @@ const SOURCE_LABELS: Record<string, string> = { budget: 'תקציב', trend: 'מ
 
 export function ForecastPanel({ forecast }: { forecast: Forecast | null | undefined }) {
   if (!forecast || forecast.months.length === 0) {
-    return <Card title="תחזית"><p className="mt-3 text-stone-600">אין נתונים לתחזית.</p></Card>;
+    return (
+      <EmptyState title="אין נתונים לתחזית">
+        התחזית נבנית מתקציב שהוזן או משלושה חודשים מלאים עם ספרים או תנועות בנק.
+      </EmptyState>
+    );
   }
   return (
     <Card title="תחזית">
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="d-table">
           <thead>
-            <tr className="border-b text-stone-500"><Th>סעיף</Th>{forecast.months.map((month) => <Th key={month}>{month}</Th>)}</tr>
+            <tr><Th>סעיף</Th>{forecast.months.map((month) => <Th key={month}>{month}</Th>)}</tr>
           </thead>
           <tbody>
             {forecast.rows.map((row) => (
-              <tr key={row.id} className="border-b border-stone-100">
-                <td className="py-2">{row.label}</td>
+              <tr key={row.id}>
+                <td>{row.label}</td>
                 {forecast.months.map((month) => {
                   const cell = row.months[month];
                   return (
-                    <td key={month} className="py-2">
+                    <td key={month}>
                       {money(cell?.value)}
                       {cell?.source ? <div className="text-xs text-stone-500">{SOURCE_LABELS[cell.source] ?? cell.source}</div> : null}
                     </td>
@@ -306,8 +311,8 @@ export function ForecastPanel({ forecast }: { forecast: Forecast | null | undefi
             ))}
             {(['result', 'cash_flow', 'cumulative_cash', 'projected_balance'] as const).map((key) => (
               <tr key={key} className="border-b border-stone-100 font-medium">
-                <td className="py-2">{{ result: 'תוצאה', cash_flow: 'תזרים (קירוב)', cumulative_cash: 'תזרים מצטבר', projected_balance: 'יתרה צפויה' }[key]}</td>
-                {forecast.months.map((month) => <td key={month} className="py-2">{money(forecast.totals[month]?.[key])}</td>)}
+                <td>{{ result: 'תוצאה', cash_flow: 'תזרים (קירוב)', cumulative_cash: 'תזרים מצטבר', projected_balance: 'יתרה צפויה' }[key]}</td>
+                {forecast.months.map((month) => <td key={month}>{money(forecast.totals[month]?.[key])}</td>)}
               </tr>
             ))}
           </tbody>
@@ -637,9 +642,9 @@ export function LiquidityEvidenceCard({
         ))}
       </div>
       {items.length > 0 ? (
-        <table className="mt-3 w-full text-sm">
+        <table className="mt-3 d-table">
           <thead>
-            <tr className="border-b text-stone-500">
+            <tr>
               <Th>ישות</Th>
               {spec.fields.map((field) => <Th key={field.key}>{field.label}</Th>)}
               <Th>מקור</Th>
@@ -649,7 +654,7 @@ export function LiquidityEvidenceCard({
           <tbody>
             {items.map((item, index) => (
               <tr key={`${kind}-${index}`} className={`border-b border-stone-100 ${editing === index ? 'bg-amber-50' : ''}`}>
-                <td className="py-1">{entityLabel(item.organizationId)}</td>
+                <td>{entityLabel(item.organizationId)}</td>
                 {spec.fields.map((field) => <td key={field.key} className="py-1">{evidenceCell(field, item[field.key])}</td>)}
                 <td className="py-1 text-xs text-stone-500">{typeof item.source === 'string' ? item.source : '—'}</td>
                 <td className="py-1 whitespace-nowrap">
@@ -767,19 +772,19 @@ export function ZReportsCard({
         סכום חודשי מדוח Z מאומת של הקופה. בחודש שיש לו דוח Z, ההכנסה ברווח והפסד היא סכום ה-Z, וסליקת האשראי והפקדות המזומן בבנק לא נספרות שוב. רק בעלי הדשבורד יכולים לשנות.
       </p>
       {items.length > 0 ? (
-        <table className="mt-3 w-full text-sm">
+        <table className="mt-3 d-table">
           <thead>
-            <tr className="border-b text-stone-500">
+            <tr>
               <Th>ישות</Th><Th>חודש</Th><Th>ללא מע״מ</Th><Th>כולל מע״מ</Th><Th>מקור</Th><Th />
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
-              <tr key={`${item.organizationId}-${item.month}`} className="border-b border-stone-100">
-                <td className="py-1">{label(item.organizationId)}</td>
-                <td className="py-1">{item.month}</td>
-                <td className="py-1">{money(item.revenueExVat)}</td>
-                <td className="py-1">{money(item.totalInclVat ?? null)}</td>
+              <tr key={`${item.organizationId}-${item.month}`}>
+                <td>{label(item.organizationId)}</td>
+                <td>{item.month}</td>
+                <td>{money(item.revenueExVat)}</td>
+                <td>{money(item.totalInclVat ?? null)}</td>
                 <td className="py-1 text-xs text-stone-500">{item.source}</td>
                 <td className="py-1 whitespace-nowrap">
                   <button type="button" className="underline" onClick={() => edit(item)}>ערוך</button>
