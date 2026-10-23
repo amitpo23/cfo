@@ -1,11 +1,65 @@
 {
   "version": 1,
   "skills": {
+    "anti-slop": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/anti-ai-slop/anti-slop/SKILL.md",
+      "computedHash": "d5e0322eb9c70047ca4c3d1945b13bda1eaab6519d4b423c585377e64ed0f0b2"
+    },
+    "anti-slop-code": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/anti-ai-slop/anti-slop-code/SKILL.md",
+      "computedHash": "5bfddc71c8b93ff990c285f0dddb989625d18e842d6304568473d5404ab53aa8"
+    },
+    "api-design": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/api-design/SKILL.md",
+      "computedHash": "ccaeda96bdeada51b881f87bad4e7d9cafdd372557e609d9dc2b2024c922eb4e"
+    },
+    "app-ui": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/app-ui/SKILL.md",
+      "computedHash": "2a801f75feaaa1a285a762593c7d6940c510e8b2c0ccca8f676ec5f1a13ab04f"
+    },
+    "background-jobs": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/background-jobs/SKILL.md",
+      "computedHash": "d15cfcf3ef6a3488f196ca517ba6629f2b0be3e876db4776dad618ddfc63c3e5"
+    },
     "boi-economic-data": {
       "source": "skills-il/tax-and-finance",
       "sourceType": "github",
       "skillPath": "boi-economic-data/SKILL.md",
       "computedHash": "044f20e174405fd6d324218e0e18e40691c92c370647bcd2e5492479c3fcfae5"
+    },
+    "code-review": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/code-review/SKILL.md",
+      "computedHash": "49a02dcc22f54cde9e94509baea8d5cf002c1f916678318c10ef0c3a69b59873"
+    },
+    "debugging": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/debugging/SKILL.md",
+      "computedHash": "dbe9d36c98b1cd4d671078bde71b80f2c3c47910d030c0c4def6445e08463ede"
+    },
+    "domain-modeling": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/architecture/domain-modeling/SKILL.md",
+      "computedHash": "90c4be1fe3fb71ae4ccfa1f0935ee2260c4f5633d57a9cde210d3f39667938ac"
+    },
+    "e2e-testing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing/e2e-testing/SKILL.md",
+      "computedHash": "f56b92ec7bf01773444004a0cf0a06a64a965e4a29efb8a970b5144827d54ae7"
     },
     "find-skills": {
       "source": "vercel-labs/skills",
@@ -152,11 +206,77 @@
       "sourceType": "github",
       "computedHash": "8dfa20e5931cee18e1d91663ef78768ac8beb11e34cd1491002e4da519c28624"
     },
+    "messaging": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/messaging/SKILL.md",
+      "computedHash": "8578ef1a5db09394c2ec26b701ad6894fdb900b6a8d0f253d5a7d16690e57c1b"
+    },
+    "observability": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/monitoring/observability/SKILL.md",
+      "computedHash": "5befd3b63ac24eeff03d3347ebe8c81e95b164204f73efbad6875910ed7b69c0"
+    },
+    "postgres": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/postgres/SKILL.md",
+      "computedHash": "097f6f17ac0e85e49b4aaec44fd00d4ef63dfad67f2e079ad23703e0e6a590ae"
+    },
+    "react": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/react/SKILL.md",
+      "computedHash": "7dd65c9c28c5521a59ee6197ac478fcae80dbb3bc1fa2f6638682bad66d5ee2f"
+    },
+    "secure-coding": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/secure-coding/SKILL.md",
+      "computedHash": "7473ce78e3a346f749b83845c98f12c83eec5fde33362f051c775d0f02c2ae11"
+    },
     "shekel-currency-converter": {
       "source": "skills-il/tax-and-finance",
       "sourceType": "github",
       "skillPath": "shekel-currency-converter/SKILL.md",
       "computedHash": "f882e03556bf1a4919734206745599362f318278d25a75534c74850cf55cc6c6"
+    },
+    "software-architecture": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/architecture/software-architecture/SKILL.md",
+      "computedHash": "42b2ec1f52ef623a0aa8c245dcb3edd092b550a01e577a884ff3d5d42ddc3d4e"
+    },
+    "sql-patterns": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/sql-patterns/SKILL.md",
+      "computedHash": "7627f0b1f59e2f9059147a071e2f01db0b5aba4488e8b3a5bd960add0e9ee2a4"
+    },
+    "system-design": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/architecture/system-design/SKILL.md",
+      "computedHash": "24bc1cfd9371674f2882e6eb89bf26389b99aa375f0941e05ec1d43fc4962fda"
+    },
+    "system-migration": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/system-migration/SKILL.md",
+      "computedHash": "0a0ee1fc26625e7e8da93ba84258f95dea195399bb7ce1c1fc2c91474a2f1180"
+    },
+    "testing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing/testing/SKILL.md",
+      "computedHash": "59d6e8981f59c017f390068de1615e45f9259e1d7b56a98a0c9ae62ad3b074aa"
+    },
+    "third-party-integrations": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/third-party-integrations/SKILL.md",
+      "computedHash": "b047050a185f0d1db418ee5b7e8a685ee4e4e503f5c8e727313de0732789ed6b"
     }
   }
 }
