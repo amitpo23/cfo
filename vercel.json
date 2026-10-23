@@ -73,10 +73,6 @@
     {
       "path": "/api/cron/roster-health",
       "schedule": "30 5 * * *"
-    },
-    {
-      "path": "/api/cron/channel-alerts",
-      "schedule": "0 6 * * *"
     }
   ]
 }

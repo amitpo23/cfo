@@ -258,6 +258,7 @@ def test_whatsapp_push_uses_provider_specific_configuration_and_gateway(fresh_or
 
     monkeypatch.setattr(settings, "telegram_bot_token", None, raising=False)
     monkeypatch.setattr(settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_push_enabled", True)
     monkeypatch.setattr(settings, "whatsapp_access_token", "wa-token", raising=False)
     monkeypatch.setattr(notifier, "is_quiet_hours", lambda *a, **kw: False)
     now = datetime(2026, 7, 20, 12, 0, tzinfo=ZoneInfo("UTC"))
@@ -292,6 +293,7 @@ def test_whatsapp_real_http_failure_counts_as_failed_not_sent(fresh_org, monkeyp
     import httpx
 
     monkeypatch.setattr(settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_push_enabled", True)
     monkeypatch.setattr(settings, "whatsapp_access_token", "wa-token", raising=False)
     monkeypatch.setattr(notifier, "is_quiet_hours", lambda *a, **kw: False)
     now = datetime(2026, 7, 20, 12, 0, tzinfo=ZoneInfo("UTC"))
@@ -328,6 +330,7 @@ def test_whatsapp_outside_service_window_without_template_is_explicit(fresh_org,
     import asyncio
 
     monkeypatch.setattr(settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_push_enabled", True)
     monkeypatch.setattr(settings, "whatsapp_access_token", "wa-token", raising=False)
     monkeypatch.setattr(settings, "whatsapp_push_template_name", None, raising=False)
     monkeypatch.setattr(notifier, "is_quiet_hours", lambda *a, **kw: False)
@@ -357,6 +360,7 @@ def test_whatsapp_outside_window_uses_configured_template(fresh_org, monkeypatch
     import asyncio
 
     monkeypatch.setattr(settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_push_enabled", True)
     monkeypatch.setattr(settings, "whatsapp_access_token", "wa-token", raising=False)
     monkeypatch.setattr(settings, "whatsapp_push_template_name", "rezef_alert", raising=False)
     monkeypatch.setattr(settings, "whatsapp_push_template_language", "he", raising=False)
@@ -514,6 +518,7 @@ def test_channel_alerts_cron_pushes_to_whatsapp_only_organization(
 ):
     monkeypatch.setattr(settings, "telegram_bot_token", None, raising=False)
     monkeypatch.setattr(settings, "whatsapp_phone_number_id", "phone-id", raising=False)
+    monkeypatch.setattr(settings, "whatsapp_push_enabled", True)
     monkeypatch.setattr(settings, "whatsapp_access_token", "wa-token", raising=False)
     monkeypatch.setattr(notifier, "is_quiet_hours", lambda *a, **kw: False)
 

@@ -1194,7 +1194,11 @@ async def run_channel_alerts(db: Session = Depends(get_db_session)):
     לא תיבחר שוב בהרצה הבאה. אם אף זהות מעולם לא קיבלה push (last_push_at
     כולן None — כולל ארגון חדש לגמרי), אין בסיס היסטורי להשוואה; הנפילה
     לחלון 24 שעות אחורה (ולא "כל ההיסטוריה") מונעת הצפה בהרצה הראשונה של
-    ארגון ותיק עם עשרות תובנות ישנות."""
+    ארגון ותיק עם עשרות תובנות ישנות.
+
+    הכרעת בעלים 23/10/2026: ה-cron היומי (06:00) הוסר מ-vercel.json. הנתיב
+    נשאר להפעלה מפורשת עם CRON_SECRET; push לוואטסאפ מדולג כל עוד
+    WHATSAPP_PUSH_ENABLED כבוי (נאכף ב-channel_notifier)."""
     from ...models import CfoInsight
     from ...services.channel_notifier import push_to_organization, recipients_for
 

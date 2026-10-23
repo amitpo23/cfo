@@ -138,12 +138,13 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # 23/10/2026 — הכרעות בעלים (Rezef ops guardrails): רענון Open Finance
 # הלילי כבוי. /api/cron/sync-open-finance הוסר מ-vercel.json, והנתיב מסרב
 # לריצה בלתי-מאוישת כל עוד OPEN_FINANCE_SCHEDULED_SYNC_ENABLED כבוי.
+# התרעות הוואטסאפ היומיות כבויות: /api/cron/channel-alerts (06:00) הוסר
+# מ-vercel.json; push יזום לוואטסאפ מדולג כל עוד WHATSAPP_PUSH_ENABLED כבוי.
 
 EXPECTED_DAILY_SCHEDULES: dict[str, str] = {
     "/api/cron/bank-gap-scan": "15 3 * * *",
     "/api/cron/bookkeeper-morning": "45 3 * * *",
     "/api/cron/roster-health": "30 5 * * *",
-    "/api/cron/channel-alerts": "0 6 * * *",
 }
 
 # These paths can reach SUMIT. None of them may appear in vercel.json crons.
@@ -159,6 +160,7 @@ UNSCHEDULED_SUMIT_PATHS = {
 # Owner decision 2026-10-23: off the schedule. The routes stay mounted.
 UNSCHEDULED_BY_OWNER_DECISION = {
     "/api/cron/sync-open-finance",
+    "/api/cron/channel-alerts",
 }
 
 

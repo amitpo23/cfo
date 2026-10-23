@@ -159,6 +159,11 @@ class Settings(BaseSettings):
     # outside_service_window; free-form text is never attempted there.
     whatsapp_push_template_name: Optional[str] = None
     whatsapp_push_template_language: str = "he"
+    # הכרעת בעלים 23/10/2026: התרעות וואטסאפ יזומות כבויות. כל push יזום
+    # לוואטסאפ (channel-alerts, roster-health, הבריף) מדולג כל עוד הדגל
+    # כבוי. מענה לשיחה שהמשתמש פתח (webhook) אינו push ואינו מושפע.
+    # Telegram וההתרעות בתוך המערכת אינם תלויים בדגל.
+    whatsapp_push_enabled: bool = False
 
     # Google Sign-In
     google_client_id: Optional[str] = None

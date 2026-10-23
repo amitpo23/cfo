@@ -11,7 +11,10 @@ gateway directly.
 Provider-specific configuration, per-identity opt-in and quiet-hours gates
 apply before any message reaches Telegram or WhatsApp. WhatsApp additionally
 enforces Meta's 24-hour customer-service window; outside it, only an approved
-configured template may be attempted.
+configured template may be attempted. Proactive WhatsApp push is off unless
+``WHATSAPP_PUSH_ENABLED`` is set (owner decision 2026-10-23); WhatsApp
+identities are then skipped and counted in ``push_disabled``. Telegram is
+not affected.
   * per-identity opt-in (``ChannelIdentity.push_enabled``, default True —
     same nullable-defaults-True convention as
     ``Organization.morning_brief_email_enabled``: NULL means "not explicitly
@@ -86,6 +89,11 @@ def recipients_for(
     return query.all()
 
 
+def _push_disabled(provider: str) -> bool:
+    """Owner decision 2026-10-23: no proactive WhatsApp unless explicitly on."""
+    return provider == "whatsapp" and not settings.whatsapp_push_enabled
+
+
 def _provider_configured(provider: str) -> bool:
     if provider == "telegram":
         return bool(settings.telegram_bot_token)
@@ -141,6 +149,8 @@ async def push_to_organization(
       sent            - at least one recipient received the message.
       failed          - had recipients, attempted, but every send failed.
       outside_service_window - WhatsApp is outside 24h and no template exists.
+      push_disabled   - every eligible recipient is on WhatsApp and
+                        WHATSAPP_PUSH_ENABLED is off.
     """
     recipients = recipients_for(db, organization_id, provider=provider)
     if not recipients:
@@ -151,15 +161,23 @@ async def push_to_organization(
         return {
             "status": "no_recipients" if configured else "not_configured",
             "sent": 0, "failed": 0, "skipped": 0,
-            "outside_service_window": 0, "not_configured": 0,
+            "outside_service_window": 0, "not_configured": 0, "push_disabled": 0,
         }
 
     providers = {identity.provider for identity in recipients}
+    disabled_recipients = [i for i in recipients if _push_disabled(i.provider)]
+    if len(disabled_recipients) == len(recipients):
+        return {
+            "status": "push_disabled", "sent": 0, "failed": 0, "skipped": len(recipients),
+            "outside_service_window": 0, "not_configured": 0,
+            "push_disabled": len(recipients),
+        }
     configured_recipients = [i for i in recipients if _provider_configured(i.provider)]
     if not configured_recipients:
         return {
             "status": "not_configured", "sent": 0, "failed": 0, "skipped": len(recipients),
             "outside_service_window": 0, "not_configured": len(recipients),
+            "push_disabled": len(disabled_recipients),
         }
 
     current = now or datetime.now(timezone.utc)
@@ -168,6 +186,7 @@ async def push_to_organization(
             "status": "quiet_hours", "sent": 0, "failed": 0, "skipped": len(recipients),
             "outside_service_window": 0,
             "not_configured": len(recipients) - len(configured_recipients),
+            "push_disabled": len(disabled_recipients),
         }
 
     resolved_gateways = dict(gateways or {})
@@ -185,7 +204,12 @@ async def push_to_organization(
     skipped = 0
     outside_service_window = 0
     not_configured = 0
+    push_disabled = 0
     for identity in recipients:
+        if _push_disabled(identity.provider):
+            push_disabled += 1
+            skipped += 1
+            continue
         if not _provider_configured(identity.provider):
             not_configured += 1
             skipped += 1
@@ -232,6 +256,8 @@ async def push_to_organization(
         status = "outside_service_window"
     elif not_configured and not failed:
         status = "not_configured"
+    elif push_disabled and not failed:
+        status = "push_disabled"
     else:
         status = "failed"
     return {
@@ -241,4 +267,5 @@ async def push_to_organization(
         "skipped": skipped,
         "outside_service_window": outside_service_window,
         "not_configured": not_configured,
+        "push_disabled": push_disabled,
     }
