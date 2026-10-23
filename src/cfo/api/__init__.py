@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from .routes import (
     accounting, crm, payments, communications, admin,
@@ -51,6 +52,10 @@ async def upstream_error_handler(request: Request, exc: httpx.HTTPError):
         status_code=503,
         content={"detail": f"upstream integration unavailable: {type(exc).__name__}"},
     )
+
+# JSON bodies such as a /d/ view (160KB+ for two entities) go out compressed.
+# Starlette skips text/event-stream, so streaming responses are not buffered.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # CORS middleware
 app.add_middleware(

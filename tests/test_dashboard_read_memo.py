@@ -81,3 +81,15 @@ def test_query_count_of_a_two_entity_view_stays_under_the_ratchet(client, fresh_
     finally:
         event.remove(engine, "before_cursor_execute", _count)
     assert count["n"] <= QUERY_CEILING, count["n"]
+
+
+def test_the_view_is_sent_compressed_to_a_client_that_accepts_gzip(client, fresh_org, platform_admin):
+    dashboard_id = _two_entity_dashboard(client, platform_admin, fresh_org, "view-gzip")
+    response = client.get(f"/api/dashboards/{dashboard_id}/view", headers={**platform_admin["headers"], "Accept-Encoding": "gzip"},
+                          params={"start": "2026-06-01", "end": "2026-09-30"})
+    assert response.status_code == 200
+    assert response.headers.get("content-encoding") == "gzip"
+    assert response.json()["combined"]["intercompany_removed"]["pairs"] == 1
+    plain = client.get(f"/api/dashboards/{dashboard_id}/view", headers={**platform_admin["headers"], "Accept-Encoding": "identity"},
+                       params={"start": "2026-06-01", "end": "2026-09-30"})
+    assert plain.headers.get("content-encoding") is None and plain.json() == response.json()
