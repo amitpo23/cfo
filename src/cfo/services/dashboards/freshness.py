@@ -5,13 +5,17 @@ by source): the last transaction / document date, the last sync or import time,
 the row count and a stale flag. Grouped queries, so the cost does not grow with
 the number of rows. No provider calls. Reads only.
 
-Stale rule:
+Age of a source:
 
-* a live feed (``open_finance``, ``sumit``): the last successful sync is more than
-  ``LIVE_STALE_DAYS`` before ``today``, or there is no sync time;
+* a live feed (``open_finance``, ``sumit``): days since the last successful sync;
+  no sync time is ``stale``;
 * an imported source (``reviewed_local_import``, ``hashavshevet_mdb``, manual,
-  anything else): the last row date is more than ``IMPORT_STALE_DAYS`` before ``today``;
+  anything else): days since the last row date;
 * no rows at all: ``unknown``, never "fresh".
+
+One set of thresholds for every source, defined only in ``FRESHNESS_THRESHOLDS``:
+up to ``FRESH_MAX_DAYS`` is fresh, up to ``AGING_MAX_DAYS`` is aging, older is
+stale. A 10-12 day old import is therefore stale, not "עדכני".
 """
 from __future__ import annotations
 
@@ -23,8 +27,10 @@ from ...models import (
     Account, BankTransaction, Bill, Expense, IntegrationConnection, Invoice, JournalEntry, SyncRun, SyncStatus,
 )
 
-LIVE_STALE_DAYS = 2
-IMPORT_STALE_DAYS = 14
+FRESH_MAX_DAYS = 3
+AGING_MAX_DAYS = 7
+# Ordered (status, max age in days). The single source of the labels' meaning.
+FRESHNESS_THRESHOLDS = (("fresh", FRESH_MAX_DAYS), ("aging", AGING_MAX_DAYS))
 LIVE_SOURCES = {"open_finance", "sumit"}
 SOURCE_LABELS = {
     "open_finance": "Open Finance — חיבור בנק חי",
@@ -40,7 +46,24 @@ KIND_LABELS = {
     "expenses": "הוצאות",
     "journal": "יומן",
 }
-STATUS_LABELS = {"fresh": "עדכני", "stale": "לא עדכני", "unknown": "לא ידוע"}
+STATUS_LABELS = {"fresh": "עדכני", "aging": "מתיישן", "stale": "לא עדכני", "unknown": "לא ידוע"}
+
+
+def age_status(age_days: int) -> str:
+    """fresh / aging / stale for an age in days, from ``FRESHNESS_THRESHOLDS``."""
+    for status, max_days in FRESHNESS_THRESHOLDS:
+        if age_days <= max_days:
+            return status
+    return "stale"
+
+
+def freshness_rule() -> str:
+    return (
+        f"עדכני: עד {FRESH_MAX_DAYS} ימים. מתיישן: עד {AGING_MAX_DAYS} ימים. "
+        f"לא עדכני: מעל {AGING_MAX_DAYS} ימים. "
+        "חיבור חי (Open Finance, SUMIT) נמדד מהסנכרון המוצלח האחרון; "
+        "מקור מיובא נמדד מהתנועה האחרונה."
+    )
 
 
 def _day(value):
@@ -68,9 +91,9 @@ def _status(source: str | None, last_data: date | None, last_sync, today: date) 
         if synced is None:
             return "stale", None
         age = (today - synced).days
-        return ("stale" if age > LIVE_STALE_DAYS else "fresh"), age
+        return age_status(age), age
     age = (today - last_data).days
-    return ("stale" if age > IMPORT_STALE_DAYS else "fresh"), age
+    return age_status(age), age
 
 
 def _last_syncs(db, organization_id: int) -> dict:
@@ -158,16 +181,13 @@ def build_freshness(db, organization_id: int, *, today: date | None = None) -> d
                 "status_label": STATUS_LABELS[status],
             })
     items.sort(key=lambda item: (list(KIND_LABELS).index(item["kind"]), item["label"] or "", item["source"]))
-    stale = [item for item in items if item["status"] == "stale"]
     return {
         "status": "ready" if items else "unknown",
         "today": today.isoformat(),
         "items": items,
-        "stale_count": len(stale),
-        "rule": (
-            f"חיבור חי (Open Finance, SUMIT) לא עדכני אם הסנכרון המוצלח האחרון לפני יותר מ-{LIVE_STALE_DAYS} ימים. "
-            f"מקור מיובא לא עדכני אם התנועה האחרונה לפני יותר מ-{IMPORT_STALE_DAYS} ימים."
-        ),
+        "stale_count": sum(1 for item in items if item["status"] == "stale"),
+        "aging_count": sum(1 for item in items if item["status"] == "aging"),
+        "rule": freshness_rule(),
         "provider_calls": 0,
     }
 

@@ -97,6 +97,19 @@ class Settings(BaseSettings):
     # provider client while the flag is off. Default is off: explicit
     # control, not a deploy, is what starts automatic calls.
     sumit_automatic_calls_enabled: bool = False
+    # הכרעת בעלים 23/10/2026: לכל היותר משיכה מתוזמנת **אחת בשבוע** (כל
+    # הארגונים יחד, קריאה בלבד) — /api/cron/sumit-weekly-pull. כבוי כברירת
+    # מחדל. לפני הריצה נבדקת יתרת התקרה החודשית של החשבון (50 ב-live,
+    # `sumit_request_budget.account_monthly_request_limit`), ונשמרות לפחות
+    # `sumit_weekly_pull_reserve_calls` קריאות לבקשות מנהל ידניות.
+    sumit_weekly_pull_enabled: bool = False
+    # שמירה לבקשות ידניות. רצפה קשיחה 10 (הכרעת הבעלים) — ערך נמוך יותר
+    # מועלה ל-10, לעולם לא מוריד את השמירה.
+    sumit_weekly_pull_reserve_calls: int = 10
+    # הערכה זהירה לקריאות של משיכה מלאה לארגון אחד (רשימות מסמכים לפי
+    # סוג + תשלומים + אימות סביבה). משמשת רק להחלטה אם לדלג מראש; האכיפה
+    # בפועל היא תקרת החשבון פחות השמירה, בשער הבקשות.
+    sumit_weekly_pull_calls_per_org: int = 12
     # P0-A תיקון 3 (סקירת קודקס 23/08/2026): endpoints "inferred free"
     # אינם מאומתים ישירות — ההגנה היחידה הייתה התרעת 80%. בכל רענון
     # מכסה, delta-השימוש האמיתי מושווה מול מה שהמערכת תבעה. פער העולה
@@ -159,6 +172,11 @@ class Settings(BaseSettings):
     # outside_service_window; free-form text is never attempted there.
     whatsapp_push_template_name: Optional[str] = None
     whatsapp_push_template_language: str = "he"
+    # הכרעת בעלים 23/10/2026: התרעות וואטסאפ יזומות כבויות. כל push יזום
+    # לוואטסאפ (channel-alerts, roster-health, הבריף) מדולג כל עוד הדגל
+    # כבוי. מענה לשיחה שהמשתמש פתח (webhook) אינו push ואינו מושפע.
+    # Telegram וההתרעות בתוך המערכת אינם תלויים בדגל.
+    whatsapp_push_enabled: bool = False
 
     # Google Sign-In
     google_client_id: Optional[str] = None
@@ -247,6 +265,11 @@ class Settings(BaseSettings):
     # OF syncs are capped to at most one *successful full* sync per org per
     # this many hours (daily-ish, not hourly).
     of_sync_min_interval_hours: int = 20
+    # הכרעת בעלים 23/10/2026: רענון Open Finance הלילי (02:00) כבוי. ה-cron
+    # הוסר מ-vercel.json, ו-/cron/sync-open-finance מסרב לריצה בלתי-מאוישת
+    # כל עוד הדגל כבוי. רענון ידני/מאושר (POST /sync/run, זרימת ה-consent)
+    # אינו תלוי בדגל הזה.
+    open_finance_scheduled_sync_enabled: bool = False
     # SUMIT bills API overage to the CLIENT company's own payment method
     # (incident 2026-07-17: daily ILS 62.23 invoices to org 2's business).
     # Scheduled SUMIT syncs are therefore code-gated to one successful full
@@ -328,6 +351,8 @@ class Settings(BaseSettings):
         self.sumit_live_monthly_request_limit = min(
             50, max(0, self.sumit_live_monthly_request_limit),
         )
+        self.sumit_weekly_pull_reserve_calls = max(10, self.sumit_weekly_pull_reserve_calls)
+        self.sumit_weekly_pull_calls_per_org = max(1, self.sumit_weekly_pull_calls_per_org)
         # 10 is the exempt-plan included action count. A higher env value
         # is clamped down; it is never a way to buy overage from config.
         self.sumit_live_monthly_paid_action_limit = min(

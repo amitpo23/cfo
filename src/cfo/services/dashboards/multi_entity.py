@@ -169,6 +169,7 @@ def _combine_sources(sections: list[dict]) -> dict:
         "status": "ready" if items else "unknown",
         "items": items,
         "stale_count": sum(1 for item in items if item.get("status") == "stale"),
+        "aging_count": sum(1 for item in items if item.get("status") == "aging"),
         "rule": rule,
         "provider_calls": 0,
     }

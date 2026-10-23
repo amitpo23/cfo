@@ -88,12 +88,18 @@ type SourceItem = {
   last_sync: string | null;
   rows: number;
   age_days: number | null;
-  status: 'fresh' | 'stale' | 'unknown';
+  status: 'fresh' | 'aging' | 'stale' | 'unknown';
   status_label: string;
   entity?: string | null;
 };
 
-type Sources = { status?: string; items?: SourceItem[]; stale_count?: number; rule?: string | null };
+type Sources = {
+  status?: string;
+  items?: SourceItem[];
+  stale_count?: number;
+  aging_count?: number;
+  rule?: string | null;
+};
 
 type StatementCells = Record<string, number | null>;
 
@@ -366,7 +372,13 @@ export function IntercompanyCard({ removed }: { removed: IntercompanyRemoved | n
   );
 }
 
-const STATUS_TONE: Record<string, string> = { fresh: 'text-emerald-700', stale: 'text-amber-700', unknown: 'text-stone-500' };
+// Labels and thresholds come from the API (dashboards/freshness.py); only the tone lives here.
+const STATUS_TONE: Record<string, string> = {
+  fresh: 'text-emerald-700',
+  aging: 'text-amber-600',
+  stale: 'text-red-700',
+  unknown: 'text-stone-500',
+};
 
 // Sources and freshness: one row per bank account and per books source.
 export function SourcesCard({ sources }: { sources: Sources | null | undefined }) {
@@ -377,7 +389,10 @@ export function SourcesCard({ sources }: { sources: Sources | null | undefined }
     <section className="d-card">
       <h2>מקורות ורעננות</h2>
       {sources?.stale_count ? (
-        <p className="mt-1 text-sm text-amber-700">{sources.stale_count} מקורות לא עדכניים.</p>
+        <p className="mt-1 text-sm text-red-700">{sources.stale_count} מקורות לא עדכניים.</p>
+      ) : null}
+      {sources?.aging_count ? (
+        <p className="mt-1 text-sm text-amber-600">{sources.aging_count} מקורות מתיישנים.</p>
       ) : null}
       <div className="mt-3 overflow-x-auto">
         <table className="d-table">

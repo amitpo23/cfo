@@ -457,6 +457,7 @@ def test_of_failed_cron_attempt_enters_cooldown_before_retry(
 
     monkeypatch.setattr(cron, "roster_sync_targets", lambda _db: [])
     monkeypatch.setattr(cron, "_run_sync_targets", fail_sync)
+    monkeypatch.setattr(settings, "open_finance_scheduled_sync_enabled", True)
     headers = {"Authorization": "Bearer test-cron-secret"}
 
     first = client.get("/api/cron/sync-open-finance", headers=headers)
@@ -520,6 +521,7 @@ def test_of_daily_attempt_cap_blocks_third_attempt_even_after_cooldown(
 
     monkeypatch.setattr(cron, "roster_sync_targets", lambda _db: [])
     monkeypatch.setattr(cron, "_run_sync_targets", fail_sync)
+    monkeypatch.setattr(settings, "open_finance_scheduled_sync_enabled", True)
     headers = {"Authorization": "Bearer test-cron-secret"}
 
     for attempt in range(3):
@@ -575,6 +577,7 @@ def test_of_attempt_counter_failure_is_fail_closed(
         raising=False,
     )
 
+    monkeypatch.setattr(settings, "open_finance_scheduled_sync_enabled", True)
     response = client.get(
         "/api/cron/sync-open-finance",
         headers={"Authorization": "Bearer test-cron-secret"},
