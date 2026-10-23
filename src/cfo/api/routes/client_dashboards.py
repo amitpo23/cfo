@@ -210,6 +210,15 @@ def patch_dashboard(dashboard_id: int, body: DashboardPatch, db: Session = Depen
     return {"id": row.id, "slug": row.slug, "status": row.status, "access_mode": row.access_mode}
 
 
+def _check_window(start: date, end: date) -> None:
+    """The caller's window, checked here with fixed messages. Any other ValueError of
+    the build is a server fault: it goes to the 500 handler, never echoed to the client."""
+    if end < start:
+        raise DashboardError(422, "invalid_range", "תאריך הסיום מוקדם מתאריך ההתחלה")
+    if (end - start).days > view_model.MAX_RANGE_DAYS:
+        raise DashboardError(422, "invalid_range", "טווח התאריכים ארוך מ-366 ימים")
+
+
 @router.get("/dashboards/{dashboard_id}/view")
 def dashboard_view(dashboard_id: int, response: Response, start: date | None = None, end: date | None = None,
                    db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
@@ -217,13 +226,12 @@ def dashboard_view(dashboard_id: int, response: Response, start: date | None = N
         row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
         window_end = end or date.today()
         window_start = start or date(window_end.year, 1, 1)
+        _check_window(window_start, window_end)
         with measured(db) as measure:
             view = multi_entity.build_dashboard_view(db, row, window_start, window_end,
                                                      plan=view_model.plan_payload(db, row.id))
     except DashboardError as exc:
         return _error(exc)
-    except ValueError as exc:
-        return _error(DashboardError(422, "invalid_range", str(exc)))
     response.headers["Server-Timing"] = server_timing(measure)
     log_build(logger, "view", row.id, len(view.get("entities") or []), measure)
     view["dashboard_id"] = row.id

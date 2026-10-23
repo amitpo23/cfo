@@ -112,3 +112,24 @@ def test_the_view_reports_its_build_time_and_query_count(client, fresh_org, plat
     assert event["route"] == "view" and event["entities"] == 2 and event["queries"] == queries
     # No user identity and no amounts in the log line.
     assert set(event) == {"route", "dashboard_id", "entities", "ms", "queries"}
+
+
+def test_a_bad_window_is_a_fixed_hebrew_422_and_an_internal_error_is_not_echoed(client, fresh_org, platform_admin, monkeypatch):
+    dashboard_id = _two_entity_dashboard(client, platform_admin, fresh_org, "view-range")
+    url = f"/api/dashboards/{dashboard_id}/view"
+    backwards = client.get(url, headers=platform_admin["headers"], params={"start": "2026-09-30", "end": "2026-06-01"})
+    assert backwards.status_code == 422
+    assert backwards.json()["error"] == {"code": "invalid_range", "message_he": "תאריך הסיום מוקדם מתאריך ההתחלה"}
+    too_long = client.get(url, headers=platform_admin["headers"], params={"start": "2025-01-01", "end": "2026-06-01"})
+    assert too_long.status_code == 422 and too_long.json()["error"]["message_he"] == "טווח התאריכים ארוך מ-366 ימים"
+
+    def broken(*_args, **_kwargs):
+        raise ValueError("could not convert string to float: 'secret internal detail'")
+
+    monkeypatch.setattr(multi_entity, "build_dashboard_view", broken)
+    from fastapi.testclient import TestClient
+    from cfo.api import app
+    with TestClient(app, raise_server_exceptions=False) as quiet:
+        failed = quiet.get(url, headers=platform_admin["headers"], params={"start": "2026-06-01", "end": "2026-09-30"})
+    assert failed.status_code == 500
+    assert "secret internal detail" not in failed.text
