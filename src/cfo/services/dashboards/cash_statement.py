@@ -24,7 +24,20 @@ GROUPS = (
     ("financing", "מימון (הלוואות, ניכיון, בעלים)"),
     ("internal", "פנימי ומסים"),
 )
+NETTING_LINES = (
+    ("intercompany_netting_in", "inflows", -1, "קיזוז בין-חברתי — כניסות שקוזזו (מאוחד)"),
+    ("intercompany_netting_out", "outflows", 1, "קיזוז בין-חברתי — יציאות שקוזזו (מאוחד)"),
+)
+NETTING_IDS = frozenset(line_id for line_id, *_ in NETTING_LINES)
+NETTING_NOTE = (
+    "העברות בין-חברתיות שקוזזו כבר הוסרו מהכניסות ומהיציאות של התזרים המאוחד. "
+    "שתי שורות הקיזוז מראות כמה הוסר בכל חודש; בנטו הן מתקזזות, כמו ההעברות עצמן."
+)
 FORECAST_NOTE = "תחזית: תקציב אם יש, אחרת מגמה. ללא מע״מ — קירוב, לא מצטרף לביצוע."
+FORECAST_LINE_NOTE = (
+    "התחזית מחושבת לפי קבוצה בלבד: כניסות תפעוליות (הכנסות), יציאות תפעוליות (הוצאות) והחזרי קרן. "
+    "אין לה פירוט לפי סעיף, ולכן תאי הסעיפים בעמודות התחזית ריקים (—). מימון שוטף ופנימי לא נחזים."
+)
 
 
 def _r(value: float) -> float:
@@ -98,6 +111,18 @@ def build_cash_statement(filed, start: date, end: date, forecast: dict | None = 
     }
 
 
+def _scope_note(scope: dict[str, dict]) -> str | None:
+    if not scope:
+        return None
+    parts = []
+    for month, item in sorted(scope.items()):
+        parts.append(f"{month}: {item['label']} ({', '.join(str(label) for label in item['missing'])} — אין תנועות בנק)")
+    return (
+        "חודש שמסומן \"בלבד\" הוא סכום הישויות שיש להן תנועות בנק באותו חודש, לא של כל הקבוצה. "
+        + "; ".join(parts) + "."
+    )
+
+
 def _forecast_columns(forecast: dict | None) -> dict | None:
     if not isinstance(forecast, dict) or not forecast.get("months"):
         return None
@@ -115,20 +140,51 @@ def _forecast_columns(forecast: dict | None) -> dict | None:
         "months": list(forecast["months"]),
         "rows": rows,
         "note": FORECAST_NOTE,
+        "line_items": False,
+        "line_note": FORECAST_LINE_NOTE,
     }
 
 
+def known_entities(sections: list[dict], months: list[str]) -> dict[str, list]:
+    """Per month, the labels of the entities whose statement knows it (has bank rows in it)."""
+    out: dict[str, list] = {month: [] for month in months}
+    for section in sections:
+        net = (((section.get("view") or {}).get("cash_statement") or {}).get("totals") or {}).get("net") or {}
+        for month in months:
+            if net.get(month) is not None:
+                out[month].append(section.get("label"))
+    return out
+
+
+def scope_of(known_by: dict[str, list], labels: list) -> dict[str, dict]:
+    """Months only some entities know: who is in the sum and who is missing (the tool's "chef_only")."""
+    scope = {}
+    for month, present in known_by.items():
+        if present and len(present) < len(labels):
+            scope[month] = {
+                "label": " + ".join(str(label) for label in present) + " בלבד",
+                "entities": list(present),
+                "missing": [label for label in labels if label not in present],
+            }
+    return scope
+
+
 def combine(sections: list[dict], forecast: dict | None = None, netted: dict | None = None) -> dict:
-    """The entities' statements summed per line and month. A month one entity does not
-    know is unknown in the combined statement (the dashboard's honest-null rule)."""
-    parts = [((section.get("view") or {}).get("cash_statement") or {}) for section in sections]
-    parts = [part for part in parts if part.get("months")]
+    """The entities' statements summed per line and month.
+
+    A month no entity knows is unknown. A month only some entities know (Food Group's
+    bank import starts in July) is the sum of those entities, labelled in ``scope``
+    ("שף בלבד"), as the Eliav tool shows it; it is never presented as the whole group."""
+    sections = [section for section in sections
+                if ((section.get("view") or {}).get("cash_statement") or {}).get("months")]
+    parts = [section["view"]["cash_statement"] for section in sections]
     if not parts:
         return {"status": "unknown", "months": [], "lines": [], "totals": {}, "forecast": None,
                 "groups": [{"id": g, "label": label} for g, label in GROUPS], "provider_calls": 0}
     months = parts[0]["months"]
-    known = {month for month in months
-             if all(part["totals"].get("net", {}).get(month) is not None for part in parts)}
+    known_by = known_entities(sections, months)
+    known = {month for month in months if known_by[month]}
+    scope = scope_of(known_by, [section.get("label") for section in sections])
     index: dict[str, dict] = {}
     for part in parts:
         for line in part.get("lines") or []:
@@ -137,23 +193,22 @@ def combine(sections: list[dict], forecast: dict | None = None, netted: dict | N
                 cell = line["values"].get(month)
                 if month in known:
                     slot["values"][month] = _r((slot["values"][month] or 0.0) + (cell or 0.0))
-    # The intercompany netting of the combined cash flow, as its own internal line, so the
-    # statement's net equals the combined cash flow: - netted inflows + netted outflows.
+    # The intercompany netting of the combined cash flow, as two internal lines: the netted
+    # inflows (minus) and the netted outflows (plus). One line of outflows - inflows read 0
+    # whenever both sides of a pair fell in the same month, so the netting looked absent.
+    # Together they keep the statement's net equal to the combined cash flow.
     if netted and any(netted.get(month) for month in months):
-        values = {}
-        for month in months:
-            cut = netted.get(month) or {}
-            values[month] = None if month not in known else _r(
-                float(cut.get("outflows") or 0) - float(cut.get("inflows") or 0))
-        index["intercompany_netting"] = {
-            "id": "intercompany_netting", "label": "קיזוז בין-חברתי (מאוחד)", "group": "internal",
-            "review": False, "values": values, "total": 0.0,
-        }
+        for line_id, side, sign, label in NETTING_LINES:
+            index[line_id] = {
+                "id": line_id, "label": label, "group": "internal", "review": False, "total": 0.0,
+                "values": {month: None if month not in known else _r(sign * float((netted.get(month) or {}).get(side) or 0))
+                           for month in months},
+            }
     # A line's group follows the combined sign (an operating line may flip).
     lines = []
     for line in index.values():
         line["total"] = _r(sum(line["values"][month] or 0.0 for month in months))
-        if line["id"] != "intercompany_netting":
+        if line["id"] not in NETTING_IDS:
             line["group"] = _group(line["id"], line["total"])
         lines.append(line)
     lines.sort(key=lambda line: ([g for g, _ in GROUPS].index(line["group"]), -abs(line["total"])))
@@ -176,5 +231,8 @@ def combine(sections: list[dict], forecast: dict | None = None, netted: dict | N
         "forecast": _forecast_columns(forecast),
         "basis": "booked_only",
         "message": parts[0].get("message"),
+        "netting_note": NETTING_NOTE if any(line["id"] in NETTING_IDS for line in lines) else None,
+        "scope": scope,
+        "scope_note": _scope_note(scope),
         "provider_calls": 0,
     }

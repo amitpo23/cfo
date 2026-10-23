@@ -13,6 +13,7 @@ from decimal import Decimal
 from ...models import BankTransaction, ClientDashboard, DashboardEntity, DashboardEntityAccount
 from .. import bank_status
 from ..office_access import classifying_office_id, office_manages
+from ..read_memo import read_memo
 from .service import DashboardError
 from . import cash_statement, filing, forecast, liquidity, view_model
 
@@ -57,7 +58,16 @@ def build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date,
                          *, plan: dict | None = None) -> dict:
     """Every entity reads the dashboard plan. Filing decisions and rules carry their
     own ``organizationId``. ``booksClosedMonths`` has no organization, so only the
-    primary organization treats those months as closed."""
+    primary organization treats those months as closed.
+
+    The build only reads, so the bank rows, card accounts and coverage each entity's
+    sections share are read once (``read_memo``)."""
+    with read_memo(db):
+        return _build_dashboard_view(db, dashboard, start, end, plan=plan)
+
+
+def _build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date,
+                          *, plan: dict | None = None) -> dict:
     entities = (
         db.query(DashboardEntity)
         .filter_by(dashboard_id=dashboard.id)
@@ -136,7 +146,7 @@ def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | N
     )
     return {
         "pnl": _combine_pnl(views),
-        "cashflow": _combine_cashflow(views, removed),
+        "cashflow": _combine_cashflow(sections, removed),
         "budget_vs_actual": _combine_budget(views),
         "liquidity": position,
         "forecast": outlook,
@@ -193,7 +203,12 @@ def _combine_pnl(views: list[dict]) -> dict:
     return totals
 
 
-def _combine_cashflow(views: list[dict], removed: dict) -> dict:
+def _combine_cashflow(sections: list[dict], removed: dict) -> dict:
+    """Each month labels which entities it sums (``scope_label``): a month only the chef
+    has bank rows in is the chef's alone, and a month no entity has rows in is unknown,
+    not the zeros a single entity's cash flow fills in."""
+    views = [section["view"] for section in sections]
+    labels = [section["label"] for section in sections]
     slots: dict[str, dict] = {}
     reported = 0
     for view in views:
@@ -211,9 +226,18 @@ def _combine_cashflow(views: list[dict], removed: dict) -> dict:
             "months": [],
             "message": "אין תנועות בנק בישויות הדשבורד בחלון הזה.",
         }
+    known_by = cash_statement.known_entities(sections, sorted(slots))
+    scope = cash_statement.scope_of(known_by, labels)
+    with_statement = any((view.get("cash_statement") or {}).get("months") for view in views)
     cumulative = 0.0
     months_out = []
     for month in sorted(slots):
+        if with_statement and not known_by[month]:
+            months_out.append({
+                "month": month, "inflows": None, "outflows": None, "net_flow": None,
+                "cumulative": cumulative, "scope_label": "אין תנועות בנק",
+            })
+            continue
         cut = removed["by_month"].get(month, {"inflows": 0.0, "outflows": 0.0})
         inflows = round(slots[month]["inflows"] - cut["inflows"], 2)
         outflows = round(slots[month]["outflows"] - cut["outflows"], 2)
@@ -231,6 +255,7 @@ def _combine_cashflow(views: list[dict], removed: dict) -> dict:
             "outflows": outflows,
             "net_flow": net,
             "cumulative": cumulative,
+            "scope_label": scope[month]["label"] if month in scope else None,
         })
     return {"status": "ready", "months": months_out, "message": None}
 
@@ -394,7 +419,8 @@ def _intercompany(db, org_ids: list[int], start: date, end: date, plan: dict | N
     settings = intercompany_settings(plan)
     empty = {
         "summary": {"pairs": 0, "inflows": 0.0, "outflows": 0.0, "amount": 0.0,
-                    "window_days": settings["window_days"], "rule": IC_RULE_HE, "items": []},
+                    "window_days": settings["window_days"], "rule": IC_RULE_HE, "items": [],
+                    "by_month": {}},
         "by_month": {},
     }
     if len(set(org_ids)) < 2:
@@ -449,5 +475,6 @@ def _intercompany(db, org_ids: list[int], start: date, end: date, plan: dict | N
         "outflows": round(float(total), 2),
         "amount": round(float(total), 2),
         "items": items,
+        "by_month": {month: dict(by_month[month]) for month in sorted(by_month)},
     })
     return {"summary": summary, "by_month": by_month}

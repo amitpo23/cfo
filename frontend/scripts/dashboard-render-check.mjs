@@ -20,12 +20,13 @@ import { createElement } from 'react';
 import { BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
 import { LiquidityEvidenceCard, LiquidityPanel, OpeningBalanceCard, draftFromItem, evidenceItems, itemFromDraft, upcomingAmount, withEvidenceItem, withOpeningBalance, ZReportsCard, withZReport, zReportsFromPayload } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
+import { DashboardFrame, DashboardSkeleton, EmptyState, KpiCards, StatusTabs } from ${JSON.stringify(join(components, 'dashboardUi.tsx'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
 export { renderToStaticMarkup, createElement, BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
   LiquidityEvidenceCard, draftFromItem, evidenceItems, itemFromDraft, withEvidenceItem, ZReportsCard, withZReport, zReportsFromPayload,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
-  categoryLabel, pieSlices };
+  categoryLabel, pieSlices, DashboardFrame, DashboardSkeleton, EmptyState, KpiCards, StatusTabs };
 `;
 
 const dir = mkdtempSync(join(tmpdir(), 'dashboard-render-'));
@@ -204,6 +205,24 @@ try {
     expect(old.includes('קוזזו 0'), 'the older shape does not render');
   });
 
+  check('intercompany: netted amounts per month on both sides, never a bare 0 line', () => {
+    const removed = { pairs: 2, inflows: 35000, outflows: 35000, amount: 35000,
+      by_month: { '2026-09': { inflows: 30000, outflows: 30000 }, '2026-08': { inflows: 5000, outflows: 5000 } } };
+    const card = html(ui.IntercompanyCard, { removed });
+    expect(card.includes('כניסות שקוזזו') && card.includes('30,000') && card.indexOf('2026-08') < card.indexOf('2026-09'), 'per month table');
+    const statement = {
+      status: 'ready', months: ['2026-09'], groups: [{ id: 'internal', label: 'פנימי ומסים' }],
+      lines: [
+        { id: 'intercompany_netting_in', label: 'קיזוז בין-חברתי — כניסות שקוזזו (מאוחד)', group: 'internal', values: { '2026-09': -30000 }, total: -30000 },
+        { id: 'intercompany_netting_out', label: 'קיזוז בין-חברתי — יציאות שקוזזו (מאוחד)', group: 'internal', values: { '2026-09': 30000 }, total: 30000 },
+      ],
+      totals: { internal: { '2026-09': 0 }, net: { '2026-09': 0 } }, netting_note: 'כבר הוסרו מהכניסות',
+    };
+    const markup = html(ui.CashStatementCard, { statement });
+    expect(markup.includes('-30,000') || markup.includes('‎-30,000') || markup.includes('−30,000'), 'netted inflows line');
+    expect(markup.includes('כבר הוסרו מהכניסות'), 'netting note');
+  });
+
   check('sources card: per account, stale flag, entity column in the combined view', () => {
     const sources = { stale_count: 1, rule: 'כלל רעננות', items: [
       { kind: 'bank', kind_label: 'תנועות בנק', label: 'עו״ש 8954', source: 'open_finance', source_label: 'Open Finance', last_date: '2026-10-20',
@@ -231,7 +250,34 @@ try {
     const markup = html(ui.CashStatementCard, { statement });
     expect(markup.includes('11,800') && markup.includes('9,800') && markup.includes('לא ידוע'), 'actual cells');
     expect(markup.includes('2026-11 (תחזית)') && markup.includes('10,000') && markup.includes('ללא מע״מ'), 'forecast columns');
+    // Line cells under the forecast are marked, not blank, and the note says why.
+    expect(markup.includes('title="תחזית לפי קבוצה בלבד">—</td>') && markup.includes('לפי קבוצה בלבד'), 'forecast line cells unlabelled');
     expect(html(ui.CashStatementCard, { statement: { status: 'unknown', months: [] } }) === '', 'unknown statement rendered');
+  });
+
+  check('cash statement: a month one entity knows is labelled, a month none knows stays unknown', () => {
+    const statement = {
+      status: 'ready', months: ['2026-05', '2026-06'], groups: [{ id: 'operating_in', label: 'תפעולי — כניסות' }],
+      lines: [{ id: 'sales_cash', label: 'הפקדות מזומן', group: 'operating_in', values: { '2026-05': null, '2026-06': 11800 }, total: 11800 }],
+      totals: { operating_in: { '2026-05': null, '2026-06': 11800 }, net: { '2026-05': null, '2026-06': 11800 } },
+      scope: { '2026-06': { label: 'שף בלבד', entities: ['שף'], missing: ['פוד גרופ'] } },
+      scope_note: 'חודש שמסומן "בלבד"; 2026-06: שף בלבד (פוד גרופ — אין תנועות בנק).',
+    };
+    const markup = html(ui.CashStatementCard, { statement });
+    expect(markup.includes('שף בלבד') && markup.includes('11,800') && markup.includes('לא ידוע'), 'partial month label or unknown month');
+    expect(markup.includes('פוד גרופ — אין תנועות בנק'), 'scope note');
+  });
+
+  check('frame, status tabs, KPI cards, skeleton and empty state', () => {
+    const frame = html(ui.DashboardFrame, { title: 'שף אליהב', subtitle: 'בעלים', children: 'x' });
+    expect(frame.includes('dir="rtl"') && frame.includes('bg-navy-900') && frame.includes('שף אליהב'), 'navy frame');
+    const tabs = html(ui.StatusTabs, { tabs: [{ id: 'status', label: 'תמונת מצב' }, { id: 'bva', label: 'תקציב' }], active: 'bva', onSelect: () => {} });
+    expect(tabs.includes('role="tablist"') && tabs.includes('aria-selected="true"') && tabs.includes('aria-controls="dashboard-panel"'), 'tabs aria');
+    const kpis = html(ui.KpiCards, { items: [{ label: 'הכנסות', value: 'לא ידוע' }, { label: 'לבירור', value: '12', tone: 'warn', note: 'דורש החלטה' }] });
+    expect(kpis.includes('text-stone-400') && kpis.includes('text-amber-700'), 'unknown KPI muted, warn note');
+    const skeleton = html(ui.DashboardSkeleton, {});
+    expect(skeleton.includes('role="status"') && skeleton.includes('טוען') && skeleton.includes('motion-reduce:animate-none'), 'skeleton');
+    expect(html(ui.EmptyState, { title: 'אין נתונים', children: 'הסבר' }).includes('הסבר'), 'empty state');
   });
 
   check('liquidity evidence form: add, edit, delete keep openingBalances and unknown keys', () => {

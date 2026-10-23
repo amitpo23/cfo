@@ -266,14 +266,93 @@ def test_cash_statement_by_line_and_month_with_forecast(client, fresh_org, platf
         assert totals["net"][month["month"]] == month["net_flow"]
     assert chef_statement["forecast"]["months"] == view["entities"][0]["view"]["forecast"]["months"]
     assert "ללא מע״מ" in chef_statement["forecast"]["note"]
+    # The forecast has group totals only; the statement says so instead of leaving lines blank.
+    assert chef_statement["forecast"]["line_items"] is False
+    assert set(chef_statement["forecast"]["rows"]) == {"operating_in", "operating_out", "financing", "net"}
+    assert "לפי קבוצה" in chef_statement["forecast"]["line_note"]
 
     combined = view["combined"]["cash_statement"]
-    netting = next(line for line in combined["lines"] if line["id"] == "intercompany_netting")
+    lines = {line["id"]: line for line in combined["lines"]}
     # The 5,000 pair crosses the month: August's outflow and September's inflow leave the statement.
-    assert netting["values"] == {"2026-08": 5000.0, "2026-09": -5700.0 + 700.0}
+    # The 700 pair is inside September. Each side is its own line, so neither shows as 0.
+    assert lines["intercompany_netting_in"]["values"] == {"2026-08": 0.0, "2026-09": -5700.0}  # 5,000 + 700
+    assert lines["intercompany_netting_out"]["values"] == {"2026-08": 5000.0, "2026-09": 700.0}
+    assert lines["intercompany_netting_in"]["total"] == -5700.0 and lines["intercompany_netting_out"]["total"] == 5700.0
+    assert "intercompany_netting" not in lines
+    assert view["combined"]["intercompany_removed"]["by_month"] == {
+        "2026-08": {"inflows": 0.0, "outflows": 5000.0}, "2026-09": {"inflows": 5700.0, "outflows": 700.0},
+    }
     for month in view["combined"]["cashflow"]["months"]:
         assert combined["totals"]["net"][month["month"]] == month["net_flow"], month["month"]
     assert combined["forecast"]["months"] == view["combined"]["forecast"]["months"]
+
+
+def _section(label, values):
+    """One entity's cash statement: a single transfer line, every month known."""
+    months = sorted(values)
+    return {"label": label, "view": {"cash_statement": {
+        "months": months,
+        "lines": [{"id": "intercompany", "label": "בין-חברתי", "group": "internal", "review": False,
+                   "values": dict(values), "total": sum(v or 0.0 for v in values.values())}],
+        "totals": {"net": dict(values)},
+    }}}
+
+
+def test_netting_inside_one_month_is_shown_on_both_lines_not_as_zero():
+    from cfo.services.dashboards import cash_statement
+    # The chef sends 30,000 to Food Group on 3.8; Food Group receives it on 4.8: both sides in August.
+    sections = [_section("שף", {"2026-08": -30000.0}), _section("פוד גרופ", {"2026-08": 30000.0})]
+    netted = {"2026-08": {"inflows": 30000.0, "outflows": 30000.0}}
+    statement = cash_statement.combine(sections, None, netted)
+    lines = {line["id"]: line for line in statement["lines"]}
+    assert lines["intercompany_netting_in"]["values"] == {"2026-08": -30000.0}
+    assert lines["intercompany_netting_out"]["values"] == {"2026-08": 30000.0}
+    # The net is unchanged: the two sides cancel, as the transfers themselves do.
+    assert statement["totals"]["net"] == {"2026-08": 0.0}
+    assert "כבר הוסרו" in statement["netting_note"]
+
+
+def test_month_only_one_entity_knows_is_that_entity_labelled_not_unknown():
+    from cfo.services.dashboards import cash_statement
+    # Food Group's bank import starts in July: June is the chef's alone, as in the Eliav tool (chef_only).
+    chef = _section("שף", {"2026-06": -1200.0, "2026-07": -400.0})
+    food = _section("פוד גרופ", {"2026-06": None, "2026-07": 250.0})
+    statement = cash_statement.combine([chef, food])
+    assert statement["status"] == "ready"
+    assert statement["totals"]["net"] == {"2026-06": -1200.0, "2026-07": -150.0}  # -400 + 250
+    assert statement["scope"] == {"2026-06": {"label": "שף בלבד", "entities": ["שף"], "missing": ["פוד גרופ"]}}
+    assert "שף בלבד" in statement["scope_note"] and "פוד גרופ" in statement["scope_note"]
+
+
+def test_month_no_entity_knows_stays_unknown():
+    from cfo.services.dashboards import cash_statement
+    chef = _section("שף", {"2026-05": None, "2026-06": -1200.0})
+    food = _section("פוד גרופ", {"2026-05": None, "2026-06": None})
+    statement = cash_statement.combine([chef, food])
+    assert statement["totals"]["net"] == {"2026-05": None, "2026-06": -1200.0}
+    assert statement["lines"][0]["values"]["2026-05"] is None
+    assert set(statement["scope"]) == {"2026-06"}
+
+
+def test_combined_cash_flow_labels_the_months_one_entity_has_no_bank_rows(client, fresh_org, platform_admin):
+    dashboard_id, chef, food = _consolidated(client, platform_admin, fresh_org, "p1-partial-scope")
+    with SessionLocal() as db:
+        _bank(db, chef["org_id"], date(2026, 6, 10), 11800, "הפקדת מזומן")
+        _bank(db, chef["org_id"], date(2026, 8, 3), 2360, "הפקדת מזומן")
+        _bank(db, food["org_id"], date(2026, 8, 5), -500, "בזק")
+        db.commit()
+    view = _view(client, platform_admin["headers"], dashboard_id, "2026-06-01", "2026-08-31")
+    chef_label = view["entities"][0]["label"]
+    months = {m["month"]: m for m in view["combined"]["cashflow"]["months"]}
+    assert months["2026-06"]["inflows"] == 11800.0 and months["2026-06"]["scope_label"] == f"{chef_label} בלבד"
+    assert months["2026-08"]["scope_label"] is None
+    # July: neither entity has a bank row, so neither the cash flow nor the statement may claim it.
+    assert months["2026-07"]["scope_label"] == "אין תנועות בנק"
+    assert months["2026-07"]["inflows"] is None and months["2026-07"]["net_flow"] is None
+    assert months["2026-08"]["cumulative"] == round(11800 + 2360 - 500, 2)
+    statement = view["combined"]["cash_statement"]
+    assert statement["totals"]["net"]["2026-06"] == 11800.0 and statement["totals"]["net"]["2026-07"] is None
+    assert statement["scope"]["2026-06"]["label"] == f"{chef_label} בלבד"
 
 
 def test_cash_statement_month_without_bank_rows_is_unknown(fresh_org):

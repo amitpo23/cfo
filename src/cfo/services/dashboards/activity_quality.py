@@ -264,12 +264,16 @@ def adjust_cashflow(db, organization_id: int, cashflow: dict, plan_payload: dict
 
 def load_txns(db, organization_id: int, start: date | None, end: date | None, *,
               respect_coverage: bool) -> list[Txn]:
-    query = db.query(BankTransaction).filter(BankTransaction.organization_id == organization_id)
-    if start is not None:
-        query = query.filter(BankTransaction.transaction_date >= start)
-    if end is not None:
-        query = query.filter(BankTransaction.transaction_date <= end)
-    rows = query.all()
+    if start is not None and end is not None:
+        from ..bank_coverage import window_rows
+        rows = window_rows(db, organization_id, start, end)
+    else:
+        query = db.query(BankTransaction).filter(BankTransaction.organization_id == organization_id)
+        if start is not None:
+            query = query.filter(BankTransaction.transaction_date >= start)
+        if end is not None:
+            query = query.filter(BankTransaction.transaction_date <= end)
+        rows = query.all()
     if respect_coverage:
         rows = _coverage_keeps(db, organization_id, rows)
     return [txn_from_row(row) for row in rows]

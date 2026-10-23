@@ -1,3 +1,39 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* /d/ dashboard: one card and one dense table for every section (ClientDashboardPage and its tabs). */
+@layer components {
+  .d-card {
+    /* min-w-0: a wide table scrolls inside its card instead of stretching the page grid. */
+    @apply min-w-0 rounded-lg border border-navy-100 bg-white p-4 sm:p-5;
+  }
+  .d-card > h2 {
+    @apply text-base font-semibold text-navy-900;
+  }
+  .d-table {
+    @apply w-full border-collapse text-[13px] tabular-nums;
+  }
+  .d-table thead tr {
+    @apply border-b border-navy-100 bg-navy-50 text-navy-700;
+  }
+  .d-table th {
+    @apply whitespace-nowrap px-2 py-2 text-right font-medium;
+  }
+  .d-table td {
+    @apply px-2 py-1.5 align-top;
+  }
+  .d-table tbody tr {
+    @apply border-b border-stone-100;
+  }
+  .d-table tbody tr:hover {
+    @apply bg-navy-50/60;
+  }
+  /* The label column stays in view while months scroll sideways (right edge in RTL). */
+  .d-table th:first-child,
+  .d-table td:first-child {
+    @apply sticky right-0 z-[1] min-w-[9rem] bg-inherit;
+  }
+  .d-table thead th:first-child { @apply bg-navy-50; }
+  .d-table tbody td:first-child { @apply bg-white; }
+}

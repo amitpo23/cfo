@@ -270,8 +270,8 @@ export function monthTotal(lines: LineDraft[], month: string, categories: Budget
 
 function Card({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="rounded-xl bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-medium">{title}</h2>
+    <section className="d-card">
+      <h2>{title}</h2>
       {children}
     </section>
   );
@@ -369,16 +369,16 @@ export function BudgetEditor({
         </p>
       ) : null}
       {lines.length === 0 ? <p className="mt-3 text-stone-600">אין שורות תקציב.</p> : (
-        <table className="mt-4 w-full text-sm">
+        <table className="mt-4 d-table">
           <thead>
-            <tr className="border-b text-stone-500">
-              <th className="py-2 text-right font-medium">שורה</th>
-              <th className="py-2 text-right font-medium">קטגוריה</th>
-              <th className="py-2 text-right font-medium">כמות</th>
-              <th className="py-2 text-right font-medium">תעריף</th>
-              <th className="py-2 text-right font-medium">סכום</th>
-              <th className="py-2 text-right font-medium">סה״כ {month.slice(0, 4)}</th>
-              {canEdit ? <th className="py-2 text-right font-medium"> </th> : null}
+            <tr>
+              <th>שורה</th>
+              <th>קטגוריה</th>
+              <th>כמות</th>
+              <th>תעריף</th>
+              <th>סכום</th>
+              <th>סה״כ {month.slice(0, 4)}</th>
+              {canEdit ? <th> </th> : null}
             </tr>
           </thead>
           <tbody>
@@ -400,8 +400,8 @@ export function BudgetEditor({
                     </td>
                   </tr>
                 ) : null}
-                <tr className="border-b border-stone-100">
-                  <td className="py-2">
+                <tr>
+                  <td>
                     <input
                       className="w-full rounded border border-stone-200 px-2 py-1"
                       value={line.label}
@@ -410,7 +410,7 @@ export function BudgetEditor({
                       onChange={(event) => update(line.id, { label: event.target.value })}
                     />
                   </td>
-                  <td className="py-2">
+                  <td>
                     <select
                       className="w-full rounded border border-stone-200 px-2 py-1"
                       value={line.category}
@@ -426,7 +426,7 @@ export function BudgetEditor({
                       ))}
                     </select>
                   </td>
-                  <td className="py-2">
+                  <td>
                     <input
                       dir="ltr"
                       inputMode="decimal"
@@ -438,7 +438,7 @@ export function BudgetEditor({
                       onChange={(event) => updateCell(line.id, 'quantity', event.target.value)}
                     />
                   </td>
-                  <td className="py-2">
+                  <td>
                     <input
                       dir="ltr"
                       inputMode="decimal"
@@ -453,7 +453,7 @@ export function BudgetEditor({
                   <td className={`py-2 ${cellValue(stored) === null ? 'text-stone-400' : ''}`}>{cellAmount(stored, defaults)}</td>
                   <td className="py-2 text-stone-600">{yearTotal === null ? 'אין תקציב' : money(yearTotal)}</td>
                   {canEdit ? (
-                    <td className="py-2">
+                    <td>
                       <button
                         type="button"
                         className="text-stone-600 underline"
@@ -477,9 +477,9 @@ export function BudgetEditor({
       ) : null}
       {lines.length > 0 ? (
         <div className="mt-4 overflow-x-auto">
-          <table className="w-full text-xs">
+          <table className="d-table">
             <thead>
-              <tr className="border-b text-stone-500">
+              <tr>
                 <th className="py-1 text-right font-medium">{month.slice(0, 4)}</th>
                 {yearMonths(month).map((key) => (
                   <th key={key} className="py-1 text-right font-medium">
@@ -492,10 +492,10 @@ export function BudgetEditor({
             </thead>
             <tbody>
               {([['revenue', 'הכנסות'], ['cost', 'הוצאות'], ['financing', 'מימון']] as const).map(([kind, label]) => (
-                <tr key={kind} className="border-b border-stone-100">
-                  <td className="py-1">{label}</td>
+                <tr key={kind}>
+                  <td>{label}</td>
                   {yearMonths(month).map((key) => (
-                    <td key={key} className="py-1">{money(monthTotal(lines, key, categories, kind))}</td>
+                    <td key={key}>{money(monthTotal(lines, key, categories, kind))}</td>
                   ))}
                 </tr>
               ))}
@@ -568,31 +568,31 @@ export function FilingRulesCard({
         {manifest?.in_sync === false ? ' הכללים המובנים השתנו מאז שקובעו בתוכנית — יש לבדוק את הסיווג מחדש.' : ''}
         {manifest?.in_sync === true ? ' הכללים המובנים תואמים לקיבוע בתוכנית.' : ''}
       </p>
-      <table className="mt-4 w-full text-sm">
+      <table className="mt-4 d-table">
         <thead>
-          <tr className="border-b text-stone-500">
-            <th className="py-2 text-right font-medium">כלל</th>
-            <th className="py-2 text-right font-medium">מילות מפתח</th>
-            <th className="py-2 text-right font-medium">התאמות</th>
-            <th className="py-2 text-right font-medium">סכום</th>
-            {canEdit ? <th className="py-2 text-right font-medium"> </th> : null}
+          <tr>
+            <th>כלל</th>
+            <th>מילות מפתח</th>
+            <th>התאמות</th>
+            <th>סכום</th>
+            {canEdit ? <th> </th> : null}
           </tr>
         </thead>
         <tbody>
           {rules.map((rule) => (
-            <tr key={rule.id} className="border-b border-stone-100">
-              <td className="py-2">
+            <tr key={rule.id}>
+              <td>
                 {rule.category_he}
                 <span className="mr-2 text-stone-500">{rule.source === 'custom' ? 'מותאם' : 'מובנה'}</span>
               </td>
-              <td className="py-2">
+              <td>
                 {rule.fallback ? 'כל תנועה שלא נתפסה בכלל קודם' : `«${rule.contains}»`} · {fieldLabel(rule.field)} · {directionLabel(rule.direction)}
                 {rule.overridden > 0 ? <span className="mr-2 text-stone-500">נדרס {rule.overridden}</span> : null}
               </td>
-              <td className="py-2">{rule.match_count}</td>
-              <td className="py-2">{money(rule.total)}</td>
+              <td>{rule.match_count}</td>
+              <td>{money(rule.total)}</td>
               {canEdit ? (
-                <td className="py-2">
+                <td>
                   {rule.source === 'custom' ? (
                     <button
                       type="button"
@@ -670,16 +670,16 @@ function ReviewRow({
   const description = item.description || item.counterparty || 'ללא תיאור';
   return (
     <tr className="border-b border-stone-100 align-top">
-      <td className="py-2">{item.date}</td>
-      <td className="py-2">
+      <td>{item.date}</td>
+      <td>
         {item.entity ? <div className="text-xs text-stone-500">{item.entity}</div> : null}
         <div>{description}</div>
         {item.counterparty && item.counterparty !== item.description ? <div className="text-stone-500">{item.counterparty}</div> : null}
       </td>
-      <td className="py-2">{money(item.amount)}</td>
+      <td>{money(item.amount)}</td>
       <td className="py-2 text-stone-600">{item.filed_by.reason_he}</td>
       {canEdit ? (
-        <td className="py-2">
+        <td>
           <div className="flex flex-wrap gap-2">
             <select className="rounded border border-stone-300 px-2 py-1" value={category} aria-label="קטגוריה לאישור" onChange={(event) => setCategory(event.target.value)}>
               {categories.map((option) => <option key={option.key} value={option.key}>{option.label_he}</option>)}
@@ -731,14 +731,14 @@ export function ReviewList({
         <p className="mt-2 text-sm text-stone-600">החלטות שלא הותאמו לתנועה: {unmatched.length}</p>
       ) : null}
       {review.items.length === 0 ? null : (
-        <table className="mt-4 w-full text-sm">
+        <table className="mt-4 d-table">
           <thead>
-            <tr className="border-b text-stone-500">
-              <th className="py-2 text-right font-medium">תאריך</th>
-              <th className="py-2 text-right font-medium">תיאור</th>
-              <th className="py-2 text-right font-medium">סכום</th>
-              <th className="py-2 text-right font-medium">למה לא תויק</th>
-              {canEdit ? <th className="py-2 text-right font-medium">סיווג</th> : null}
+            <tr>
+              <th>תאריך</th>
+              <th>תיאור</th>
+              <th>סכום</th>
+              <th>למה לא תויק</th>
+              {canEdit ? <th>סיווג</th> : null}
             </tr>
           </thead>
           <tbody>

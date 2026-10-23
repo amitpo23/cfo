@@ -5,6 +5,7 @@ Public reads set no-referrer and noindex. They do not call SUMIT or Open Finance
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 
@@ -19,9 +20,11 @@ from ..dependencies import get_current_user
 from ...config import settings
 from ...database import get_db_session
 from ...models import DashboardRateLimit, PublishedSnapshot, User
+from ...services.build_timing import log_build, measured, server_timing
 from ...services.dashboards import budget, multi_entity, service, view_model
 from ...services.dashboards.service import READ_ROLES, DashboardError
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 public_router = APIRouter()
 
@@ -207,19 +210,30 @@ def patch_dashboard(dashboard_id: int, body: DashboardPatch, db: Session = Depen
     return {"id": row.id, "slug": row.slug, "status": row.status, "access_mode": row.access_mode}
 
 
+def _check_window(start: date, end: date) -> None:
+    """The caller's window, checked here with fixed messages. Any other ValueError of
+    the build is a server fault: it goes to the 500 handler, never echoed to the client."""
+    if end < start:
+        raise DashboardError(422, "invalid_range", "תאריך הסיום מוקדם מתאריך ההתחלה")
+    if (end - start).days > view_model.MAX_RANGE_DAYS:
+        raise DashboardError(422, "invalid_range", "טווח התאריכים ארוך מ-366 ימים")
+
+
 @router.get("/dashboards/{dashboard_id}/view")
-def dashboard_view(dashboard_id: int, start: date | None = None, end: date | None = None,
+def dashboard_view(dashboard_id: int, response: Response, start: date | None = None, end: date | None = None,
                    db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
     try:
         row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
         window_end = end or date.today()
         window_start = start or date(window_end.year, 1, 1)
-        view = multi_entity.build_dashboard_view(db, row, window_start, window_end,
-                                                 plan=view_model.plan_payload(db, row.id))
+        _check_window(window_start, window_end)
+        with measured(db) as measure:
+            view = multi_entity.build_dashboard_view(db, row, window_start, window_end,
+                                                     plan=view_model.plan_payload(db, row.id))
     except DashboardError as exc:
         return _error(exc)
-    except ValueError as exc:
-        return _error(DashboardError(422, "invalid_range", str(exc)))
+    response.headers["Server-Timing"] = server_timing(measure)
+    log_build(logger, "view", row.id, len(view.get("entities") or []), measure)
     view["dashboard_id"] = row.id
     return view
 
@@ -509,10 +523,13 @@ def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get
         return _public_response(payload)
     today = date.today()
     try:
-        live = multi_entity.build_dashboard_view(db, dashboard, date(today.year, 1, 1), today,
-                                                 plan=view_model.plan_payload(db, dashboard.id))
+        with measured(db) as measure:
+            live = multi_entity.build_dashboard_view(db, dashboard, date(today.year, 1, 1), today,
+                                                     plan=view_model.plan_payload(db, dashboard.id))
     except DashboardError as exc:
         return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
+    # Logged only: a public viewer gets no timing header.
+    log_build(logger, "public_live", dashboard.id, len(live.get("entities") or []), measure)
     view = view_model.redact_public_view(live)
     view["source"] = "live"
     return _public_response(view)
