@@ -283,7 +283,35 @@ def link_coverage_overlap(db, org_id: int) -> dict:
     return {"matched": matched}
 
 
+def window_rows(db, org_id: int, start: date, end: date) -> list:
+    """Every bank row of the organization dated in ``[start, end]``, in (date, id) order.
+
+    Shared by the cash flow, the cash-basis P&L, pending and card summaries and the
+    intercompany match of one view (``read_memo``). Callers filter; the list is a copy.
+    """
+    from .read_memo import remember
+
+    def load() -> tuple:
+        return tuple(
+            db.query(BankTransaction)
+            .filter(
+                BankTransaction.organization_id == org_id,
+                BankTransaction.transaction_date >= start,
+                BankTransaction.transaction_date <= end,
+            )
+            .order_by(BankTransaction.transaction_date, BankTransaction.id)
+            .all()
+        )
+
+    return list(remember(db, ("bank_window_rows", org_id, start, end), load))
+
+
 def _org_has_reviewed_local_import(db, org_id: int) -> bool:
+    from .read_memo import remember
+    return remember(db, ("has_reviewed_local_import", org_id), lambda: _has_reviewed_local_import(db, org_id))
+
+
+def _has_reviewed_local_import(db, org_id: int) -> bool:
     account = (
         db.query(Account.id)
         .filter(Account.organization_id == org_id, Account.source == LOCAL_SOURCE)
@@ -741,15 +769,7 @@ def cashflow_selection(db, org_id: int, start: date, end: date):
     account is BOUND, INDEPENDENT, or UNCLASSIFIED. This read does not
     write alerts.
     """
-    rows = (
-        db.query(BankTransaction)
-        .filter(
-            BankTransaction.organization_id == org_id,
-            BankTransaction.transaction_date >= start,
-            BankTransaction.transaction_date <= end,
-        )
-        .all()
-    )
+    rows = window_rows(db, org_id, start, end)
     # Only money that moved in a cash account: BOOKED Open Finance rows,
     # never PENDING twins or card-account detail (see bank_status).
     from .bank_status import card_account_ids, counts_in_cash_flow
@@ -773,16 +793,7 @@ def cashflow_selection(db, org_id: int, start: date, end: date):
 def cashflow_row_objects(db, org_id: int, start: date, end: date) -> list:
     """The same rows ``cashflow_selection`` sums, as BankTransaction objects."""
     from .bank_status import card_account_ids, counts_in_cash_flow
-    rows = (
-        db.query(BankTransaction)
-        .filter(
-            BankTransaction.organization_id == org_id,
-            BankTransaction.transaction_date >= start,
-            BankTransaction.transaction_date <= end,
-        )
-        .order_by(BankTransaction.transaction_date, BankTransaction.id)
-        .all()
-    )
+    rows = window_rows(db, org_id, start, end)
     card_ids = card_account_ids(db, org_id)
     rows = [row for row in rows if counts_in_cash_flow(row, card_ids)]
     if not _org_has_reviewed_local_import(db, org_id):
@@ -792,6 +803,12 @@ def cashflow_row_objects(db, org_id: int, start: date, end: date) -> list:
 
 
 def _classification_context(db, org_id: int) -> dict:
+    """Read-only for its callers, so one view shares it (``read_memo``)."""
+    from .read_memo import remember
+    return remember(db, ("classification_context", org_id), lambda: _load_classification_context(db, org_id))
+
+
+def _load_classification_context(db, org_id: int) -> dict:
     coverages = db.query(AccountSourceCoverage).filter_by(organization_id=org_id).all()
     classes = {
         row.account_id: row

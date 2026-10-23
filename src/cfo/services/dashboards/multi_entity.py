@@ -13,6 +13,7 @@ from decimal import Decimal
 from ...models import BankTransaction, ClientDashboard, DashboardEntity, DashboardEntityAccount
 from .. import bank_status
 from ..office_access import classifying_office_id, office_manages
+from ..read_memo import read_memo
 from .service import DashboardError
 from . import cash_statement, filing, forecast, liquidity, view_model
 
@@ -57,7 +58,16 @@ def build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date,
                          *, plan: dict | None = None) -> dict:
     """Every entity reads the dashboard plan. Filing decisions and rules carry their
     own ``organizationId``. ``booksClosedMonths`` has no organization, so only the
-    primary organization treats those months as closed."""
+    primary organization treats those months as closed.
+
+    The build only reads, so the bank rows, card accounts and coverage each entity's
+    sections share are read once (``read_memo``)."""
+    with read_memo(db):
+        return _build_dashboard_view(db, dashboard, start, end, plan=plan)
+
+
+def _build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date,
+                          *, plan: dict | None = None) -> dict:
     entities = (
         db.query(DashboardEntity)
         .filter_by(dashboard_id=dashboard.id)

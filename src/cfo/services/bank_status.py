@@ -79,13 +79,17 @@ def is_card_row(row, card_account_ids: set[int] | frozenset = frozenset()) -> bo
 
 def card_account_ids(db, organization_id: int) -> set[int]:
     from ..models import Account
+    from .read_memo import remember
 
-    rows = (
-        db.query(Account.id, Account.raw_account_type)
-        .filter(Account.organization_id == organization_id)
-        .all()
-    )
-    return {aid for aid, raw_type in rows if str(raw_type or "").strip().upper() == CARD}
+    def load() -> frozenset[int]:
+        rows = (
+            db.query(Account.id, Account.raw_account_type)
+            .filter(Account.organization_id == organization_id)
+            .all()
+        )
+        return frozenset(aid for aid, raw_type in rows if str(raw_type or "").strip().upper() == CARD)
+
+    return set(remember(db, ("card_account_ids", organization_id), load))
 
 
 def counts_in_cash_flow(row, card_ids: set[int] | frozenset = frozenset()) -> bool:
@@ -116,20 +120,10 @@ def _money(value) -> float:
 
 def pending_summary(db, organization_id: int, start: date, end: date) -> dict:
     """PENDING rows per month for display. Never part of any total."""
-    from ..models import BankTransaction
+    from .bank_coverage import window_rows
 
     card_ids = card_account_ids(db, organization_id)
-    rows = (
-        db.query(BankTransaction)
-        .filter(
-            BankTransaction.organization_id == organization_id,
-            BankTransaction.source == OPEN_FINANCE,
-            BankTransaction.transaction_date >= start,
-            BankTransaction.transaction_date <= end,
-        )
-        .order_by(BankTransaction.transaction_date, BankTransaction.id)
-        .all()
-    )
+    rows = [row for row in window_rows(db, organization_id, start, end) if row.source == OPEN_FINANCE]
     months: "OrderedDict[str, dict]" = OrderedDict()
     future = 0
     count = 0
@@ -163,17 +157,13 @@ def pending_summary(db, organization_id: int, start: date, end: date) -> dict:
 
 def card_breakdown(db, organization_id: int, start: date, end: date, *, top: int = 15) -> dict:
     """Merchant breakdown of card accounts. Detail only: never a cash-flow total."""
-    from ..models import BankTransaction
+    from .bank_coverage import window_rows
 
     card_ids = card_account_ids(db, organization_id)
-    query = db.query(BankTransaction).filter(
-        BankTransaction.organization_id == organization_id,
-        BankTransaction.source == OPEN_FINANCE,
-        BankTransaction.transaction_date >= start,
-        BankTransaction.transaction_date <= end,
-    )
     months: "OrderedDict[str, dict]" = OrderedDict()
-    for row in query.order_by(BankTransaction.transaction_date, BankTransaction.id).all():
+    for row in window_rows(db, organization_id, start, end):
+        if row.source != OPEN_FINANCE:
+            continue
         if not is_card_row(row, card_ids) or bank_status(row) != BOOKED:
             continue
         key = row.transaction_date.strftime("%Y-%m")
