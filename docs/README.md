@@ -38,6 +38,7 @@
 - [`MOSHKO_ACTIVATION_RUNBOOK.md`](MOSHKO_ACTIVATION_RUNBOOK.md) — **מדריך ההפעלה המלא של מושקו**: אימות SUMIT/Open Finance, גישה לידע וליכולות, הקמת WhatsApp, חיבור העוסק, ומה לבדוק
 - [`rezef_capabilities.json`](rezef_capabilities.json) — חוזה היכולות המכונתי; נבדק מול קוד וטסטים
 - [`DATABASE_MAP.md`](DATABASE_MAP.md) — מודל הנתונים
+- [`public-dashboard-read-path.md`](public-dashboard-read-path.md) — שתי אפשרויות לקריאת `/d/` (snapshot יומי, או להפסיק לכתוב `last_used_at` בכל קריאה). לא הוכרע; ההתנהגות לא שונתה
 - [`PERMISSIONS.md`](PERMISSIONS.md) · [`AUTH_ROADMAP.md`](AUTH_ROADMAP.md) — הרשאות ורב-דיירות
 - [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) — מצב מוכנות לפרוד
 - [`DOCKER_LOCAL.md`](DOCKER_LOCAL.md) — הרמה מקומית
