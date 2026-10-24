@@ -7,8 +7,9 @@ dashboard must belong to the same office. No provider calls.
 """
 from __future__ import annotations
 
-from datetime import date
-from decimal import Decimal
+from bisect import bisect_left, bisect_right
+from datetime import date, timedelta
+from decimal import ROUND_FLOOR, Decimal
 
 from ...models import BankTransaction, ClientDashboard, DashboardEntity, DashboardEntityAccount
 from .. import bank_status
@@ -399,54 +400,88 @@ def _candidates(db, org_ids: list[int], start: date, end: date, plan: dict | Non
     return out
 
 
-def _intercompany(db, org_ids: list[int], start: date, end: date, plan: dict | None = None,
-                  labels: dict | None = None) -> dict:
-    """Intercompany netting of the combined cash flow, an explicit rule:
-
-    1. rows: what each entity's cash flow sums (BOOKED, not superseded, no card rows,
-       confirmed duplicates dropped), on ``plan.intercompany.accountIds`` when the
-       entity has rows on those accounts;
-    2. eligible: the row is filed as a transfer (``IC_CATEGORIES``: intercompany,
-       transfers_out, other_in, bank_journal), not as sales, supplier, fee, ...; or
-       its description carries an intercompany marker;
-    3. a pair: two entities, opposite signs, the same absolute amount (±0.01), dates at
-       most ``windowDays`` apart (default 4, the tool's match);
-    4. deterministic: outflows in (date, id) order each take the free inflow with the
-       smallest date gap, then the lowest id. A row is used once.
-
-    Each side is removed from its own month (an outflow on 31.8 paired with an
-    inflow on 2.9 removes 31.8 from August's outflows and 2.9 from September's inflows).
-    """
-    settings = intercompany_settings(plan)
-    empty = {
-        "summary": {"pairs": 0, "inflows": 0.0, "outflows": 0.0, "amount": 0.0,
-                    "window_days": settings["window_days"], "rule": IC_RULE_HE, "items": [],
-                    "by_month": {}},
+def _empty_intercompany(window_days: int) -> dict:
+    return {
+        "summary": {
+            "pairs": 0, "inflows": 0.0, "outflows": 0.0, "amount": 0.0,
+            "window_days": window_days, "rule": IC_RULE_HE, "items": [],
+            "by_month": {},
+        },
         "by_month": {},
     }
-    if len(set(org_ids)) < 2:
-        return empty
+
+
+def _amount_bucket(amount: Decimal) -> int:
+    """floor(amount / 0.01). Two amounts within one tolerance land at most one bucket apart."""
+    return int((amount / IC_TOLERANCE).to_integral_value(rounding=ROUND_FLOOR))
+
+
+def _index_inflows(ins: list) -> dict[int, dict[int, list]]:
+    """Inflows by amount bucket, then organization, sorted by (date, id)."""
+    by_bucket: dict[int, dict[int, list]] = {}
+    for item in ins:
+        row = item[0]
+        org_rows = by_bucket.setdefault(_amount_bucket(item[1]), {}).setdefault(row.organization_id, [])
+        org_rows.append(item)
+    for by_org in by_bucket.values():
+        for org_rows in by_org.values():
+            org_rows.sort(key=lambda item: (item[0].transaction_date, item[0].id))
+    return by_bucket
+
+
+def _best_inflow(by_bucket: dict[int, dict[int, list]], out_row, out_amount: Decimal,
+                 window_days: int, used: set[int]):
+    """The free inflow with the smallest (date gap, id), or None.
+
+    The date scan is one day wider than ``window_days`` so a datetime whose
+    ``.days`` still falls inside the window is not dropped before the same
+    gap predicate the nested scan used. Amount buckets are a superset too:
+    the tolerance check below is what accepts a pair.
+    """
+    center = _amount_bucket(abs(out_amount))
+    span = timedelta(days=window_days + 1)
+    lo_date = out_row.transaction_date - span
+    hi_date = out_row.transaction_date + span
+    best = None
+    for bucket in (center - 1, center, center + 1):
+        by_org = by_bucket.get(bucket)
+        if not by_org:
+            continue
+        for org_id, org_rows in by_org.items():
+            if org_id == out_row.organization_id:
+                continue
+            lo = bisect_left(org_rows, lo_date, key=lambda item: item[0].transaction_date)
+            hi = bisect_right(org_rows, hi_date, key=lambda item: item[0].transaction_date)
+            for in_row, in_amount, _in_category in org_rows[lo:hi]:
+                if in_row.id in used or in_row.organization_id == out_row.organization_id:
+                    continue
+                if abs(abs(out_amount) - in_amount) > IC_TOLERANCE:
+                    continue
+                gap = abs((in_row.transaction_date - out_row.transaction_date).days)
+                if gap > window_days:
+                    continue
+                key = (gap, in_row.id)
+                if best is None or key < best[0]:
+                    best = (key, in_row, in_amount)
+    return best
+
+
+def _settle_intercompany(rows: list, window_days: int, labels: dict | None = None) -> dict:
+    """Pair eligible rows. Same rule as the previous nested scan, indexed by amount and date."""
     labels = labels or {}
-    rows = _candidates(db, org_ids, start, end, plan, settings["account_ids"])
-    outs = sorted((item for item in rows if item[1] < 0), key=lambda item: (item[0].transaction_date, item[0].id))
+    empty = _empty_intercompany(window_days)
+    outs = sorted(
+        (item for item in rows if item[1] < 0),
+        key=lambda item: (item[0].transaction_date, item[0].id),
+    )
     ins = [item for item in rows if item[1] > 0]
+    by_bucket = _index_inflows(ins)
     used: set[int] = set()
     by_month: dict[str, dict] = {}
     items = []
     total = Decimal(0)
-    for out_row, out_amount, out_category in outs:
-        best = None
-        for in_row, in_amount, in_category in ins:
-            if in_row.id in used or in_row.organization_id == out_row.organization_id:
-                continue
-            if abs(abs(out_amount) - in_amount) > IC_TOLERANCE:
-                continue
-            gap = abs((in_row.transaction_date - out_row.transaction_date).days)
-            if gap > settings["window_days"]:
-                continue
-            key = (gap, in_row.id)
-            if best is None or key < best[0]:
-                best = (key, in_row, in_amount)
+    for out_row, out_amount, _out_category in outs:
+        best = _best_inflow(by_bucket, out_row, out_amount, window_days, used)
         if best is None:
             continue
         _, in_row, in_amount = best
@@ -479,3 +514,28 @@ def _intercompany(db, org_ids: list[int], start: date, end: date, plan: dict | N
         "by_month": {month: dict(by_month[month]) for month in sorted(by_month)},
     })
     return {"summary": summary, "by_month": by_month}
+
+
+def _intercompany(db, org_ids: list[int], start: date, end: date, plan: dict | None = None,
+                  labels: dict | None = None) -> dict:
+    """Intercompany netting of the combined cash flow, an explicit rule:
+
+    1. rows: what each entity's cash flow sums (BOOKED, not superseded, no card rows,
+       confirmed duplicates dropped), on ``plan.intercompany.accountIds`` when the
+       entity has rows on those accounts;
+    2. eligible: the row is filed as a transfer (``IC_CATEGORIES``: intercompany,
+       transfers_out, other_in, bank_journal), not as sales, supplier, fee, ...; or
+       its description carries an intercompany marker;
+    3. a pair: two entities, opposite signs, the same absolute amount (±0.01), dates at
+       most ``windowDays`` apart (default 4, the tool's match);
+    4. deterministic: outflows in (date, id) order each take the free inflow with the
+       smallest date gap, then the lowest id. A row is used once.
+
+    Each side is removed from its own month (an outflow on 31.8 paired with an
+    inflow on 2.9 removes 31.8 from August's outflows and 2.9 from September's inflows).
+    """
+    settings = intercompany_settings(plan)
+    if len(set(org_ids)) < 2:
+        return _empty_intercompany(settings["window_days"])
+    rows = _candidates(db, org_ids, start, end, plan, settings["account_ids"])
+    return _settle_intercompany(rows, settings["window_days"], labels)

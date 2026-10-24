@@ -1562,6 +1562,8 @@ class Invoice(Base):
         Index("ix_invoice_org_ext", "organization_id", "external_id", "source", unique=True),
         Index("ix_invoice_status", "organization_id", "status"),
         Index("ix_invoice_due", "organization_id", "due_date"),
+        # /d/ books and freshness filter issue_date. ix_invoice_due is due_date.
+        Index("ix_invoice_org_issue_date", "organization_id", "issue_date"),
     )
 
 
@@ -1603,6 +1605,8 @@ class Bill(Base):
         Index("ix_bill_org_ext", "organization_id", "external_id", "source", unique=True),
         Index("ix_bill_status", "organization_id", "status"),
         Index("ix_bill_due", "organization_id", "due_date"),
+        # /d/ books and freshness filter issue_date. ix_bill_due is due_date.
+        Index("ix_bill_org_issue_date", "organization_id", "issue_date"),
     )
 
 
@@ -1976,6 +1980,8 @@ class Expense(Base):
 
     __table_args__ = (
         Index("ix_expense_org_status", "organization_id", "status"),
+        # /d/ books and freshness filter expense_date.
+        Index("ix_expense_org_date", "organization_id", "expense_date"),
         # W6.4: ייחודי כשיש external_id (partial) — היה לא-unique בכלל.
         Index(
             "ix_expense_org_ext", "organization_id", "external_id", "source",
@@ -2124,6 +2130,8 @@ class BankTransaction(Base):
     __table_args__ = (
         Index("ix_banktx_org_ext", "organization_id", "external_id", "source", unique=True),
         Index("ix_banktx_date", "organization_id", "transaction_date"),
+        # /d/ liquidity filters account_id + transaction_date. ix_banktx_date is (org, date).
+        Index("ix_banktx_account_date", "account_id", "transaction_date"),
         CheckConstraint(
             "source = 'manual' OR external_id IS NOT NULL",
             name="ck_banktx_source_external_id",
