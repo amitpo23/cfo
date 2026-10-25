@@ -762,6 +762,57 @@ async def scheduled_refresh_sumit_quota(db: Session = Depends(get_db_session)):
     return {"refreshed": len(targets), "results": results}
 
 
+_WEEKLY_PULL_LOG_LIMIT = 300
+
+
+def _clip_weekly_log(value) -> str:
+    if value is None or value == "":
+        return "-"
+    text = str(value).replace("\n", " ")
+    if len(text) > _WEEKLY_PULL_LOG_LIMIT:
+        return text[:_WEEKLY_PULL_LOG_LIMIT]
+    return text
+
+
+def _weekly_pull_entity_detail(counts) -> Optional[str]:
+    """Entity errors and open circuits only. Counts of rows stay out of the log."""
+    if not isinstance(counts, dict):
+        return None
+    parts = []
+    for entity, payload in counts.items():
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("error"):
+            parts.append(f"{entity}: {payload['error']}")
+        elif payload.get("skipped_circuit_open"):
+            parts.append(f"{entity}: circuit_open")
+    if not parts:
+        return None
+    return "; ".join(parts)
+
+
+def _weekly_pull_org_log(item: dict) -> str:
+    """One line: org, status, and why it did not call SUMIT. No I/O."""
+    status = item.get("status")
+    skipped = item.get("skipped")
+    reason = item.get("reason") or item.get("error") or item.get("error_summary")
+    if status is None and (skipped or item.get("reason")):
+        status = "skipped"
+    elif status is None and item.get("error"):
+        status = "error"
+    return (
+        "org={org} source={source} status={status} skipped={skipped} "
+        "reason={reason} detail={detail}"
+    ).format(
+        org=item.get("organization_id"),
+        source=item.get("source"),
+        status=status if status is not None else "-",
+        skipped=skipped if skipped is not None else "-",
+        reason=_clip_weekly_log(reason),
+        detail=_clip_weekly_log(_weekly_pull_entity_detail(item.get("counts"))),
+    )
+
+
 @router.get("/cron/sumit-weekly-pull", dependencies=[Depends(_verify_cron_secret)])
 async def scheduled_sumit_weekly_pull(db: Session = Depends(get_db_session)):
     """Weekly: one read-only SUMIT pull for all organizations combined.
@@ -852,6 +903,9 @@ async def scheduled_sumit_weekly_pull(db: Session = Depends(get_db_session)):
         "SUMIT weekly pull %s: %s targets, %s calls used, %s of %s used this month",
         week_key, len(to_run), calls_used, used_after, quota.limit,
     )
+    for item in results:
+        if isinstance(item, dict):
+            logger.info("SUMIT weekly pull %s %s", week_key, _weekly_pull_org_log(item))
     return {
         "status": "ok",
         "week": week_key,

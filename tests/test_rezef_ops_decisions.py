@@ -389,6 +389,104 @@ def test_weekly_pull_logs_the_calls_it_used(client, clean_budgets, monkeypatch, 
     assert any("3 calls used" in record.getMessage() for record in caplog.records)
 
 
+def test_weekly_pull_logs_why_a_ran_org_made_no_calls(client, clean_budgets, monkeypatch, caplog):
+    """A target that entered the sync loop must log status and the skip/error reason.
+
+    The summary line only counts orgs in ``to_run`` and calls committed. A
+    connector refusal or an entity error stays in ``results`` and is invisible
+    in that line. The response body is unchanged.
+    """
+    import logging
+
+    from cfo.api.routes import cron
+
+    _arm_weekly_pull(monkeypatch, claims_per_org=0)
+
+    async def fake_run(_db, targets, *, pull_expenses=True):
+        assert pull_expenses is False
+        assert targets
+        return [
+            {
+                "organization_id": 7,
+                "source": "sumit",
+                "status": "partial",
+                "error_summary": "1 entity types had errors",
+                "counts": {
+                    "invoices": {
+                        "error": "refusing to call SUMIT (/accounting/documents/list/) with a placeholder API key",
+                    },
+                    "bills": {"skipped_circuit_open": True, "circuit_open_until": "2026-10-25T12:00:00"},
+                    "accounts": {"created": 5},
+                },
+            },
+            {
+                "organization_id": 8,
+                "source": "sumit",
+                "error": "Provider access is disabled for this import-only organization",
+            },
+        ]
+
+    monkeypatch.setattr(cron, "_run_sync_targets", fake_run)
+
+    with caplog.at_level(logging.INFO, logger="cfo.api.routes.cron"):
+        body = client.get(WEEKLY, headers=CRON_HEADERS).json()
+
+    assert body["calls_used"] == 0
+    assert body["synced"] >= 1
+    assert [item["organization_id"] for item in body["results"]] == [7, 8]
+    assert body["results"][0]["counts"]["accounts"] == {"created": 5}
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "org=7" in message
+        and "source=sumit" in message
+        and "status=partial" in message
+        and "placeholder API key" in message
+        and "bills: circuit_open" in message
+        and "created" not in message
+        and "circuit_open_until" not in message
+        for message in messages
+    )
+    assert any(
+        "org=8" in message
+        and "status=error" in message
+        and "Provider access is disabled" in message
+        for message in messages
+    )
+
+
+def test_weekly_pull_logs_a_gate_skip_that_never_enters_the_sync(client, clean_budgets, monkeypatch, caplog):
+    """Daily-budget and per-key skips are 0 calls and must be logged too."""
+    import logging
+
+    from cfo.api.routes import cron
+
+    _arm_weekly_pull(monkeypatch, claims_per_org=0)
+
+    def daily_gate(_db, org_id, source):
+        return {
+            "organization_id": org_id,
+            "source": source,
+            "skipped": "daily_budget",
+            "last_success_at": "2026-10-25T00:00:00",
+            "next_eligible_at": "2026-10-25T20:00:00",
+        }
+
+    monkeypatch.setattr(cron, "_daily_budget_gate", daily_gate)
+
+    with caplog.at_level(logging.INFO, logger="cfo.api.routes.cron"):
+        body = client.get(WEEKLY, headers=CRON_HEADERS).json()
+
+    assert body["calls_used"] == 0
+    assert body["synced"] == 0
+    assert body["results"]
+    assert all(item["skipped"] == "daily_budget" for item in body["results"])
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "org=1" in message and "status=skipped" in message and "skipped=daily_budget" in message
+        for message in messages
+    )
+
+
 def test_scheduled_pull_guard_keeps_the_reserve_at_the_request_boundary(client, clean_budgets):
     from cfo.services.sumit_request_budget import (
         SumitRequestBudgetExceeded, SumitRequestLimiter, account_monthly_request_limit,
