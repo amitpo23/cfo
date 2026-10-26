@@ -269,6 +269,11 @@ def test_per_org_isolation_in_run_all_organizations(fresh_org, monkeypatch):
         def _maybe_boom(db_, organization_id, today, force=False):
             if organization_id == org_a:
                 raise RuntimeError("org_a boom")
+            if organization_id != org_b:
+                # מסד הסוויטה מחזיק כל ארגון שטסטים קודמים יצרו (~1,500). מחזור מלא
+                # לכל אחד מהם העביר את הטסט את 60 השניות (26/10/2026). הבידוד
+                # נבדק על org_a ו-org_b בלבד.
+                return {"organization_id": organization_id, "status": "skipped"}
             return real_run(db_, organization_id, today, force=force)
 
         monkeypatch.setattr(svc, "run_morning_cycle", _maybe_boom)

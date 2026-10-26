@@ -405,6 +405,31 @@ def _forbid_sumit_clients(monkeypatch) -> list[str]:
     return built
 
 
+def _morning_cycle_only_where_sumit_can_be_built(monkeypatch) -> None:
+    """The morning cron runs the full cycle for every active organization, and the
+    suite's database holds every organization earlier tests created (~1,500): the
+    loop alone passed 60 seconds (26/10/2026), and the cut-off run leaked a push into
+    the next test. A SUMIT client can only be built for org 1 (the env key in tests)
+    or an organization with a saved SUMIT connection, so the real cycle runs for
+    exactly those and the rest are skipped."""
+    from cfo.models import IntegrationConnection
+    from cfo.services import morning_cycle_service
+
+    with SessionLocal() as db:
+        keyed = {1} | {
+            row.organization_id
+            for row in db.query(IntegrationConnection).filter(IntegrationConnection.source == "sumit")
+        }
+    real_run = morning_cycle_service.run_morning_cycle
+
+    def run_where_sumit_exists(db, organization_id, today, force=False):
+        if organization_id not in keyed:
+            return {"organization_id": organization_id, "status": "skipped"}
+        return real_run(db, organization_id, today, force=force)
+
+    monkeypatch.setattr(morning_cycle_service, "run_morning_cycle", run_where_sumit_exists)
+
+
 def test_every_scheduled_cron_builds_no_sumit_client(client, owner, monkeypatch):
     """Whatever stays on the Vercel schedule must not reach SUMIT.
 
@@ -413,6 +438,7 @@ def test_every_scheduled_cron_builds_no_sumit_client(client, owner, monkeypatch)
     """
     monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", False)
     built = _forbid_sumit_clients(monkeypatch)
+    _morning_cycle_only_where_sumit_can_be_built(monkeypatch)
     schedule = json.loads((ROOT / "vercel.json").read_text())
     for job in schedule["crons"]:
         response = client.get(job["path"], headers={"Authorization": "Bearer test-cron-secret"})

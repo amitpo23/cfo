@@ -115,6 +115,27 @@ def _isolate_sumit_environment_cache():
     sumit_integration._SUMIT_ENVIRONMENT_CACHE.clear()
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "real_stagger: keep the production SUMIT inter-org stagger for this test",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_inter_org_stagger(request, monkeypatch):
+    """הפיזור בין ארגוני SUMIT (`cron.SUMIT_INTER_ORG_STAGGER_SECONDS`) הוא 65
+    שניות אמיתיות לכל ארגון נוסף. בתוך TestClient השינה נגבית במלואה, וה-
+    `client` חי לאורך כל ה-session: כל טסט שרושם ארגון מוסיף יעד, והעלות היא
+    65×(n−1) לכל ריצת cron. כך "נתקעה" הסוויטה בנקודה משתנה (אירוע 26/10/2026).
+    טסט שמאמת את הפיזור עצמו מסומן `real_stagger` ומקבל את ערך הפרוד."""
+    if request.node.get_closest_marker("real_stagger"):
+        return
+    from cfo.api.routes import cron
+
+    monkeypatch.setattr(cron, "SUMIT_INTER_ORG_STAGGER_SECONDS", 0)
+
+
 def pytest_runtest_setup(item):
     """מחזיק את שם הטסט הנוכחי כדי שחומת הרשת תוכל להצביע על האשם."""
     _current_test["name"] = item.name
