@@ -254,7 +254,10 @@ def test_needs_user_regression_on_existing_tools():
         "propose_expense_filing", "file_expense",
         # Local collection decisions must receive the real caller identity.
         "propose_collection_request", "allocate_collection_receipt", "reverse_collection_allocation",
-        "propose_payable_request", "execute_payable_request", "settle_payable_request", "reverse_payable_settlement"}
+        "propose_payable_request", "execute_payable_request", "settle_payable_request", "reverse_payable_settlement",
+        # send_report delivers a PDF to the caller's own chat; it checks the
+        # verified channel identity belongs to this very user and org.
+        "send_report"}
 
 
 def test_needs_user_tool_receives_user_id_kwarg(monkeypatch, fresh_org):

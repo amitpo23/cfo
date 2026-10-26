@@ -22,6 +22,8 @@ _TOOLS_MENTIONED_IN_BASE_PROMPT = {
     "get_bank_reconciliation", "get_ap_aging", "email_report",
     "propose_vat_filing_approval", "verify_filing", "rezef_help",
     "search_history", "get_ledger_card", "get_ar_aging", "kb_lookup",
+    # נוסף 26/10/2026: שליחת דוח PDF לשיחה בוואטסאפ/טלגרם.
+    "send_report",
 }
 
 

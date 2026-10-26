@@ -345,7 +345,7 @@ async def _handle_message(db: Session, message: dict) -> None:
         # never depend on which channel a message arrived through. A
         # super_admin who wants office tools uses the authenticated web app.
         is_super_admin=False,
-        channel="telegram",
+        channel="telegram", channel_external_id=external_id,
     )
     result = await service.send_message(
         session_id=f"tg-{external_id}", text=text, persona=identity.default_persona,
@@ -439,7 +439,7 @@ async def _handle_callback(db: Session, callback_query: dict) -> None:
         if message_id is not None:
             service = AIChatService(
                 db, identity.organization_id, identity.user_id,
-                is_super_admin=False, channel="telegram",
+                is_super_admin=False, channel="telegram", channel_external_id=external_id,
             )
             try:
                 await service.confirm_action(message_id)
@@ -453,7 +453,7 @@ async def _handle_callback(db: Session, callback_query: dict) -> None:
         if message_id is not None:
             service = AIChatService(
                 db, identity.organization_id, identity.user_id,
-                is_super_admin=False, channel="telegram",
+                is_super_admin=False, channel="telegram", channel_external_id=external_id,
             )
             try:
                 service.cancel_action(message_id)
