@@ -144,10 +144,18 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # /api/cron/sumit-weekly-pull, יום א' 05:00 שעון ישראל = 03:00 UTC (בקיץ
 # 06:00; השער השבועי העמיד מונע ריצה כפולה). כבויה עד SUMIT_WEEKLY_PULL_ENABLED,
 # ומדלגת אם לא נשארות לפחות 10 קריאות מתוך תקרת ה-50 החודשית לבקשות ידניות.
+#
+# 26/10/2026 — בקשת בעלים ("תגדיר את הקרון שרץ ובודק, ועושה"). מה רץ:
+# /api/cron/cashflow-watch — התזרים החזוי של כל דשבורד, מהמסד בלבד, נשמר
+# כ-CfoInsight (חריגה צפויה, מועד שעבר, מסגרת שפוקעת תוך 60 יום, יתרה חסרה).
+# תדירות: פעם ביום, 04:15 UTC, אחרי bookkeeper-morning. תקציב: אפס קריאות
+# לספק. ראיית הצלחה: תובנות cash_forecast_* פעילות למי שצפויה לו חריגה,
+# ונסגרות כשהממצא כבר לא מתקיים.
 
 EXPECTED_DAILY_SCHEDULES: dict[str, str] = {
     "/api/cron/bank-gap-scan": "15 3 * * *",
     "/api/cron/bookkeeper-morning": "45 3 * * *",
+    "/api/cron/cashflow-watch": "15 4 * * *",
     "/api/cron/roster-health": "30 5 * * *",
 }
 
