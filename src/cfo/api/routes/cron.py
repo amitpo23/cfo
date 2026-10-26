@@ -870,11 +870,14 @@ async def scheduled_sync_open_finance(db: Session = Depends(get_db_session)):
     OF_SYNC_MIN_INTERVAL_HOURS (default 20h) to stay well inside the ~500/month
     call budget (RSF-025).
 
-    Owner decision 2026-10-23: the nightly refresh is off. The route is no
-    longer on the Vercel schedule and refuses unattended runs unless
-    ``OPEN_FINANCE_SCHEDULED_SYNC_ENABLED`` is set. Manual refresh paths do
-    not go through this route."""
-    if not settings.open_finance_scheduled_sync_enabled:
+    Owner decision 2026-10-23: the nightly refresh is off. The route refuses
+    unattended runs unless ``OPEN_FINANCE_SCHEDULED_SYNC_ENABLED`` is set.
+    Owner decision 2026-10-26: a daily refresh for Eliav only. When
+    ``OPEN_FINANCE_SCHEDULED_SYNC_ORG_IDS`` names organizations, only they are
+    refreshed, flag or not, and each still passes every gate below. Manual
+    refresh paths do not go through this route."""
+    allowlist = settings.open_finance_scheduled_sync_org_id_set
+    if not settings.open_finance_scheduled_sync_enabled and not allowlist:
         return {
             "status": "ok",
             "skipped": "open_finance_scheduled_sync_disabled",
@@ -889,6 +892,8 @@ async def scheduled_sync_open_finance(db: Session = Depends(get_db_session)):
         ).all()
     }
     targets.update((org_id, src) for org_id, src in roster_sync_targets(db) if src == "open_finance")
+    if allowlist:
+        targets = {(org_id, src) for org_id, src in targets if org_id in allowlist}
 
     results = []
     to_run = set()

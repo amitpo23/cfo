@@ -25,8 +25,12 @@ def _scheduled_paths() -> set[str]:
 
 # ------------------------------------------------- 1. Open Finance nightly
 
-def test_open_finance_nightly_cron_is_not_scheduled():
-    assert "/api/cron/sync-open-finance" not in _scheduled_paths()
+def test_open_finance_daily_cron_is_scheduled_for_the_allowlist_only():
+    """23/10/2026: off the schedule. 26/10/2026 (owner, Eliav only): back at 02:00
+    UTC for the organizations in OPEN_FINANCE_SCHEDULED_SYNC_ORG_IDS. The list is
+    empty by default, so the scheduled run refreshes nothing until it is set."""
+    assert "/api/cron/sync-open-finance" in _scheduled_paths()
+    assert Settings(_env_file=None).open_finance_scheduled_sync_org_ids == ""
 
 
 def test_open_finance_scheduled_sync_flag_defaults_off():

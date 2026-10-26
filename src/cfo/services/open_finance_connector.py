@@ -379,8 +379,16 @@ def _credit_limit(item: dict[str, Any]) -> Optional[Decimal]:
     לא נגזר משום שדה אחר: interimAvailable הוא זמין-לשימוש (ISO 20022 ITAV),
     לא מסגרת ולא ניצול, ולכן לעולם לא משמש כאן. שדה חסר/ריק/לא-מספרי -> None
     (honest-null), לעולם לא 0.
+
+    התיעוד מגדיר מספר. ראיית הנזילות של אליהב נרשמה מ-``creditLimit.amount``
+    (26/10/2026), ולכן גם אובייקט עם ``amount`` נקרא. איזו צורה מגיעה בפועל לא
+    אומת: הסוג נרשם בלוג (בלי הערך) כדי שהרענון הראשון יכריע.
     """
     value = item.get("creditLimit")
+    if value is not None:
+        logger.info("Open Finance creditLimit arrived as %s", type(value).__name__)
+    if isinstance(value, dict):
+        value = value.get("amount")
     if value is None or value == "":
         return None
     try:
