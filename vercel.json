@@ -71,6 +71,10 @@
       "schedule": "45 3 * * *"
     },
     {
+      "path": "/api/cron/cashflow-watch",
+      "schedule": "15 4 * * *"
+    },
+    {
       "path": "/api/cron/roster-health",
       "schedule": "30 5 * * *"
     },

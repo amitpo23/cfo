@@ -15,7 +15,7 @@ from .. import bank_status
 from ..office_access import classifying_office_id, office_manages
 from ..read_memo import read_memo
 from .service import DashboardError
-from . import cash_statement, filing, forecast, liquidity, view_model
+from . import cash_forecast, cash_statement, filing, forecast, liquidity, view_model
 
 _MARKER = ("intercompany", "בין-חברתי", "בין חברתי")
 # The explicit intercompany rule (see ``_intercompany``).
@@ -78,19 +78,26 @@ def _build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date
         entities = [_Primary(dashboard)]
     office_id = assert_same_office(db, dashboard, entities)
     ordered = sorted(entities, key=lambda entity: (entity.role != "primary", entity.id or 0))
+    # The plan's budget lines name no entity: with more than one entity they are the
+    # group's budget, and only the combined view uses them. One entity alone with the
+    # whole group's costs projected that one company far below its real trend.
+    single = len(ordered) == 1
     sections = []
     for entity in ordered:
+        is_primary = entity.organization_id == dashboard.primary_organization_id
+        section_view = view_model.build_view(
+            db, entity.organization_id, start, end,
+            plan=_plan_for(plan, is_primary),
+            entity_id=getattr(entity, "id", None) or None,
+            with_budget=single and is_primary,
+        )
+        section_view["cash_forecast"]["label"] = entity.label
         sections.append({
             "organization_id": entity.organization_id,
             "label": entity.label,
             "role": entity.role,
             "accounts": _accounts(db, entity),
-            "view": view_model.build_view(
-                db, entity.organization_id, start, end,
-                plan=_plan_for(plan, entity.organization_id == dashboard.primary_organization_id),
-                entity_id=getattr(entity, "id", None) or None,
-                with_budget=entity.organization_id == dashboard.primary_organization_id,
-            ),
+            "view": section_view,
         })
     primary = next(
         (section["view"] for section in sections if section["role"] == "primary"),
@@ -150,6 +157,7 @@ def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | N
         "budget_vs_actual": _combine_budget(views),
         "liquidity": position,
         "forecast": outlook,
+        "cash_forecast": cash_forecast.combine([section["view"]["cash_forecast"] for section in sections]),
         "cash_statement": cash_statement.combine(sections, outlook, removed["by_month"]),
         "intercompany_removed": removed["summary"],
         "sources": _combine_sources(sections),

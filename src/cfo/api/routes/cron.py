@@ -1380,6 +1380,18 @@ async def run_channel_alerts(db: Session = Depends(get_db_session)):
     }
 
 
+@router.get("/cron/cashflow-watch", dependencies=[Depends(_verify_cron_secret)])
+def run_cashflow_watch(db: Session = Depends(get_db_session)):
+    """Daily (04:15 UTC, after the morning cycle): the 13-week cash forecast of
+    every dashboard, read from the database only, kept as CfoInsight findings —
+    a projected facility breach, a past-due maturity, a facility ending within
+    60 days, a missing opening balance. Owner request 2026-10-26. No provider
+    calls."""
+    from ...services.dashboards import cash_forecast_watch
+
+    return cash_forecast_watch.run_watch(db, date.today())
+
+
 @router.get("/cron/roster-health", dependencies=[Depends(_verify_cron_secret)])
 async def scheduled_roster_health(db: Session = Depends(get_db_session)):
     """יומי: מוודא שכל תיק בפנקס המשרד באמת משתתף בלולאת הסנכרון.
