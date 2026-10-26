@@ -10,6 +10,9 @@ import {
   withZReport, zReportsFromPayload,
 } from './dashboardTabs';
 import TabErrorBoundary from './TabErrorBoundary';
+import {
+  CashForecast, CashForecastItemsCard, CashForecastPanel, Overdue, cashForecastItemsFromPayload,
+} from './cashForecastTab';
 import { DashboardFrame, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs } from './dashboardUi';
 
 type CashMonth = {
@@ -155,6 +158,7 @@ type DashboardView = {
   } | null;
   liquidity?: EntityLiquidity | null;
   forecast?: Forecast | null;
+  cash_forecast?: CashForecast | null;
   sources?: Sources | null;
   cash_statement?: CashStatement | null;
   entities?: { label: string | null; role: string; view: DashboardView }[];
@@ -164,6 +168,7 @@ type DashboardView = {
     budget_vs_actual?: DashboardView['budget_vs_actual'];
     liquidity?: EntityLiquidity | null;
     forecast?: Forecast | null;
+    cash_forecast?: CashForecast | null;
     intercompany_removed?: IntercompanyRemoved;
     sources?: Sources | null;
     cash_statement?: CashStatement | null;
@@ -773,9 +778,15 @@ export default function ClientDashboardPage() {
     budget_vs_actual: view.combined?.budget_vs_actual,
     liquidity: view.combined?.liquidity,
     forecast: view.combined?.forecast,
+    cash_forecast: view.combined?.cash_forecast,
     sources: view.combined?.sources,
     cash_statement: view.combined?.cash_statement,
   } : entities[Number(scope)]?.view ?? view;
+  // Past-due items are per entity; the combined scope lists every entity's, named.
+  const overdue: Overdue[] = !view ? [] : !multi ? (view.cash_forecast?.overdue ?? [])
+    : scope === 'combined'
+      ? entities.flatMap((entity) => (entity.view.cash_forecast?.overdue ?? []).map((item) => ({ ...item, entity: entity.label })))
+      : (entities[Number(scope)]?.view.cash_forecast?.overdue ?? []);
   const parameters = parametersFromPayload(plan?.payload);
 
   return (
@@ -855,6 +866,15 @@ export default function ClientDashboardPage() {
                   onSave={(organizationId, item) => void savePayload(withOpeningBalance(plan.payload, organizationId, item), false)}
                 />
               ) : null}
+              {tab === 'cashforecast' ? <CashForecastPanel forecast={scoped.cash_forecast} overdue={overdue} /> : null}
+              {tab === 'cashforecast' && editor?.role === 'owner' && plan && filing ? (
+                <CashForecastItemsCard
+                  entities={filing.entities ?? []}
+                  items={cashForecastItemsFromPayload(plan.payload)}
+                  saving={saving}
+                  onSave={(next) => void savePayload({ ...plan.payload, cashForecastItems: next }, false)}
+                />
+              ) : null}
               {tab === 'forecast' ? <ForecastPanel forecast={scoped.forecast} /> : null}
               {tab === 'budget' && editor ? (
                 <>
@@ -896,6 +916,7 @@ export default function ClientDashboardPage() {
 
 const TABS = [
   { id: 'status', label: 'תמונת מצב' },
+  { id: 'cashforecast', label: 'תזרים חזוי' },
   { id: 'bva', label: 'תקציב מול ביצוע' },
   { id: 'liquidity', label: 'נזילות והתחייבויות' },
   { id: 'forecast', label: 'תחזית' },

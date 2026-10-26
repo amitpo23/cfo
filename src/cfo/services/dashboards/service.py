@@ -448,6 +448,10 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
     if (payload.get("zReports") or None) != ((stored or {}).get("zReports") or None) \
             and role_for(db, user, row) not in EVIDENCE_ROLES:
         raise DashboardError(403, "z_reports_forbidden", "רק בעלי הדשבורד או מנהל יכולים להזין דוחות Z")
+    if (payload.get("cashForecastItems") or None) != ((stored or {}).get("cashForecastItems") or None) \
+            and role_for(db, user, row) not in EVIDENCE_ROLES:
+        raise DashboardError(403, "cash_forecast_items_forbidden",
+                             "רק בעלי הדשבורד או מנהל יכולים לשנות פריטי תזרים")
     expected = if_match.strip().strip('"')
     if current is None:
         if expected not in {"null", "*"}:
@@ -491,11 +495,15 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
 
 
 def _validate_managed_plan(payload: dict) -> None:
+    from .cash_forecast import validate_items
     from .plan_budget import PlanBudgetError, validate_budget_lines
     try:
         validate_budget_lines(payload)
     except PlanBudgetError as exc:
         raise DashboardError(422, "invalid_plan", exc.message_he)
+    error = validate_items(payload)
+    if error:
+        raise DashboardError(422, "invalid_plan", error)
 
 
 def _project_plan_budget(db, organization_id: int, version: str, payload: dict) -> int:
