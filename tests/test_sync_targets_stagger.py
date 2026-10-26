@@ -14,9 +14,16 @@ payments/customers) נופלים.
 נפרד, לא משותף) — ההמתנה חלה רק בין שני יעדי-sumit עוקבים."""
 import asyncio
 
+import pytest
 
+
+@pytest.mark.real_stagger
 def test_stagger_sleeps_between_consecutive_sumit_targets(monkeypatch):
     from cfo.api.routes import cron
+
+    # כל ארגון בדקת-UTC משלו: הפיזור חייב לעלות על 60 שניות. נכשל גם אם
+    # ה-fixture של הסוויטה איפס את הערך כאן, למרות ה-marker.
+    assert cron.SUMIT_INTER_ORG_STAGGER_SECONDS > 60
 
     sleep_calls = []
 
@@ -99,6 +106,49 @@ def test_stagger_does_not_apply_to_open_finance_targets(monkeypatch):
     asyncio.run(cron._run_sync_targets(_FakeDB(), targets))
 
     assert sleep_calls == []
+
+
+def test_the_suite_does_not_pay_the_production_stagger(monkeypatch):
+    """65 שניות אמיתיות לכל ארגון SUMIT נוסף הן ההגנה על תקציב הדקה בפרוד.
+    בתוך הסוויטה, שני יעדי sumit עם `asyncio.sleep` אמיתי עלו 65 שניות לכל
+    ריצת cron — ובגלל ש-`client` חי לאורך כל ה-session ומצטברים בו ארגונים,
+    העלות גדלה ככל שהריצה מתקדמת. הסוויטה "נתקעה" בנקודה משתנה (8%–21%).
+    הטסט נכשל אם הסוויטה שוב משלמת את הפיזור של הפרוד."""
+    import time
+
+    from cfo.api.routes import cron
+
+    _fake_sync(monkeypatch, cron)
+
+    class _FakeDB:
+        def commit(self):
+            pass
+
+    started = time.monotonic()
+    asyncio.run(cron._run_sync_targets(_FakeDB(), {(1, "sumit"), (2, "sumit")}))
+
+    assert time.monotonic() - started < 5
+
+
+def _fake_sync(monkeypatch, cron):
+    """A sync loop that never builds a connector or touches the network."""
+    def fake_get_connector_for_org(db, org_id, source):
+        return object(), None, source
+
+    class _FakeSyncRun:
+        id = 1
+        status = None
+        counts = {}
+        error_summary = None
+
+    async def fake_run_full_sync(self, *a, **kw):
+        return _FakeSyncRun()
+
+    from cfo.services.sync_engine import SyncEngine
+    monkeypatch.setattr(SyncEngine, "run_full_sync", fake_run_full_sync)
+    monkeypatch.setattr(cron, "get_connector_for_org", fake_get_connector_for_org)
+    monkeypatch.setattr(cron, "run_post_sync_tasks", lambda *a, **kw: _async_return({}))
+    monkeypatch.setattr(cron, "mark_client_loop_result", lambda *a, **kw: None)
 
 
 async def _async_return(value):

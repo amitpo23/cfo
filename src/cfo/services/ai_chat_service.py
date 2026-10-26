@@ -172,6 +172,7 @@ class AIChatService:
     def __init__(
         self, db: Session, organization_id: int, user_id: int,
         *, is_super_admin: bool = False, channel: str = "web",
+        channel_external_id: str | None = None,
     ):
         self.db = db
         self.organization_id = organization_id
@@ -182,6 +183,17 @@ class AIChatService:
         # office-tool schema visibility and office-tool execution below.
         self.is_super_admin = is_super_admin
         self.channel = channel
+        # The sender the webhook verified (WhatsApp number / Telegram chat id).
+        # Only tools with needs_channel receive it, so a reply such as a PDF
+        # report goes back to this conversation and nowhere else. None on web.
+        self.channel_external_id = channel_external_id if channel != "web" else None
+
+    def _channel_kwargs(self, tool) -> dict[str, Any]:
+        """Set unconditionally for needs_channel tools, so a `_channel*` key the
+        model put in its tool input can never survive into the call."""
+        if not getattr(tool, "needs_channel", False):
+            return {}
+        return {"_channel": self.channel, "_channel_external_id": self.channel_external_id}
 
     @staticmethod
     def _pending_authority_scope(msg: ChatMessage) -> str | None:
@@ -779,6 +791,7 @@ class AIChatService:
                     call_kwargs = dict(block.input)
                     if tool.needs_user:
                         call_kwargs["_user_id"] = self.user_id
+                    call_kwargs.update(self._channel_kwargs(tool))
                     result = await self._execute_tool_observed(
                         tool=tool,
                         call_kwargs=call_kwargs,
@@ -938,6 +951,7 @@ class AIChatService:
             if tool.needs_user:
                 call_kwargs["_user_id"] = self.user_id
                 call_kwargs["_channel"] = self.channel
+            call_kwargs.update(self._channel_kwargs(tool))
             result = await self._execute_tool_observed(
                 tool=tool,
                 call_kwargs=call_kwargs,

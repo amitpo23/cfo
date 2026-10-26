@@ -14,7 +14,7 @@ from ..bank_coverage import redact_public_coverage
 from ..financial_reports_service import FinancialReportsService
 from ..live_cash_flow_service import LiveCashFlowService
 from .. import bank_status
-from . import activity_quality, books, budget, cash_statement, forecast, freshness, liquidity
+from . import activity_quality, books, budget, cash_forecast, cash_statement, forecast, freshness, liquidity
 
 MAX_RANGE_DAYS = 366
 
@@ -89,6 +89,10 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
             "published": False,
         },
     }
+    view["cash_forecast"] = cash_forecast.build_entity_forecast(
+        view, plan=plan, organization_id=organization_id, label=None, today=end,
+    )
+    view["freshness"]["cash_forecast"] = view["cash_forecast"]["status"]
     return redact_public_view(view)
 
 

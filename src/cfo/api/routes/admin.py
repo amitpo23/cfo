@@ -3303,3 +3303,17 @@ async def cost_protection_status(
             "whatsapp_push_enabled": live_settings.whatsapp_push_enabled,
         },
     }
+
+
+@router.get("/moshko-readiness", tags=["Admin"])
+async def moshko_readiness_status(
+    current_user: User = Depends(get_super_admin),
+):
+    """מה חסר כדי שמושקו יעבוד חי בוואטסאפ/טלגרם וישלח דוחות.
+
+    בוליאנים בלבד — "מוגדר / לא מוגדר" — אף ערך סודי לא מוחזר. אין קריאת
+    רשת ואין קריאת DB: רק ההגדרות שה-runtime טוען (ר' moshko_readiness).
+    """
+    from ...services.moshko_readiness import moshko_readiness
+
+    return moshko_readiness()

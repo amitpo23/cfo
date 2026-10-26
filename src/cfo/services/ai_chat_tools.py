@@ -36,6 +36,11 @@ class ChatTool:
     # tools with this flag set, so the other ~39 existing tools' call
     # signature is completely unaffected (Moshko plan 2026-07-27, package D1).
     needs_user: bool = False
+    # True only for tools that deliver to the conversation itself (send_report).
+    # ai_chat_service then sets `_channel` and `_channel_external_id` from the
+    # webhook-verified sender — always, overwriting anything the model put in
+    # its input, and None on the web. The model never chooses a recipient.
+    needs_channel: bool = False
     # Stable policy-catalog action checked both when the write is proposed
     # and immediately before the atomic execution claim. Office-only tools
     # use the separate platform gate and deliberately leave this unset.
@@ -1428,6 +1433,74 @@ async def _get_credit_line_status(db, org_id: int, days: int = 30, **_kwargs) ->
     return get_credit_line_status(db, org_id, days=days)
 
 
+_FORECAST_TOP_ITEMS = 8
+
+
+def _compact_forecast(forecast: dict | None) -> dict | None:
+    """The tab's numbers without the per-week item lists, so the answer fits the chat."""
+    if not forecast:
+        return None
+    items = [
+        dict(item, week_start=week["start"])
+        for week in forecast.get("weeks") or [] for item in week.get("items") or []
+        if item.get("date")
+    ]
+    items.sort(key=lambda item: abs(item.get("amount") or 0), reverse=True)
+    return {
+        "label": forecast.get("label"),
+        "opening": forecast.get("opening"),
+        "first_breach": forecast.get("first_breach"),
+        "overdue": forecast.get("overdue") or [],
+        "missing": forecast.get("missing") or [],
+        "run_rate": forecast.get("run_rate"),
+        "weeks": [
+            {key: week.get(key) for key in ("start", "end", "in", "out", "closing", "limit", "headroom")}
+            for week in forecast.get("weeks") or []
+        ],
+        "largest_dated_items": items[:_FORECAST_TOP_ITEMS],
+    }
+
+
+async def _get_cash_forecast(db, org_id: int, slug: str | None = None, _today=None, **_kwargs) -> dict:
+    """תזרים חזוי 13 שבועות — אותם מספרים כמו לשונית "תזרים חזוי" ב-/d/.
+
+    Only a dashboard whose primary organization is the chat's organization: a
+    SUPER_ADMIN's reach over every dashboard does not widen what a chat reads."""
+    from datetime import date, timedelta
+
+    from ..models import ClientDashboard
+    from .dashboards import multi_entity, view_model
+
+    query = db.query(ClientDashboard).filter(
+        ClientDashboard.primary_organization_id == org_id, ClientDashboard.status != "archived",
+    )
+    if slug:
+        query = query.filter(ClientDashboard.slug == slug)
+    dashboard = query.order_by(ClientDashboard.id).first()
+    if dashboard is None:
+        return {
+            "status": "unknown",
+            "message": "אין דשבורד /d/ שהארגון הזה הוא הישות הראשית בו, ולכן אין תזרים חזוי. "
+                       "אפשר לענות רק מהכלים האחרים, ולומר שהתחזית חסרה.",
+            "provider_calls": 0,
+        }
+    today = _today or date.today()
+    view = multi_entity.build_dashboard_view(
+        db, dashboard, today - timedelta(days=200), today, plan=view_model.plan_payload(db, dashboard.id),
+    )
+    sections = view.get("entities") or []
+    return {
+        "status": "ready",
+        "dashboard": dashboard.slug,
+        "as_of": today.isoformat(),
+        "entities": [_compact_forecast((section.get("view") or {}).get("cash_forecast")) for section in sections],
+        "combined": _compact_forecast((view.get("combined") or {}).get("cash_forecast")) if len(sections) > 1 else None,
+        "note": "headroom = מסגרת + יתרה צפויה; null = לא ידוע (חסר נתון, ראה missing), לא אפס. "
+                "סכום של סיום הלוואה הוא מרבי. קצב ריצה הוא ממוצע 3 חודשים מלאים.",
+        "provider_calls": 0,
+    }
+
+
 async def _get_ar_health(db, org_id: int, months: int = 12, target_dso: int = 30, **_kwargs) -> dict:
     """בריאות גבייה — מגמת DSO אמיתית (ממוצע ימי-תשלום בפועל) + סיכומי
     סיכון/גבייה מדוח הגיול. לא כולל את פירוט הלקוחות המלא (זמין דרך
@@ -1833,6 +1906,162 @@ async def _email_report(
         "period": period_label,
         "filename": filename,
         "message": f"הדוח נשלח בהצלחה אל {recipient_email}.",
+    }
+
+
+# ------------------------------------------------------------------------ #
+# send_report — מושקו כצ'אטבוט ששולח דוחות. "שלח לי את דוח התזרים" בוואטסאפ
+# או בטלגרם מחזיר PDF לאותה שיחה.
+#
+# read ולא write, במודע: הנמען קבוע — השולח עצמו, בשיחה שהוא פתח — ולכן זו
+# תשובה בצורת קובץ, לא פנייה לצד שלישי (להבדיל מ-email_report). אין שינוי
+# בספרים ואין פנייה לספק: מודל-התצוגה נקרא מה-DB בלבד.
+#
+# הנמען לעולם אינו מגיע מהמודל: אין לו שדה בסכמה, ו-ai_chat_service מזריק את
+# `_channel` / `_channel_external_id` מהזהות שה-webhook אימת (needs_channel),
+# ודורס כל מפתח שהמודל הכניס. כאן הזהות נפתרת מחדש ונבדקת מול המשתמש והארגון.
+# ------------------------------------------------------------------------ #
+_REPORT_TYPES = {"cash_position"}
+_FILE_CHANNELS = {"whatsapp", "telegram"}
+
+
+def _report_gateway(provider: str):
+    """Factory indirection so tests swap in a fake gateway — no live call
+    ever happens under pytest."""
+    if provider == "whatsapp":
+        from .whatsapp_gateway import WhatsAppGateway
+        return WhatsAppGateway()
+    from .channel_gateway import TelegramGateway
+    return TelegramGateway()
+
+
+def _report_channel_configured(provider: str) -> bool:
+    from ..config import settings
+    if provider == "whatsapp":
+        return bool(settings.whatsapp_phone_number_id and settings.whatsapp_access_token)
+    return bool(settings.telegram_bot_token)
+
+
+async def _send_report(
+    db, org_id: int, *,
+    report_type: str = "cash_position",
+    dashboard_id: int | None = None,
+    _user_id: int | None = None,
+    _channel: str | None = None,
+    _channel_external_id: str | None = None,
+    **_kwargs,
+) -> dict:
+    from datetime import date, datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    from ..models import ClientDashboard, User
+    from .cash_position_pdf import REPORT_TITLE, ReportFontMissing, render_cash_position_pdf
+    from .channel_gateway import TelegramSendError
+    from .channel_link_service import resolve_identity
+    from .channel_notifier import whatsapp_service_window_open
+    from .dashboards import multi_entity, view_model
+    from .dashboards.service import READ_ROLES, DashboardError, role_for
+    from .whatsapp_gateway import WhatsAppNotConfiguredError, WhatsAppSendError
+
+    if _channel not in _FILE_CHANNELS:
+        return {
+            "status": "unsupported_channel",
+            "message": (
+                "בערוץ הזה (האתר) מושקו לא שולח קבצים. את מצב המזומנים אפשר לראות "
+                "בדשבורד, או לבקש את הדוח בוואטסאפ או בטלגרם המקושרים."
+            ),
+        }
+    if report_type not in _REPORT_TYPES:
+        return {
+            "status": "unsupported_report",
+            "message": f"סוג דוח לא נתמך: {report_type}. זמין כרגע: cash_position (מצב מזומנים).",
+        }
+
+    refused = {
+        "status": "identity_not_verified",
+        "message": "לא ניתן לאמת את השיחה הזו מול משתמש מקושר בארגון — הדוח לא נשלח.",
+    }
+    if not _channel_external_id or _user_id is None:
+        return refused
+    identity = resolve_identity(db, _channel, str(_channel_external_id))
+    if identity is None or identity.user_id != _user_id or identity.organization_id != org_id:
+        return refused
+    user = db.get(User, _user_id)
+    if user is None:
+        return refused
+    if _channel == "whatsapp" and not whatsapp_service_window_open(identity, datetime.now(timezone.utc)):
+        return {
+            "status": "outside_service_window",
+            "message": "חלון השיחה של WhatsApp (24 שעות) סגור — שלח הודעה ואז בקש את הדוח שוב.",
+        }
+    if not _report_channel_configured(_channel):
+        return {
+            "status": "not_configured",
+            "message": "שליחת קבצים בערוץ הזה אינה מוגדרת במערכת — הדוח לא נשלח.",
+        }
+
+    # רק דשבורדים של הארגון שהשיחה מקושרת אליו. role_for מתיר ל-SUPER_ADMIN
+    # כל דשבורד במערכת, ולכן סינון הארגון קודם לבדיקת התפקיד.
+    rows = (
+        db.query(ClientDashboard)
+        .filter(ClientDashboard.primary_organization_id == org_id, ClientDashboard.status != "archived")
+        .order_by(ClientDashboard.id)
+        .all()
+    )
+    visible = [row for row in rows if role_for(db, user, row) in READ_ROLES]
+    if dashboard_id is not None:
+        try:
+            wanted = int(dashboard_id)
+        except (TypeError, ValueError):
+            wanted = None
+        chosen = next((row for row in visible if row.id == wanted), None)
+        if chosen is None:
+            return {"status": "dashboard_not_found", "message": "הדשבורד המבוקש לא נמצא בארגון הזה."}
+    elif not visible:
+        return {
+            "status": "no_dashboard",
+            "message": "לארגון הזה אין דשבורד שאתה מורשה לראות — אין ממה להפיק את הדוח.",
+        }
+    elif len(visible) > 1:
+        return {
+            "status": "choose_dashboard",
+            "dashboards": [{"id": row.id, "title": row.title} for row in visible],
+            "message": "יש יותר מדשבורד אחד. שאל את המשתמש איזה, וקרא שוב עם dashboard_id.",
+        }
+    else:
+        chosen = visible[0]
+
+    today = datetime.now(ZoneInfo("Asia/Jerusalem")).date()
+    try:
+        view = multi_entity.build_dashboard_view(
+            db, chosen, date(today.year, 1, 1), today, plan=view_model.plan_payload(db, chosen.id),
+        )
+        pdf = render_cash_position_pdf(view, title=chosen.title, generated_on=today)
+    except (DashboardError, ReportFontMissing) as exc:
+        return {"status": "failed", "message": f"הדוח לא הופק: {getattr(exc, 'message_he', None) or exc}"}
+
+    filename = f"rezef-cash-position-{today.isoformat()}.pdf"
+    caption = f"{REPORT_TITLE} — {chosen.title} ({today.strftime('%d/%m/%Y')})"
+    try:
+        await _report_gateway(_channel).send_document(
+            identity.external_id, pdf, filename=filename, caption=caption,
+        )
+    except (WhatsAppSendError, WhatsAppNotConfiguredError, TelegramSendError) as exc:
+        return {"status": "failed", "message": f"הדוח הופק אבל שליחת הקובץ נכשלה: {exc}"}
+
+    position = (view.get("liquidity") or {}).get("position") or {}
+    return {
+        "status": "sent",
+        "channel": _channel,
+        "dashboard_id": chosen.id,
+        "dashboard": chosen.title,
+        "filename": filename,
+        "balance_as_of": position.get("as_of"),
+        "provider_calls": 0,
+        "message": (
+            "הדוח נשלח כקובץ PDF לשיחה הזו. ערכים לא ידועים מסומנים בו \"לא ידוע\"; "
+            "אל תשלח אותו שוב באותה תשובה."
+        ),
     }
 
 
@@ -3680,6 +3909,24 @@ TOOLS: dict[str, ChatTool] = {
         category="read",
         fn=_rezef_help,
     ),
+    "get_cash_forecast": ChatTool(
+        name="get_cash_forecast",
+        description=(
+            "תזרים חזוי ל-13 שבועות, לכל ישות ומאוחד — אותם מספרים כמו לשונית "
+            "'תזרים חזוי' בדשבורד. עונה על 'כמה פנוי לי במסגרות', 'מתי אגיע "
+            "למינוס/לחריגה ולמה', 'אילו צ׳קים והלוואות יורדים', 'מסגרת שפוקעת'. "
+            "לכל שבוע: כניסות, יציאות, יתרת סגירה, מסגרת ו-headroom (פנוי). "
+            "first_breach עם הסיבות, overdue (מועדים שעברו, סטטוס לא ידוע), "
+            "missing (מה חסר כדי לחשב). null הוא לא ידוע, לא אפס. "
+            "עדיף על get_credit_line_status, שבודק רק את מסגרת העו״ש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"slug": {"type": "string", "description": "דשבורד מסוים (אופציונלי)"}},
+        },
+        category="read",
+        fn=_get_cash_forecast,
+    ),
     "get_credit_line_status": ChatTool(
         name="get_credit_line_status",
         description=(
@@ -3818,6 +4065,39 @@ TOOLS: dict[str, ChatTool] = {
         category="write",
         policy_action="reports.email",
         fn=_email_report,
+    ),
+    "send_report": ChatTool(
+        name="send_report",
+        description=(
+            "שליחת דוח כקובץ PDF לשיחה הנוכחית בוואטסאפ או בטלגרם — לבקשות כמו "
+            "'שלח לי את דוח התזרים' / 'תשלח לי את מצב המזומנים'. זה הכלי לבקשת "
+            "'שלח לי' בצ'אט, לא email_report. הקובץ נשלח רק לשולח עצמו, באותה "
+            "שיחה; אין דרך (ואסור לנסות) לשלוח לנמען אחר. הדוח: יתרות ומסגרות "
+            "אשראי לפי ישות עם תאריך נכון-ל, חשבונות, חובות והלוואות, אירועים "
+            "צפויים (צ'קים דחויים, סיום הלוואות, תום מסגרות) ותזרים חודשי. באתר "
+            "הכלי מחזיר שאין שליחת קבצים — אמור זאת למשתמש. אם יש כמה דשבורדים "
+            "הכלי מחזיר את הרשימה — שאל איזה, וקרא שוב עם dashboard_id. קרא לכלי "
+            "פעם אחת לבקשה."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "report_type": {
+                    "type": "string",
+                    "enum": sorted(_REPORT_TYPES),
+                    "description": "cash_position — מצב מזומנים, חובות ותזרים (ברירת מחדל)",
+                },
+                "dashboard_id": {
+                    "type": "integer",
+                    "description": "רק אם הכלי ביקש לבחור דשבורד מתוך רשימה",
+                },
+            },
+            "required": [],
+        },
+        category="read",
+        needs_user=True,
+        needs_channel=True,
+        fn=_send_report,
     ),
     "propose_vat_filing_approval": ChatTool(
         name="propose_vat_filing_approval",
@@ -4090,7 +4370,9 @@ _SUMIT_TOOLS = {
     "verify_bank_account",
 }
 _OPEN_FINANCE_TOOLS = {"create_bank_payment_request", "connect_bank_account", "execute_payable_request"}
-_LOCAL_TOOLS = {"rezef_help", "kb_lookup", "email_report"}
+# send_report delivers over the chat channel itself (WhatsApp/Telegram), like
+# email_report over SMTP: neither SUMIT nor Open Finance, so local.
+_LOCAL_TOOLS = {"rezef_help", "kb_lookup", "email_report", "send_report"}
 _REZEF_DB_TOOLS = set(TOOLS) - _SUMIT_TOOLS - _OPEN_FINANCE_TOOLS - _LOCAL_TOOLS
 
 
