@@ -26,7 +26,16 @@ def test_constant_time_equal_matches_full_secret_only():
     assert not constant_time_equal("anything", None)
 
 
-def test_cron_route_rejects_a_missing_or_partial_bearer(client):
+def test_cron_route_rejects_a_missing_or_partial_bearer(client, monkeypatch):
+    from cfo.services import morning_cycle_service
+
+    # The secret is under test, not the close. With the right secret the route runs
+    # the daily close for every organization in the suite's database (~1,500), which
+    # passed 60 seconds under load (26/10/2026).
+    monkeypatch.setattr(
+        morning_cycle_service, "run_daily_close_step",
+        lambda _db, _org_id, _today: {"data_quality": None, "issues_count": 0},
+    )
     missing = client.get("/api/cron/daily-close")
     assert missing.status_code == 401
     partial = client.get(
