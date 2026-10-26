@@ -441,3 +441,48 @@ def test_telegram_webhook_builds_the_chat_service_with_the_sender_identity(clien
 
     assert response.status_code == 200
     assert seen == {"channel": "telegram", "external_id": external_id}
+
+
+# ------------------------------------------------------------------ real view → PDF
+
+
+def test_a_real_account_reaches_the_pdf_through_the_real_view_builder(
+    client, fresh_org, gateways, channels_configured,
+):
+    """End to end over the real dashboard view builder (no hand-written view):
+    if a key the renderer reads were renamed in dashboards/*, the balance
+    would silently print "לא ידוע" and this test would catch it."""
+    from decimal import Decimal
+
+    import pypdfium2 as pdfium
+
+    from cfo.models import Account, AccountType
+
+    org = fresh_org()
+    _dashboard(client, org, title="בדיקה")
+    db = SessionLocal()
+    try:
+        db.add(Account(
+            organization_id=org["org_id"], name="עו״ש בדיקה", account_type=AccountType.BANK,
+            balance=Decimal("28459.68"), credit_limit=Decimal("50000"), source="open_finance",
+            balance_as_of=datetime(2026, 10, 20), raw_account_type="CHECKING",
+        ))
+        db.commit()
+    finally:
+        db.close()
+    external_id = _identity(org["org_id"])
+
+    result = _run(org["org_id"], channel="whatsapp", external_id=external_id)
+
+    assert result["status"] == "sent", result
+    assert result["balance_as_of"] == "2026-10-20"
+    document = pdfium.PdfDocument(gateways["whatsapp"].documents[0]["content"])
+    try:
+        text = "\n".join(document[i].get_textpage().get_text_bounded() for i in range(len(document)))
+    finally:
+        document.close()
+    assert "28,459.68" in text        # the balance
+    assert "20/10/2026" in text       # its as-of date
+    assert "50,000.00" in text        # the credit limit
+    assert "78,459.68" in text        # headroom = limit + balance
+    assert "עו״ש בדיקה" in text
