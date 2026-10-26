@@ -31,6 +31,10 @@ WHATSAPP_BODY_MAX = 1024
 # receipt photo/PDF has no business being anywhere near this size; this is
 # a guard against an unbounded download, not a real expected ceiling.
 WHATSAPP_MEDIA_MAX_BYTES = 20 * 1024 * 1024  # 20MB
+# Meta's ceiling for an outbound document is 100MB and a caption 1024 chars.
+# A generated report PDF is a few hundred KB; the cap only stops a runaway.
+WHATSAPP_DOCUMENT_MAX_BYTES = 100 * 1024 * 1024
+WHATSAPP_CAPTION_MAX = 1024
 _TIMEOUT = httpx.Timeout(20.0)
 
 _GRAPH_BASE = "https://graph.facebook.com"
@@ -58,6 +62,16 @@ class WhatsAppSendError(Exception):
     best-effort (webhook per-message handling, channel_notifier's
     per-recipient loop) already catch broadly around these sends — this
     exception makes the failure visible to them instead of invisible."""
+
+
+def ascii_upload_filename(filename: str, fallback: str = "report.pdf") -> str:
+    """Multipart filename for an upload: ASCII only. A non-ASCII name in a
+    multipart header is an encoding risk at the provider; the human-facing
+    name travels separately (WhatsApp's JSON ``document.filename``)."""
+    name = (filename or "").strip()
+    if name and name.isascii() and '"' not in name and "\\" not in name:
+        return name
+    return fallback
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -193,6 +207,68 @@ class WhatsAppGateway:
             },
         }
         await self._post_messages(payload)
+
+    async def upload_media(self, content: bytes, *, filename: str, mime_type: str) -> str:
+        """Upload bytes to ``/{phone_number_id}/media`` (multipart) and return
+        Meta's media id. Only 2xx with an ``id`` counts as success."""
+        self._require_configured()
+        url = f"{_GRAPH_BASE}/{self.api_version}/{self.phone_number_id}/media"
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                response = await client.post(
+                    url,
+                    headers=self._headers(),
+                    data={"messaging_product": "whatsapp", "type": mime_type},
+                    files={"file": (ascii_upload_filename(filename), content, mime_type)},
+                )
+        except httpx.HTTPError as exc:
+            # Type name only: the transport error is not echoed to chat/logs.
+            raise WhatsAppSendError(
+                f"העלאת הקובץ ל-WhatsApp נכשלה ({type(exc).__name__})"
+            ) from None
+        if not (200 <= response.status_code < 300):
+            try:
+                detail = response.json()
+            except ValueError:
+                detail = response.text
+            raise WhatsAppSendError(
+                f"העלאת הקובץ ל-WhatsApp נכשלה (סטטוס {response.status_code}): {detail}"
+            )
+        try:
+            media_id = (response.json() or {}).get("id")
+        except ValueError:
+            media_id = None
+        if not media_id:
+            raise WhatsAppSendError("Meta לא החזירה מזהה מדיה לקובץ שהועלה")
+        return str(media_id)
+
+    async def send_document(
+        self, chat_id: str, content: bytes, *, filename: str,
+        caption: Optional[str] = None, mime_type: str = "application/pdf",
+    ) -> None:
+        """Send a file to ``chat_id``: upload it as media, then send a
+        ``type: document`` message that points at the media id.
+
+        Free-form like send_text — valid only inside the 24-hour customer-
+        service window the user opened. Callers that are not replying to an
+        inbound message must use an approved template instead."""
+        self._require_configured()
+        if not content:
+            raise WhatsAppSendError("אין תוכן לקובץ — לא נשלח דבר")
+        if len(content) > WHATSAPP_DOCUMENT_MAX_BYTES:
+            raise WhatsAppSendError(
+                f"הקובץ גדול מדי ({len(content)} בייטים) — המגבלה {WHATSAPP_DOCUMENT_MAX_BYTES} בייטים"
+            )
+        media_id = await self.upload_media(content, filename=filename, mime_type=mime_type)
+        document: dict = {"id": media_id, "filename": filename}
+        if caption:
+            document["caption"] = _truncate(caption, WHATSAPP_CAPTION_MAX)
+        await self._post_messages({
+            "messaging_product": "whatsapp",
+            "to": chat_id,
+            "type": "document",
+            "document": document,
+        })
 
     async def download_media(self, media_id: str) -> tuple[bytes, str]:
         """Two-step Meta Media API resolve-then-fetch: GET /{media_id} for a

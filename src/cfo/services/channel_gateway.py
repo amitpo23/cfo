@@ -16,6 +16,15 @@ import httpx
 from ..config import settings
 
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+# Bot API limits for sendDocument: 50MB upload, 1024-char caption.
+TELEGRAM_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024
+TELEGRAM_CAPTION_MAX = 1024
+
+
+class TelegramSendError(Exception):
+    """Raised by send_document when Telegram rejects the upload or cannot be
+    reached. The message never carries the request URL: the bot token is
+    part of every Bot API URL."""
 
 
 class ChannelGateway(Protocol):
@@ -96,6 +105,54 @@ class TelegramGateway:
             "sendMessage",
             {"chat_id": chat_id, "text": chunks[-1], "reply_markup": keyboard},
         )
+
+    async def send_document(
+        self, chat_id: str, content: bytes, *, filename: str,
+        caption: Optional[str] = None, mime_type: str = "application/pdf",
+    ) -> None:
+        """Send a file to ``chat_id`` with sendDocument (multipart upload).
+
+        Unlike ``_post`` (fire-and-forget text), this checks the reply: only
+        HTTP 2xx with ``ok: true`` counts as delivered."""
+        from .whatsapp_gateway import ascii_upload_filename
+
+        if not self.token:
+            raise TelegramSendError("טוקן טלגרם לא מוגדר — הקובץ לא נשלח")
+        if not content:
+            raise TelegramSendError("אין תוכן לקובץ — לא נשלח דבר")
+        if len(content) > TELEGRAM_DOCUMENT_MAX_BYTES:
+            raise TelegramSendError(
+                f"הקובץ גדול מדי ({len(content)} בייטים) — המגבלה {TELEGRAM_DOCUMENT_MAX_BYTES} בייטים"
+            )
+        data = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = (
+                caption if len(caption) <= TELEGRAM_CAPTION_MAX
+                else caption[: TELEGRAM_CAPTION_MAX - 1] + "…"
+            )
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self._base_url()}/sendDocument",
+                    data=data,
+                    files={"document": (ascii_upload_filename(filename), content, mime_type)},
+                )
+        except httpx.HTTPError as exc:
+            # `from None`: the httpx error text and its traceback carry the
+            # URL, which contains the bot token.
+            raise TelegramSendError(
+                f"שליחת הקובץ לטלגרם נכשלה ({type(exc).__name__})"
+            ) from None
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if not (200 <= response.status_code < 300) or not (isinstance(body, dict) and body.get("ok")):
+            description = body.get("description") if isinstance(body, dict) else None
+            raise TelegramSendError(
+                f"שליחת הקובץ לטלגרם נכשלה (סטטוס {response.status_code}): "
+                f"{description or 'שגיאה לא ידועה'}"
+            )
 
     async def answer_callback_query(
         self, callback_query_id: str, text: Optional[str] = None,
