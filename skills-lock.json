@@ -1,17 +1,401 @@
 {
   "version": 1,
   "skills": {
+    "ab-testing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/ab-testing/SKILL.md",
+      "computedHash": "e38aad778a99d55ec86ed43fce0f4a200a45c40a1419f3c1b1085978ec9e2ca5"
+    },
+    "ad-creative": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/ad-creative/SKILL.md",
+      "computedHash": "52a165b8e803aab399e3454b94fb2f6ba872953ee55f4904654444cc7845096d"
+    },
+    "agent-chat-ui": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ai-agents/agent-chat-ui/SKILL.md",
+      "computedHash": "7747e28f5f5b11255a8e224297b620c8a889f8a87f0512858a8275cdbd1be863"
+    },
+    "agent-codebase": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ai-agents/agent-codebase/SKILL.md",
+      "computedHash": "4fd68384158a186db532c62729dd91870c11e0c9e0df77e37b519702e7269532"
+    },
+    "agent-dx-audit": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/agent-workflows/agent-dx-audit/SKILL.md",
+      "computedHash": "d181e95e4ebd5df497ffd09d99ac0715982ba45a207e2759f60a837fbefe234d"
+    },
+    "agent-evals": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ai-agents/agent-evals/SKILL.md",
+      "computedHash": "773271eb3929e4f014a9e1e684cc61f5dc30d11d60da91149931e72e7fd583e2"
+    },
+    "agent-harness": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ai-agents/agent-harness/SKILL.md",
+      "computedHash": "49cebe33a6539787dea02a4648fc3589fc3362983ceb6e08a534ea3141164108"
+    },
+    "agent-memory": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ai-agents/agent-memory/SKILL.md",
+      "computedHash": "b532d5b8b1e7e0f0e646d943ded262302a4e8c9cf65f30c8c71674146bc1840a"
+    },
+    "ai-features": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ai-agents/ai-features/SKILL.md",
+      "computedHash": "361ed991e3f4c61829185e4dd2a6c1c400658e7b279a00c4c4270683586693a2"
+    },
+    "ai-search-visibility": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/ai-search-visibility/SKILL.md",
+      "computedHash": "bbff8eaf45ea385989cafba010c7fc5d39ca2e2934a2ef2fbbf444f34e48bf40"
+    },
+    "algorithm-patterns": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/algorithm-patterns/SKILL.md",
+      "computedHash": "7fcd8089ad4ee4171df562d619a3b65475d669161f67ddf95e36176140de8d2c"
+    },
+    "anti-slop": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/anti-ai-slop/anti-slop/SKILL.md",
+      "computedHash": "d5e0322eb9c70047ca4c3d1945b13bda1eaab6519d4b423c585377e64ed0f0b2"
+    },
+    "anti-slop-code": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/anti-ai-slop/anti-slop-code/SKILL.md",
+      "computedHash": "e4d9d9e28e471b8b4f945a158e69a90b2c90f42b8251c8bd9d34a2f35baa30ad"
+    },
+    "anti-slop-copy": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/anti-ai-slop/anti-slop-copy/SKILL.md",
+      "computedHash": "f8ebb4bc961ec74ea7ec9e96f13810f7de57b83ecde1882350836cd80ddf3844"
+    },
+    "anti-slop-ui": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/anti-ai-slop/anti-slop-ui/SKILL.md",
+      "computedHash": "5f13a7b6eaedc364175d9184e283f5162ef85d34ff6be550785da6331d301711"
+    },
+    "anti-slop-writing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/anti-ai-slop/anti-slop-writing/SKILL.md",
+      "computedHash": "48ff0cc2fc8d4def048edb33b67a011a3f890298480a75dad911fe30c94fb7f7"
+    },
+    "api-design": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/api-design/SKILL.md",
+      "computedHash": "ccaeda96bdeada51b881f87bad4e7d9cafdd372557e609d9dc2b2024c922eb4e"
+    },
+    "app-growth": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/app-growth/SKILL.md",
+      "computedHash": "657bd63f7270c04e643734fdd64b72111ef2e171e3ce891392f6eeb1612d740c"
+    },
+    "app-store-connect": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/mobile/app-store-connect/SKILL.md",
+      "computedHash": "0b22ffb7fdb94b03a95cb32f5209f0c1bec47f01b18ff6a8d4e0a445282534a6"
+    },
+    "app-ui": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/app-ui/SKILL.md",
+      "computedHash": "2a801f75feaaa1a285a762593c7d6940c510e8b2c0ccca8f676ec5f1a13ab04f"
+    },
+    "aso": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/aso/SKILL.md",
+      "computedHash": "fb4fe709e4c327840b7a3f672ab22e889e0c681b6caf1539f59914003f8794c7"
+    },
+    "asset-prep": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/asset-prep/SKILL.md",
+      "computedHash": "4c0b1f04875dd5e6ef55c926c34aa0a3f3f1fe0503cb18a266f5544ef53475b9"
+    },
+    "background-jobs": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/background-jobs/SKILL.md",
+      "computedHash": "d15cfcf3ef6a3488f196ca517ba6629f2b0be3e876db4776dad618ddfc63c3e5"
+    },
+    "beat-grid": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/beat-grid/SKILL.md",
+      "computedHash": "c94d4571b904b414867ddd26411ef4a3f0e99b39c82665c5e00923ada3cab597"
+    },
     "boi-economic-data": {
       "source": "skills-il/tax-and-finance",
       "sourceType": "github",
       "skillPath": "boi-economic-data/SKILL.md",
       "computedHash": "044f20e174405fd6d324218e0e18e40691c92c370647bcd2e5492479c3fcfae5"
     },
+    "browser-automation": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-automation/browser-automation/SKILL.md",
+      "computedHash": "ee960a89a7a31e39afbe44ee504badf67ca5ec703d2723c206630007e2fc0839"
+    },
+    "browser-ui-qa": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing/browser-ui-qa/SKILL.md",
+      "computedHash": "3fc78608c781ce0433e1c0cca7ad9efb6abfade1af77ce4fb139ab619cd56087"
+    },
+    "churn-prevention": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/churn-prevention/SKILL.md",
+      "computedHash": "0656ca0124da2e2441fdfa3073ab93b1f90528fb09e51258b6bd6d50ebe611e9"
+    },
+    "code-research": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/code-research/SKILL.md",
+      "computedHash": "35712d5f18f41d181edf120f42d6b9dda2ffc162001565ff5ccfa25f7c32dead"
+    },
+    "code-review": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/code-review/SKILL.md",
+      "computedHash": "ab0d97e8773f229099ab549e853fdb797031199a6ff87c14eaa05c01221d5f71"
+    },
+    "coding-agent-harness": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/agent-workflows/coding-agent-harness/SKILL.md",
+      "computedHash": "2c371ab046a7e89b368b53888534ef9d8418325b890e80656032a926b45b20b5"
+    },
+    "cold-outreach": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/cold-outreach/SKILL.md",
+      "computedHash": "8a866a9e00ea18958169bd05ffa12169f0776826d5b233d514fedd1eafe2acb2"
+    },
+    "color-system": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/color-system/SKILL.md",
+      "computedHash": "00b49b6a932e6c8c76b62dadc3a9d796af571f0e034e0e331d7450f0f4f769c0"
+    },
+    "community-marketing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/community-marketing/SKILL.md",
+      "computedHash": "8146c9dd8b989d720dd35bd3fc55c43771f6a6484175d111df49475c1b46a181"
+    },
+    "comparison-pages": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/comparison-pages/SKILL.md",
+      "computedHash": "df4a8ab3a587b7cdb9f3096c950e9e6c419c75455f0a76dfc65e08215d916b57"
+    },
+    "content-strategy": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/content-strategy/SKILL.md",
+      "computedHash": "7d5a5d1a510d8eb6747871f2d3862a7b99abcb74eee7c7ef2941a78daa70e525"
+    },
+    "convex": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/convex/SKILL.md",
+      "computedHash": "875115cd4bae131fb08a2f6fc1fba04f17d6f35e983f887c83143c9bd2627087"
+    },
+    "cookie-consent": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/cookie-consent/SKILL.md",
+      "computedHash": "5844c1a57d97f21b742a0168945ccf9344b835195ae9bf0a46a482a7dcf31acd"
+    },
+    "creator-marketing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/creator-marketing/SKILL.md",
+      "computedHash": "6e02b9b88ac46b2033a0680f489e1fc83430ab0b59b0106caf21519fca3c800f"
+    },
+    "cro": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/cro/SKILL.md",
+      "computedHash": "eb4197774cac885d5c429ace4f4272f026b4df847bfa5b568fe6781fa36ffca2"
+    },
+    "customer-research": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/customer-research/SKILL.md",
+      "computedHash": "2fbc885883efa7a958b6d2353013cdd60015e72aea04f10c841036d9ca8799ff"
+    },
+    "dart": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/mobile/dart/SKILL.md",
+      "computedHash": "aa6c48fbf3ee1b5ea618a2fcadc9fd9aa3a791249fabd76c73aa97f59bfd533e"
+    },
+    "debugging": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/debugging/SKILL.md",
+      "computedHash": "25ec4d999a39817a2ede7442b450116958287f903dd0e77abc1691d70d1bf7ee"
+    },
+    "deployment": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/deployment/SKILL.md",
+      "computedHash": "ab67890adb11f902de6b5954d2fb1d95b97760eaf6900544448760abd5812d23"
+    },
+    "design-system-maintenance": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/design-system-maintenance/SKILL.md",
+      "computedHash": "18e087e289995cd84dc42add6505708a4265ba8e485e7dd95b2a7be568f550c4"
+    },
+    "developer-docs": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/developer-docs/SKILL.md",
+      "computedHash": "2b82eb83e87e5a91d42da41fe3954cd5bd4619fd48c0026c6f36bb0361e4f4be"
+    },
+    "domain-modeling": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/architecture/domain-modeling/SKILL.md",
+      "computedHash": "295a337331a89ea122bf45b2b43f165a236e04567b17b7266e7327245d016650"
+    },
+    "e2e-testing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing/e2e-testing/SKILL.md",
+      "computedHash": "f56b92ec7bf01773444004a0cf0a06a64a965e4a29efb8a970b5144827d54ae7"
+    },
+    "effect": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/effect/SKILL.md",
+      "computedHash": "f979c54780d02bf6d217324448d6535037179fe36a6d0d969418d5ece0a5c0b1"
+    },
+    "email-marketing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/email-marketing/SKILL.md",
+      "computedHash": "fd7eef44538a8983c682320c77e286bfb15c154de4b13e6c4c35afd5d8680387"
+    },
+    "email-practices": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/email-practices/SKILL.md",
+      "computedHash": "08d4442eae32e5fbc188ca8ed4967df24de1c319b4aa350caee15ab0163ba15a"
+    },
+    "engineering-planning": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/engineering-planning/SKILL.md",
+      "computedHash": "ca42f6b6a6c92ad877260b309bd886bd6b4ebcd1f9853dc81f93a94ce95da428"
+    },
+    "event-marketing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/event-marketing/SKILL.md",
+      "computedHash": "d22cb32c1a14188c1f6e51c5ba7fe8a1c4890269df84fa69b19c500659ae3edf"
+    },
     "find-skills": {
       "source": "vercel-labs/skills",
       "sourceType": "github",
       "skillPath": "skills/find-skills/SKILL.md",
       "computedHash": "9e1c8b3103f92fa8092568a44fe64858de7c5c9dc65ce4bea8f168080e889cfd"
+    },
+    "firebase": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/firebase/SKILL.md",
+      "computedHash": "afd6dbeba169d761d29a54c3b37d4837f0be5472a73ecfb520bbd40732150499"
+    },
+    "flutter": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/mobile/flutter/SKILL.md",
+      "computedHash": "6c6ec3d8fee7e422d52951fbd73d86b652f46510f9082e1111bf0173f473f59a"
+    },
+    "flutter-render-objects": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/mobile/flutter-render-objects/SKILL.md",
+      "computedHash": "b8a49445f984df694ab7d99880e840bb1f5690df5b0f4b0ab1d55584c3628e6c"
+    },
+    "flutter-ui": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/mobile/flutter-ui/SKILL.md",
+      "computedHash": "26eed88652f64bf644b8993dcb1324ecb525820ad8d5e6cabe707459ce9ac938"
+    },
+    "flutter-ux": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/mobile/flutter-ux/SKILL.md",
+      "computedHash": "c2517cdcddc66bd80de79f9fa5b743abe02b2110086139374f12e6a6affdc05e"
+    },
+    "frame-review": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/frame-review/SKILL.md",
+      "computedHash": "cbc59511f76cb8207b02ec3a437b97197b54fa8ca4a839c5f9f5b8bbd37a1a4a"
+    },
+    "google-analytics": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/google-analytics/SKILL.md",
+      "computedHash": "64270413c40cd19b8844dac5aa8f05c85ea2b3a5f0ebcf85665eeaeff6beca84"
+    },
+    "google-play": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/mobile/google-play/SKILL.md",
+      "computedHash": "fc91ef993f520c0f78da043252d97262df848bf1275e8c93733ee939c19d981a"
+    },
+    "grafana": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/monitoring/grafana/SKILL.md",
+      "computedHash": "1a00282e4a04c8ed9fcfb8e7d5c868456f7125e8857f019dff422f92950aeeaa"
+    },
+    "growth-ideas": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/growth-ideas/SKILL.md",
+      "computedHash": "00246692f9f4817a5087c2b986f8a2c9f088064109bb312a6bdacae4b3cd568b"
+    },
+    "gsap": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/gsap/SKILL.md",
+      "computedHash": "ebf8310f77c4cfc23e3c816262ed0a07becbedeaf733a6c2654b98315a19ae31"
+    },
+    "guided-learning": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/agent-workflows/guided-learning/SKILL.md",
+      "computedHash": "5cf8312010ab0c67d9622b8354e4da0c9eb0225007091255a67684f0eb02562f"
     },
     "gws-israeli-business-sheets": {
       "source": "skills-il/tax-and-finance",
@@ -23,6 +407,12 @@
       "sourceType": "github",
       "skillPath": "il-invoice-organizer/SKILL.md",
       "computedHash": "d53359406ef60682b7c1348e57b0cef7e0b036755662905bdfd3cb18cff91dab"
+    },
+    "isometric-figures": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/isometric-figures/SKILL.md",
+      "computedHash": "e0c6fe82864c17c4a76ed26a105f032bf19c80ac01c5642578398d27ee7ba7af"
     },
     "israel-gov-api": {
       "source": "skills-il/government-services",
@@ -152,11 +542,491 @@
       "sourceType": "github",
       "computedHash": "8dfa20e5931cee18e1d91663ef78768ac8beb11e34cd1491002e4da519c28624"
     },
+    "jev-decisions": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ai-agents/jev-decisions/SKILL.md",
+      "computedHash": "360e3ccc6829134cff66d510d464606a872465aff67934f58c3ed365ac87eed2"
+    },
+    "k6": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing/k6/SKILL.md",
+      "computedHash": "b3248519df2c3ef1bc6ea6417e80e4664d90dfa59e881c436999a8cf9388e4ef"
+    },
+    "kapso": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/kapso/SKILL.md",
+      "computedHash": "28f33c16c57a6d73989c0ef75383d049279736a10e7329c55449440e66dd757d"
+    },
+    "keyword-research": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/keyword-research/SKILL.md",
+      "computedHash": "1d51fc8660859a60227894a61d929ea42b3e1cd73242b3d4e45c12cdc844e70f"
+    },
+    "landing-page-ui": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/landing-page-ui/SKILL.md",
+      "computedHash": "e263c99121138458c85f1f94aeea2401e85eb2f633f37e520f19f9365f855581"
+    },
+    "langfuse": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ai-agents/langfuse/SKILL.md",
+      "computedHash": "fcd8806bad7ce1ea222c976825503cdad66899c1b13bc5fc8bdd7d51b9e132c6"
+    },
+    "lead-magnets": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/lead-magnets/SKILL.md",
+      "computedHash": "f491573ca3f54f7598ddb95ae472c7e005e0511fd2817ba96ea49e3586d46299"
+    },
+    "lint-rule-authoring": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/lint-rule-authoring/SKILL.md",
+      "computedHash": "08c06822f61610174153f375bdf7d32321f9e510f1c1af0d9a08d9c807472ab5"
+    },
+    "maestro": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing/maestro/SKILL.md",
+      "computedHash": "9436794c866ae852c5fe4cd8cc48bb866022ecaa0a5721d65b938799dd14d2f6"
+    },
+    "make-video": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/make-video/SKILL.md",
+      "computedHash": "ba01732bcddc47317c0b2f45da412204e0d302433fa7ee78b42f1e6b6357c069"
+    },
+    "marketing-attribution": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/marketing-attribution/SKILL.md",
+      "computedHash": "f0d64724ca897e09cab649bc46b3deb30a5a8ed2120903609122ad1fbc601228"
+    },
+    "marketing-council": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/marketing-council/SKILL.md",
+      "computedHash": "ead2e494445345aa4c8d0257c9042fd3ef2f61395c2d1252d0222c2860af5e89"
+    },
+    "marketing-images": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/marketing-images/SKILL.md",
+      "computedHash": "bbb8c3a7b85441b5d896a21fe5c43af69cc9c8b036acfb6cf0fc7ff608375056"
+    },
+    "marketing-loops": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/marketing-loops/SKILL.md",
+      "computedHash": "2af41644b702edecd14c1c40192c92ecaa7de8b6393766235d3b3fbb365770ce"
+    },
+    "marketing-plan": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/marketing-plan/SKILL.md",
+      "computedHash": "282ca8293063442f0750f73120053cd76ee4f350c2d192c742d1a8738e6afcc8"
+    },
+    "marketing-video": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/marketing-video/SKILL.md",
+      "computedHash": "66d6570039f9eef8c1c5987b2097196c77695b972ca8c72dd2eaecb69298f2a1"
+    },
+    "messaging": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/messaging/SKILL.md",
+      "computedHash": "8578ef1a5db09394c2ec26b701ad6894fdb900b6a8d0f253d5a7d16690e57c1b"
+    },
+    "modern-css": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/modern-css/SKILL.md",
+      "computedHash": "a1832cfe79e5cf73858c5796d732d73cfd736ab4c6b946c9488d6fde4d93cb49"
+    },
+    "observability": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/monitoring/observability/SKILL.md",
+      "computedHash": "5befd3b63ac24eeff03d3347ebe8c81e95b164204f73efbad6875910ed7b69c0"
+    },
+    "offer-design": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/offer-design/SKILL.md",
+      "computedHash": "cd587915e1911fe47612b1bfd3e6e2769facf34be5a96da8db76f3284da23927"
+    },
+    "onboarding-and-upgrades": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/onboarding-and-upgrades/SKILL.md",
+      "computedHash": "695547bd5e2a72c767898005c11a552c49fb22c5760737490d27e3e1aacfacfe"
+    },
+    "onesignal": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/onesignal/SKILL.md",
+      "computedHash": "f2937ffca1f4aff1c673bf562a30b051d79365983665eae846e52270852ed37c"
+    },
+    "paid-ads": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/paid-ads/SKILL.md",
+      "computedHash": "519106d136c5a2dc33eef076298154300e56592b5337014c43ec81c384e8fd2f"
+    },
+    "partnerships": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/partnerships/SKILL.md",
+      "computedHash": "3b85c8a2ee302dd88efee6cd56ba1a39eff6ad57d3a5cb52b05d4798d9c2dc91"
+    },
+    "patrol": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing/patrol/SKILL.md",
+      "computedHash": "d4ffd8285462819294bf330915ccf3d0935658021b8e96e1522e39b4041b2136"
+    },
+    "performance-and-caching": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/performance-and-caching/SKILL.md",
+      "computedHash": "8f6a611a6b069ce2cdd1832f57f6ea049a8f646cf79e620dbe34e8644b22d473"
+    },
+    "pixel-reverse-engineer": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/pixel-reverse-engineer/SKILL.md",
+      "computedHash": "37e4e12d3fb2c4e083c9eb941a3ed62d11535a553272b656730e46a0d50565cf"
+    },
+    "postgres": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/postgres/SKILL.md",
+      "computedHash": "097f6f17ac0e85e49b4aaec44fd00d4ef63dfad67f2e079ad23703e0e6a590ae"
+    },
+    "posthog": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/monitoring/posthog/SKILL.md",
+      "computedHash": "a0190136bef180ea2fb2a45026e70362e077e730a31e26581f19393dc02f469b"
+    },
+    "pricing-strategy": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/pricing-strategy/SKILL.md",
+      "computedHash": "077de5ab605d948de357ffc8ca30a0f91ae01c8666891122901c20ee876480f3"
+    },
+    "product-launch": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/product-launch/SKILL.md",
+      "computedHash": "c370619b48c0e35fcdd292ec74330a000d34242642e8fddf3bc8d7fdf1e74fa6"
+    },
+    "prospecting": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/prospecting/SKILL.md",
+      "computedHash": "2343708102660f2374557c562ea49aba127891eea889fdf940e6fe5d69d5a544"
+    },
+    "public-relations": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/public-relations/SKILL.md",
+      "computedHash": "a9146af2c53906067301b305ebc3e6abf354eda9ac68823237c19864a090f8ec"
+    },
+    "react": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/react/SKILL.md",
+      "computedHash": "7d8bbd645cb59412d3d4f2fc48303b20960717f791fa57d904a33071e6e91ed5"
+    },
+    "react-email": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/react-email/SKILL.md",
+      "computedHash": "620385a7e1247bc966b6cb32f079ab372f265e6e59250b804190b58cd4a31f1b"
+    },
+    "refactoring": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/refactoring/SKILL.md",
+      "computedHash": "b99c2c5700fd7175873f22ce39130548f7328df2c27ab55c748cc693b49f98fc"
+    },
+    "referral-programs": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/referral-programs/SKILL.md",
+      "computedHash": "bdbe8036ff1965113b7d2fad9f6d3c09f70659290a6257e5a31883dca19c9906"
+    },
+    "resend": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/resend/SKILL.md",
+      "computedHash": "933daa2ed2fb313df8b5fe582c83e8f2555e04bb9299e47778ca9ab12f3bedff"
+    },
+    "revenuecat": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/revenuecat/SKILL.md",
+      "computedHash": "614ed5a55bda7b18ca054798c4067a6a3cace64b9542dc889ac36d135d01ab34"
+    },
+    "reverse-engineering": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/reverse-engineering/SKILL.md",
+      "computedHash": "5ddaac818f1245759bec9bc8b5091dbb29e2fa6c8908af1c5aa492cd138b012a"
+    },
+    "review-management": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/review-management/SKILL.md",
+      "computedHash": "9166e05b218fc1de18d5960413fd03a856ee592299d079071a2fcefbec51e288"
+    },
+    "revops": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/revops/SKILL.md",
+      "computedHash": "f68212c5c4fd77132d8c6e7f4ed85e818d4ae7009a87f3d0250928aeb203d35a"
+    },
+    "sales-enablement": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/sales-enablement/SKILL.md",
+      "computedHash": "8718a77e2dad9dd24d38322be0e1ce41d824bf6207212a84e2035b11cbe5a05a"
+    },
+    "search-console": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/search-console/SKILL.md",
+      "computedHash": "6e891be60a6b5b9ffbd4fe69240a9001eac7a3d08419c83e61e1811c67a10a43"
+    },
+    "secure-coding": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/secure-coding/SKILL.md",
+      "computedHash": "7473ce78e3a346f749b83845c98f12c83eec5fde33362f051c775d0f02c2ae11"
+    },
+    "seek-engine": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/seek-engine/SKILL.md",
+      "computedHash": "1038590be68880b717bcc65d417543b57505884593cf99d122f17bd0f5b845ab"
+    },
+    "sentry": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/monitoring/sentry/SKILL.md",
+      "computedHash": "bb9c030afcb8917ef2c02997d870cb87c63aba2a82982d294c3242de09392229"
+    },
+    "seo": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/seo/SKILL.md",
+      "computedHash": "329589639cc64379d0bedf179e0374601e3a00a0d8b61e9f664559e1cb1b8628"
+    },
+    "service-businesses": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/service-businesses/SKILL.md",
+      "computedHash": "b7b705d7e5db97a13d7239e0e6ac5fa139632e374558960ff60359dbe3b2e544"
+    },
     "shekel-currency-converter": {
       "source": "skills-il/tax-and-finance",
       "sourceType": "github",
       "skillPath": "shekel-currency-converter/SKILL.md",
       "computedHash": "f882e03556bf1a4919734206745599362f318278d25a75534c74850cf55cc6c6"
+    },
+    "shotlist": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/shotlist/SKILL.md",
+      "computedHash": "2233d07a5048f45350344b5cbbefba695eea3908aa30a933e07b685a7eda692e"
+    },
+    "site-architecture": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/site-architecture/SKILL.md",
+      "computedHash": "c630382dee0953d3aafbce81b6153fce179dd1b6a05207df1d28a8b0ce99f2c0"
+    },
+    "site-audit": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/site-audit/SKILL.md",
+      "computedHash": "694ec237f8b525e2500dc126f91a26637b93a282473c4b1aeb7878a9f387fba7"
+    },
+    "skill-authoring": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/agent-workflows/skill-authoring/SKILL.md",
+      "computedHash": "95249fe6a0cd270c983e5e9304a54f1dde78b4d7f5bdfbca035ae10340495f25"
+    },
+    "sms-marketing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/sms-marketing/SKILL.md",
+      "computedHash": "b1836d017091b5d16829d7177fd0461e08912b907af83ee16257248458f3d00b"
+    },
+    "social-media": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/social-media/SKILL.md",
+      "computedHash": "1b73d4815c7bc3c3835087f94bc3a51e4ba5726913f9764f599723a89f0ee892"
+    },
+    "software-architecture": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/architecture/software-architecture/SKILL.md",
+      "computedHash": "42b2ec1f52ef623a0aa8c245dcb3edd092b550a01e577a884ff3d5d42ddc3d4e"
+    },
+    "sonner": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/sonner/SKILL.md",
+      "computedHash": "dc669abd41446d38d095d1d9c5cb57e92fefab8ebe36579ef3ca25061a1044a4"
+    },
+    "sound-pass": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/sound-pass/SKILL.md",
+      "computedHash": "bed807c102eb2a443698623ebe6646a2823bd8ac09fa29f51f4c36e8092f71a4"
+    },
+    "sql-patterns": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/sql-patterns/SKILL.md",
+      "computedHash": "7627f0b1f59e2f9059147a071e2f01db0b5aba4488e8b3a5bd960add0e9ee2a4"
+    },
+    "stripe": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/stripe/SKILL.md",
+      "computedHash": "60fed93de786d76edd6cfee2f93abdd74a5e6f8efebbb98234c2cdc8eb15107a"
+    },
+    "supabase": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/supabase/SKILL.md",
+      "computedHash": "bdf3947476d681e5cb4b2957b2015a8050ba74101a34b1f66ebb85923616ccb3"
+    },
+    "svg": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/svg/SKILL.md",
+      "computedHash": "c155c7f188420174b3e261eb17b51e189b7b725b9ab4a119dec0ab0db35b8c50"
+    },
+    "system-design": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/architecture/system-design/SKILL.md",
+      "computedHash": "24bc1cfd9371674f2882e6eb89bf26389b99aa375f0941e05ec1d43fc4962fda"
+    },
+    "system-migration": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/system-migration/SKILL.md",
+      "computedHash": "0a0ee1fc26625e7e8da93ba84258f95dea195399bb7ce1c1fc2c91474a2f1180"
+    },
+    "technical-drawing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/technical-drawing/SKILL.md",
+      "computedHash": "6d0de6a63f67af701a3a831b035898051e9c575f2ddf0c59cf26c115fdb1b012"
+    },
+    "tester-army-e2e": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing/tester-army-e2e/SKILL.md",
+      "computedHash": "b6c469ae5ea85cb81a0d68db35f85afe64c2454eeaf24f21e9dacfc3ecc77d5a"
+    },
+    "testing": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/testing/testing/SKILL.md",
+      "computedHash": "e16c0f5480453cdcee7e6ec3e7c7273ac64ea152e0d0d72ce0be6996fd6bc069"
+    },
+    "third-party-integrations": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/backend/third-party-integrations/SKILL.md",
+      "computedHash": "b047050a185f0d1db418ee5b7e8a685ee4e4e503f5c8e727313de0732789ed6b"
+    },
+    "ui-animation": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/ui-animation/SKILL.md",
+      "computedHash": "d166514b27febb8630f373fa92beba227433c044607c7c49849fb8cb42a2e6ba"
+    },
+    "ultracite": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/ultracite/SKILL.md",
+      "computedHash": "4bdaf5eb4b10a957efa1383b2ffc15962bfc1b618e91f7a937fbf8fc3ebed510"
+    },
+    "video-brief": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/video-brief/SKILL.md",
+      "computedHash": "0260b9a6422fbddb3a0aef5a2bf1ef1bb91040b01e112a79dbd13a43de71c6e5"
+    },
+    "video-help": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/video-help/SKILL.md",
+      "computedHash": "c6495361d67be6302b0371d98e20b620e300dd00dcd0154747efd5a866589bc3"
+    },
+    "video-setup": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/video-setup/SKILL.md",
+      "computedHash": "fa2f3b9ce677361e53b2939d1d8d9ad0818281e8b8f2cd8bfe9752037fbc7f50"
+    },
+    "voiceover": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/videos/voiceover/SKILL.md",
+      "computedHash": "e8fc8382fa938d7d106349d799da7314f50019743acd3a11ae5c987f4394821b"
+    },
+    "web-accessibility": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/web-accessibility/SKILL.md",
+      "computedHash": "8f9f13c6a2f85a1e3ff43f200eb8d303e62556699efec3aa6b7a34b5051de83d"
+    },
+    "web-performance": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/web-performance/SKILL.md",
+      "computedHash": "22aa39d5d5418c27f38569ee4055e773911ec30ac2a790a1880f80ad23923b37"
+    },
+    "web-research": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/marketing/web-research/SKILL.md",
+      "computedHash": "6e3fcde694f2308bb42968bc259841c5d458d3070c5e646d51efdcf06c30f356"
+    },
+    "web-scraping": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-automation/web-scraping/SKILL.md",
+      "computedHash": "e6b1ed08748f2091b057fe6df2cc46edff3e4ff9a9acc48ad9e0252c0fe5e626"
+    },
+    "webgl": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-ui/webgl/SKILL.md",
+      "computedHash": "e12aecc889497052026a4602f63ab176f1047c08fcc6d8bece01e5fba447e762"
+    },
+    "webmcp": {
+      "source": "Quegenx/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-automation/webmcp/SKILL.md",
+      "computedHash": "b3eda10ea21d39a7a30704ca2b759c605ce96c5be9186bbff2363b26d34ffd7c"
     }
   }
 }
