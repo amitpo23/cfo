@@ -49,13 +49,13 @@ def test_weeks_run_sunday_to_saturday_from_the_week_of_today():
 
 
 def test_closing_walks_the_opening_balance_through_dated_items():
-    view = _view(checks=[{"check": "10013", "date": "2026-10-28", "amount": 3484.0,
-                          "payee": "יהודה בוגנים", "state": "future"}])
+    view = _view(checks=[{"check": "1", "date": "2026-10-28", "amount": 3000.0,
+                          "payee": "ספק א", "state": "future"}])
 
     week = _forecast(view)["weeks"][0]
 
-    assert week["out"] == -3484.0
-    assert week["closing"] == -38484.0
+    assert week["out"] == -3000.0
+    assert week["closing"] == -38000.0
     assert week["items"][0]["certainty"] == "certain"
 
 
@@ -131,12 +131,12 @@ def test_owner_items_are_added_on_top_of_the_run_rate():
 def test_a_loan_maturity_is_dated_and_marked_as_an_upper_bound():
     view = _view(balance=0.0, upcoming=[{
         "date": "2026-11-25", "kind": "loan_maturity", "label": "גישור · סיום הלוואה",
-        "amount": -61351.0, "amount_basis": "outstanding_balance",
+        "amount": -60000.0, "amount_basis": "outstanding_balance",
     }])
 
     item = next(i for w in _forecast(view)["weeks"] for i in w["items"])
 
-    assert item["amount"] == -61351.0
+    assert item["amount"] == -60000.0
     assert item["certainty"] == "certain"
     assert item["upper_bound"] is True
 
@@ -189,14 +189,14 @@ def test_one_off_lines_stay_out_of_the_run_rate():
 def test_a_maturity_already_past_with_no_bank_coverage_is_flagged_not_dropped():
     view = _view(balance=None, as_of=None)
     plan = {"liquidityEvidence": {"loans": [{
-        "label": "גישור", "organizationId": 2, "balance": 62708.33, "maturity": "2026-10-25",
+        "label": "גישור", "organizationId": 2, "balance": 50000.0, "maturity": "2026-10-25",
     }]}}
 
     result = _forecast(view, plan)
 
     overdue = result["overdue"]
     assert overdue[0]["label"] == "גישור"
-    assert overdue[0]["amount"] == -62708.33
+    assert overdue[0]["amount"] == -50000.0
     assert overdue[0]["date"] == "2026-10-25"
 
 

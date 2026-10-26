@@ -105,7 +105,7 @@ def test_a_finding_that_no_longer_holds_is_resolved(client, fresh_org, platform_
 def test_a_past_due_maturity_and_a_missing_balance_each_raise_an_insight(client, fresh_org, platform_admin):
     dashboard_id, _chef, food = _dashboard(client, platform_admin, fresh_org, "watch-overdue")
     _plan(client, platform_admin["headers"], dashboard_id, {"liquidityEvidence": {"loans": [
-        {"label": "גישור", "organizationId": food["org_id"], "balance": 62708.33, "maturity": "2026-10-25"},
+        {"label": "גישור", "organizationId": food["org_id"], "balance": 50000.0, "maturity": "2026-10-25"},
     ]}})
 
     _watch(dashboard_id)

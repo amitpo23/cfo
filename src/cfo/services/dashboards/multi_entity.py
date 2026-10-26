@@ -80,7 +80,7 @@ def _build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date
     ordered = sorted(entities, key=lambda entity: (entity.role != "primary", entity.id or 0))
     # The plan's budget lines name no entity: with more than one entity they are the
     # group's budget, and only the combined view uses them. One entity alone with the
-    # whole group's costs projected its balance to −286,678 by April (26/10/2026).
+    # whole group's costs projected that one company far below its real trend.
     single = len(ordered) == 1
     sections = []
     for entity in ordered:

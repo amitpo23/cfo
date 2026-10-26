@@ -111,11 +111,11 @@ def test_a_group_budget_drives_the_combined_forecast_and_not_one_entity_alone(cl
     dashboard_id, _chef, _food = _consolidated(client, platform_admin, fresh_org, "cash-forecast-budget")
     _save(client, platform_admin["headers"], dashboard_id, {"budgetLines": [
         {"id": "pay", "label": "שכר", "category": "salaries", "kind": "cost",
-         "months": {"2026-11": {"quantity": 1, "rate": 49700}}},
+         "months": {"2026-11": {"quantity": 1, "rate": 40000}}},
     ]})
 
     body = _view(client, platform_admin["headers"], dashboard_id, end="2026-10-31")
 
     costs = lambda forecast: next(r for r in forecast["rows"] if r["id"] == "costs")["months"]["2026-11"]
-    assert costs(body["combined"]["forecast"]) == {"value": 49700.0, "source": "budget"}
+    assert costs(body["combined"]["forecast"]) == {"value": 40000.0, "source": "budget"}
     assert costs(body["entities"][0]["view"]["forecast"])["source"] != "budget"
