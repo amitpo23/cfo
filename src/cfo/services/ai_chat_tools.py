@@ -1428,6 +1428,74 @@ async def _get_credit_line_status(db, org_id: int, days: int = 30, **_kwargs) ->
     return get_credit_line_status(db, org_id, days=days)
 
 
+_FORECAST_TOP_ITEMS = 8
+
+
+def _compact_forecast(forecast: dict | None) -> dict | None:
+    """The tab's numbers without the per-week item lists, so the answer fits the chat."""
+    if not forecast:
+        return None
+    items = [
+        dict(item, week_start=week["start"])
+        for week in forecast.get("weeks") or [] for item in week.get("items") or []
+        if item.get("date")
+    ]
+    items.sort(key=lambda item: abs(item.get("amount") or 0), reverse=True)
+    return {
+        "label": forecast.get("label"),
+        "opening": forecast.get("opening"),
+        "first_breach": forecast.get("first_breach"),
+        "overdue": forecast.get("overdue") or [],
+        "missing": forecast.get("missing") or [],
+        "run_rate": forecast.get("run_rate"),
+        "weeks": [
+            {key: week.get(key) for key in ("start", "end", "in", "out", "closing", "limit", "headroom")}
+            for week in forecast.get("weeks") or []
+        ],
+        "largest_dated_items": items[:_FORECAST_TOP_ITEMS],
+    }
+
+
+async def _get_cash_forecast(db, org_id: int, slug: str | None = None, _today=None, **_kwargs) -> dict:
+    """תזרים חזוי 13 שבועות — אותם מספרים כמו לשונית "תזרים חזוי" ב-/d/.
+
+    Only a dashboard whose primary organization is the chat's organization: a
+    SUPER_ADMIN's reach over every dashboard does not widen what a chat reads."""
+    from datetime import date, timedelta
+
+    from ..models import ClientDashboard
+    from .dashboards import multi_entity, view_model
+
+    query = db.query(ClientDashboard).filter(
+        ClientDashboard.primary_organization_id == org_id, ClientDashboard.status != "archived",
+    )
+    if slug:
+        query = query.filter(ClientDashboard.slug == slug)
+    dashboard = query.order_by(ClientDashboard.id).first()
+    if dashboard is None:
+        return {
+            "status": "unknown",
+            "message": "אין דשבורד /d/ שהארגון הזה הוא הישות הראשית בו, ולכן אין תזרים חזוי. "
+                       "אפשר לענות רק מהכלים האחרים, ולומר שהתחזית חסרה.",
+            "provider_calls": 0,
+        }
+    today = _today or date.today()
+    view = multi_entity.build_dashboard_view(
+        db, dashboard, today - timedelta(days=200), today, plan=view_model.plan_payload(db, dashboard.id),
+    )
+    sections = view.get("entities") or []
+    return {
+        "status": "ready",
+        "dashboard": dashboard.slug,
+        "as_of": today.isoformat(),
+        "entities": [_compact_forecast((section.get("view") or {}).get("cash_forecast")) for section in sections],
+        "combined": _compact_forecast((view.get("combined") or {}).get("cash_forecast")) if len(sections) > 1 else None,
+        "note": "headroom = מסגרת + יתרה צפויה; null = לא ידוע (חסר נתון, ראה missing), לא אפס. "
+                "סכום של סיום הלוואה הוא מרבי. קצב ריצה הוא ממוצע 3 חודשים מלאים.",
+        "provider_calls": 0,
+    }
+
+
 async def _get_ar_health(db, org_id: int, months: int = 12, target_dso: int = 30, **_kwargs) -> dict:
     """בריאות גבייה — מגמת DSO אמיתית (ממוצע ימי-תשלום בפועל) + סיכומי
     סיכון/גבייה מדוח הגיול. לא כולל את פירוט הלקוחות המלא (זמין דרך
@@ -3679,6 +3747,24 @@ TOOLS: dict[str, ChatTool] = {
         },
         category="read",
         fn=_rezef_help,
+    ),
+    "get_cash_forecast": ChatTool(
+        name="get_cash_forecast",
+        description=(
+            "תזרים חזוי ל-13 שבועות, לכל ישות ומאוחד — אותם מספרים כמו לשונית "
+            "'תזרים חזוי' בדשבורד. עונה על 'כמה פנוי לי במסגרות', 'מתי אגיע "
+            "למינוס/לחריגה ולמה', 'אילו צ׳קים והלוואות יורדים', 'מסגרת שפוקעת'. "
+            "לכל שבוע: כניסות, יציאות, יתרת סגירה, מסגרת ו-headroom (פנוי). "
+            "first_breach עם הסיבות, overdue (מועדים שעברו, סטטוס לא ידוע), "
+            "missing (מה חסר כדי לחשב). null הוא לא ידוע, לא אפס. "
+            "עדיף על get_credit_line_status, שבודק רק את מסגרת העו״ש."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"slug": {"type": "string", "description": "דשבורד מסוים (אופציונלי)"}},
+        },
+        category="read",
+        fn=_get_cash_forecast,
     ),
     "get_credit_line_status": ChatTool(
         name="get_credit_line_status",
