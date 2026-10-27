@@ -257,7 +257,9 @@ def test_needs_user_regression_on_existing_tools():
         "propose_payable_request", "execute_payable_request", "settle_payable_request", "reverse_payable_settlement",
         # send_report delivers a PDF to the caller's own chat; it checks the
         # verified channel identity belongs to this very user and org.
-        "send_report"}
+        "send_report",
+        # get_cash_forecast reads a dashboard only when the caller may read it.
+        "get_cash_forecast"}
 
 
 def test_needs_user_tool_receives_user_id_kwarg(monkeypatch, fresh_org):
