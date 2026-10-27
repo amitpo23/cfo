@@ -1461,22 +1461,29 @@ def _compact_forecast(forecast: dict | None) -> dict | None:
     }
 
 
-async def _get_cash_forecast(db, org_id: int, slug: str | None = None, _today=None, **_kwargs) -> dict:
+async def _get_cash_forecast(db, org_id: int, slug: str | None = None, _today=None, _user_id=None,
+                             **_kwargs) -> dict:
     """תזרים חזוי 13 שבועות — אותם מספרים כמו לשונית "תזרים חזוי" ב-/d/.
 
-    Only a dashboard whose primary organization is the chat's organization: a
-    SUPER_ADMIN's reach over every dashboard does not widen what a chat reads."""
+    Only a dashboard whose primary organization is the chat's organization (a
+    SUPER_ADMIN's reach over every dashboard does not widen what a chat reads),
+    and only one the caller may read: the same role check as send_report."""
     from datetime import date, timedelta
 
-    from ..models import ClientDashboard
+    from ..models import ClientDashboard, User
     from .dashboards import multi_entity, view_model
+    from .dashboards.service import READ_ROLES, role_for
 
+    user = db.query(User).filter_by(id=_user_id).first() if _user_id else None
     query = db.query(ClientDashboard).filter(
         ClientDashboard.primary_organization_id == org_id, ClientDashboard.status != "archived",
     )
     if slug:
         query = query.filter(ClientDashboard.slug == slug)
-    dashboard = query.order_by(ClientDashboard.id).first()
+    dashboard = next(
+        (row for row in query.order_by(ClientDashboard.id).all() if role_for(db, user, row) in READ_ROLES),
+        None,
+    )
     if dashboard is None:
         return {
             "status": "unknown",
@@ -3925,6 +3932,7 @@ TOOLS: dict[str, ChatTool] = {
             "properties": {"slug": {"type": "string", "description": "דשבורד מסוים (אופציונלי)"}},
         },
         category="read",
+        needs_user=True,
         fn=_get_cash_forecast,
     ),
     "get_credit_line_status": ChatTool(
