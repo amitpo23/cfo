@@ -603,6 +603,11 @@ class Account(Base):
     # חריגה, לא רק LOAN). NULL = לא ידוע (הספק לא החזיר את השדה) — לעולם לא
     # נגזר מ-interimAvailable (זמין-לשימוש, לא מסגרת).
     credit_limit = Column(Numeric(precision=14, scale=2), nullable=True)
+    # כמה פנוי לשימוש לפי הבנק (Open Finance interimAvailable; בכרטיס: open to
+    # buy). NULL = לא ידוע — לעולם לא 0 ולא creditLimit פחות היתרה. המיגרציה
+    # k40a1b2c3d4e חייבת לרוץ בפרוד לפני הפריסה של העמודה הזו: INSERT של ה-ORM
+    # כותב כל עמודה ממופה.
+    available_limit = Column(Numeric(precision=14, scale=2), nullable=True)
     # בעלות מדויקת (חבילה H) — Open Finance מחזיר ownerInfo.{nationalId,
     # fullName} על כל Account (docs/OPEN_FINANCE_KNOWLEDGE_BASE.md:248).
     # nationalId מנורמל לספרות בלבד ע"י account_ownership.normalize_israeli_id

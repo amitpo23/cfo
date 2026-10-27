@@ -402,8 +402,11 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
     days, conflicts = _daily_balances(db, [a.id for a in checking], start, end)
     month_keys = list(_month_keys(start, end))
 
+    # מסגרת ופנוי כפי שהבנק מסר (creditLimit, interimAvailable). לא ידוע נשאר
+    # None — לא נגזר "פנוי" ממסגרת פחות יתרה.
     cards = [
         {"name": a.name, "balance": None if _balance(a) is None else _r(abs(_balance(a))),
+         "credit_limit": _num(a.credit_limit), "available": _num(a.available_limit),
          "as_of": a.balance_as_of.date().isoformat() if a.balance_as_of else None}
         for a in by_kind.get("card", [])
     ]
@@ -490,6 +493,7 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
             for a in accounts
         ],
         "cards": cards,
+        "card_summary": card_summary(cards),
         "loans": loans,
         "credit_line_mirrors": mirrors,
         "months": _months(days, limit),
@@ -561,6 +565,17 @@ def _month_keys(start: date, end: date):
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
 
 
+def card_summary(cards: list[dict]) -> dict:
+    """Card totals: a total is known only when every card's value is known;
+    ``*_known`` sums the cards that are."""
+    out = {}
+    for key, field in (("available", "available"), ("credit_limit", "credit_limit")):
+        values = [card.get(field) for card in cards]
+        out[key] = None if not values or any(v is None for v in values) else _r(sum(values))
+        out[f"{key}_known"] = _sum_or_none(values)
+    return out
+
+
 def combine(sections: list[dict]) -> dict:
     """Combined position of several entities.
 
@@ -598,6 +613,7 @@ def combine(sections: list[dict]) -> dict:
             slot = service.setdefault(row["month"], {"month": row["month"], "principal": 0.0, "interest": 0.0, "new_loans": 0.0})
             for key in ("principal", "interest", "new_loans"):
                 slot[key] = _r(slot[key] + (row.get(key) or 0.0))
+    cards = [{**card, "entity": label} for label, part in parts for card in part.get("cards") or []]
     balance = None if missing else _r(sum(balances))
     limit = None if any(value is None for value in limits) else _r(sum(limits))
     return {
@@ -617,6 +633,8 @@ def combine(sections: list[dict]) -> dict:
         "debts_known_total": _sum_or_none(d.get("amount") for d in debts),
         "debts_complete": all(d.get("amount") is not None for d in debts),
         "upcoming": upcoming,
+        "cards": cards,
+        "card_summary": card_summary(cards),
         "debt_service": [service[key] for key in sorted(service)],
         "provider_calls": 0,
     }

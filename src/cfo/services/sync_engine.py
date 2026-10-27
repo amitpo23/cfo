@@ -622,6 +622,8 @@ class SyncEngine:
             # תמיד מחזיר אותו) לא אמור לאפס מסגרת ידועה שכבר נשמרה.
             if item.credit_limit is not None:
                 existing.credit_limit = item.credit_limit
+            if item.available_limit is not None:
+                existing.available_limit = item.available_limit
             # אותו עיקרון לבעלות (חבילה H): ownerInfo לא מובטח בכל עמוד/פולינג
             # — אין לאפס מזהה בעלים ידוע כשהפעימה הנוכחית פשוט לא כללה אותו.
             if item.owner_national_id is not None:
@@ -648,6 +650,7 @@ class SyncEngine:
             balance_as_of=item.balance_as_of,
             raw_account_type=item.raw_account_type,
             credit_limit=item.credit_limit,
+            available_limit=item.available_limit,
             owner_national_id=item.owner_national_id,
             owner_name=item.owner_name,
             open_finance_connection_id=item.open_finance_connection_id,

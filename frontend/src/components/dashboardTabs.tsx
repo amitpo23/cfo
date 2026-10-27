@@ -13,6 +13,13 @@ export type EntityPosition = {
   entity: string | null; balance: number | null; as_of: string | null; balance_source?: string | null;
   limit: number | null; limit_source?: string | null; available_to_limit: number | null;
 };
+export type CardRow = {
+  name: string; balance: number | null; credit_limit?: number | null; available?: number | null;
+  as_of: string | null; entity?: string | null;
+};
+export type CardSummary = {
+  available: number | null; available_known: number | null; credit_limit: number | null; credit_limit_known: number | null;
+};
 export type DebtService = { month: string; principal: number; interest: number; new_loans: number };
 
 export type EntityLiquidity = {
@@ -26,7 +33,8 @@ export type EntityLiquidity = {
     available_to_limit: number | null;
   };
   accounts?: { name: string; kind: string; balance: number | null; credit_limit: number | null; as_of: string | null; balance_source?: string | null }[];
-  cards?: { name: string; balance: number | null; as_of: string | null }[];
+  cards?: CardRow[];
+  card_summary?: CardSummary;
   loans?: { name: string; balance: number | null; as_of: string | null; maturity?: string | null }[];
   months?: { month: string; days: number; min: number | null; negative_days: number; beyond_limit_days: number | null; last: number | null }[];
   checks?: { check: string; date: string; amount: number; payee: string | null; state: string; cleared_on?: string }[];
@@ -237,6 +245,39 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
           </table>
         ) : null}
       </Card>
+      {(section.cards ?? []).length > 0 ? (
+        <Card title="כרטיסי אשראי">
+          <div className="mt-4 overflow-x-auto">
+          <table className="d-table">
+            <thead><tr><Th>כרטיס</Th>{combined ? <Th>ישות</Th> : null}<Th>חיוב אחרון</Th><Th>מסגרת</Th><Th>פנוי</Th><Th>נכון ל</Th></tr></thead>
+            <tbody>
+              {(section.cards ?? []).map((card, index) => (
+                <tr key={`${card.entity ?? ''}-${card.name}-${index}`}>
+                  <td>{card.name}</td>
+                  {combined ? <td>{card.entity}</td> : null}
+                  <td>{money(card.balance)}</td>
+                  <td>{money(card.credit_limit ?? null)}</td>
+                  <td>{money(card.available ?? null)}</td>
+                  <td>{card.as_of ?? '—'}</td>
+                </tr>
+              ))}
+              {section.card_summary ? (
+                <tr className="font-medium">
+                  <td>{section.card_summary.available === null ? 'סה״כ ידוע' : 'סה״כ'}</td>
+                  {combined ? <td /> : null}
+                  <td />
+                  <td>{money(section.card_summary.credit_limit ?? section.card_summary.credit_limit_known)}</td>
+                  <td>{money(section.card_summary.available ?? section.card_summary.available_known)}</td>
+                  <td className="py-2 text-xs text-stone-500">
+                    {section.card_summary.available === null ? 'לחלק מהכרטיסים הבנק לא מסר כמה פנוי' : ''}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+          </div>
+        </Card>
+      ) : null}
       <Card title="מועדים קרובים">
         {(section.upcoming ?? []).length === 0 ? <p className="mt-3 text-stone-600">אין מועדים ידועים.</p> : (
           <table className="mt-4 d-table">

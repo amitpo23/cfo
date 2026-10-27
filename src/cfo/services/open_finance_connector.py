@@ -170,6 +170,7 @@ class OpenFinanceConnector(AccountingConnector):
             balance_as_of=_account_balance_as_of(item),
             raw_account_type=raw_account_type,
             credit_limit=_credit_limit(item),
+            available_limit=_available_limit(item),
             owner_national_id=_owner_national_id(item),
             owner_name=_owner_name(item),
             open_finance_connection_id=_first_str(item, "connectionId"),
@@ -441,6 +442,31 @@ def _credit_limit(item: dict[str, Any]) -> Optional[Decimal]:
     try:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
+        return None
+
+
+def _available_limit(item: dict[str, Any]) -> Optional[Decimal]:
+    """כמה פנוי לפי הבנק: balanceAmount.amount של רשומת interimAvailable האחרונה.
+
+    בכרטיס זה ה-open to buy (docs/open_finance_api_reference/guide_account-balance-types.md).
+    הרשומה נבחרת לפי referenceDate המאוחר. סכום חסר/ריק/לא-מספרי -> None, לעולם
+    לא 0, ולעולם לא creditLimit פחות היתרה. מחרוזת מעוצבת ("12,345.60") נקראת
+    כמו בסכום תנועה.
+    """
+    balances = item.get("balances")
+    if not isinstance(balances, list):
+        return None
+    entries = [b for b in balances if isinstance(b, dict) and b.get("balanceType") == "interimAvailable"]
+    if not entries:
+        return None
+    entry = max(entries, key=lambda e: _parse_date(e.get("referenceDate")) or date.min)
+    amount_obj = entry.get("balanceAmount")
+    value = amount_obj.get("amount") if isinstance(amount_obj, dict) else entry.get("amount")
+    if value is None or value == "":
+        return None
+    try:
+        return _transaction_decimal(value)
+    except ValueError:
         return None
 
 
