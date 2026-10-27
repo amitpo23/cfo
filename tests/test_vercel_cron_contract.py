@@ -145,6 +145,15 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # 06:00; השער השבועי העמיד מונע ריצה כפולה). כבויה עד SUMIT_WEEKLY_PULL_ENABLED,
 # ומדלגת אם לא נשארות לפחות 10 קריאות מתוך תקרת ה-50 החודשית לבקשות ידניות.
 #
+# 26/10/2026 — הכרעת בעלים (עמית, בשאלה מפורשת: "רענון OF יומי רק לאליהב").
+# מה רץ: /api/cron/sync-open-finance, רק לארגונים ב-OPEN_FINANCE_SCHEDULED_SYNC_ORG_IDS
+# (בפרוד: 2, שף אליהב כהן). הדגל הגלובלי נשאר כבוי; בלי הרשימה הנתיב מדלג.
+# תדירות: פעם ביום, 02:00 UTC, לפני bank-gap-scan ו-bookkeeper-morning שקוראים
+# את היתרות. תקציב: סנכרון מלא אחד לארגון ב-20 שעות (OF_SYNC_MIN_INTERVAL_HOURS),
+# שער ההסכמה ותקציב הניסיונות הקיימים; ארגון אחד מתוך תקציב של ~500 קריאות בחודש
+# לחשבון. ראיית הצלחה: balance_as_of של חשבונות אליהב מתעדכן כל יום, ולשונית
+# "תזרים חזוי" מחשבת מיתרה של אתמול ולא משבוע שעבר.
+#
 # 26/10/2026 — בקשת בעלים ("תגדיר את הקרון שרץ ובודק, ועושה"). מה רץ:
 # /api/cron/cashflow-watch — התזרים החזוי של כל דשבורד, מהמסד בלבד, נשמר
 # כ-CfoInsight (חריגה צפויה, מועד שעבר, מסגרת שפוקעת תוך 60 יום, יתרה חסרה).
@@ -153,6 +162,7 @@ ISRAEL = ZoneInfo("Asia/Jerusalem")
 # ונסגרות כשהממצא כבר לא מתקיים.
 
 EXPECTED_DAILY_SCHEDULES: dict[str, str] = {
+    "/api/cron/sync-open-finance": "0 2 * * *",
     "/api/cron/bank-gap-scan": "15 3 * * *",
     "/api/cron/bookkeeper-morning": "45 3 * * *",
     "/api/cron/cashflow-watch": "15 4 * * *",
@@ -175,8 +185,8 @@ EXPECTED_WEEKLY_SCHEDULES: dict[str, str] = {
 }
 
 # Owner decision 2026-10-23: off the schedule. The routes stay mounted.
+# sync-open-finance came back on 2026-10-26 for allowlisted organizations only.
 UNSCHEDULED_BY_OWNER_DECISION = {
-    "/api/cron/sync-open-finance",
     "/api/cron/channel-alerts",
 }
 

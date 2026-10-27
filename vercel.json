@@ -63,6 +63,10 @@
   ],
   "crons": [
     {
+      "path": "/api/cron/sync-open-finance",
+      "schedule": "0 2 * * *"
+    },
+    {
       "path": "/api/cron/bank-gap-scan",
       "schedule": "15 3 * * *"
     },

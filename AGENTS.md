@@ -55,7 +55,7 @@
 
 | נושא | מצב | דגל env (ברירת מחדל) |
 | --- | --- | --- |
-| רענון Open Finance לילי (`/api/cron/sync-open-finance`) | הוסר מ-`vercel.json`; הנתיב מסרב לריצה בלתי-מאוישת | `OPEN_FINANCE_SCHEDULED_SYNC_ENABLED` (`false`) |
+| רענון Open Finance יומי (`/api/cron/sync-open-finance`, 02:00 UTC) | הכרעת בעלים 26/10/2026: רק לארגונים ברשימה (בפרוד: 2, אליהב). בלי רשימה ובלי הדגל הגלובלי — הנתיב מדלג. כל שערי העלות נשארים | `OPEN_FINANCE_SCHEDULED_SYNC_ORG_IDS` (ריק), `OPEN_FINANCE_SCHEDULED_SYNC_ENABLED` (`false`) |
 | התרעות וואטסאפ יומיות (`/api/cron/channel-alerts`, 06:00) | הוסר מ-`vercel.json`; כל push יזום לוואטסאפ מדולג | `WHATSAPP_PUSH_ENABLED` (`false`) |
 | משיכת SUMIT שבועית (`/api/cron/sumit-weekly-pull`) | יום א' 03:00 UTC (05:00 שעון ישראל בחורף), קריאה בלבד, פעם אחת בשבוע ISO, מדלגת אם לא נשארות ≥10 קריאות לבקשות ידניות | `SUMIT_WEEKLY_PULL_ENABLED` (`false`) |
 

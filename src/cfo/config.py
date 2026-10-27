@@ -270,6 +270,11 @@ class Settings(BaseSettings):
     # כל עוד הדגל כבוי. רענון ידני/מאושר (POST /sync/run, זרימת ה-consent)
     # אינו תלוי בדגל הזה.
     open_finance_scheduled_sync_enabled: bool = False
+    # הכרעת בעלים 26/10/2026: רענון Open Finance יומי לאליהב בלבד. רשימת
+    # מזהי ארגון מופרדת בפסיקים; כשהיא מוגדרת, ה-cron מרענן רק אותם, גם
+    # כשהדגל הגלובלי כבוי, ועדיין דרך כל השערים (הסכמה, 20 שעות, ניסיונות).
+    # ערך לא תקין מתעלם מהרשימה כולה: טעות הקלדה לא מרחיבה את הרענון.
+    open_finance_scheduled_sync_org_ids: str = ""
     # SUMIT bills API overage to the CLIENT company's own payment method
     # (incident 2026-07-17: daily ILS 62.23 invoices to org 2's business).
     # Scheduled SUMIT syncs are therefore code-gated to one successful full
@@ -320,6 +325,14 @@ class Settings(BaseSettings):
     def normalize_sumit_environment(cls, value):
         normalized = value.strip().lower() if isinstance(value, str) else "test"
         return normalized if normalized in {"test", "live"} else "test"
+
+    @property
+    def open_finance_scheduled_sync_org_id_set(self) -> set[int]:
+        """The allowlisted organization ids; empty on any token that is not an id."""
+        tokens = [token.strip() for token in self.open_finance_scheduled_sync_org_ids.split(",") if token.strip()]
+        if not all(token.isdigit() for token in tokens):
+            return set()
+        return {int(token) for token in tokens}
 
     @property
     def cors_origins_list(self) -> list[str]:
