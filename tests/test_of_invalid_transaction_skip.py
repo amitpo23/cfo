@@ -58,7 +58,7 @@ def test_the_readable_rows_come_through_and_the_unreadable_one_is_reported():
     rejected = result.rejected[0]
     assert rejected["id"] == "tx-2"
     assert "amount" in rejected["reason"]
-    assert rejected["amount_shape"] == {"chargedAmount": ["currency"], "originalAmount": ["currency"]}
+    assert rejected["amount_shape"] == {"chargedAmount": {"currency": "str"}, "originalAmount": {"currency": "str"}}
 
 
 def test_a_rejection_report_never_carries_a_value():

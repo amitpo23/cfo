@@ -13,6 +13,7 @@ from typing import Any, Optional
 import hashlib
 import json
 import logging
+import re
 
 from .account_ownership import normalize_israeli_id
 from .connector_base import (
@@ -326,16 +327,38 @@ def _transaction_amount(item: dict[str, Any]) -> tuple[Decimal, Optional[str]]:
 
 
 def _amount_shape(value: Any):
-    """The key names of an amount object, one level down; for anything else its type."""
+    """The keys of an amount object two levels down, each with the type of its
+    value (``NoneType``, ``str``, ``float``); for anything else its type. Never a value."""
     if isinstance(value, dict):
         return {
-            key: sorted(sub) if isinstance(sub, dict) else type(sub).__name__
+            key: (
+                {sub_key: type(sub_value).__name__ for sub_key, sub_value in sorted(sub.items())}
+                if isinstance(sub, dict) else type(sub).__name__
+            )
             for key, sub in sorted(value.items())
         }
     return type(value).__name__
 
 
+# A numeric string as banks format it: thousands commas, a sign in front or behind.
+_AMOUNT_STRING = re.compile(r"(-?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?(-?)")
+_AMOUNT_NOISE = re.compile(r"[\s\u00a0\u200e\u200f\u202a-\u202e₪]")
+
+
+def _clean_amount_string(text: str) -> str:
+    """"1,234.56", "1,234.56-", " 12 345.00 ", "₪ 99.90" -> a plain decimal string.
+    Anything else is returned as is and fails the Decimal parse after it."""
+    compact = _AMOUNT_NOISE.sub("", text)
+    match = _AMOUNT_STRING.fullmatch(compact)
+    if not match or (match.group(1) and match.group(4)):
+        return compact
+    sign = "-" if match.group(1) or match.group(4) else ""
+    return f"{sign}{match.group(2).replace(',', '')}{match.group(3) or ''}"
+
+
 def _transaction_decimal(value: Any) -> Decimal:
+    if isinstance(value, str):
+        value = _clean_amount_string(value)
     try:
         number = Decimal(str(value))
         if not number.is_finite():
