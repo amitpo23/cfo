@@ -39,6 +39,8 @@ class BindBody(BaseModel):
     bank_name: Optional[str] = Field(default=None, max_length=255)
     provider_id: Optional[str] = Field(default=None, max_length=100)
     coverage: Optional[CoverageBody] = None
+    # Copy the Financy identity of another entity of the same dashboard, server side.
+    identity_from_organization_id: Optional[int] = None
 
 
 @router.post("/organizations/{org_id}/open-finance/bind")
@@ -59,6 +61,7 @@ def bind_open_finance_connection(
             bank_name=body.bank_name,
             provider_id=body.provider_id,
             coverage=coverage,
+            identity_from_organization_id=body.identity_from_organization_id,
         )
     except OpenFinanceBindError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

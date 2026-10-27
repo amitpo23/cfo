@@ -93,8 +93,13 @@ def bind_existing_connection(
     bank_name: str | None = None,
     provider_id: str | None = None,
     coverage: dict | None = None,
+    identity_from_organization_id: int | None = None,
 ) -> dict:
     """Attach a provider connection id that already exists outside Rezef.
+
+    ``identity_from_organization_id`` copies the Financy identity of another
+    entity of the same dashboard, server side: one identity, a connection scope
+    per organization. Without an identity the bound organization cannot sync.
 
     Idempotent for the same organization. A connection id already stored for
     another organization is refused. No network, no onboarding task, no
@@ -150,13 +155,15 @@ def bind_existing_connection(
         db.flush()
 
         integration = _ensure_integration(db, org, connection_id)
+        if identity_from_organization_id is not None:
+            _share_identity(db, org_id, integration, identity_from_organization_id)
         _mark_hybrid_if_import_only(db, org)
         coverage_out = None
         if coverage is not None:
             coverage_out = _record_coverage(db, org_id, coverage)
         suggest_account_states(db, org_id)
         record_unattached_coverage_alert(db, org_id)
-        if created or coverage_out is not None:
+        if created or coverage_out is not None or identity_from_organization_id is not None:
             db.add(AuditLog(
                 user_id=actor_id,
                 organization_id=org_id,
@@ -170,6 +177,7 @@ def bind_existing_connection(
                     "kickoff_sync": False,
                     "connect_url_set": False,
                     "coverage": coverage_out,
+                    "identity_from_organization_id": identity_from_organization_id,
                 },
             ))
         db.commit()
@@ -1190,6 +1198,49 @@ def _refuse_conflicting_provider(db, org: Organization) -> None:
         raise OpenFinanceBindError(
             "Hybrid organizations require exactly one active Open Finance connection"
         )
+
+
+_IDENTITY_KEYS = ("user_id", "client_id", "client_secret", "api_base_url", "oauth_url")
+
+
+def _share_one_dashboard(db, first: int, second: int) -> bool:
+    """True when one dashboard holds both organizations (primary or entity)."""
+    from ..models import ClientDashboard, DashboardEntity
+
+    members: dict[int, set[int]] = {}
+    for dashboard in db.query(ClientDashboard).filter(
+        ClientDashboard.primary_organization_id.in_((first, second)),
+    ):
+        members.setdefault(dashboard.id, set()).add(dashboard.primary_organization_id)
+    for entity in db.query(DashboardEntity).filter(DashboardEntity.organization_id.in_((first, second))):
+        members.setdefault(entity.dashboard_id, set()).add(entity.organization_id)
+    for dashboard_id in list(members):
+        dashboard = db.get(ClientDashboard, dashboard_id)
+        if dashboard is not None:
+            members[dashboard_id].add(dashboard.primary_organization_id)
+    return any({first, second} <= orgs for orgs in members.values())
+
+
+def _share_identity(db, org_id: int, integration: IntegrationConnection, source_org_id: int) -> None:
+    """Copy a sibling entity's Financy identity into this organization's connection.
+
+    Server side only: the value is never returned or logged. The connection
+    scope stays this organization's own (``connection_id``)."""
+    if source_org_id == org_id or not _share_one_dashboard(db, org_id, source_org_id):
+        raise OpenFinanceBindError("Identity can be shared only between entities of one dashboard")
+    source = (
+        db.query(IntegrationConnection)
+        .filter_by(organization_id=source_org_id, source="open_finance", status="active")
+        .first()
+    )
+    source_creds = (decrypt_credentials(source.credentials_encrypted) if source else None) or {}
+    if not source_creds.get("user_id"):
+        raise OpenFinanceBindError("Source organization has no Open Finance identity")
+    creds = decrypt_credentials(integration.credentials_encrypted) or {}
+    for key in _IDENTITY_KEYS:
+        if source_creds.get(key):
+            creds[key] = source_creds[key]
+    integration.credentials_encrypted = encrypt_credentials(creds)
 
 
 def _ensure_integration(db, org: Organization, connection_id: str) -> IntegrationConnection:
