@@ -20,6 +20,7 @@ const ACTIONS = [
   'payment_link.create', 'bank_payment.propose', 'mandate.propose', 'recurring_cancel.propose',
   'refund.propose', 'filing.prepare', 'period_close.propose', 'accounting.writeback.propose',
   'bank_connection.create', 'reports.email', 'moshko.memory.write', 'tasks.write',
+  'dashboards.manage',
 ];
 const ROLES: Role[] = ['admin', 'accountant', 'manager', 'user', 'viewer'];
 const IRREVERSIBLE_ACTIONS = ['payment', 'refund', 'mandate', 'recurring_cancel', 'document_issue', 'sumit_writeback', 'filing_submission', 'period_close'];

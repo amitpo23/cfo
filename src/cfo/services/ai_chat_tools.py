@@ -1508,6 +1508,61 @@ async def _get_cash_forecast(db, org_id: int, slug: str | None = None, _today=No
     }
 
 
+_CHAT_DASHBOARD_ACCESS = ("members", "link")
+
+
+async def _list_dashboards(db, org_id: int, _user_id=None, **_kwargs) -> dict:
+    """The /d/ dashboards of the chat's organization that the caller may read.
+
+    Primary organization only, like get_cash_forecast: a SUPER_ADMIN's reach
+    over every dashboard does not widen what a chat lists."""
+    from ..models import ClientDashboard, User
+    from .dashboards.service import READ_ROLES, role_for
+
+    user = db.query(User).filter_by(id=_user_id).first() if _user_id else None
+    rows = (
+        db.query(ClientDashboard)
+        .filter(ClientDashboard.primary_organization_id == org_id, ClientDashboard.status != "archived")
+        .order_by(ClientDashboard.id).all()
+    )
+    return {
+        "dashboards": [
+            {"slug": row.slug, "title": row.title, "status": row.status,
+             "access_mode": row.access_mode, "path": f"/d/{row.slug}"}
+            for row in rows if role_for(db, user, row) in READ_ROLES
+        ],
+        "note": "דשבורד בטיוטה (draft) נראה רק לבעלים. הפעלה, שיתוף, הוספת ישות קשורה "
+                "ושיוך חשבונות נעשים במסך 'דשבורדים' באפליקציה.",
+        "provider_calls": 0,
+    }
+
+
+async def _create_dashboard(db, org_id: int, *, slug: str, title: str, template: str = "generic",
+                            access_mode: str = "members", _user_id=None, **_kwargs) -> dict:
+    """A draft /d/ dashboard for the chat's organization. Raises ValueError on
+    every outcome that did not create one (see _memory for why)."""
+    from ..models import User
+    from .dashboards.service import DashboardError, create_dashboard
+
+    if access_mode not in _CHAT_DASHBOARD_ACCESS:
+        raise ValueError("מצב גישה מהשיחה: members או link בלבד. דשבורד ציבורי נפתח רק מהאפליקציה.")
+    user = db.query(User).filter_by(id=_user_id).first() if _user_id else None
+    if user is None:
+        raise ValueError("לא זוהה משתמש מבצע")
+    try:
+        row = create_dashboard(db, user, organization_id=org_id, slug=slug, title=title,
+                               template=template, access_mode=access_mode)
+    except DashboardError as exc:
+        db.rollback()
+        raise ValueError(exc.message_he) from exc
+    return {
+        "status": "created", "slug": row.slug, "title": row.title, "dashboard_status": row.status,
+        "path": f"/d/{row.slug}",
+        "next_step": "הדשבורד נוצר כטיוטה. הפעלה, שיתוף ושיוך חשבונות במסך 'דשבורדים' באפליקציה.",
+        "provider_calls": 0,
+    }
+
+
 async def _get_ar_health(db, org_id: int, months: int = 12, target_dso: int = 30, **_kwargs) -> dict:
     """בריאות גבייה — מגמת DSO אמיתית (ממוצע ימי-תשלום בפועל) + סיכומי
     סיכון/גבייה מדוח הגיול. לא כולל את פירוט הלקוחות המלא (זמין דרך
@@ -3934,6 +3989,44 @@ TOOLS: dict[str, ChatTool] = {
         category="read",
         needs_user=True,
         fn=_get_cash_forecast,
+    ),
+    "list_dashboards": ChatTool(
+        name="list_dashboards",
+        description=(
+            "רשימת הדשבורדים (/d/) של העסק בשיחה הזו: כתובת, כותרת, סטטוס ומצב גישה. "
+            "לשאלות 'איזה דשבורדים יש לי', 'מה הקישור לדשבורד'. לנתוני התזרים "
+            "עצמם השתמש ב-get_cash_forecast."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        needs_user=True,
+        fn=_list_dashboards,
+    ),
+    "create_dashboard": ChatTool(
+        name="create_dashboard",
+        description=(
+            "יצירת דשבורד /d/ חדש לעסק בשיחה הזו, כטיוטה. פעולת כתיבה — דורשת "
+            "אישור מפורש. slug: אנגלית קטנה, ספרות ומקפים, 3 עד 48 תווים; אם "
+            "המשתמש לא בחר, הצע אחד ושאל. הוספת ישות קשורה, שיוך חשבונות, שיתוף "
+            "והפעלה נעשים במסך 'דשבורדים' באפליקציה, לא מהשיחה."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "slug": {"type": "string", "description": "כתובת הדשבורד, למשל my-business"},
+                "title": {"type": "string", "description": "כותרת שתוצג בדשבורד"},
+                "template": {"type": "string", "enum": ["generic", "restaurant", "services"]},
+                "access_mode": {
+                    "type": "string", "enum": list(_CHAT_DASHBOARD_ACCESS),
+                    "description": "members (ברירת מחדל): חברי הארגון בלבד; link: גם בקישור שיתוף",
+                },
+            },
+            "required": ["slug", "title"],
+        },
+        category="write",
+        needs_user=True,
+        policy_action="dashboards.manage",
+        fn=_create_dashboard,
     ),
     "get_credit_line_status": ChatTool(
         name="get_credit_line_status",

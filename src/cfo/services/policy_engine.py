@@ -72,6 +72,9 @@ WRITE_ACTIONS = frozenset({
     "expenses.manage_categories", "expenses.manage_vehicle_profile",
     "expenses.classify", "reports.email", "moshko.memory.write",
     "tasks.write", "users.manage", "policies.manage",
+    # A dashboard is created as a draft for the caller's organization; making
+    # it reachable (active, link) is a separate owner step in the app.
+    "dashboards.manage",
 })
 
 KNOWN_ACTIONS = READ_ACTIONS | WRITE_ACTIONS | IRREVERSIBLE_ACTIONS | SIGNING_ACTIONS
@@ -130,6 +133,8 @@ ROLE_PRESETS: dict[UserRole, frozenset[str]] = {
         # W3 גל 2 — ADMIN רשאי להציע את כל ארבע הפעולות החדשות;
         # billing.charge עדיין דורש מאשר-חותם נפרד לפני ביצוע.
         "crm.manage", "billing.charge", "comms.send", "integrations.manage",
+        # The dashboard service itself requires an ADMIN membership.
+        "dashboards.manage",
     }),
     UserRole.ACCOUNTANT: frozenset({
         "financial.read", "reports.read", "bank.read",
