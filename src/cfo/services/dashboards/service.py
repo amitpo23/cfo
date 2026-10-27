@@ -743,3 +743,37 @@ def set_entity_accounts(db, user: User, dashboard_id: int, entity_id: int, accou
     ))
     db.commit()
     return _entity_out(db, entity)
+
+
+def manageable_organizations(db, user: User) -> list[dict]:
+    """The organizations the caller may build a dashboard for: the same rule as
+    create_dashboard (active ADMIN membership, or platform SUPER_ADMIN)."""
+    from ..membership_service import active_organization_ids
+    query = db.query(Organization).filter(Organization.is_active.is_(True))
+    if user.role != UserRole.SUPER_ADMIN:
+        ids = [org_id for org_id in active_organization_ids(db, user.id)
+               if role_in(db, user.id, org_id) == UserRole.ADMIN]
+        query = query.filter(Organization.id.in_(ids or [-1]))
+    return [{"id": org.id, "name": org.name} for org in query.order_by(Organization.name).all()]
+
+
+def available_accounts(db, user: User, dashboard_id: int, entity_id: int) -> list[dict]:
+    """Bank and card accounts of the entity's organization, to choose from when binding.
+
+    A SUMIT chart of accounts holds hundreds of ledger accounts that liquidity
+    never reads, so only Open Finance and bank accounts are offered, plus any
+    account already bound."""
+    from ...models import Account, AccountType, DashboardEntityAccount
+    from .liquidity import _account_kind
+    row = get_dashboard(db, user, dashboard_id, allowed={"owner"})
+    entity = db.get(DashboardEntity, entity_id)
+    if entity is None or entity.dashboard_id != row.id:
+        raise not_found()
+    bound = {r.account_id for r in db.query(DashboardEntityAccount).filter_by(entity_id=entity.id).all()}
+    accounts = db.query(Account).filter(Account.organization_id == entity.organization_id).order_by(Account.id).all()
+    return [
+        {"id": account.id, "name": account.name, "kind": _account_kind(account),
+         "source": account.source, "bound": account.id in bound}
+        for account in accounts
+        if account.id in bound or account.source == "open_finance" or account.account_type == AccountType.BANK
+    ]

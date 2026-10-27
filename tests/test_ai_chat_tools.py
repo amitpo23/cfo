@@ -92,6 +92,9 @@ def test_write_tools_are_exactly_issue_document_and_log_attempt():
         # טריגרים: הרשמה/ביטול webhook אצל הספק — שינוי תצורה, write.
         "subscribe_trigger",
         "unsubscribe_trigger",
+        # נוסף במודע 27/10/2026: יצירת דשבורד /d/ כטיוטה לארגון השיחה
+        # (dashboards.manage). `list_dashboards` הוא read.
+        "create_dashboard",
     }
 
 

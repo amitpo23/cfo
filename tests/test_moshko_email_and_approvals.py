@@ -259,7 +259,9 @@ def test_needs_user_regression_on_existing_tools():
         # verified channel identity belongs to this very user and org.
         "send_report",
         # get_cash_forecast reads a dashboard only when the caller may read it.
-        "get_cash_forecast"}
+        "get_cash_forecast",
+        # Dashboards: listed only when the caller may read them; created as the caller.
+        "list_dashboards", "create_dashboard"}
 
 
 def test_needs_user_tool_receives_user_id_kwarg(monkeypatch, fresh_org):

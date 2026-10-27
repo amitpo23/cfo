@@ -180,6 +180,11 @@ def create_dashboard(body: DashboardCreate, db: Session = Depends(get_db_session
     return {"id": row.id, "slug": row.slug, "status": row.status, "provider_calls": 0}
 
 
+@router.get("/dashboards/manageable-organizations")
+def manageable_organizations(db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    return {"organizations": service.manageable_organizations(db, user), "provider_calls": 0}
+
+
 @router.get("/dashboards/by-slug/{slug}")
 def read_dashboard_by_slug(slug: str, db: Session = Depends(get_db_session),
                            user: User = Depends(get_current_user)):
@@ -309,6 +314,15 @@ def set_entity_accounts(dashboard_id: int, entity_id: int, body: EntityAccountsB
         return service.set_entity_accounts(
             db, user, dashboard_id, entity_id, [item.model_dump() for item in body.accounts],
         )
+    except DashboardError as exc:
+        return _error(exc)
+
+
+@router.get("/dashboards/{dashboard_id}/entities/{entity_id}/available-accounts")
+def available_accounts(dashboard_id: int, entity_id: int, db: Session = Depends(get_db_session),
+                       user: User = Depends(get_current_user)):
+    try:
+        return {"accounts": service.available_accounts(db, user, dashboard_id, entity_id), "provider_calls": 0}
     except DashboardError as exc:
         return _error(exc)
 

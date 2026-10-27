@@ -106,6 +106,7 @@ import RezefLanding from './components/RezefLanding';
 import PrivacyPolicy from './components/PrivacyPolicy';
 import ResetPassword from './components/ResetPassword';
 const TeamManagement = lazy(() => import('./components/TeamManagement'));
+const DashboardsManager = lazy(() => import('./components/DashboardsManager'));
 
 import './App.css';
 
@@ -128,6 +129,7 @@ const navigationConfig = [
       { to: '/', icon: LayoutDashboard, label: 'Command Center', description: 'CFO overview' },
       { to: '/ai-chat', icon: MessageCircle, label: 'מושקו', description: 'שיחה עם סוכן ה-CFO — פעולות כתיבה דורשות אישור' },
       { to: '/executive', icon: Gauge, label: 'דשבורד מנהלים', description: '8 פאנלים של מצב העסק' },
+      { to: '/dashboards', icon: LayoutGrid, label: 'דשבורדים', description: 'דשבורדי /d/ לעסקים: יצירה, ישויות, חשבונות ושיתוף' },
       { to: '/cashflow', icon: Wallet, label: 'Cash Flow', description: 'Projections & scenarios' },
       { to: '/cashflow-detail', icon: TrendingUp, label: 'תזרים — מפורט', description: 'חודשי/יומי, burn-rate ויחסי נזילות' },
       { to: '/ar', icon: Receipt, label: 'AR / Collections', description: 'Aging & follow-up' },
@@ -454,6 +456,7 @@ function App() {
                 <Route path="/inventory" element={<InventoryDashboard darkMode={darkMode} />} />
                 <Route path="/bank-report" element={<BankReportDashboard darkMode={darkMode} />} />
                 <Route path="/executive" element={<ExecutiveDashboard darkMode={darkMode} />} />
+                <Route path="/dashboards" element={<DashboardsManager darkMode={darkMode} />} />
                 <Route path="/budget-entry" element={<BudgetEntry darkMode={darkMode} />} />
                 <Route path="/year-comparison" element={<YearComparison darkMode={darkMode} />} />
                 <Route path="/expenses" element={<ExpenseFiling darkMode={darkMode} />} />
