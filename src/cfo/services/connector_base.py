@@ -138,6 +138,9 @@ class FetchResult:
     # Retry-After response header on a transient failure. Honored by
     # SyncEngine._fetch_with_retry instead of the default backoff.
     retry_after: Optional[float] = None
+    # Provider rows the connector could not read: {"id", "reason", "amount_shape"}.
+    # Never carries a value. The engine counts them and keeps its checkpoint.
+    rejected: list = field(default_factory=list)
 
 
 class AccountingConnector(ABC):

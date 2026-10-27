@@ -508,6 +508,7 @@ class SyncEngine:
         created = 0
         updated = 0
         skipped = 0
+        rejected: list = []
         cursor = cp.cursor  # resume from a previous page-capped run, if any
         seen_cursors = {cursor} if cursor is not None else set()
         pages = 0
@@ -534,6 +535,7 @@ class SyncEngine:
                         raise ValueError('Provider pagination cursor is missing or repeated; completeness review required')
                     seen_cursors.add(result.next_cursor)
 
+                rejected.extend(getattr(result, "rejected", None) or [])
                 for item in result.items:
                     action = upsert_method(item)
                     if action == "created":
@@ -573,10 +575,16 @@ class SyncEngine:
             cp.cursor = cursor
         else:
             cp.cursor = None
-            cp.last_success_at = datetime.utcnow()
+            # Rows the connector could not read are refetched next time: the
+            # watermark stays where it was until a run reads every row.
+            if not rejected:
+                cp.last_success_at = datetime.utcnow()
         self.db.commit()
 
         out = {"created": created, "updated": updated, "skipped": skipped}
+        if rejected:
+            out["rejected"] = len(rejected)
+            out["rejected_sample"] = rejected[:5]
         if page_capped:
             out["status"] = "PARTIAL"
             out["reason"] = "page_cap_exceeded"

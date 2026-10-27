@@ -98,8 +98,22 @@ class OpenFinanceConnector(AccountingConnector):
             connection_id=self.connection_id,
         )
         items, next_page = _items_and_next(payload)
-        transactions = [self._normalize_transaction(item) for item in items]
-        return FetchResult(items=transactions, has_more=bool(next_page), next_cursor=next_page)
+        # One unreadable row must not stop the rest (prod 27/10/2026: the whole
+        # entity failed and no bank row after 13/10 arrived). The row is reported
+        # with its id and the key names of its amount, never a value.
+        transactions, rejected = [], []
+        for item in items:
+            try:
+                transactions.append(self._normalize_transaction(item))
+            except ValueError as exc:
+                rejected.append({
+                    "id": _first_str(item, "id", "SK", "transactionProviderIdentifier"),
+                    "reason": str(exc),
+                    "amount_shape": _amount_shape(item.get("amount")),
+                })
+        if rejected:
+            logger.warning("Open Finance rejected %s of %s transactions: %s", len(rejected), len(items), rejected[:5])
+        return FetchResult(items=transactions, has_more=bool(next_page), next_cursor=next_page, rejected=rejected)
 
     # --- connections (not part of AccountingConnector, used by sync routes) --- #
     async def fetch_connections(self) -> list[dict[str, Any]]:
@@ -309,6 +323,16 @@ def _transaction_amount(item: dict[str, Any]) -> tuple[Decimal, Optional[str]]:
             return _transaction_decimal(amount_obj.get("amount")), amount_obj.get("currency")
     # flat fallback
     return _transaction_decimal(amount_obj), _first_str(item, "currency")
+
+
+def _amount_shape(value: Any):
+    """The key names of an amount object, one level down; for anything else its type."""
+    if isinstance(value, dict):
+        return {
+            key: sorted(sub) if isinstance(sub, dict) else type(sub).__name__
+            for key, sub in sorted(value.items())
+        }
+    return type(value).__name__
 
 
 def _transaction_decimal(value: Any) -> Decimal:
