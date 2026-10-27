@@ -55,6 +55,57 @@ def _sum_or_none(values) -> float | None:
     return _r(sum(known)) if known else None
 
 
+# Evidence and a live loan are one loan when their names match and the balances are
+# within this share of the evidence balance (interest accrues between the two dates).
+LOAN_MATCH_TOLERANCE = 0.05
+
+
+def _name_key(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def merge_loan_evidence(live: list[dict], evidence: list[dict]) -> list[dict]:
+    """The bank's loans win over the plan's loan evidence.
+
+    Without a live loan the evidence stands (an entity with no connection). With
+    live loans, evidence adds only the maturity the feed does not carry, matched
+    by name and the nearest balance across all pairs (so a repaid loan cannot take
+    a live loan from its real twin). Unmatched evidence whose name the bank still
+    reports for other loans is gone from that feed, so it is no longer a debt
+    (production 27/10/2026: a repaid bridge loan was still counted). Unmatched
+    evidence with a name the feed never reports stays: it may be a loan at a bank
+    that is not connected."""
+    rows = [
+        {"name": item.get("label"), "balance": _num(item.get("balance")), "as_of": item.get("asOf"),
+         "maturity": item.get("maturity"), "source": "evidence"}
+        for item in evidence
+    ]
+    if not live:
+        return rows
+    pairs = sorted(
+        (abs(live[j]["balance"] - row["balance"]), i, j)
+        for i, row in enumerate(rows) for j in range(len(live))
+        if row["balance"] and live[j]["balance"] is not None
+        and _name_key(row["name"]) == _name_key(live[j]["name"])
+        and abs(live[j]["balance"] - row["balance"]) <= LOAN_MATCH_TOLERANCE * row["balance"]
+    )
+    merged = [dict(loan) for loan in live]
+    used_rows, used_live = set(), set()
+    for _gap, i, j in pairs:
+        if i in used_rows or j in used_live:
+            continue
+        used_rows.add(i)
+        used_live.add(j)
+        if rows[i].get("maturity"):
+            merged[j]["maturity"] = rows[i]["maturity"]
+    live_names = {_name_key(loan["name"]) for loan in live}
+    merged += [
+        row for i, row in enumerate(rows)
+        if i not in used_rows and _name_key(row["name"]) not in live_names
+    ]
+    return merged
+
+
 def _balance(account: Account) -> float | None:
     """A balance counts only with its date. A local import leaves 0 without a date: unknown."""
     if account.balance_as_of is None:
@@ -361,11 +412,7 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
          "as_of": a.balance_as_of.date().isoformat() if a.balance_as_of else None, "source": "accounts"}
         for a in by_kind.get("loan", [])
     ]
-    loans += [
-        {"name": item.get("label"), "balance": _num(item.get("balance")), "as_of": item.get("asOf"),
-         "maturity": item.get("maturity"), "source": "evidence"}
-        for item in evidence["loans"]
-    ]
+    loans = merge_loan_evidence(loans, evidence["loans"])
     mirrors = [{"name": a.name, "balance": _balance(a)} for a in by_kind.get("credit_line_mirror", [])]
 
     bank_rows = (
