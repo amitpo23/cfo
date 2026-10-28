@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta
 from pydantic import BaseModel, Field
 from decimal import Decimal
 
-from ..dependencies import get_current_user, get_current_org_id, get_db
+from ..dependencies import get_current_user, get_current_org_id, get_db, get_super_admin
 from ...services.cash_flow_service import CashFlowService, CashFlowCategory
 from ...services.forecasting_service import ForecastingService
 from ...services.live_forecast_service import LiveForecastService
@@ -173,6 +173,48 @@ async def get_payables_aging(
 
 
 # ============= Live-books Forecast (no ML, no Transaction) =============
+
+@router.get("/balance-diagnostic")
+async def cash_balance_diagnostic(
+    db=Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """Stored checking balance, its date, and the last transaction date. No provider call."""
+    from ...services.dashboards.balance_diagnostic import diagnose_org
+    return diagnose_org(db, org_id)
+
+
+@router.get("/balance-diagnostic/all")
+async def cash_balance_diagnostic_all(
+    db=Depends(get_db),
+    _admin=Depends(get_super_admin),
+):
+    """Every organization that has an account row. No provider call."""
+    from ...services.dashboards.balance_diagnostic import diagnose_all
+    return diagnose_all(db)
+
+
+@router.get("/weekly")
+async def weekly_forecast(
+    db=Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """The same 13-week forecast the client dashboard uses, for this organization."""
+    from datetime import date as date_cls
+    from ...services.dashboards.budget_fill import dashboard_for_org
+    from ...services.dashboards.liquidity import checking_snapshot
+    from ...services.dashboards.view_model import build_view, plan_payload
+    today = date_cls.today()
+    dashboard = dashboard_for_org(db, org_id)
+    plan = plan_payload(db, dashboard.id) if dashboard is not None else None
+    view = build_view(db, org_id, date_cls(today.year, 1, 1), today, plan=plan)
+    return {
+        "snapshot": checking_snapshot(db, org_id, today=today),
+        "forecast": view.get("cash_forecast"),
+        "funding_need": (view.get("cash_forecast") or {}).get("funding_need"),
+        "provider_calls": 0,
+    }
+
 
 @router.get("/forecast/live-monthly")
 async def get_live_monthly_forecast(

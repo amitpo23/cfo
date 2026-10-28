@@ -377,12 +377,30 @@ def first_breach(weeks: list[dict], opening: float | None = None) -> dict | None
     return None
 
 
+def _known_flow(items: list[dict]) -> tuple[float | None, float | None]:
+    positives = [item["amount"] for item in items if item.get("amount") and item["amount"] > 0]
+    negatives = [item["amount"] for item in items if item.get("amount") and item["amount"] < 0]
+    return (
+        _r(sum(positives)) if positives else None,
+        _r(sum(negatives)) if negatives else None,
+    )
+
+
 def _apply_unknown(week: dict, unknown: list[tuple[date, str]], start: date, end: date, first: date) -> None:
+    """A missing category keeps the week incomplete. Known items stay visible.
+
+    Net and closing stay unknown. Inflow and outflow of the items that do
+    exist are not replaced with a blank, and never with 0.
+    """
     keys = [key for day, key in unknown if start <= day <= end and day >= first]
     if not keys:
         week["unknown"] = []
         return
     week["unknown"] = [forecast_rules.UNKNOWN_HE[key] for key in dict.fromkeys(keys)]
+    inflow, outflow = _known_flow(week.get("items") or [])
+    week["in"] = inflow
+    week["out"] = outflow
+    week["net"] = None
     week["in"] = week["out"] = week["net"] = None
 
 
@@ -437,6 +455,13 @@ def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int
         missing.append("run_rate")
     if any(week.get("unknown") for week in out_weeks):
         missing.append("forecast_rules")
+    from .cashflow_truth import funding_need
+    need = funding_need(
+        [week.get("closing") for week in out_weeks],
+        opening,
+        out_weeks[0]["limit"] if out_weeks else None,
+        [week.get("net") for week in out_weeks],
+    )
     return {
         "label": label,
         "status": "ready" if opening is not None else ("partial" if rates or items else "unknown"),
@@ -451,6 +476,7 @@ def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int
         "overdue": overdue(view, plan, organization_id, today, as_of, first),
         "discounted_cheque_balances": forecast_rules.discounted_cheque_balances(plan, organization_id, today),
         "missing": missing,
+        "funding_need": need,
         "engine": "cashflow_source",
         "provider_calls": 0,
     }
@@ -523,14 +549,15 @@ def overlay_budget_rules(combined: dict, plan: dict | None) -> dict:
             })
         keys = [key for day, key in unknown if start and end and start <= day <= end and day >= first]
         items = kept + added
+        inflow, outflow = _known_flow(items)
         nxt = dict(week, items=items)
-        if keys or week.get("net") is None:
-            nxt["in"] = nxt["out"] = nxt["net"] = None
+        if keys:
+            nxt["in"], nxt["out"], nxt["net"] = inflow, outflow, None
             nxt["unknown"] = [forecast_rules.UNKNOWN_HE[key] for key in dict.fromkeys(keys)]
         else:
-            inflow = _r(sum(item["amount"] for item in items if item.get("amount") and item["amount"] > 0))
-            outflow = _r(sum(item["amount"] for item in items if item.get("amount") and item["amount"] < 0))
-            nxt["in"], nxt["out"], nxt["net"] = inflow, outflow, _r(inflow + outflow)
+            nxt["in"] = inflow if inflow is not None else 0.0
+            nxt["out"] = outflow if outflow is not None else 0.0
+            nxt["net"] = _r((nxt["in"] or 0) + (nxt["out"] or 0))
             nxt["unknown"] = []
         new_weeks.append(nxt)
     opening = combined.get("opening")

@@ -234,16 +234,23 @@ class LiveForecastService:
             month_overdue_ap = overdue_ap_by_slot[i]["amount"]
             month_overdue_ap_count = overdue_ap_by_slot[i]["count"]
 
+            ap_known = bool(open_bills or overdue_bills)
+            ar_known = bool(open_invoices or overdue_invoices)
             recurring_amount = float(recurring_monthly_avg)
+            ap_part = round(ap_amount + month_overdue_ap, 2) if ap_known else None
+            ar_part = round(ar_amount + month_overdue_ar, 2) if ar_known else None
 
-            inflow_total = round(ar_amount + month_overdue_ar, 2)
-            outflow_total = round(ap_amount + month_overdue_ap + recurring_amount, 2)
+            inflow_total = ar_part
+            if not ap_known and not recurring_rows:
+                outflow_total = None
+            else:
+                outflow_total = round((ap_part or 0) + recurring_amount, 2)
 
             months.append({
                 "month": m_start.strftime("%Y-%m"),
                 "inflow_total": inflow_total,
                 "outflow_total": outflow_total,
-                "net_flow": round(inflow_total - outflow_total, 2),
+                "net_flow": None if inflow_total is None or outflow_total is None else round(inflow_total - outflow_total, 2),
                 "components": [
                     {
                         "source": "invoices_open_ar",
@@ -263,14 +270,14 @@ class LiveForecastService:
                         "source": "bills_open_ap",
                         "label": "חשבונות ספק פתוחים לפי תאריך פירעון",
                         "direction": "outflow",
-                        "amount": round(ap_amount, 2),
+                        "amount": None if not ap_known else round(ap_amount, 2),
                         "count": len(ap_matches),
                     },
                     {
                         "source": "bills_overdue_ap",
                         "label": "חשבונות ספק בפיגור לפי גיל (30 יום לחודש; מעל 90 יום לא משובץ)",
                         "direction": "outflow",
-                        "amount": round(month_overdue_ap, 2),
+                        "amount": None if not ap_known else round(month_overdue_ap, 2),
                         "count": month_overdue_ap_count,
                     },
                     {

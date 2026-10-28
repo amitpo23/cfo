@@ -132,7 +132,7 @@ class DashboardService:
         cash_balance = snap["balance"]
         cash_as_of = snap["as_of"]
         cash_by_account = [
-            {"id": a.id, "name": a.name, "balance": float(a.balance or 0), "currency": a.currency,
+            {"id": a.id, "name": a.name, "balance": None if a.balance is None else float(a.balance), "currency": a.currency,
              "credit_limit": float(a.credit_limit) if a.credit_limit is not None else None}
             for a in checking
         ]

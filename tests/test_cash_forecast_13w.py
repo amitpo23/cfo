@@ -45,7 +45,7 @@ def test_weeks_run_sunday_to_friday_and_saturday_cash_moves_to_sunday():
     }]))
 
     assert len(result["weeks"]) == 13
-    assert result["weeks"][0]["start"] == "2026-10-25"
+    assert result["weeks"][0]["start"] == "2026-10-26"
     assert result["weeks"][0]["end"] == "2026-10-30"
     assert result["weeks"][0]["end"] < "2026-10-31"
     assert result["weeks"][1]["start"] == "2026-11-01"

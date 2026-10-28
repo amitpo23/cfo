@@ -22,6 +22,7 @@ STATUS_HE = {
     "filled": "יש סכום",
     "none": "אין",
     "missing": "חסר, הבעלים יזין",
+    "assumption": "הנחה מהיסטוריה",
 }
 _ACTIVE = {"revenue", "cost", "expense", "interest", "depreciation"}
 _MONEY = Decimal("0.01")
@@ -151,7 +152,7 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
     imported = ((payload or {}).get("eliavImport") or {}).get("lines") if isinstance(payload, dict) else None
     imported = imported if isinstance(imported, dict) else {}
     months = list(range(from_month, to_month + 1))
-    history = _history_amounts(db, organization_id, year, months) if source == "catalog" else {}
+    history = _history_amounts(db, organization_id, year, months)
     lines = []
     missing = []
     filled = none = 0
@@ -187,9 +188,9 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
                     status, amount = "filled", Decimal(str(stored.budgeted_amount or 0)).quantize(_MONEY)
             source_name = None
             if status == "missing":
-                prior = history.get((month, line_id))
-                if prior is not None:
-                    status, amount = "filled", prior
+                prior = history.get((month, line_id)) or history.get((month, str(raw.get("category") or "")))
+                if prior is not None and prior != 0:
+                    status, amount = "assumption", prior
                     source_name = "history"
             warning = None
             income = kind == "revenue" or str(raw.get("category") or "") in {"revenue", "sales", "income"}
@@ -471,3 +472,38 @@ def seed_status(seed: list[dict]) -> dict:
             "line_ids": wage_ids,
         },
     }
+
+
+def with_history_assumptions(db, organization_id: int, plan: dict | None, today: date) -> dict | None:
+    """A forecast-only copy. Missing budget months are filled from stored history.
+
+    Nothing is written. A month the owner already filled is left alone. A zero
+    history amount is not used.
+    """
+    if not isinstance(plan, dict):
+        return plan
+    lines = [dict(line) for line in plan.get("budgetLines") or [] if isinstance(line, dict)]
+    if not lines:
+        return plan
+    history = _history_amounts(db, organization_id, today.year, list(range(today.month, 13)))
+    if not history:
+        return plan
+    changed = False
+    for line in lines:
+        cells = dict(line.get("months") or {})
+        for month in range(today.month, 13):
+            key = f"{today.year:04d}-{month:02d}"
+            cell = cells.get(key)
+            if isinstance(cell, dict) and (cell.get("rate") is not None or cell.get("amount") is not None):
+                continue
+            prior = history.get((month, str(line.get("id") or ""))) or history.get((month, str(line.get("category") or "")))
+            if prior is None or prior == 0:
+                continue
+            cells[key] = {"quantity": 1, "rate": float(prior), "amount": float(prior), "source": "history"}
+            changed = True
+        line["months"] = cells
+    if not changed:
+        return plan
+    copied = dict(plan)
+    copied["budgetLines"] = lines
+    return copied

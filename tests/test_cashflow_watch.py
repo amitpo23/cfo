@@ -70,8 +70,8 @@ def test_a_breach_in_the_coming_weeks_raises_a_critical_insight_with_its_week(cl
     assert len(breach) == 1
     _type, severity, status, fingerprint, title = breach[0]
     assert (severity, status) == ("critical", "active")
-    assert fingerprint == "cash_forecast_breach:2026-10-25"
-    assert "25/10" in title
+    assert fingerprint == "cash_forecast_breach:2026-10-28"
+    assert "28/10" in title
     assert result["provider_calls"] == 0
 
 

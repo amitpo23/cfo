@@ -19,6 +19,12 @@ def _txn(txn_id, amount, description, debtor):
     return Txn(txn_id, 1, None, "2026-08-02", amount, description, debtor, "")
 
 
+def test_the_first_forecast_week_starts_today_and_a_missing_line_does_not_hide_a_known_payment():
+    from cfo.services.dashboards.cashflow_truth import week_windows
+    assert week_windows(date(2026, 10, 29))[0] == (date(2026, 10, 29), date(2026, 10, 30))
+    assert week_windows(date(2026, 10, 29))[1][0] == date(2026, 11, 1)
+
+
 def test_supplier_default_is_end_of_next_month():
     assert truth.DEFAULT_SUPPLIER_TERMS_MODE == "end_of_next_month"
     assert truth.supplier_due(date(2026, 9, 15), None) == date(2026, 11, 1)
@@ -201,7 +207,7 @@ def test_the_bank_pack_names_the_source_and_a_missing_figure(client, fresh_org):
     assert body["title_he"] == "חבילה לבנק"
     assert body["pnl"]["revenue"]["amount"] is None
     assert body["pnl"]["revenue"]["missing_label"].startswith("חסר נכון ל-")
-    assert body["pnl"]["revenue"]["source"] == "books"
+    assert body["pnl"]["revenue"]["source"] == "ספרים"
     assert body["pnl"]["revenue"]["as_of"]
     assert body["forecast"]["supplier_terms"] == "end_of_next_month"
     public = client.get("/api/public/d/print-pack/bank-pack")

@@ -223,8 +223,8 @@ def test_actuals_match_the_pnl_and_missing_budget_is_null(client, fresh_org):
     assert marketing["variance_pct"] == -20.0
 
     rent = _line(march, "cost", "rent")
-    assert rent["budget"] == 0.0 and rent["actual"] == 0.0
-    assert rent["variance"] == 0.0 and rent["variance_pct"] is None
+    assert rent["budget"] is None and rent["actual"] == 0.0
+    assert rent["variance"] is None and rent["variance_pct"] is None
 
     sales = _line(march, "revenue", "sales")
     assert (sales["budget"], sales["actual"], sales["variance"], sales["variance_pct"]) == (

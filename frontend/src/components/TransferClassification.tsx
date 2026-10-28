@@ -38,9 +38,12 @@ function money(value: number): string {
   return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(value);
 }
 
-export default function TransferClassification({ dashboardId }: { dashboardId: number }) {
+export default function TransferClassification({ dashboardId, slug }: { dashboardId?: number; slug?: string }) {
   const token = localStorage.getItem('auth_token') || '';
   const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+  const listUrl = dashboardId
+    ? `/api/dashboards/${dashboardId}/unclassified-transfers?start=2026-07-01&end=2026-10-31`
+    : `/api/public/d/${slug}/unclassified-transfers?start=2026-07-01&end=2026-10-31`;
   const [queue, setQueue] = useState<Queue | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Record<number, string>>({});
@@ -48,7 +51,7 @@ export default function TransferClassification({ dashboardId }: { dashboardId: n
   const [notice, setNotice] = useState<string | null>(null);
 
   async function load(nextHeaders: HeadersInit = headers) {
-    const response = await fetch(`/api/dashboards/${dashboardId}/unclassified-transfers?start=2026-07-01&end=2026-10-31`, { headers: nextHeaders });
+    const response = await fetch(listUrl, { headers: nextHeaders, credentials: 'include' });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       setError(body.error?.message_he || 'לא ניתן לטעון את התנועות');
@@ -61,7 +64,7 @@ export default function TransferClassification({ dashboardId }: { dashboardId: n
   useEffect(() => {
     let cancelled = false;
     const requestHeaders: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
-    fetch(`/api/dashboards/${dashboardId}/unclassified-transfers?start=2026-07-01&end=2026-10-31`, { headers: requestHeaders })
+    fetch(listUrl, { headers: requestHeaders, credentials: 'include' })
       .then((response) => response.json().then((body) => ({ ok: response.ok, body })))
       .then(({ ok, body }) => {
         if (cancelled) return;
@@ -78,7 +81,7 @@ export default function TransferClassification({ dashboardId }: { dashboardId: n
     return () => {
       cancelled = true;
     };
-  }, [dashboardId, token]);
+  }, [dashboardId, token, listUrl]);
 
   async function accept(rows: TransferRow[]) {
     const accepts = rows.map((row) => ({
@@ -87,6 +90,10 @@ export default function TransferClassification({ dashboardId }: { dashboardId: n
     })).filter((item) => item.counterparty && item.category);
     if (!accepts.length) {
       setNotice('בחרו קטגוריה. אין סיווג בלי בחירה.');
+      return;
+    }
+    if (!dashboardId) {
+      setNotice('אישור סיווג זמין לבעלים מחובר.');
       return;
     }
     const response = await fetch(`/api/dashboards/${dashboardId}/classification-rules`, {

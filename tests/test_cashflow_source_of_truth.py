@@ -60,7 +60,7 @@ def test_saturday_cash_moves_to_the_next_sunday_once():
     assert report["discounted_cheque_balances"] == [{
         "check": "1", "amount": 50, "closes_on": "2026-11-01", "outstanding": True, "as_of": "2026-10-28",
     }]
-    october = next(week for week in report["weeks"] if week["week_start"] == "2026-10-25")
+    october = next(week for week in report["weeks"] if week["week_start"] == "2026-10-28")
     assert all(event["date"] != "2026-10-31" for event in report["events"])
     assert october["week_end"] == "2026-10-30"
 
@@ -408,12 +408,15 @@ def test_an_empty_organization_gets_a_full_scaffold_of_unknowns():
         assert row["certainty"] in ("מאושר", "סביר", "מסוכן", "הערכה")
         if row["layer"] == 3:
             assert row["certainty"] == "הערכה"
-    for week in report["weeks"]:
+    for index, week in enumerate(report["weeks"]):
         start = date.fromisoformat(week["week_start"])
         end = date.fromisoformat(week["week_end"])
-        assert start.weekday() == 6
         assert end.weekday() == 4
-        assert end == start + __import__("datetime").timedelta(days=5)
+        if index == 0:
+            assert start == AS_OF
+        else:
+            assert start.weekday() == 6
+            assert end == start + __import__("datetime").timedelta(days=5)
         assert week["in"] is None and week["out"] is None and week["net"] is None
         assert week["closing"] is None and week["headroom"] is None and week["daily_min"] is None
     assert report["liquidity"]["state"] == "לא ידוע"
@@ -477,7 +480,7 @@ def test_supplier_documents_build_september_provision_minus_what_was_paid(fresh_
     assert [event["amount"] for event in provisions] == [-600]
     assert provisions[0]["date"] == "2026-11-01"
     assert source["duplicates"]["status"] == "clear"
-    assert view["cash_forecast"]["weeks"][0]["start"] == "2026-10-25"
+    assert view["cash_forecast"]["weeks"][0]["start"] == "2026-10-28"
 
 
 def test_settings_reject_an_unknown_field_and_a_guessed_free_text_term():

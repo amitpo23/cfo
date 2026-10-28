@@ -226,7 +226,7 @@ def test_the_forecast_starts_at_todays_position_and_ignores_cash_already_in_it()
 
 def test_default_supplier_mode_pays_september_on_1_november():
     result = _run()
-    week = _week(result, "2026-10-25")
+    week = _week(result, "2026-10-28")
     supplier = _item(result, "סוף החודש העוקב")
 
     assert date(2026, 10, 31).weekday() == 5
@@ -245,7 +245,7 @@ def test_default_supplier_mode_pays_september_on_1_november():
 def test_eom_plus_30_days_still_pays_september_on_30_october():
     plan = _plan(cashflowSettings={"supplierTermsMode": "eom_plus_30_days"})
     result = _run(plan=plan)
-    week = _week(result, "2026-10-25")
+    week = _week(result, "2026-10-28")
     supplier = _item(result, "שוטף 30")
 
     assert supplier["date"] == "2026-10-30"
@@ -313,7 +313,7 @@ def test_payroll_falls_back_to_salary_budget_lines_when_there_is_no_definition()
 
 
 def test_expected_income_comes_from_the_budget_not_from_a_run_rate():
-    week = _week(_run(), "2026-10-25")
+    week = _week(_run(), "2026-10-28")
     income = next(item for item in week["items"] if item["label"] == "הכנסה לפי התקציב")
 
     assert income["amount"] == 4000.0
@@ -389,9 +389,9 @@ def test_an_unknown_opening_does_not_become_zero():
 
 
 def test_the_worked_week_of_25_to_31_october():
-    week = _week(_run(), "2026-10-25")
+    week = _week(_run(), "2026-10-28")
 
-    assert week["start"] == "2026-10-25"
+    assert week["start"] == "2026-10-28"
     assert week["end"] == "2026-10-30"
     assert week["in"] == 4000.0
     assert week["out"] == 0.0
@@ -431,7 +431,7 @@ def test_an_ended_evidence_facility_falls_back_to_the_account_limit():
 
     result = _run(_view(balance=-20000.0, limit=80000.0), plan=plan)
 
-    assert _week(result, "2026-10-25")["limit"] == 10000.0
+    assert _week(result, "2026-10-28")["limit"] == 10000.0
     assert _week(result, "2026-11-01")["limit"] == 80000.0
     assert _week(result, "2026-11-01")["headroom"] == 60000.0
 
@@ -771,7 +771,7 @@ def test_opening_balance_is_checking_only_and_the_facility_is_separate(fresh_org
     assert result["opening"]["amount"] == -44000.0
     assert result["opening"]["as_of"] == "2026-10-28"
     assert result["opening"]["source"] == "open_finance"
-    assert result["weeks"][0]["start"] == "2026-10-25"
+    assert result["weeks"][0]["start"] == "2026-10-28"
     assert result["weeks"][0]["end"] == "2026-10-30"
     assert result["weeks"][0]["limit"] == 80000.0
     assert result["weeks"][0]["closing"] == -44000.0

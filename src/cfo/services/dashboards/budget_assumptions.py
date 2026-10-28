@@ -315,11 +315,14 @@ def bank_pack(view: dict, assumptions: list[dict], *, as_of: date) -> dict:
     pnl = (view or {}).get("pnl") or {}
     budget = (view or {}).get("budget_vs_actual") or {}
 
+    labels = {"books": "ספרים", "bank": "בנק", "owner": "בעלים"}
+
     def marked(amount, source, figure_as_of: str | None = None):
         day = figure_as_of or as_of.isoformat()
+        label = labels.get(source, source)
         if amount is None:
-            return {"amount": None, "missing_label": missing_label(as_of), "source": source, "as_of": day}
-        return {"amount": amount, "missing_label": None, "source": source, "as_of": day}
+            return {"amount": None, "missing_label": missing_label(as_of), "source": label, "as_of": day}
+        return {"amount": amount, "missing_label": None, "source": label, "as_of": day}
 
     raw_opening = forecast.get("opening")
     opening = raw_opening if isinstance(raw_opening, dict) else {}

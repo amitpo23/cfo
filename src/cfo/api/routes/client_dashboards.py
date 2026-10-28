@@ -331,7 +331,22 @@ def _bank_pack_for(db, row) -> dict:
     today = date.today()
     plan = view_model.plan_payload(db, row.id)
     view = multi_entity.build_dashboard_view(db, row, date(today.year, 1, 1), today, plan=plan)
-    pack_view = view.get("combined") if len(view.get("entities") or []) > 1 else view
+    entities = view.get("entities") or []
+    pack_view = view.get("combined") if len(entities) > 1 else view
+    if len(entities) > 1 and isinstance(pack_view, dict):
+        primary = next((entity for entity in entities if entity.get("role") == "primary"), entities[0])
+        primary_view = primary.get("view") or {}
+        pack_view = dict(pack_view)
+        combined_bva = pack_view.get("budget_vs_actual") or {}
+        primary_bva = primary_view.get("budget_vs_actual") or {}
+        if combined_bva.get("status") != "ready" and primary_bva.get("months"):
+            pack_view["budget_vs_actual"] = primary_bva
+            pack_view["budget_vs_actual_scope"] = primary.get("label")
+        combined_pnl = pack_view.get("pnl") or {}
+        primary_pnl = primary_view.get("pnl") or {}
+        if combined_pnl.get("status") != "ready" and primary_pnl.get("status") == "ready":
+            pack_view["pnl"] = primary_pnl
+            pack_view["pnl_scope"] = primary.get("label")
     months = [f"{today.year:04d}-{month:02d}" for month in range(1, 13)]
     opening = ((pack_view or {}).get("cash_forecast") or {}).get("opening") or {}
     assumptions = list_assumptions(
@@ -700,6 +715,23 @@ def _public_dashboard_or_error(slug: str, request: Request, db: Session):
             return None, _public_response({"error": {"code": "not_found", "message_he": "הדשבורד לא נמצא"}}, 404)
         service.mark_link_used(db, link)
     return dashboard, None
+
+
+@public_router.get("/d/{slug}/unclassified-transfers")
+def public_unclassified(slug: str, request: Request, start: date | None = None, end: date | None = None,
+                        db: Session = Depends(get_db_session)):
+    """The classification queue for a dashboard the caller can already open. No provider call."""
+    from ...services.dashboards.transfer_queue import load_queue
+    dashboard, error = _public_dashboard_or_error(slug, request, db)
+    if error is not None:
+        return error
+    today = date.today()
+    window_end = end or today
+    window_start = start or date(window_end.year, 7, 1)
+    plan = view_model.plan_payload(db, dashboard.id)
+    report = load_queue(db, dashboard.primary_organization_id, window_start, window_end, plan)
+    report["coverage_only"] = False
+    return _public_response(report)
 
 
 @public_router.get("/d/{slug}/bank-pack")

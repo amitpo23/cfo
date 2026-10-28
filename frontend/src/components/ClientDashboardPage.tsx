@@ -979,7 +979,7 @@ export default function ClientDashboardPage() {
                 />
               ) : null}
               {tab === 'forecast' ? <ForecastPanel forecast={scoped.forecast} /> : null}
-              {tab === 'classify' && editor ? <TransferClassification dashboardId={editor.id} /> : null}
+              {tab === 'classify' ? <TransferClassification dashboardId={editor?.id} slug={slugFromLocation()} /> : null}
               {tab === 'budget' && editor ? (
                 <>
                   {filing ? (
