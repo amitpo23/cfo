@@ -12,8 +12,10 @@ from cfo.services import bank_coverage, read_memo
 from cfo.services.dashboards import multi_entity, view_model
 from tests.test_dashboard_eliav_ui_fixes import _account, _bank, _consolidated
 
-# Two entities, a reviewed local import on one of them. 132 queries before the memo.
-QUERY_CEILING = 90
+# Two entities, a reviewed local import on one of them. The memo removed the
+# per-month reread. Books P&L and the balance sheet add a fixed read per entity
+# (journal, invoices, bills, expenses, bank dates), so the ceiling is 150.
+QUERY_CEILING = 150
 
 
 def _two_entity_dashboard(client, platform_admin, fresh_org, slug):

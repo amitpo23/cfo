@@ -69,7 +69,8 @@ def test_the_owner_lists_the_bank_and_card_accounts_with_their_binding(client, f
     rows = {row["id"]: row for row in response.json()["accounts"]}
     assert set(rows) == {bank, card}
     assert rows[bank]["bound"] is True and rows[card]["bound"] is False
-    assert rows[card]["kind"] == "card" and rows[bank]["kind"] == "other"
+    # An Open Finance bank account with no raw type is a checking account.
+    assert rows[card]["kind"] == "card" and rows[bank]["kind"] == "checking"
     assert response.json()["provider_calls"] == 0
 
 
