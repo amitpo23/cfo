@@ -96,9 +96,44 @@ def validate_items(payload: dict) -> str | None:
 
 
 def week_windows(today: date, weeks: int = WEEKS) -> list[tuple[date, date]]:
-    """Sunday-to-Saturday weeks, starting with the week of ``today``."""
+    """Sunday-to-Friday weeks, starting with the week of ``today``.
+
+    Saturday is not a business day. Cash that falls on a Saturday is moved to
+    the next Sunday by ``business_day`` — the next business day in Israel —
+    so it is counted in exactly one week and not dropped.
+    """
     start = today - timedelta(days=(today.weekday() + 1) % 7)
-    return [(start + timedelta(weeks=i), start + timedelta(weeks=i, days=6)) for i in range(weeks)]
+    return [(start + timedelta(weeks=i), start + timedelta(weeks=i, days=5)) for i in range(weeks)]
+
+
+def business_day(day: date) -> date:
+    """Saturday cash is taken on the following Sunday, once.
+
+    A forecast week is Sunday–Friday. Saturday has no week of its own. The
+    next business day after Saturday is Sunday, not Friday, so the amount
+    moves forward and is not counted twice.
+    """
+    if day.weekday() == 5:
+        return day + timedelta(days=1)
+    return day
+
+
+def _roll_to_business_days(items: list[dict], streams: dict[date, dict[str, float]],
+                           unknown: list[tuple[date, str]]) -> tuple[list[dict], dict[date, dict[str, float]], list[tuple[date, str]]]:
+    rolled_items = []
+    for item in items:
+        when = item.get("date")
+        if isinstance(when, date):
+            moved = business_day(when)
+            if moved != when:
+                item = dict(item, date=moved, saturday_rolled=True)
+        rolled_items.append(item)
+    rolled_streams: dict[date, dict[str, float]] = {}
+    for day, values in streams.items():
+        slot = rolled_streams.setdefault(business_day(day), {})
+        for key, value in values.items():
+            slot[key] = slot.get(key, 0.0) + value
+    return rolled_items, rolled_streams, [(business_day(day), key) for day, key in unknown]
 
 
 def _month(day: date) -> str:
@@ -386,6 +421,7 @@ def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int
     streams = _daily_streams(rates, _principal(view, today), items, first, last)
     for day, amount in income_days.items():
         streams.setdefault(day, {})["income"] = amount
+    items, streams, unknown = _roll_to_business_days(items, streams, unknown)
     facilities = _facilities(plan, organization_id, liquidity.get("upcoming") or [])
     out_weeks = []
     for index, (start, end) in enumerate(windows):
@@ -471,6 +507,8 @@ def overlay_budget_rules(combined: dict, plan: dict | None) -> dict:
     extra, unknown = forecast_rules.supplier_and_payroll(plan, lines, first, last)
     income_days, income_unknown = forecast_rules.income_for_window(lines, first, last)
     unknown = unknown + [(day, "income") for day in income_unknown]
+    extra, income_streams, unknown = _roll_to_business_days(extra, {day: {"income": amount} for day, amount in income_days.items()}, unknown)
+    income_days = {day: values["income"] for day, values in income_streams.items()}
     new_weeks = []
     for week in weeks:
         start, end = _date(week["start"]), _date(week["end"])

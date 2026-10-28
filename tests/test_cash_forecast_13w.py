@@ -7,7 +7,7 @@ from datetime import date
 
 from cfo.services.dashboards import cash_forecast
 
-TODAY = date(2026, 10, 26)  # יום שני; השבוע הראשון הוא 25/10–31/10
+TODAY = date(2026, 10, 26)  # יום שני; השבוע הראשון הוא 25/10–30/10 (ראשון–שישי)
 
 
 def _view(*, balance=-35000.0, as_of="2026-10-21", checks=None, upcoming=None,
@@ -39,13 +39,24 @@ def _forecast(view, plan=None, org=2):
     )
 
 
-def test_weeks_run_sunday_to_saturday_from_the_week_of_today():
-    result = _forecast(_view())
+def test_weeks_run_sunday_to_friday_and_saturday_cash_moves_to_sunday():
+    result = _forecast(_view(checks=[{
+        "check": "sat", "date": "2026-10-31", "amount": 1000.0, "payee": "ספק", "state": "future",
+    }]))
 
     assert len(result["weeks"]) == 13
     assert result["weeks"][0]["start"] == "2026-10-25"
-    assert result["weeks"][0]["end"] == "2026-10-31"
+    assert result["weeks"][0]["end"] == "2026-10-30"
+    assert result["weeks"][0]["end"] < "2026-10-31"
     assert result["weeks"][1]["start"] == "2026-11-01"
+    assert result["weeks"][1]["end"] == "2026-11-06"
+    assert all(item.get("date") != "2026-10-31" for week in result["weeks"] for item in week["items"])
+    saturday = [item for item in result["weeks"][1]["items"] if "sat" in (item.get("label") or "")]
+    assert [item["date"] for item in saturday] == ["2026-11-01"]
+    assert saturday[0]["amount"] == -1000.0
+    assert saturday[0]["saturday_rolled"] is True
+    assert result["weeks"][1]["out"] == -1000.0
+    assert result["weeks"][0]["out"] == 0.0
 
 
 def test_closing_walks_the_opening_balance_through_dated_items():

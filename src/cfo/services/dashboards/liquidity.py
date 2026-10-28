@@ -614,8 +614,10 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
     known = {}
     for account in checking:
         if _balance(account) is not None:
-            known[account.id] = {"balance": _balance(account), "as_of": account.balance_as_of.date(),
-                                 "source": "accounts"}
+            known[account.id] = {
+                "balance": _balance(account), "as_of": account.balance_as_of.date(),
+                "source": "open_finance" if account.source == "open_finance" else "accounts",
+            }
         elif account.source != "open_finance":
             derived = imported_balance(db, account)
             if derived is not None:

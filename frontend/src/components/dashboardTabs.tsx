@@ -152,6 +152,7 @@ const CHECK_STATES: Record<string, string> = {
 
 const BALANCE_SOURCES: Record<string, string> = {
   accounts: 'יתרת חשבון',
+  open_finance: 'Open Finance — תאריך הסנכרון של היתרה',
   imported_running_balance: 'יתרה רצה בדף הבנק המיובא',
   mixed: 'יתרת חשבון ודף בנק מיובא',
   opening_balance: 'יתרת פתיחה ידנית ותנועות הבנק שאחריה',

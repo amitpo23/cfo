@@ -217,7 +217,7 @@ def test_liquidity_reads_accounts_daily_balances_checks_and_debt_service(client,
         )
     assert section["provider_calls"] == 0
     assert section["position"] == {
-        "balance": -31873.87, "as_of": "2026-10-19", "balance_source": "accounts", "limit": 15000.0,
+        "balance": -31873.87, "as_of": "2026-10-19", "balance_source": "open_finance", "limit": 15000.0,
         "limit_source": "accounts.credit_limit", "available_to_limit": -16873.87,
     }
     # The manual account is not Open Finance and is not read without a binding.

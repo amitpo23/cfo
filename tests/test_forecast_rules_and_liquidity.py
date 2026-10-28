@@ -1,17 +1,19 @@
 """Explicit forecast rules and owner-entered liquidity. No provider calls.
 
-Worked week, Sunday 25/10/2026–Saturday 31/10/2026, opening dated 28/10/2026
-(the day after which the forecast moves). October has 31 days; only 29–31
-are still ahead of the opening, so October's budget income of 62,000 is
-62,000 × 3/31 = 6,000. September's supplier budget of 30,000 is paid on
-30/10, thirty days after 30/09. Checking facility 50,000.
+Worked week, Sunday 25/10/2026–Friday 30/10/2026, opening dated 28/10/2026
+(the day after which the forecast moves). October has 31 days. Only 29–30
+are still ahead of the opening and inside this Sunday–Friday week, so
+October's budget income of 62,000 contributes 62,000 × 2/31 = 4,000 here.
+31/10 is a Saturday; its 2,000 is taken on Sunday 01/11 and is not in this
+week. September's supplier budget of 30,000 is paid on 30/10, thirty days
+after 30/09. Checking facility 50,000 is headroom, not part of the balance.
 
     opening                         -12,000   accounts, as of 28/10
-    income 29–31/10                  +6,000   plan.budgetLines
+    income 29–30/10                  +4,000   plan.budgetLines
     suppliers, supply 2026-09       -30,000   due 30/10
-    net                             -24,000
-    closing                         -36,000
-    headroom                 50,000 - 36,000 = 14,000   not a breach
+    net                             -26,000
+    closing                         -38,000
+    headroom                 50,000 - 38,000 = 12,000   not a breach
 
 Payroll of 18,000 is the plan's payroll definition, paid on the 10th, so it
 lands on 10/11, not in this week. The bridge of 61,000 closes on 25/11
@@ -135,7 +137,7 @@ def test_expected_income_comes_from_the_budget_not_from_a_run_rate():
     week = _week(_run(), "2026-10-25")
     income = next(item for item in week["items"] if item["label"] == "הכנסה לפי התקציב")
 
-    assert income["amount"] == 6000.0
+    assert income["amount"] == 4000.0
     assert income["source"] == "plan.budgetLines"
     assert income["certainty"] == "scheduled"
     assert all(item.get("stream") != "operating_in" for item in week["items"])
@@ -210,12 +212,16 @@ def test_an_unknown_opening_does_not_become_zero():
 def test_the_worked_week_of_25_to_31_october():
     week = _week(_run(), "2026-10-25")
 
-    assert week["in"] == 6000.0
+    assert week["start"] == "2026-10-25"
+    assert week["end"] == "2026-10-30"
+    assert week["in"] == 4000.0
     assert week["out"] == -30000.0
-    assert week["net"] == -24000.0
-    assert week["closing"] == -36000.0
+    assert week["net"] == -26000.0
+    assert week["closing"] == -38000.0
     assert week["limit"] == 50000.0
-    assert week["headroom"] == 14000.0
+    assert week["headroom"] == 12000.0
+    rolled = next(item for item in _week(_run(), "2026-11-01")["items"] if item["label"] == "הכנסה לפי התקציב")
+    assert rolled["amount"] == 2000.0
     assert _run()["first_breach"] is None
 
 
@@ -528,7 +534,6 @@ def test_food_group_hapoalim_balance_is_the_opening(client, fresh_org, platform_
         )
         db.add_all([checking, savings, card])
         db.commit()
-        card_id = card.id
     body = client.get(
         f"/api/dashboards/{dashboard_id}/view", headers=platform_admin["headers"],
         params={"start": "2026-07-01", "end": "2026-10-28"},
@@ -537,10 +542,57 @@ def test_food_group_hapoalim_balance_is_the_opening(client, fresh_org, platform_
 
     assert food_view["liquidity"]["position"]["balance"] == -44000.0
     assert food_view["liquidity"]["position"]["as_of"] == "2026-10-28"
-    assert food_view["liquidity"]["position"]["balance_source"] == "accounts"
+    assert food_view["liquidity"]["position"]["balance_source"] == "open_finance"
     assert food_view["cash_forecast"]["opening"]["amount"] == -44000.0
     assert "opening_balance" not in food_view["cash_forecast"]["missing"]
     assert body["provider_calls"] == 0
+
+
+def test_opening_balance_is_checking_only_and_the_facility_is_separate(fresh_org):
+    """The forecast opens on Open Finance checking balances. The credit line is headroom."""
+    owner = fresh_org()
+    synced = datetime(2026, 10, 28, 6, 0)
+    with SessionLocal() as db:
+        db.add(Account(
+            organization_id=owner["org_id"], name="הפועלים עו״ש", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id="chk",
+            balance=Decimal("-44000"), balance_as_of=synced, currency="ILS",
+            credit_limit=Decimal("80000"),
+        ))
+        db.add(Account(
+            organization_id=owner["org_id"], name="חיסכון", account_type=AccountType.ASSET,
+            raw_account_type="SAVINGS", source="open_finance", external_id="sav",
+            balance=Decimal("5000"), balance_as_of=synced, currency="ILS",
+        ))
+        db.add(Account(
+            organization_id=owner["org_id"], name="כאל", account_type=AccountType.LIABILITY,
+            raw_account_type="CARD", source="open_finance", external_id="card",
+            balance=Decimal("-1000"), balance_as_of=synced, currency="ILS",
+            credit_limit=Decimal("20000"),
+        ))
+        db.commit()
+        section = liquidity.build_liquidity(
+            db, owner["org_id"], date(2026, 10, 1), date(2026, 10, 28), classified=[], today=date(2026, 10, 28),
+        )
+    view = {"liquidity": section, "cash_statement": {"months": [], "lines": []}}
+    result = cash_forecast.build_entity_forecast(
+        view, plan=None, organization_id=owner["org_id"], label="פוד גרופ", today=date(2026, 10, 28),
+    )
+
+    assert section["position"]["balance"] == -44000.0
+    assert section["position"]["as_of"] == "2026-10-28"
+    assert section["position"]["balance_source"] == "open_finance"
+    assert section["position"]["limit"] == 80000.0
+    assert section["position"]["available_to_limit"] == 36000.0
+    assert result["opening"]["amount"] == -44000.0
+    assert result["opening"]["as_of"] == "2026-10-28"
+    assert result["opening"]["source"] == "open_finance"
+    assert result["weeks"][0]["start"] == "2026-10-25"
+    assert result["weeks"][0]["end"] == "2026-10-30"
+    assert result["weeks"][0]["limit"] == 80000.0
+    assert result["weeks"][0]["closing"] == -44000.0
+    assert result["weeks"][0]["headroom"] == 36000.0
+    assert result["provider_calls"] == 0
 
 
 def test_budget_entry_lines_change_the_13_week_forecast(client, fresh_org, platform_admin):
@@ -582,7 +634,7 @@ def test_budget_entry_lines_change_the_13_week_forecast(client, fresh_org, platf
     after = view()
     income = next(item for week in after["weeks"] for item in week["items"] if item.get("label") == "הכנסה לפי התקציב")
     payroll = next(item for week in after["weeks"] for item in week["items"] if "שכר" in (item.get("label") or ""))
-    assert income["amount"] == 6000.0
+    assert income["amount"] == 4000.0
     assert income["source"] == "plan.budgetLines"
     assert payroll["date"] == "2026-11-10"
     assert payroll["amount"] == -18000.0
