@@ -5,10 +5,10 @@ came last (the last statement or the open-to-buy), so "how much is free on my
 cards" cannot be answered. ``accounts.available_limit`` will hold the bank's
 ``interimAvailable``.
 
-The model column waits for phase B. A deferred column keeps it out of SELECT but
-not out of INSERT: the ORM writes every mapped column on a new Account, so a model
-column deployed before ``POST /api/admin/db/migrate`` would break account creation
-in production until the migration ran.
+Phase B maps the column. A deferred column would keep it out of SELECT but not
+out of INSERT (the ORM writes every mapped column on a new Account), so phase B
+deploys only after ``POST /api/admin/db/migrate`` has run this revision in
+production. The model column must match the migration exactly.
 """
 from pathlib import Path
 
@@ -20,8 +20,10 @@ from cfo.models import Account
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_the_model_does_not_map_the_column_before_the_migration_runs():
-    assert "available_limit" not in Account.__table__.columns
+def test_the_model_column_matches_the_migration():
+    column = Account.__table__.columns["available_limit"]
+    assert column.nullable is True
+    assert column.type.precision == 14 and column.type.scale == 2
 
 
 def test_the_migration_adds_it_on_top_of_the_single_head():
