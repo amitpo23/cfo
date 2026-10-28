@@ -13,7 +13,8 @@ import TabErrorBoundary from './TabErrorBoundary';
 import {
   CashForecast, CashForecastItemsCard, CashForecastPanel, Overdue, cashForecastItemsFromPayload,
 } from './cashForecastTab';
-import { DashboardFrame, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs } from './dashboardUi';
+import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs } from './dashboardUi';
+import { safeLoginHref } from './dashboardReturn';
 
 type CashMonth = {
   month: string;
@@ -587,6 +588,7 @@ function currentMonth(): string {
 export default function ClientDashboardPage() {
   const [view, setView] = useState<DashboardView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loginHref, setLoginHref] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorContext | null>(null);
   const [plan, setPlan] = useState<{ version: string | null; payload: PlanPayload } | null>(null);
   const [lines, setLines] = useState<LineDraft[]>([]);
@@ -608,11 +610,19 @@ export default function ClientDashboardPage() {
     }
     let cancelled = false;
 
-    async function loadPublic() {
+    async function loadPublic(signedIn: boolean) {
       const response = await fetch(`/api/public/d/${slug}`, { credentials: 'include' });
-      const body = (await response.json().catch(() => ({}))) as DashboardView;
+      const body = (await response.json().catch(() => ({}))) as DashboardView & {
+        error?: { code?: string; message_he?: string; login_path?: string };
+      };
       if (cancelled) return;
       if (!response.ok) {
+        if (!signedIn && body.error?.code === 'login_required') {
+          setLoginHref(safeLoginHref(body.error.login_path, slug));
+          setError(body.error.message_he || 'התחברו כדי לפתוח את הדשבורד');
+          return;
+        }
+        setLoginHref(null);
         setError(body.error?.message_he || 'הדשבורד לא נמצא');
         return;
       }
@@ -667,7 +677,8 @@ export default function ClientDashboardPage() {
           body: JSON.stringify({ token: shareToken }),
         });
       }
-      if (localStorage.getItem('auth_token')) {
+      const token = localStorage.getItem('auth_token');
+      if (token) {
         const meta = await fetch(`/api/dashboards/by-slug/${slug}`, { headers: authHeaders() });
         if (meta.ok) {
           const dashboard = (await meta.json()) as { id: number; role: string; can_edit: boolean; title?: string };
@@ -677,8 +688,15 @@ export default function ClientDashboardPage() {
           await loadEditor(dashboard.id);
           return;
         }
+        if (meta.status === 401) {
+          localStorage.removeItem('auth_token');
+          await loadPublic(false);
+          return;
+        }
+        await loadPublic(true);
+        return;
       }
-      await loadPublic();
+      await loadPublic(false);
     }
 
     void load();
@@ -795,7 +813,13 @@ export default function ClientDashboardPage() {
       subtitle={editor ? `${ROLE_LABELS[editor.role] || editor.role}${editor.canEdit ? ' · אפשר לערוך' : ' · צפייה בלבד'}` : null}
     >
         {notice ? <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">{notice}</p> : null}
-        {error ? <div className="mt-6"><EmptyState title={error}>בדקו את הקישור, או בקשו קישור חדש מבעלי הדשבורד.</EmptyState></div> : null}
+        {error ? (
+          <div className="mt-6">
+            {loginHref
+              ? <DashboardLoginPrompt message={error} loginPath={loginHref} />
+              : <EmptyState title={error}>בדקו את הקישור, או בקשו קישור חדש מבעלי הדשבורד.</EmptyState>}
+          </div>
+        ) : null}
         {!error && !view ? <DashboardSkeleton /> : null}
         {view && scoped ? (
           <>
