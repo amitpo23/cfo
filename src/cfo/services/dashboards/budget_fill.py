@@ -128,6 +128,12 @@ def _history_amounts(db, organization_id: int, year: int, months: list[int]) -> 
     return found
 
 
+def _assumptions(payload, year: int, from_month: int, to_month: int) -> list[dict]:
+    from .budget_assumptions import list_assumptions
+    months = [f"{year:04d}-{month:02d}" for month in range(from_month, to_month + 1)]
+    return list_assumptions(payload if isinstance(payload, dict) else None, months, as_of=date.today())
+
+
 def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: int) -> dict:
     dashboard = dashboard_for_org(db, organization_id)
     payload = None
@@ -237,6 +243,7 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
             "months": wage_months,
         },
         "provider_calls": 0,
+        "assumptions": _assumptions(payload, year, from_month, to_month),
     }
 
 
@@ -260,7 +267,7 @@ def apply_updates(payload: dict, updates: list[dict]) -> dict:
             kind = update.get("kind")
             if not isinstance(label, str) or not label.strip():
                 raise ValueError("לשורה חדשה חסרה כותרת")
-            if kind not in {"revenue", "cost"} or not isinstance(category, str) or not category:
+            if kind not in {"revenue", "cost", "financing"} or not isinstance(category, str) or not category:
                 raise ValueError("שורה חדשה צריכה קטגוריה וסוג")
             line = {"id": line_id, "label": label.strip(), "category": category, "kind": kind, "months": {}}
             lines.append(line)

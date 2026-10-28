@@ -326,6 +326,31 @@ def dashboard_view(dashboard_id: int, response: Response, start: date | None = N
     return view
 
 
+@router.get("/dashboards/{dashboard_id}/bank-pack")
+def dashboard_bank_pack(dashboard_id: int, db: Session = Depends(get_db_session),
+                        user: User = Depends(get_current_user)):
+    """P&L, forecast and budget-vs-actual for a bank, with the assumptions listed."""
+    from ...services.dashboards.budget_assumptions import bank_pack, list_assumptions
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
+        today = date.today()
+        plan = view_model.plan_payload(db, row.id)
+        view = multi_entity.build_dashboard_view(db, row, date(today.year, 1, 1), today, plan=plan)
+    except DashboardError as exc:
+        return _error(exc)
+    pack_view = view.get("combined") if len(view.get("entities") or []) > 1 else view
+    months = [f"{today.year:04d}-{month:02d}" for month in range(1, 13)]
+    opening = ((pack_view or {}).get("cash_forecast") or {}).get("opening") or {}
+    assumptions = list_assumptions(
+        plan, months, as_of=today,
+        bank_balance=opening.get("amount") if isinstance(opening, dict) else None,
+        bank_as_of=opening.get("as_of") if isinstance(opening, dict) else None,
+    )
+    pack = bank_pack(pack_view or view, assumptions, as_of=today)
+    pack["dashboard_id"] = row.id
+    return pack
+
+
 @router.post("/dashboards/{dashboard_id}/snapshots", status_code=201)
 def publish_snapshot(dashboard_id: int, db: Session = Depends(get_db_session),
                      user: User = Depends(get_current_user)):

@@ -15,11 +15,33 @@ type BudgetLine = {
   category: string;
   months: Record<string, LineMonth>;
 };
+type Assumption = {
+  id: string;
+  kind: string;
+  label_he: string;
+  month: string | null;
+  amount: number | null;
+  source: string | null;
+  status: string;
+  missing_label: string | null;
+};
 type LinesPayload = {
   lines: BudgetLine[];
   counts: { active: number; filled: number; none: number; missing: number };
   declared_payroll: { monthly: string | null; note_he: string };
+  assumptions?: Assumption[];
 };
+
+const ASSUMPTION_LINE: Record<string, { category: string; kind: string }> = {
+  income: { category: 'revenue', kind: 'revenue' },
+  payroll: { category: 'payroll', kind: 'cost' },
+  headcount: { category: 'headcount', kind: 'cost' },
+  suppliers: { category: 'suppliers', kind: 'cost' },
+  vehicle: { category: 'vehicle', kind: 'cost' },
+  interest: { category: 'interest_expense', kind: 'cost' },
+  loan_repayment: { category: 'loan_principal', kind: 'financing' },
+};
+const SOURCE_HE: Record<string, string> = { owner: 'הנחת בעלים', bank: 'מהבנק', books: 'מהספרים' };
 
 type OrgOption = { id: number; name: string };
 
@@ -56,6 +78,7 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   });
   const data = linesQuery.data?.data;
   const key = monthKey(year, month);
+  const monthAssumptions = (data?.assumptions ?? []).filter((row) => row.month === key || row.kind === 'opening_balance');
 
   const saveMutation = useMutation({
     mutationFn: (updates: Array<Record<string, unknown>>) => apiService.put('/financial/budget/lines', { updates }),
@@ -85,9 +108,17 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   function save() {
     const updates = Object.entries(drafts).map(([id, raw]) => {
       const text = raw.trim();
-      if (text === 'none') return { id, month: key, status: 'none' };
-      return { id, month: key, status: 'filled', amount: Number(text) };
-    }).filter((update) => update.status === 'none' || Number.isFinite(update.amount as number));
+      const assumption = monthAssumptions.find((row) => row.id === id);
+      const line = assumption ? ASSUMPTION_LINE[assumption.kind] : null;
+      const target = line ? {
+        id: `assumption:${assumption!.kind}`,
+        label: assumption!.label_he,
+        category: line.category,
+        kind: line.kind,
+      } : { id };
+      if (text === '' || text === 'none') return { ...target, month: key, status: 'missing' };
+      return { ...target, month: key, status: 'filled', amount: Number(text) };
+    }).filter((update) => update.status === 'missing' || update.status === 'none' || Number.isFinite(update.amount as number));
     if (updates.length === 0) {
       setMessage('אין שינוי לשמירה');
       return;
@@ -144,6 +175,42 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
           <input type="file" accept=".xlsx" className="hidden"
             onChange={(e) => e.target.files?.[0] && importMutation.mutate(e.target.files[0])} />
         </label>
+      </div>
+
+      <div className={`rounded-xl border p-5 ${card}`}>
+        <h2 className="text-lg font-semibold mb-1">הנחות עבודה</h2>
+        <p className="text-sm text-gray-500 mb-3">הכנסות, שכר ומצבת, ספקים, רכב, ריבית, החזרי קרן ויתרת פתיחה. חסר אינו 0.</p>
+        <table className="w-full text-sm mb-2">
+          <thead>
+            <tr className="text-right border-b">
+              <th className="py-2">הנחה</th>
+              <th>מקור</th>
+              <th>סטטוס</th>
+              <th>סכום</th>
+            </tr>
+          </thead>
+          <tbody>
+            {monthAssumptions.map((row) => (
+              <tr key={row.id} className="border-b">
+                <td className="py-2">{row.label_he}</td>
+                <td>{row.source ? (SOURCE_HE[row.source] ?? row.source) : '—'}</td>
+                <td>{row.missing_label ?? (row.status === 'assumption' ? 'הנחת בעלים' : row.status === 'confirmed' ? 'מאושר' : row.status)}</td>
+                <td>
+                  {ASSUMPTION_LINE[row.kind] ? (
+                    <input
+                      className={input + ' w-40'}
+                      value={drafts[row.id] !== undefined ? drafts[row.id] : (row.amount ?? '')}
+                      placeholder={row.missing_label ?? ''}
+                      onChange={(event) => setDrafts({ ...drafts, [row.id]: event.target.value })}
+                    />
+                  ) : (
+                    <span>{row.amount ?? row.missing_label}</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       <div className={`rounded-xl border p-5 ${card}`}>

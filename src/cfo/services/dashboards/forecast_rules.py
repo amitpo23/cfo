@@ -329,6 +329,39 @@ def discounted_cheque_keys(plan: dict | None, organization_id: int | None) -> se
     return keys
 
 
+def budget_outflow_items(plan: dict | None, lines: list[dict] | None, first: date, last: date) -> list[dict]:
+    """Loan repayments, interest and vehicle cash from the same budget lines.
+
+    They are paid on the payroll day. A missing month is not emitted as 0.
+    """
+    from .budget_assumptions import CASH_KINDS, CATEGORY
+    settings = resolve_settings(plan)
+    items = []
+    seen: set[tuple[str, str]] = set()
+    labels = {
+        "loan_repayment": "החזר קרן לפי התקציב",
+        "interest": "ריבית לפי התקציב",
+        "vehicle": "רכב לפי התקציב",
+    }
+    for day in _days(first, last):
+        if day != payroll_date(day.year, day.month, settings.payroll_day):
+            continue
+        month = _month_key(day)
+        for kind in ("loan_repayment", "interest", "vehicle"):
+            if kind not in CASH_KINDS or (kind, month) in seen:
+                continue
+            amount = _category_sum(lines, month, frozenset({CATEGORY[kind]}))
+            if amount is None:
+                continue
+            seen.add((kind, month))
+            items.append({
+                "date": day, "label": labels[kind],
+                "amount": -round(abs(amount), 2), "certainty": SCHEDULED,
+                "source": "plan.budgetLines", "rule": "budget_assumption",
+            })
+    return items
+
+
 def supplier_and_payroll(plan: dict | None, lines: list[dict] | None, first: date, last: date) -> tuple[list[dict], list[tuple[date, str]]]:
     items: list[dict] = []
     unknown: list[tuple[date, str]] = []

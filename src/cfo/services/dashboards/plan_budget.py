@@ -49,7 +49,7 @@ def _pnl_ids() -> set[str]:
 
 def _known_key(name: str) -> str:
     key = category_key(name)
-    if key in FINANCING_CATEGORIES or key in _pnl_ids() or key in _LABELS:
+    if key in FINANCING_CATEGORIES or key in _pnl_ids() or key in _LABELS or key in {"headcount", "opening_balance"}:
         return key
     for code, label in FINANCING_CATEGORIES.items():
         if label == name:
@@ -77,7 +77,7 @@ def category_kinds() -> dict[str, str]:
 
 
 def _kind_for(key: str) -> str:
-    if key in FINANCING_CATEGORIES:
+    if key in FINANCING_CATEGORIES or key == "opening_balance":
         return FINANCING
     return "revenue" if key in REVENUE_KEYS else "cost"
 
