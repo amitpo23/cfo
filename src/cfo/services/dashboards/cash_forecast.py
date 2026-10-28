@@ -162,8 +162,11 @@ def _limit(facilities: list[dict], fallback: float | None, week_start: date, wee
 def _dated_items(view: dict, plan: dict | None, organization_id: int, first: date, last: date) -> list[dict]:
     liquidity = view.get("liquidity") or {}
     items = []
+    discounted = forecast_rules.discounted_cheque_keys(plan, organization_id)
     for check in liquidity.get("checks") or []:
         when, amount = _date(check.get("date")), _num(check.get("amount"))
+        if (str(check.get("check") or ""), when) in discounted:
+            continue
         if check.get("state") in CHECK_STATES and when and amount and first <= when <= last:
             label = " · ".join(part for part in (f"צ׳ק {check.get('check')}", check.get("payee")) if part)
             items.append({"date": when, "label": label, "amount": _r(-abs(amount)), "certainty": CERTAIN,
@@ -373,8 +376,9 @@ def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int
         lines = forecast_rules.load_lines(plan)
         ruled, ruled_unknown = forecast_rules.supplier_and_payroll(plan, lines, first, last)
         loans, loan_unknown = forecast_rules.loan_items(plan, organization_id, first, last)
-        items = items + ruled + loans
-        unknown = ruled_unknown + loan_unknown
+        cheques, cheque_unknown = forecast_rules.discounted_cheque_items(plan, organization_id, first, last)
+        items = items + ruled + loans + cheques
+        unknown = ruled_unknown + loan_unknown + cheque_unknown
         income_days, income_unknown = forecast_rules.income_for_window(lines, first, last)
         unknown += [(day, "income") for day in income_unknown]
     else:

@@ -30,7 +30,10 @@ from sqlalchemy import func
 
 from ...models import Account, BankTransaction, DashboardEntityAccount
 
-CHECKING_TYPES = {"CHECKING", "CURRENT", "SAVINGS"}
+# Operating cash only. SAVINGS is not the current account: a blocked savings
+# row with no balance date must not hide a known Hapoalim checking balance.
+OPERATING_CASH = {"CHECKING", "CURRENT", "CACC", "CURRENT_ACCOUNT"}
+CHECKING_TYPES = OPERATING_CASH | {"SAVINGS"}
 CARD = "CARD"
 LOAN = "LOAN"
 CREDIT_LINE_TEXT = "מסגרת"
@@ -318,21 +321,51 @@ def _account_kind(account: Account) -> str:
         return "card"
     if raw == LOAN:
         return "credit_line_mirror" if CREDIT_LINE_TEXT in (account.name or "") else "loan"
-    if raw in CHECKING_TYPES:
+    if raw in OPERATING_CASH:
+        return "checking"
+    if raw == "SAVINGS":
+        return "savings"
+    # An Open Finance bank account with no type is a current account. Cards and
+    # loans carry their own raw type and never get here as BANK.
+    account_type = getattr(account, "account_type", None)
+    type_name = getattr(account_type, "value", account_type)
+    if not raw and getattr(account, "source", None) == "open_finance" and str(type_name) == "bank":
         return "checking"
     return "other"
 
 
 def entity_accounts(db, organization_id: int, entity_id: int | None) -> list[Account]:
+    """Accounts this entity's liquidity reads.
+
+    No binding: every Open Finance account of the organization. A binding still
+    limits manual accounts. An Open Finance current account with a dated balance
+    is included when the binding has none, so a Hapoalim account synced onto the
+    organization is not hidden by an older card-only binding.
+    """
     bound: list[int] = []
     if entity_id:
         bound = [row.account_id for row in db.query(DashboardEntityAccount).filter_by(entity_id=entity_id).all()]
-    query = db.query(Account).filter(Account.organization_id == organization_id)
-    if bound:
-        query = query.filter(Account.id.in_(bound))
-    else:
-        query = query.filter(Account.source == "open_finance")
-    return query.order_by(Account.id).all()
+    rows = (
+        db.query(Account)
+        .filter(Account.organization_id == organization_id)
+        .order_by(Account.id)
+        .all()
+    )
+    if not bound:
+        return [account for account in rows if account.source == "open_finance"]
+    chosen = [account for account in rows if account.id in set(bound)]
+    chosen_ids = {account.id for account in chosen}
+    has_operating = any(
+        account.source == "open_finance" and _account_kind(account) == "checking" and _balance(account) is not None
+        for account in chosen
+    )
+    if not has_operating:
+        for account in rows:
+            if account.id in chosen_ids:
+                continue
+            if account.source == "open_finance" and _account_kind(account) == "checking" and _balance(account) is not None:
+                chosen.append(account)
+    return sorted(chosen, key=lambda account: account.id or 0)
 
 
 def evidence_for(plan: dict | None, organization_id: int | None) -> dict:

@@ -4,24 +4,24 @@ Worked week, Sunday 25/10/2026–Saturday 31/10/2026, opening dated 28/10/2026
 (the day after which the forecast moves). October has 31 days; only 29–31
 are still ahead of the opening, so October's budget income of 62,000 is
 62,000 × 3/31 = 6,000. September's supplier budget of 30,000 is paid on
-31/10 (שוטף 30). Checking facility 50,000.
+30/10, thirty days after 30/09. Checking facility 50,000.
 
     opening                         -12,000   accounts, as of 28/10
     income 29–31/10                  +6,000   plan.budgetLines
-    suppliers, supply 2026-09       -30,000   due 31/10
+    suppliers, supply 2026-09       -30,000   due 30/10
     net                             -24,000
     closing                         -36,000
     headroom                 50,000 - 36,000 = 14,000   not a breach
 
-Payroll of 18,000 is the plan's payroll definition, paid on the 1st, so it
-lands on 01/11, not in this week. The bridge of 61,000 closes on 25/11
+Payroll of 18,000 is the plan's payroll definition, paid on the 10th, so it
+lands on 10/11, not in this week. The bridge of 61,000 closes on 25/11
 against a receipt of the same amount.
 """
 from datetime import date, datetime
 from decimal import Decimal
 
 from cfo.database import SessionLocal
-from cfo.models import Account, AccountType, BankTransaction
+from cfo.models import Account, AccountType, BankTransaction, ClientDashboard, SumitCompany
 from cfo.services.dashboards import cash_forecast, forecast, forecast_rules, liquidity
 from cfo.services.dashboards.service import validate_filing_payload
 
@@ -73,10 +73,10 @@ def _item(result, label_part):
     return next(item for week in result["weeks"] for item in week["items"] if label_part in (item.get("label") or ""))
 
 
-def test_shotef_30_is_the_last_day_of_the_next_month():
-    assert forecast_rules.shotef_30(2026, 9) == date(2026, 10, 31)
+def test_shotef_30_is_thirty_days_after_the_end_of_the_supply_month():
+    assert forecast_rules.shotef_30(2026, 9) == date(2026, 10, 30)
     assert forecast_rules.shotef_30(2026, 10) == date(2026, 11, 30)
-    assert forecast_rules.shotef_30(2026, 12) == date(2027, 1, 31)
+    assert forecast_rules.shotef_30(2026, 12) == date(2027, 1, 30)
 
 
 def test_the_forecast_starts_at_todays_position_and_ignores_cash_already_in_it():
@@ -100,7 +100,7 @@ def test_suppliers_are_paid_on_shotef_30_from_the_supply_months_budget():
     week = _week(_run(), "2026-10-25")
     supplier = _item(_run(), "שוטף 30")
 
-    assert supplier["date"] == "2026-10-31"
+    assert supplier["date"] == "2026-10-30"
     assert supplier["amount"] == -30000.0
     assert supplier["source"] == "plan.budgetLines"
     assert supplier["rule"] == "shotef_30"
@@ -110,7 +110,7 @@ def test_suppliers_are_paid_on_shotef_30_from_the_supply_months_budget():
 def test_payroll_comes_from_the_budget_definition_on_the_first():
     item = _item(_run(), "שכר")
 
-    assert item["date"] == "2026-11-01"
+    assert item["date"] == "2026-11-10"
     assert item["amount"] == -18000.0
     assert item["source"] == "plan.payroll"
     assert item["rule"] == "budget_payroll_definition"
@@ -126,7 +126,7 @@ def test_payroll_falls_back_to_salary_budget_lines_when_there_is_no_definition()
 
     item = _item(_run(plan=plan), "שכר")
 
-    assert item["date"] == "2026-11-01"
+    assert item["date"] == "2026-11-10"
     assert item["amount"] == -9000.0
     assert item["source"] == "plan.budgetLines"
 
@@ -191,7 +191,7 @@ def test_missing_inputs_stay_null_and_are_labelled():
     assert november["out"] is None
     assert any("ספקים" in text for text in november["unknown"])
     assert not any(item.get("amount") == 0 for week in result["weeks"] for item in week["items"])
-    payroll_week = _week(result, "2026-11-01")
+    payroll_week = _week(result, "2026-11-08")
     assert any("שכר" in text for text in payroll_week["unknown"])
     bridge_week = _week(result, "2026-11-22")
     assert any("הלוואה קצרה" in text for text in bridge_week["unknown"])
@@ -271,7 +271,7 @@ def test_monthly_cells_are_filled_from_the_rules_and_missing_ones_stay_null():
     assert "לא ידוע" in november["income"]["label"]
     assert november["payroll"] == {
         "amount": -18000.0, "source": "plan.payroll", "rule": "budget_payroll_definition",
-        "pay_date": "2026-11-01",
+        "pay_date": "2026-11-10",
     }
     # September's suppliers are paid in October, which is the current month and not in the horizon.
     # October has no supplier line, so November's שוטף 30 payment stays unknown.
@@ -427,4 +427,197 @@ def test_evidence_rejects_a_bad_loan_kind_and_accepts_the_owner_shape():
         "asOf": "2026-10-28", "approximate": False,
     }], "facilities": [{
         "label": "ניכיון שיקים", "kind": "cheque_discounting", "limit": None, "asOf": "2026-10-28",
+    }], "checks": [{
+        "check": "4401", "date": "2026-11-12", "amount": 7500, "payee": "לקוח", "discounted": True,
     }]}})
+
+
+def test_bridge_61000_due_25_11_is_repaid_against_a_receipt_the_same_day():
+    plan = _plan()
+    plan["liquidityEvidence"]["loans"] = [{
+        "label": "גישור", "kind": "bridge", "balance": 61000, "maturity": "2026-11-25",
+        "asOf": "2026-10-28", "organizationId": ORG,
+    }]
+
+    legs = [item for week in _run(plan=plan)["weeks"] for item in week["items"] if item["date"] == "2026-11-25"]
+
+    assert [leg["amount"] for leg in legs] == [-61000.0, 61000.0]
+    assert {leg["label"] for leg in legs} == {"גישור · פירעון הלוואה קצרה", "גישור · תקבול שסוגר את ההלוואה הקצרה"}
+    assert sum(leg["amount"] for leg in legs) == 0.0
+
+
+def test_each_discounted_cheque_is_a_short_loan_on_its_own_date():
+    plan = _plan()
+    plan["liquidityEvidence"]["checks"] = [
+        {"check": "4401", "date": "2026-11-12", "amount": 7500, "payee": "לקוח א", "discounted": True, "organizationId": ORG},
+        {"check": "4402", "date": "2026-12-03", "amount": 2200, "payee": "לקוח ב", "discounted": True, "organizationId": ORG},
+    ]
+    view = _view()
+    view["liquidity"]["checks"] = [
+        {"check": "4401", "date": "2026-11-12", "amount": 7500, "payee": "לקוח א", "state": "future"},
+    ]
+
+    items = [item for week in _run(view, plan)["weeks"] for item in week["items"] if "4401" in (item.get("label") or "")]
+
+    assert [item["date"] for item in items] == ["2026-11-12", "2026-11-12"]
+    assert sorted(item["amount"] for item in items) == [-7500.0, 7500.0]
+    assert not any(item["amount"] == -7500.0 and "פירעון" not in item["label"] for item in items)
+    later = [item for week in _run(view, plan)["weeks"] for item in week["items"] if "4402" in (item.get("label") or "")]
+    assert {item["date"] for item in later} == {"2026-12-03"}
+
+
+def _office_dashboard(client, platform_admin, fresh_org, slug):
+    chef, food, office = fresh_org(), fresh_org(), fresh_org()
+    response = client.post("/api/dashboards", headers=platform_admin["headers"], json={
+        "primary_organization_id": chef["org_id"], "slug": slug, "title": "שף", "access_mode": "link",
+    })
+    assert response.status_code == 201, response.text
+    dashboard_id = response.json()["id"]
+    with SessionLocal() as db:
+        db.get(ClientDashboard, dashboard_id).office_organization_id = office["org_id"]
+        for org, name in ((chef, "השף"), (food, "פוד גרופ")):
+            db.add(SumitCompany(
+                office_organization_id=office["org_id"], company_id=f"file-{org['org_id']}",
+                name=name, status="active", target_organization_id=org["org_id"],
+            ))
+        db.commit()
+    added = client.post(f"/api/dashboards/{dashboard_id}/entities", headers=platform_admin["headers"],
+                        json={"organization_id": food["org_id"], "label": "פוד גרופ"})
+    assert added.status_code == 201, added.text
+    return dashboard_id, chef, food, added.json()["id"]
+
+
+def _save_plan(client, headers, dashboard_id, payload):
+    current = client.get(f"/api/dashboards/{dashboard_id}/plan", headers=headers).json()
+    response = client.put(
+        f"/api/dashboards/{dashboard_id}/plan",
+        headers={**headers, "If-Match": current["version"] or "null"},
+        json={"payload": payload},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_food_group_hapoalim_balance_is_the_opening(client, fresh_org, platform_admin):
+    """A blocked savings row, and a binding that predates the bank account, do not hide it.
+
+    Root cause: SAVINGS was classified as checking, so a Hapoalim savings account
+    with no balance date made every checking balance unknown. A binding that
+    listed only a card also dropped the current account synced later onto the
+    same organization.
+    """
+    dashboard_id, _chef, food, _entity_id = _office_dashboard(
+        client, platform_admin, fresh_org, "food-hapoalim",
+    )
+    with SessionLocal() as db:
+        checking = Account(
+            organization_id=food["org_id"], name="הפועלים עו״ש", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id="hapoalim-checking",
+            provider_account_number="12-345-678901", balance=Decimal("-44000"),
+            balance_as_of=datetime(2026, 10, 28), currency="ILS",
+        )
+        savings = Account(
+            organization_id=food["org_id"], name="הפועלים פר״י", account_type=AccountType.ASSET,
+            raw_account_type="SAVINGS", source="open_finance", external_id="hapoalim-savings",
+            balance=Decimal("0"), currency="ILS",
+        )
+        card = Account(
+            organization_id=food["org_id"], name="כאל", account_type=AccountType.LIABILITY,
+            raw_account_type="CARD", source="open_finance", external_id="hapoalim-card",
+            balance=Decimal("-100"), balance_as_of=datetime(2026, 10, 28), currency="ILS",
+        )
+        db.add_all([checking, savings, card])
+        db.commit()
+        card_id = card.id
+    body = client.get(
+        f"/api/dashboards/{dashboard_id}/view", headers=platform_admin["headers"],
+        params={"start": "2026-07-01", "end": "2026-10-28"},
+    ).json()
+    food_view = next(entity for entity in body["entities"] if entity["label"] == "פוד גרופ")["view"]
+
+    assert food_view["liquidity"]["position"]["balance"] == -44000.0
+    assert food_view["liquidity"]["position"]["as_of"] == "2026-10-28"
+    assert food_view["liquidity"]["position"]["balance_source"] == "accounts"
+    assert food_view["cash_forecast"]["opening"]["amount"] == -44000.0
+    assert "opening_balance" not in food_view["cash_forecast"]["missing"]
+    assert body["provider_calls"] == 0
+
+
+def test_budget_entry_lines_change_the_13_week_forecast(client, fresh_org, platform_admin):
+    """/budget-entry (PR #84) writes plan.budgetLines. That is what the forecast reads."""
+    owner = fresh_org()
+    created = client.post("/api/dashboards", headers=platform_admin["headers"], json={
+        "primary_organization_id": owner["org_id"], "slug": "budget-forecast", "title": "תקציב", "access_mode": "link",
+    })
+    assert created.status_code == 201, created.text
+    dashboard_id = created.json()["id"]
+    with SessionLocal() as db:
+        db.add(Account(
+            organization_id=owner["org_id"], name="עו״ש", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id="checking",
+            balance=Decimal("-12000"), balance_as_of=datetime(2026, 10, 28), currency="ILS",
+            credit_limit=Decimal("50000"),
+        ))
+        db.commit()
+
+    def view():
+        response = client.get(
+            f"/api/dashboards/{dashboard_id}/view", headers=platform_admin["headers"],
+            params={"start": "2026-07-01", "end": "2026-10-28"},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["entities"][0]["view"]["cash_forecast"]
+
+    before = view()
+    assert not any(item.get("rule") == "budget_income" for week in before["weeks"] for item in week["items"])
+
+    saved = _save_plan(client, platform_admin["headers"], dashboard_id, {"budgetLines": [
+        {"id": "sales", "label": "מכירות", "category": "sales", "kind": "revenue",
+         "months": {"2026-10": {"quantity": 1, "rate": 62000}}},
+        {"id": "salaries", "label": "שכר", "category": "salaries", "kind": "cost",
+         "months": {"2026-11": {"quantity": 1, "rate": 18000}}},
+    ]})
+    assert saved["payload"]["budgetLines"][0]["months"]["2026-10"]["rate"] == 62000
+
+    after = view()
+    income = next(item for week in after["weeks"] for item in week["items"] if item.get("label") == "הכנסה לפי התקציב")
+    payroll = next(item for week in after["weeks"] for item in week["items"] if "שכר" in (item.get("label") or ""))
+    assert income["amount"] == 6000.0
+    assert income["source"] == "plan.budgetLines"
+    assert payroll["date"] == "2026-11-10"
+    assert payroll["amount"] == -18000.0
+    assert payroll["source"] == "plan.budgetLines"
+    assert after["opening"]["amount"] == -12000.0
+    assert after["weeks"][0]["in"] != before["weeks"][0]["in"]
+
+
+def test_a_card_only_binding_still_reads_the_connected_checking_account(client, fresh_org, platform_admin):
+    dashboard_id, _chef, food, entity_id = _office_dashboard(
+        client, platform_admin, fresh_org, "food-binding",
+    )
+    with SessionLocal() as db:
+        checking = Account(
+            organization_id=food["org_id"], name="הפועלים עו״ש", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id="hapoalim-2",
+            balance=Decimal("-44000"), balance_as_of=datetime(2026, 10, 28), currency="ILS",
+        )
+        card = Account(
+            organization_id=food["org_id"], name="כאל", account_type=AccountType.LIABILITY,
+            raw_account_type="CARD", source="open_finance", external_id="card-2",
+            balance=Decimal("-100"), balance_as_of=datetime(2026, 10, 28), currency="ILS",
+        )
+        db.add_all([checking, card])
+        db.commit()
+        card_id = card.id
+    bound = client.put(
+        f"/api/dashboards/{dashboard_id}/entities/{entity_id}/accounts",
+        headers=platform_admin["headers"],
+        json={"accounts": [{"account_id": card_id}]},
+    )
+    assert bound.status_code == 200, bound.text
+    body = client.get(
+        f"/api/dashboards/{dashboard_id}/view", headers=platform_admin["headers"],
+        params={"start": "2026-07-01", "end": "2026-10-28"},
+    ).json()
+    food_view = next(entity for entity in body["entities"] if entity["label"] == "פוד גרופ")["view"]
+    assert food_view["cash_forecast"]["opening"]["amount"] == -44000.0

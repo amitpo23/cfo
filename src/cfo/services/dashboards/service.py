@@ -365,10 +365,12 @@ def _validate_evidence(evidence) -> None:
                     and _number(item.get("amount"), low=-MAX_PLAN_AMOUNT, high=MAX_PLAN_AMOUNT) \
                     and _short_text(item.get("source"), required=True, limit=300)
             elif kind == "checks":
+                discounted = item.get("discounted")
                 ok = ok and _short_text(item.get("check"), required=True, limit=40) \
                     and _optional_date(item.get("date")) and item.get("date") is not None \
                     and _number(item.get("amount"), low=0.01, high=MAX_PLAN_AMOUNT) \
-                    and _short_text(item.get("payee"))
+                    and _short_text(item.get("payee")) \
+                    and (discounted is None or isinstance(discounted, bool))
             else:
                 ok = ok and _short_text(item.get("label"), required=True) and item.get("date") is not None \
                     and _optional_date(item.get("date")) and _optional_amount(item.get("amount"), allow_negative=True) \
