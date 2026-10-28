@@ -66,6 +66,7 @@ const CalculatorsDashboard = lazy(() => import('./components/CalculatorsDashboar
 const PayrollDashboard = lazy(() => import('./components/PayrollDashboard'));
 const OpenFinanceOpsDashboard = lazy(() => import('./components/OpenFinanceOpsDashboard'));
 const LedgerDashboard = lazy(() => import('./components/LedgerDashboard'));
+const SumitPortalImportPage = lazy(() => import('./components/SumitPortalImportPage'));
 const DailyReportsDashboard = lazy(() => import('./components/DailyReportsDashboard'));
 const SuppliersMissingInvoices = lazy(() => import('./components/SuppliersMissingInvoices'));
 const VatReportScreen = lazy(() => import('./components/VatReportScreen'));
@@ -174,6 +175,7 @@ const navigationConfig = [
       { to: '/calculators', icon: Calculator, label: 'מחשבונים', description: 'חישובי שכר/מס/ב"ל דטרמיניסטיים, בלי צ\'אט' },
       { to: '/payroll', icon: Users, label: 'שכר', description: 'עובדים, תלושים ודוח 102/126' },
       { to: '/ledger', icon: BookOpen, label: 'הנה"ח כפולה', description: 'מאזן בוחן, פקודות יומן וכרטסת — נגזר מהמסמכים' },
+      { to: '/sumit-portal-import', icon: FileSpreadsheet, label: 'ייבוא מפורטל SUMIT', description: 'מאזן, רווח והפסד וכרטיסי הנה״ח מקובץ CSV או Excel', adminOnly: true },
       { to: '/daily-reports', icon: TrendingUp, label: 'דוחות יומיים', description: 'רווח/הפסד מצטבר, גיול חובות וספקים תוך-חודשי' },
       { to: '/annual-reports', icon: FileWarning, label: 'דוחות שנתיים', description: 'טיוטת 1301 (יחיד) / 1214 (חברה) — לבדיקת רו"ח' },
       { to: '/of-ops', icon: CreditCard, label: 'Open Finance תפעול', description: 'תשלומים, אשראי, לקוחות וסוחרים' },
@@ -433,6 +435,7 @@ function App() {
                 <Route path="/payroll" element={<PayrollDashboard />} />
                 <Route path="/of-ops" element={<OpenFinanceOpsDashboard />} />
                 <Route path="/ledger" element={<LedgerDashboard />} />
+                <Route path="/sumit-portal-import" element={<SumitPortalImportPage darkMode={darkMode} />} />
                 <Route path="/daily-reports" element={<DailyReportsDashboard />} />
                 <Route path="/suppliers-missing-invoices" element={<SuppliersMissingInvoices />} />
                 <Route path="/vat-report" element={<VatReportScreen />} />
