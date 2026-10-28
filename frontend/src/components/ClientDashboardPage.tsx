@@ -14,6 +14,7 @@ import {
   CashForecast, CashForecastItemsCard, CashForecastPanel, Overdue, cashForecastItemsFromPayload,
 } from './cashForecastTab';
 import { DashboardFrame, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs } from './dashboardUi';
+import { DASHBOARD_POLL_MS, revisionToken, shouldReloadView } from './dashboardLive';
 
 type CashMonth = {
   month: string;
@@ -44,6 +45,36 @@ type BudgetMonth = {
   blocked?: boolean;
   categories?: BudgetLine[] | null;
   totals?: { revenue?: BudgetCompare | null; costs?: BudgetCompare | null } | null;
+};
+
+type BooksDivision = {
+  id: string;
+  label: string;
+  revenue: number | null;
+  costs: number | null;
+  net: number | null;
+  share_pct?: number | null;
+};
+
+type BooksMonth = {
+  month: string;
+  basis?: string | null;
+  basis_label?: string | null;
+  source?: string | null;
+  revenue: number | null;
+  costs: number | null;
+  net: number | null;
+  budget_revenue?: number | null;
+  budget_costs?: number | null;
+  clarify_share_pct?: number | null;
+  divisions?: BooksDivision[] | null;
+  message?: string | null;
+};
+
+type BooksPnl = {
+  basis?: string;
+  months?: BooksMonth[];
+  stale_sources?: { kind?: string; label?: string | null; source_label?: string; age_days?: number | null; status_label?: string }[];
 };
 
 type PnlMonth = {
@@ -150,6 +181,7 @@ type DashboardView = {
     basis?: string;
     months?: PnlMonth[];
   };
+  books_pnl?: BooksPnl | null;
   budget_vs_actual?: {
     status?: string;
     has_budget?: boolean;
@@ -169,6 +201,7 @@ type DashboardView = {
     liquidity?: EntityLiquidity | null;
     forecast?: Forecast | null;
     cash_forecast?: CashForecast | null;
+    books_pnl?: BooksPnl | null;
     intercompany_removed?: IntercompanyRemoved;
     sources?: Sources | null;
     cash_statement?: CashStatement | null;
@@ -225,46 +258,6 @@ function BudgetRow({ label, row: given, strong }: { label: string; row: BudgetCo
       <td>{money(row.actual)}</td>
       <td>{varianceCell(row)}</td>
     </tr>
-  );
-}
-
-function PnlMonths({ months }: { months: PnlMonth[] }) {
-  const known = months.filter((month) => month.source);
-  if (known.length === 0) return null;
-  return (
-    <table className="mt-4 d-table">
-      <thead>
-        <tr>
-          <th>חודש</th>
-          <th>מקור</th>
-          <th>הכנסות</th>
-          <th>הוצאות</th>
-          <th>תוצאה</th>
-          <th>לבירור (נכנס / יצא)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {known.map((month) => (
-          <tr key={month.month}>
-            <td>{month.month}</td>
-            <td className="py-2 text-xs text-stone-600">
-              {month.source === 'cash_basis' ? 'בסיס מזומן' : 'ספרים'}
-              {month.journal_dedupe ? ' + יומן SUMIT' : ''}
-              {month.z_dedupe ? ' + דוח Z' : ''}
-              {month.coverage_label ? ` · ${month.coverage_label}` : ''}
-            </td>
-            <td>{money(month.revenue)}</td>
-            <td>{money(month.costs)}</td>
-            <td>{money(month.net)}</td>
-            <td className={`py-2 ${month.blocked ? 'text-amber-700' : 'text-stone-500'}`}>
-              {month.source === 'cash_basis'
-                ? `${money(month.unresolved_in ?? null)} / ${money(month.unresolved_out ?? null)}`
-                : '—'}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   );
 }
 
@@ -687,6 +680,39 @@ export default function ClientDashboardPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const slug = slugFromLocation();
+    if (!slug && !editor?.id) return undefined;
+    let seen: string | null = null;
+    let stopped = false;
+    const tick = async () => {
+      const url = editor?.id
+        ? `/api/dashboards/${editor.id}/revision`
+        : `/api/public/d/${slug}/revision`;
+      const response = await fetch(url, {
+        headers: editor?.id ? authHeaders() : {},
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!response.ok || stopped) return;
+      const next = revisionToken(await response.json());
+      if (shouldReloadView(seen, next)) {
+        const again = await fetch(
+          editor?.id ? `/api/dashboards/${editor.id}/view` : `/api/public/d/${slug}`,
+          { headers: editor?.id ? authHeaders() : {}, credentials: 'include', cache: 'no-store' },
+        );
+        if (again.ok && !stopped) setView((await again.json()) as DashboardView);
+      }
+      seen = next;
+    };
+    const timer = window.setInterval(() => { void tick(); }, DASHBOARD_POLL_MS);
+    void tick();
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [editor?.id]);
+
   async function reloadFiling(page: number) {
     if (!editor) return;
     const response = await fetch(
@@ -779,6 +805,7 @@ export default function ClientDashboardPage() {
     liquidity: view.combined?.liquidity,
     forecast: view.combined?.forecast,
     cash_forecast: view.combined?.cash_forecast,
+    books_pnl: view.combined?.books_pnl,
     sources: view.combined?.sources,
     cash_statement: view.combined?.cash_statement,
   } : entities[Number(scope)]?.view ?? view;
@@ -817,7 +844,7 @@ export default function ClientDashboardPage() {
                 <>
                   <StatusKpis view={scoped} reviewCount={filing?.review.total ?? null} />
                   <SourcesCard sources={scoped.sources} />
-                  <PnlCard pnl={scoped.pnl} />
+                  <PnlCard pnl={scoped.pnl} books={scoped.books_pnl} />
                   <JournalCard months={scoped.pnl?.months ?? []} />
                   <CashflowCard view={scoped} />
                   <CashStatementCard statement={scoped.cash_statement} />
@@ -940,31 +967,75 @@ function StatusKpis({ view, reviewCount }: { view: DashboardView; reviewCount: n
   return <KpiCards items={items} />;
 }
 
-function PnlCard({ pnl }: { pnl: DashboardView['pnl'] }) {
+function PnlCard({ pnl, books }: { pnl: DashboardView['pnl']; books?: BooksPnl | null }) {
+  const months = books?.months ?? [];
+  const stale = books?.stale_sources ?? [];
   return (
     <section className="d-card">
       <h2>רווח והפסד</h2>
-      {pnl?.status === 'unknown' ? (
+      {months.length > 0 ? (
+        <table className="mt-4 d-table">
+          <thead>
+            <tr>
+              <th>חודש</th>
+              <th>בסיס</th>
+              <th>הכנסות</th>
+              <th>הוצאות</th>
+              <th>תוצאה</th>
+              <th>לבירור</th>
+            </tr>
+          </thead>
+          <tbody>
+            {months.map((month) => (
+              <tr key={month.month}>
+                <td>{month.month}</td>
+                <td className="py-2 text-xs text-stone-600">{month.basis_label || (month.basis === 'no_books' ? 'אין נתוני ספרים' : 'ספרים')}</td>
+                <td>{month.basis === 'no_books' ? 'אין נתוני ספרים' : money(month.revenue)}</td>
+                <td>{month.basis === 'no_books' ? 'אין נתוני ספרים' : money(month.costs)}</td>
+                <td>{money(month.net)}</td>
+                <td>{month.clarify_share_pct === null || month.clarify_share_pct === undefined ? '—' : `${month.clarify_share_pct}%`}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : pnl?.status === 'unknown' ? (
         <p className="mt-3 text-stone-600">{pnl.message}</p>
       ) : (
-        <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div>
-            <dt className="text-sm text-stone-500">הכנסות</dt>
-            <dd className="text-xl">{money(pnl?.total_revenue)}</dd>
-          </div>
-          <div>
-            <dt className="text-sm text-stone-500">הוצאות</dt>
-            <dd className="text-xl">{money(pnl?.total_expenses)}</dd>
-          </div>
-          <div>
-            <dt className="text-sm text-stone-500">רווח לפני מס</dt>
-            <dd className="text-xl">{money(pnl?.net_income_before_tax)}</dd>
-          </div>
-        </dl>
+        <p className="mt-3 text-stone-600">{pnl?.message}</p>
       )}
-      {pnl?.status === 'ready' && pnl.months ? <PnlMonths months={pnl.months} /> : null}
-      {pnl?.status === 'ready' && pnl.message ? (
-        <p className="mt-3 text-sm text-stone-500">{pnl.message}</p>
+      {months.some((month) => month.divisions && month.divisions.length > 0) ? (
+        <div className="mt-4 overflow-x-auto">
+          <table className="d-table">
+            <thead>
+              <tr>
+                <th>חלוקה</th>
+                {months.map((month) => <th key={month.month}>{month.month}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {(months.find((month) => month.divisions)?.divisions ?? []).map((division) => (
+                <tr key={division.id}>
+                  <td>{division.label}</td>
+                  {months.map((month) => {
+                    const row = month.divisions?.find((item) => item.id === division.id);
+                    const value = row ? (row.revenue || 0) - (row.costs || 0) : null;
+                    return <td key={month.month}>{month.basis === 'no_books' || !row ? '—' : money(value)}</td>;
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {stale.length > 0 ? (
+        <ul className="mt-3 text-sm text-amber-800">
+          {stale.map((item) => (
+            <li key={`${item.kind}-${item.label}-${item.age_days}`}>
+              {item.source_label || item.label}: {item.status_label}
+              {item.age_days !== null && item.age_days !== undefined ? ` (${item.age_days} ימים)` : ''}
+            </li>
+          ))}
+        </ul>
       ) : null}
     </section>
   );

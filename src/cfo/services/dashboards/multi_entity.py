@@ -15,7 +15,7 @@ from .. import bank_status
 from ..office_access import classifying_office_id, office_manages
 from ..read_memo import read_memo
 from .service import DashboardError
-from . import cash_forecast, cash_statement, filing, forecast, liquidity, view_model
+from . import books_pnl, cash_forecast, cash_statement, filing, forecast, liquidity, view_model
 
 _MARKER = ("intercompany", "בין-חברתי", "בין חברתי")
 # The explicit intercompany rule (see ``_intercompany``).
@@ -532,6 +532,7 @@ def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | N
     )
     combined = {
         "pnl": _combine_pnl(views),
+        "books_pnl": books_pnl.combine_books([view.get("books_pnl") or {} for view in views]),
         "cashflow": _combine_cashflow(sections, removed),
         "budget_vs_actual": _combine_budget(views),
         "liquidity": position,

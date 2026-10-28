@@ -224,6 +224,17 @@ def _check_window(start: date, end: date) -> None:
         raise DashboardError(422, "invalid_range", "טווח התאריכים ארוך מ-366 ימים")
 
 
+@router.get("/dashboards/{dashboard_id}/revision")
+def dashboard_revision(dashboard_id: int, response: Response, db: Session = Depends(get_db_session),
+                       user: User = Depends(get_current_user)):
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
+    except DashboardError as exc:
+        return _error(exc)
+    response.headers["Cache-Control"] = "private, no-store"
+    return view_model.dashboard_revision(db, row)
+
+
 @router.get("/dashboards/{dashboard_id}/view")
 def dashboard_view(dashboard_id: int, response: Response, start: date | None = None, end: date | None = None,
                    db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
@@ -238,6 +249,7 @@ def dashboard_view(dashboard_id: int, response: Response, start: date | None = N
     except DashboardError as exc:
         return _error(exc)
     response.headers["Server-Timing"] = server_timing(measure)
+    response.headers["Cache-Control"] = "private, no-store"
     log_build(logger, "view", row.id, len(view.get("entities") or []), measure)
     view["dashboard_id"] = row.id
     return view
@@ -510,6 +522,30 @@ def open_share_session(slug: str, body: SessionBody, request: Request,
     return response
 
 
+def _public_dashboard_or_error(slug: str, request: Request, db: Session):
+    limited = _claim_public_limit(db, request, slug)
+    if limited:
+        return None, limited
+    try:
+        dashboard = service.public_dashboard(db, slug)
+    except DashboardError as exc:
+        return None, _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
+    if dashboard.access_mode != "public":
+        link = _cookie_dashboard(db, request, dashboard.id)
+        if link is None:
+            return None, _public_response({"error": {"code": "not_found", "message_he": "הדשבורד לא נמצא"}}, 404)
+        service.mark_link_used(db, link)
+    return dashboard, None
+
+
+@public_router.get("/d/{slug}/revision")
+def public_revision(slug: str, request: Request, db: Session = Depends(get_db_session)):
+    dashboard, error = _public_dashboard_or_error(slug, request, db)
+    if error is not None:
+        return error
+    return _public_response(view_model.dashboard_revision(db, dashboard))
+
+
 @public_router.get("/d/{slug}")
 def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get_db_session)):
     limited = _claim_public_limit(db, request, slug)
@@ -528,7 +564,7 @@ def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get
     snapshot = None
     if dashboard.current_snapshot_id:
         snapshot = db.get(PublishedSnapshot, dashboard.current_snapshot_id)
-    if snapshot is not None:
+    if snapshot is not None and view_model.snapshot_is_current(db, dashboard, snapshot):
         payload = view_model.redact_public_view(dict(snapshot.view_model or {}))
         payload["provider_calls"] = 0
         payload["freshness"] = dict(snapshot.freshness or {})

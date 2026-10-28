@@ -247,7 +247,8 @@ def _budget_index(db, organization_id: int, start: date, end: date) -> dict:
         slot = index.setdefault((row.year, row.month), {})
         ident = (_kind(row), category_key(row.category_name or ""))
         if ident not in slot:
-            slot[ident] = float(row.budgeted_amount or 0)
+            # An explicit "none" is not a budget of zero.
+            slot[ident] = None if row.notes == "budget-line:none" else float(row.budgeted_amount or 0)
     return index
 
 
@@ -310,7 +311,9 @@ def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_
         elif source == "cash_basis":
             actuals = _cash_actuals(info)
         any_known = any_known or source is not None
-        planned = budgets.get((year, month), {})
+        planned = {
+            ident: amount for ident, amount in budgets.get((year, month), {}).items() if amount is not None
+        }
         if source == "cash_basis":
             planned = _fold_for_cash(planned)
         lines = []
@@ -521,6 +524,8 @@ def _period_summary(db, org_ids: list[int], section: dict, start: date, end: dat
                 continue
             slot = budget_only.setdefault(key, {})
             for ident, amount in planned.items():
+                if amount is None:
+                    continue
                 slot[ident] = round(slot.get(ident, 0.0) + amount, 2)
     current = today.isoformat()[:7]
     unknown_month = any(m.get("source") is None for m in in_period) or any(
