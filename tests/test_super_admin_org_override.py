@@ -91,7 +91,7 @@ def test_non_super_override_does_not_leak_writes(client, owner, tenant):
 
 
 # --- super user: override honored for reads ---------------------------------
-def test_super_without_header_must_choose(client, superadmin):
+def test_super_without_header_must_choose(client, owner, superadmin):
     """**היפוך 11/08/2026 (ערב).** קודם סופר-אדמין עם ארגון בית נכנס
     אליו בלי כותרת. זה יצר שתי התנהגויות לאותו תפקיד — תלוי בשדה
     `organization_id` שהוא שריד היסטורי — והחזיר בדלת האחורית פעולה

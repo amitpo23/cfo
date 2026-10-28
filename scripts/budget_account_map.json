@@ -1,0 +1,14 @@
+{
+  "note": "Designed in the repo because eliav/work/build_budget_mapping.py was not available. Account codes are the draft journal map (source_journal.py). A code is not given an amount: splitting one account across supplier or wage lines would invent the split. Declared payroll of 49700 is the sum of wage lines that already have quantity and rate.",
+  "declared_payroll_monthly": "49700.00",
+  "accounts": [
+    {"code": "90003", "category": "cost_of_goods", "line_id": null, "label": "מזון וחומרי גלם"},
+    {"code": "90004", "category": "cost_of_goods", "line_id": null, "label": "משקאות"},
+    {"code": "90005", "category": "cost_of_goods", "line_id": null, "label": "אריזות"},
+    {"code": "90050", "category": "vehicle", "line_id": null, "label": "דלק"},
+    {"code": "99001", "category": "bank_fees", "line_id": null, "label": "עמלות בנק ואשראי"},
+    {"code": "99002", "category": "interest_expense", "line_id": null, "label": "ריבית"}
+  ],
+  "income_lines_without_amounts": ["rev_pizza", "rev_kexpress", "rev_cargo", "rev_chef"],
+  "none": []
+}

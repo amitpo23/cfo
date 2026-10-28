@@ -202,6 +202,14 @@ _RULE_FIELDS = {"description", "counterparty", "any"}
 _RULE_DIRECTIONS = {"in", "out", "both"}
 
 
+def _validate_shared_allocation(value) -> None:
+    from .books_pnl import validate_shared_cost_allocation
+    try:
+        validate_shared_cost_allocation(value)
+    except ValueError as exc:
+        raise _invalid_plan(str(exc))
+
+
 def _invalid_plan(message_he: str) -> DashboardError:
     return DashboardError(422, "invalid_plan", message_he)
 
@@ -253,6 +261,7 @@ def validate_filing_payload(payload: dict) -> None:
     _validate_journal_map(payload.get("journalAccountMap"))
     _validate_intercompany(payload.get("intercompany"))
     _validate_z_reports(payload.get("zReports"))
+    _validate_shared_allocation(payload.get("sharedCostAllocation"))
     closed = payload.get("booksClosedMonths")
     if closed is not None:
         if not isinstance(closed, list) or not all(

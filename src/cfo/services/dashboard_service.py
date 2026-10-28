@@ -762,8 +762,27 @@ class DashboardService:
     # ===== P&L =====
 
     def get_pnl(self, months: int = 6) -> list:
-        """Monthly P&L for the past N months."""
+        """Monthly P&L for the past N months.
+
+        A month with no imported documents is ``no_books`` and its amounts are
+        null. Bank and unclassified transactions are not a silent substitute.
+        """
         today = date.today()
+        from .dashboards.freshness import build_freshness
+        stale_sources = [
+            {
+                "kind": item.get("kind"),
+                "label": item.get("label"),
+                "source": item.get("source"),
+                "source_label": item.get("source_label"),
+                "age_days": item.get("age_days"),
+                "status": item.get("status"),
+                "status_label": item.get("status_label"),
+                "last_date": item.get("last_date"),
+            }
+            for item in (build_freshness(self.db, self.org_id, today=today).get("items") or [])
+            if item.get("status") == "stale"
+        ]
         result = []
 
         for i in range(months - 1, -1, -1):
@@ -780,6 +799,22 @@ class DashboardService:
             else:
                 month_end = date(y, m + 1, 1) - timedelta(days=1)
 
+            has_books = self._month_has_books(month_start, month_end)
+            if not has_books:
+                result.append({
+                    "month": month_start.strftime("%Y-%m"),
+                    "basis": "no_books",
+                    "basis_label": "אין נתוני ספרים",
+                    "revenue": None,
+                    "cogs": None,
+                    "cogs_available": False,
+                    "gross_profit": None,
+                    "opex": None,
+                    "net_profit": None,
+                    "categories": {},
+                    "stale_sources": stale_sources,
+                })
+                continue
             revenue = float(self._get_month_revenue(month_start, month_end))
             expenses = float(self._get_month_expenses(month_start, month_end))
             cogs = self._get_month_direct_cost(month_start, month_end)
@@ -793,6 +828,8 @@ class DashboardService:
 
             result.append({
                 "month": month_start.strftime("%Y-%m"),
+                "basis": "books",
+                "basis_label": "ספרים — מסמכי SUMIT שכבר במערכת",
                 "revenue": revenue,
                 "cogs": cogs,
                 "cogs_available": cogs_available,
@@ -800,6 +837,7 @@ class DashboardService:
                 "opex": opex,
                 "net_profit": net_profit,
                 "categories": categories,
+                "stale_sources": stale_sources,
             })
 
         return result

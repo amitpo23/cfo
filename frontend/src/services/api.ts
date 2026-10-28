@@ -78,11 +78,25 @@ class ApiService {
           error.response?.status === 409 &&
           detail?.error === 'active_organization_required'
         ) {
-          window.dispatchEvent(
-            new CustomEvent('rezef:active-org-required', {
-              detail: { organizations: detail.organizations ?? [] },
-            })
-          );
+          const organizations = detail.organizations ?? [];
+          const config = error.config;
+          // A single active organization is the file to open. Don't cover the
+          // page with a chooser, and don't leave the failed request as zeros.
+          if (organizations.length === 1 && config && !config._soleOrgRetry) {
+            const id = String(organizations[0].id);
+            localStorage.setItem('active_org_id', id);
+            config._soleOrgRetry = true;
+            config.headers = config.headers ?? {};
+            config.headers['X-Active-Org-Id'] = id;
+            return this.client.request(config);
+          }
+          if (organizations.length !== 1) {
+            window.dispatchEvent(
+              new CustomEvent('rezef:active-org-required', {
+                detail: { organizations },
+              })
+            );
+          }
         }
         return Promise.reject(error);
       }
