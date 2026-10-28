@@ -250,6 +250,43 @@ def test_saved_budget_replaces_the_snapshot_on_the_next_dashboard_read(client, f
     assert revision.headers["cache-control"] == "private, no-store"
 
 
+def test_budget_entry_writes_plan_lines_and_the_dashboard_forecast(client, fresh_org):
+    """The amount saved from /budget-entry is on plan.budgetLines, on the budget table, and in the forecast."""
+    from cfo.models import Budget
+
+    owner = fresh_org()
+    dashboard_id = _create(client, owner["headers"], owner["org_id"], "budget-entry-forecast")
+    today = date.today()
+    nxt = date(today.year + 1, 1, 1) if today.month == 12 else date(today.year, today.month + 1, 1)
+    future = f"{nxt.year:04d}-{nxt.month:02d}"
+    saved = client.put("/api/financial/budget/lines", headers=owner["headers"], json={"updates": [{
+        "id": "sales",
+        "label": "מכירות",
+        "category": "sales",
+        "kind": "revenue",
+        "month": future,
+        "status": "filled",
+        "amount": 3210,
+    }]})
+    assert saved.status_code == 200, saved.text
+    plan = client.get(f"/api/dashboards/{dashboard_id}/plan", headers=owner["headers"])
+    assert plan.status_code == 200, plan.text
+    lines = plan.json()["payload"]["budgetLines"]
+    sales = next(line for line in lines if line["id"] == "sales")
+    assert sales["months"][future]["quantity"] == 1
+    assert sales["months"][future]["rate"] == 3210
+    with SessionLocal() as db:
+        row = db.query(Budget).filter_by(
+            organization_id=owner["org_id"], year=nxt.year, month=nxt.month, category_name="sales",
+        ).one()
+        assert float(row.budgeted_amount) == 3210.0
+    view = client.get(f"/api/dashboards/{dashboard_id}/view", headers=owner["headers"])
+    assert view.status_code == 200, view.text
+    forecast = view.json()["forecast"]["rows"][0]["months"][future]
+    assert forecast["source"] == "budget"
+    assert forecast["value"] == 3210.0
+
+
 def test_super_admin_with_a_single_active_org_skips_the_chooser(client, platform_admin):
     from cfo.models import Organization
 
