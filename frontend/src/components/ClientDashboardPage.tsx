@@ -13,6 +13,7 @@ import TabErrorBoundary from './TabErrorBoundary';
 import {
   CashForecast, CashForecastItemsCard, CashForecastPanel, Overdue, cashForecastItemsFromPayload,
 } from './cashForecastTab';
+import { BalanceSheetView, BalanceSheetCard } from './balanceSheetTab';
 import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs } from './dashboardUi';
 import { safeLoginHref } from './dashboardReturn';
 
@@ -162,6 +163,7 @@ type DashboardView = {
   cash_forecast?: CashForecast | null;
   sources?: Sources | null;
   cash_statement?: CashStatement | null;
+  balance_sheet?: BalanceSheetView | null;
   entities?: { label: string | null; role: string; view: DashboardView }[];
   combined?: {
     pnl?: DashboardView['pnl'];
@@ -173,6 +175,7 @@ type DashboardView = {
     intercompany_removed?: IntercompanyRemoved;
     sources?: Sources | null;
     cash_statement?: CashStatement | null;
+    balance_sheet?: BalanceSheetView | null;
   };
   error?: { message_he?: string };
 };
@@ -799,6 +802,7 @@ export default function ClientDashboardPage() {
     cash_forecast: view.combined?.cash_forecast,
     sources: view.combined?.sources,
     cash_statement: view.combined?.cash_statement,
+    balance_sheet: view.combined?.balance_sheet,
   } : entities[Number(scope)]?.view ?? view;
   // Past-due items are per entity; the combined scope lists every entity's, named.
   const overdue: Overdue[] = !view ? [] : !multi ? (view.cash_forecast?.overdue ?? [])
@@ -837,6 +841,7 @@ export default function ClientDashboardPage() {
             ) : null}
             <TabErrorBoundary tab={`${tab}:${scope}`}>
             <div id="dashboard-panel" role="tabpanel" aria-labelledby={`tab-${tab}`} className="mt-4 grid gap-4">
+              {tab === 'balance' ? <BalanceSheetCard sheet={scoped.balance_sheet} /> : null}
               {tab === 'status' ? (
                 <>
                   <StatusKpis view={scoped} reviewCount={filing?.review.total ?? null} />
@@ -940,6 +945,7 @@ export default function ClientDashboardPage() {
 
 const TABS = [
   { id: 'status', label: 'תמונת מצב' },
+  { id: 'balance', label: 'מאזן' },
   { id: 'cashforecast', label: 'תזרים חזוי' },
   { id: 'bva', label: 'תקציב מול ביצוע' },
   { id: 'liquidity', label: 'נזילות והתחייבויות' },

@@ -21,6 +21,7 @@ import { BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, Sourc
 import { LiquidityEvidenceCard, LiquidityPanel, OpeningBalanceCard, draftFromItem, evidenceItems, itemFromDraft, upcomingAmount, withEvidenceItem, withOpeningBalance, ZReportsCard, withZReport, zReportsFromPayload } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
 import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, KpiCards, StatusTabs } from ${JSON.stringify(join(components, 'dashboardUi.tsx'))};
+import { BalanceSheetCard } from ${JSON.stringify(join(components, 'balanceSheetTab.tsx'))};
 import { ProviderAccessCard } from ${JSON.stringify(join(components, 'dashboardProviders.tsx'))};
 import { dashboardLoginHref, safeDashboardReturn, safeLoginHref } from ${JSON.stringify(join(components, 'dashboardReturn.ts'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
@@ -29,7 +30,7 @@ export { renderToStaticMarkup, createElement, BudgetVsActual, CashStatementCard,
   LiquidityEvidenceCard, draftFromItem, evidenceItems, itemFromDraft, withEvidenceItem, ZReportsCard, withZReport, zReportsFromPayload,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
   categoryLabel, pieSlices, DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, KpiCards, StatusTabs,
-  ProviderAccessCard, dashboardLoginHref, safeDashboardReturn, safeLoginHref };
+  BalanceSheetCard, ProviderAccessCard, dashboardLoginHref, safeDashboardReturn, safeLoginHref };
 `;
 
 const dir = mkdtempSync(join(tmpdir(), 'dashboard-render-'));
@@ -359,6 +360,97 @@ try {
     expect(ui.zReportsFromPayload(ui.withZReport(replaced, 6, '2026-07', null)).length === 1, 'not removed');
     const markup = html(ui.ZReportsCard, { entities: [{ organization_id: 6, label: 'פוד גרופ' }], items: ui.zReportsFromPayload(next), saving: false, onSave: () => {} });
     expect(markup.includes('הכנסות פיצה מדוחות Z') && markup.includes('76,511') && markup.includes('פוד גרופ'), 'card');
+  });
+
+  check('balance sheet: missing is unknown, a posted amount keeps its source and sync date', () => {
+    const line = {
+      code: '1000', name: 'קופה', amount: 1500.5, mapped: true, reason: null,
+      source: 'sumit_portal_export', source_label: 'ייצוא פורטל SUMIT', synced_at: '2026-09-30T08:00:00+00:00',
+    };
+    const known = {
+      status: 'ready', total: 1500.5, source: 'sumit_portal_export', source_label: 'ייצוא פורטל SUMIT',
+      synced_at: '2026-09-30T08:00:00+00:00', lines: [line],
+    };
+    const unknown = {
+      status: 'unknown', total: null, source: null, source_label: null, synced_at: null, lines: [],
+    };
+    const markup = html(ui.BalanceSheetCard, {
+      sheet: {
+        status: 'partial', basis: 'sumit_portal_export', basis_label: 'ייצוא פורטל SUMIT',
+        as_of: '2026-09-30', synced_at: '2026-09-30T08:00:00+00:00', balanced: null,
+        message: 'חלק מהמאזן לא ידוע', disclaimer: 'ייצוא שהועלה מפורטל SUMIT',
+        assets: known,
+        liabilities: unknown,
+        equity: { ...unknown, opening_equity: null, retained_earnings: null },
+        unclassified: [],
+        imports: { profit_loss: { status: 'unknown' }, ledger_cards: { status: 'unknown' } },
+      },
+    });
+    expect(markup.includes('קופה') && markup.includes('ייצוא פורטל SUMIT') && markup.includes('2026-09-30'), 'amount, source or sync date missing');
+    expect(markup.includes('לא ידוע'), 'a missing section was not shown as unknown');
+    expect(markup.includes('1,501') || markup.includes('1,500'), 'the known asset amount is missing');
+    const zero = html(ui.BalanceSheetCard, {
+      sheet: {
+        status: 'partial', basis: 'rezef_books', basis_label: 'ספרים ברצף (נגזר מהמסמכים)',
+        as_of: '2026-08-31', synced_at: '2026-08-31T00:00:00', balanced: null, message: '',
+        assets: { ...known, total: 100, lines: [{ ...line, name: 'לקוחות', code: '1100', amount: 100 }] },
+        liabilities: {
+          status: 'ready', total: 0, source: 'rezef_books', source_label: 'ספרים ברצף (נגזר מהמסמכים)',
+          synced_at: '2026-08-31T00:00:00',
+          lines: [{ ...line, name: 'מע״מ', code: '2200', amount: 0, source: 'rezef_books', source_label: 'ספרים ברצף (נגזר מהמסמכים)', synced_at: '2026-08-31T00:00:00' }],
+        },
+        equity: { ...unknown, status: 'partial', source: 'rezef_books', source_label: 'ספרים ברצף (נגזר מהמסמכים)', synced_at: '2026-08-31T00:00:00', opening_equity: null, retained_earnings: 100 },
+      },
+    });
+    expect(zero.includes('מע״מ') && zero.includes('הון פתיחה') && zero.includes('לא ידוע'), 'opening equity was not left unknown');
+    const compared = html(ui.BalanceSheetCard, {
+      sheet: {
+        status: 'compared', presentation: 'compared', basis: null, basis_label: null,
+        as_of: null, synced_at: null, balanced: null, message: 'שני מקורות',
+        assets: unknown, liabilities: unknown, equity: { ...unknown, opening_equity: null, retained_earnings: null },
+        portal: {
+          status: 'partial', presentation: 'single', basis: 'sumit_portal_export', basis_label: 'ייצוא פורטל SUMIT',
+          as_of: '2026-09-30', synced_at: '2026-09-30T08:00:00+00:00', balanced: null, message: '',
+          assets: { ...known, total: 200, lines: [{ ...line, name: 'כרטיס לא מוכר', mapped: false, mark: 'לא ממופה', amount: 200 }] },
+          liabilities: { ...known, total: 50, lines: [] },
+          equity: { ...known, total: 50, lines: [], opening_equity: null, retained_earnings: null },
+          unclassified: { label: 'ללא סיווג', amount: 25, row_count: 1, lines: [{ ...line, code: '7777', name: 'בלי סעיף', amount: 25 }], source_label: 'ייצוא פורטל SUMIT', synced_at: '2026-09-30T08:00:00+00:00' },
+        },
+        books: {
+          status: 'partial', presentation: 'single', basis: 'rezef_books', basis_label: 'ספרים ברצף (נגזר מהמסמכים)',
+          as_of: '2026-09-30', synced_at: '2026-09-30T09:00:00+00:00', balanced: null, message: '',
+          assets: { ...known, total: 100, source_label: 'ספרים ברצף (נגזר מהמסמכים)', lines: [{ ...line, amount: 100, source_label: 'ספרים ברצף (נגזר מהמסמכים)' }] },
+          liabilities: { ...unknown, total: 40 },
+          equity: { ...unknown, opening_equity: null, retained_earnings: null },
+          unclassified: { label: 'ללא סיווג', amount: 0, row_count: 0, lines: [] },
+        },
+        difference: {
+          assets: { portal: 200, books: 100, gap: 100, flagged: true },
+          liabilities: { portal: 50, books: 40, gap: 10, flagged: true },
+          equity: { portal: 50, books: null, gap: null, flagged: false },
+          unclassified: { portal: 25, books: 0, gap: 25, flagged: true },
+        },
+      },
+    });
+    expect(compared.includes('ייצוא פורטל SUMIT') && compared.includes('ספרים ברצף'), 'both sources are not labeled');
+    expect(compared.includes('לא ממופה') && compared.includes('ללא סיווג') && compared.includes('1 שורות'), 'unmapped or unclassified row missing');
+    expect(compared.includes('text-red-700') && compared.includes('פער מעל ₪1'), 'a gap above ₪1 is not flagged');
+    const exact = html(ui.BalanceSheetCard, {
+      sheet: {
+        status: 'compared', presentation: 'compared', basis: null, basis_label: null,
+        as_of: null, synced_at: null, balanced: null, message: '',
+        assets: unknown, liabilities: unknown, equity: { ...unknown, opening_equity: null, retained_earnings: null },
+        portal: { status: 'ready', basis_label: 'ייצוא פורטל SUMIT', as_of: '2026-09-30', synced_at: '2026-09-30', assets: known, liabilities: known, equity: { ...known, opening_equity: null, retained_earnings: null } },
+        books: { status: 'ready', basis_label: 'ספרים ברצף (נגזר מהמסמכים)', as_of: '2026-09-30', synced_at: '2026-09-30', assets: known, liabilities: known, equity: { ...known, opening_equity: null, retained_earnings: null } },
+        difference: {
+          assets: { portal: 1500.5, books: 1499.5, gap: 1, flagged: false },
+          liabilities: { portal: 0, books: 0, gap: 0, flagged: false },
+          equity: { portal: 0, books: 0, gap: 0, flagged: false },
+          unclassified: { portal: 0, books: 0, gap: 0, flagged: false },
+        },
+      },
+    });
+    expect(!exact.includes('text-red-700'), 'a gap of ₪1 is flagged');
   });
 
   const importedPlan = process.env.REZEF_IMPORTED_PLAN;

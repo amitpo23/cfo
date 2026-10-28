@@ -37,6 +37,7 @@ SOURCE_LABELS = {
     "sumit": "SUMIT — סנכרון",
     "reviewed_local_import": "יבוא מקומי שנבדק",
     "hashavshevet_mdb": "יבוא חשבשבת",
+    "sumit_portal_export": "ייצוא פורטל SUMIT",
     "manual": "הזנה ידנית",
 }
 KIND_LABELS = {
