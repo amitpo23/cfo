@@ -136,22 +136,401 @@ def _accounts(db, entity) -> list[dict]:
     ]
 
 
+SHARED_NOTE = "חשבון בנק אחד רשום ביותר מישות אחת. במאוחד הוא נספר פעם אחת."
+BALANCE_CONFLICT_NOTE = "אותו חשבון רשום ביותר מישות והיתרות אינן זהות, ולכן היתרה המאוחדת לא ידועה."
+FLOW_CONFLICT_NOTE = "אותו חשבון רשום ביותר מישות והתנועות אינן זהות, ולכן התזרים המאוחד לא ידוע."
+
+
+def _shared_groups(db, sections: list[dict]) -> tuple[list[dict], set[int]]:
+    """Copies of one bank account in more than one organization of this dashboard.
+
+    The keeper is the primary entity's copy. A missing or short account number
+    is not an identity, so those accounts are never folded together.
+    """
+    from ...models import Account
+    org_ids = [section["organization_id"] for section in sections]
+    if len(org_ids) < 2:
+        return [], set()
+    primary = next(
+        (section["organization_id"] for section in sections if section.get("role") == "primary"),
+        org_ids[0],
+    )
+    accounts = db.query(Account).filter(Account.organization_id.in_(org_ids)).all()
+    by: dict[str, list] = {}
+    for account in accounts:
+        ident = liquidity.account_identity(account)
+        if not ident:
+            continue
+        by.setdefault(ident, []).append(account)
+    groups = []
+    drop: set[int] = set()
+    for ident, group in by.items():
+        if len({account.organization_id for account in group}) < 2:
+            continue
+        keeper = min(group, key=lambda account: (
+            0 if account.organization_id == primary else 1,
+            account.organization_id or 0,
+            account.id or 0,
+        ))
+        drops = [account.id for account in group if account.id != keeper.id]
+        drop.update(drops)
+        groups.append({"identity": ident, "keeper": keeper, "accounts": group, "drop_ids": drops})
+    return groups, drop
+
+
+def _flow_signature(rows) -> dict[str, tuple[float, float]]:
+    sig: dict[str, list[float]] = {}
+    for row in rows:
+        month = row.transaction_date.strftime("%Y-%m")
+        slot = sig.setdefault(month, [0.0, 0.0])
+        amount = float(row.amount or 0)
+        if amount > 0:
+            slot[0] += amount
+        elif amount < 0:
+            slot[1] += -amount
+    return {month: (round(pair[0], 2), round(pair[1], 2)) for month, pair in sig.items()}
+
+
+def _rows_on_accounts(db, start: date, end: date, account_ids: set[int]) -> list:
+    from ..bank_coverage import cashflow_row_objects
+    if not account_ids:
+        return []
+    org_ids = {row.organization_id for row in db.query(BankTransaction.organization_id).filter(
+        BankTransaction.account_id.in_(account_ids)
+    ).distinct()}
+    found = []
+    for org_id in org_ids:
+        for row in cashflow_row_objects(db, org_id, start, end):
+            if row.account_id in account_ids:
+                found.append(row)
+    return found
+
+
+def _collapse_values(rows: list[dict], value_key: str) -> tuple[list[float], str]:
+    """One value per bank_key. ``conflict`` when known copies disagree, ``unknown`` when none are known."""
+    grouped: dict[str, list] = {}
+    order: list[str] = []
+    loose = []
+    for row in rows:
+        key = row.get("bank_key")
+        if not key:
+            loose.append(row)
+            continue
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(row)
+    state = "ok"
+    values: list[float] = []
+
+    def take(group: list[dict]) -> None:
+        nonlocal state
+        known = [item.get(value_key) for item in group if item.get(value_key) is not None]
+        distinct = {round(float(value), 2) for value in known}
+        if len(distinct) > 1:
+            state = "conflict"
+            return
+        if not known:
+            if state != "conflict":
+                state = "unknown"
+            return
+        values.append(float(known[0]))
+
+    for row in loose:
+        take([row])
+    for key in order:
+        take(grouped[key])
+    return values, state
+
+
+def _shared_view_keys(sections: list[dict]) -> set[str]:
+    seen: dict[str, str] = {}
+    shared: set[str] = set()
+    for section in sections:
+        label = section.get("label") or ""
+        liquidity_view = (section.get("view") or {}).get("liquidity") or {}
+        rows = [
+            *(liquidity_view.get("accounts") or []),
+            *(liquidity_view.get("cards") or []),
+            *(liquidity_view.get("loans") or []),
+        ]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = row.get("bank_key")
+            if not key:
+                continue
+            previous = seen.get(key)
+            if previous is not None and previous != label:
+                shared.add(key)
+            else:
+                seen.setdefault(key, label)
+    return shared
+
+
+def _apply_shared_liquidity(position: dict, sections: list[dict]) -> dict:
+    if not _shared_view_keys(sections):
+        return position
+    checking, cards, loans = [], [], []
+    for section in sections:
+        label = section.get("label")
+        liquidity_view = (section.get("view") or {}).get("liquidity") or {}
+        for row in liquidity_view.get("accounts") or []:
+            if isinstance(row, dict) and row.get("kind") == "checking":
+                checking.append({**row, "entity": label})
+        for row in liquidity_view.get("cards") or []:
+            if isinstance(row, dict):
+                cards.append({**row, "entity": label})
+        for row in liquidity_view.get("loans") or []:
+            if isinstance(row, dict) and not liquidity.is_check_discounting(row.get("name")):
+                loans.append({**row, "entity": label})
+    balances, balance_state = _collapse_values(checking, "balance")
+    limits, limit_state = _collapse_values(checking, "credit_limit")
+    card_balances, card_state = _collapse_values(cards, "balance")
+    position = dict(position)
+    notes = [SHARED_NOTE]
+    if balance_state == "conflict" or limit_state == "conflict":
+        notes.append(BALANCE_CONFLICT_NOTE)
+    balance = None if balance_state != "ok" else (liquidity._r(sum(balances)) if balances else None)
+    limit = None if limit_state != "ok" else (liquidity._r(sum(limits)) if limits else None)
+    if checking and balance_state == "ok" and not balances:
+        balance = None
+    position["balance"] = balance if checking else position.get("balance")
+    if checking:
+        position["balance_known"] = position["balance"]
+    if checking:
+        position["limit"] = limit
+        position["limit_known"] = limit
+        position["available_to_limit"] = None if position["balance"] is None or limit is None else liquidity._r(limit + position["balance"])
+    kept_cards = []
+    seen = set()
+    for card in cards:
+        key = card.get("bank_key")
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        kept_cards.append(card)
+    if card_state == "conflict":
+        for card in kept_cards:
+            if card.get("bank_key"):
+                card["balance"] = None
+                card["date_note"] = BALANCE_CONFLICT_NOTE
+    position["cards"] = kept_cards
+    position["card_summary"] = liquidity.card_summary(kept_cards)
+    kept_loans = []
+    seen_loans = set()
+    for loan in loans:
+        key = loan.get("bank_key")
+        if key and key in seen_loans:
+            continue
+        if key:
+            seen_loans.add(key)
+        kept_loans.append(loan)
+    position["loans"] = kept_loans
+    debts = []
+    if checking:
+        if position["balance"] is None:
+            overdraft = None
+        else:
+            overdraft = liquidity._r(-position["balance"]) if position["balance"] < 0 else 0.0
+        debts.append({"label": "מינוס בעו״ש", "amount": overdraft, "entity": "מאוחד", "as_of": position.get("as_of"),
+                      "note": SHARED_NOTE})
+    elif position.get("debts"):
+        debts.extend(debt for debt in position["debts"] if debt.get("label") == "מינוס בעו״ש")
+    if cards:
+        if card_state == "ok":
+            card_amount = liquidity._r(sum(card_balances)) if card_balances else 0.0
+        else:
+            card_amount = None
+        debts.append({"label": "כרטיסי אשראי", "amount": card_amount, "entity": "מאוחד", "note": SHARED_NOTE})
+    for loan in kept_loans:
+        debts.append({
+            "label": f"הלוואה — {loan.get('name')}", "amount": loan.get("balance"),
+            "entity": loan.get("entity"), "as_of": loan.get("as_of"), "note": SHARED_NOTE if loan.get("bank_key") else None,
+        })
+    if debts:
+        position["debts"] = debts
+        position["debts_known_total"] = liquidity._sum_or_none(debt.get("amount") for debt in debts)
+        position["debts_complete"] = all(debt.get("amount") is not None for debt in debts)
+    position["shared_identity_note"] = " ".join(notes)
+    if card_state == "conflict" or any(card.get("bank_key") for card in cards):
+        # The summed activity counted each shared card once per entity. Do not show that number.
+        if any(card.get("bank_key") in _shared_view_keys(sections) for card in cards):
+            position["card_activity"] = {
+                "key": "cards", "label": "עסקאות כרטיסי אשראי", "defined": False,
+                "amount": None, "count": None, "counts_as_debt": False, "counts_as_balance": False,
+                "definition": "אותו כרטיס רשום ביותר מישות. הסכום המאוחד אינו מוצג, כדי לא לספור את העסקאות פעמיים.",
+            }
+    return position
+
+
+def _subtract_duplicate_flows(cashflow: dict, rows) -> dict:
+    if not isinstance(cashflow, dict) or cashflow.get("status") != "ready" or not rows:
+        return cashflow
+    extra: dict[str, dict] = {}
+    for row in rows:
+        month = row.transaction_date.strftime("%Y-%m")
+        slot = extra.setdefault(month, {"inflows": 0.0, "outflows": 0.0})
+        amount = float(row.amount or 0)
+        if amount > 0:
+            slot["inflows"] += amount
+        elif amount < 0:
+            slot["outflows"] += -amount
+    cumulative = 0.0
+    months = []
+    for month in cashflow.get("months") or []:
+        if month.get("inflows") is None:
+            months.append(month)
+            continue
+        cut = extra.get(month["month"], {"inflows": 0.0, "outflows": 0.0})
+        inflows = round(float(month["inflows"]) - cut["inflows"], 2)
+        outflows = round(float(month["outflows"]) - cut["outflows"], 2)
+        if inflows < -0.001 or outflows < -0.001:
+            return {
+                "status": "unknown", "months": [],
+                "message": "קיזוז חשבון משותף חרג מהתזרים המאוחד — המשולב לא מוצג.",
+            }
+        net = round(inflows - outflows, 2)
+        cumulative = round(cumulative + net, 2)
+        months.append({**month, "inflows": inflows, "outflows": outflows, "net_flow": net, "cumulative": cumulative})
+    copied = dict(cashflow)
+    copied["months"] = months
+    return copied
+
+
+def _apply_shared_identity(db, result: dict, sections: list[dict], groups: list[dict], start: date, end: date) -> dict:
+    if not groups:
+        return result
+    from .books import cash_basis_month
+    result = dict(result)
+    conflict = False
+    drop_rows = []
+    for group in groups:
+        keeper_rows = _rows_on_accounts(db, start, end, {group["keeper"].id})
+        for account in group["accounts"]:
+            if account.id == group["keeper"].id:
+                continue
+            rows = _rows_on_accounts(db, start, end, {account.id})
+            if _flow_signature(rows) != _flow_signature(keeper_rows):
+                conflict = True
+            drop_rows.extend(rows)
+    if conflict:
+        result["cashflow"] = {"status": "unknown", "months": [], "message": FLOW_CONFLICT_NOTE}
+        statement = dict(result.get("cash_statement") or {})
+        statement["status"] = "unknown"
+        statement["message"] = FLOW_CONFLICT_NOTE
+        result["cash_statement"] = statement
+        note = result["liquidity"].get("shared_identity_note")
+        result["liquidity"]["shared_identity_note"] = f"{note} {FLOW_CONFLICT_NOTE}".strip() if note else FLOW_CONFLICT_NOTE
+        return _mask_shared_forecast(result, groups)
+    result["cashflow"] = _subtract_duplicate_flows(result.get("cashflow") or {}, drop_rows)
+    pairs = []
+    for row in drop_rows:
+        txn = filing.txn_from_row(row)
+        pairs.append((txn, filing.classify(txn)))
+    if pairs:
+        result["cash_statement"] = cash_statement.subtract_filed(result.get("cash_statement") or {}, pairs)
+        position = result.get("liquidity")
+        if isinstance(position, dict):
+            position["debt_service"] = _subtract_debt_service(position.get("debt_service") or [], pairs)
+    pnl = result.get("pnl") or {}
+    bases = {section["organization_id"]: (section["view"].get("pnl") or {}).get("basis") for section in sections}
+    if pnl.get("status") == "ready" and pnl.get("total_revenue") is not None and pnl.get("total_expenses") is not None and pairs:
+        eligible = True
+        for group in groups:
+            if bases.get(group["keeper"].organization_id) != "cash_basis":
+                eligible = False
+            if any(bases.get(account.organization_id) != "cash_basis" for account in group["accounts"]):
+                eligible = False
+        if eligible:
+            impact = cash_basis_month(pairs)
+            revenue = round(float(pnl["total_revenue"]) - impact["revenue"], 2)
+            costs = round(float(pnl["total_expenses"]) - impact["costs"], 2)
+            pnl = dict(pnl)
+            pnl["total_revenue"] = revenue
+            pnl["total_expenses"] = costs
+            pnl["net_income_before_tax"] = round(revenue - costs, 2)
+            result["pnl"] = pnl
+    return _mask_shared_forecast(result, groups)
+
+
+def _subtract_debt_service(rows: list[dict], pairs) -> list[dict]:
+    extra: dict[str, dict] = {}
+    for txn, filed in pairs:
+        month = str(getattr(txn, "date", ""))[:7]
+        slot = extra.setdefault(month, {"principal": 0.0, "interest": 0.0, "new_loans": 0.0})
+        amount = float(txn.amount)
+        if filed.category == "loans_out":
+            slot["principal"] += abs(amount)
+        elif filed.category == "interest":
+            slot["interest"] += abs(amount)
+        elif filed.category == "loans_in":
+            slot["new_loans"] += amount
+    if not extra:
+        return rows
+    out = []
+    for row in rows:
+        cut = extra.get(row.get("month") or "")
+        if not cut:
+            out.append(row)
+            continue
+        out.append({
+            "month": row["month"],
+            "principal": round(float(row.get("principal") or 0) - cut["principal"], 2),
+            "interest": round(float(row.get("interest") or 0) - cut["interest"], 2),
+            "new_loans": round(float(row.get("new_loans") or 0) - cut["new_loans"], 2),
+        })
+    return out
+
+
+def _mask_shared_forecast(result: dict, groups: list[dict]) -> dict:
+    """The 13-week combine adds each entity. A shared checking account would be in both.
+
+    Liquidity and the monthly cash flow already count it once. The weekly numbers
+    are left unknown rather than shown doubled.
+    """
+    checking = [group for group in groups if liquidity._account_kind(group["keeper"]) == "checking"]
+    forecast = result.get("cash_forecast")
+    if not checking or not isinstance(forecast, dict):
+        return result
+    note = (
+        "חשבון עו״ש אחד רשום ביותר מישות. יתרת הנזילות והתזרים החודשי סופרים אותו פעם אחת. "
+        "התחזית השבועית המאוחדת אינה מוצגת כמספר, כי היא נבנית מכל ישות בנפרד."
+    )
+    weeks = []
+    for week in forecast.get("weeks") or []:
+        if isinstance(week, dict):
+            weeks.append({**week, "in": None, "out": None, "net": None, "closing": None, "limit": None, "headroom": None})
+    position = result.get("liquidity") or {}
+    result["cash_forecast"] = {
+        **forecast,
+        "weeks": weeks,
+        "opening": {"amount": position.get("balance"), "as_of": position.get("as_of")},
+        "first_breach": None,
+        "shared_identity_note": note,
+    }
+    return result
+
+
 def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | None = None) -> dict:
     views = [section["view"] for section in sections]
     org_ids = [section["organization_id"] for section in sections]
     labels = {section["organization_id"]: section["label"] for section in sections}
-    removed = _intercompany(db, org_ids, start, end, plan=plan, labels=labels)
+    groups, drop_ids = _shared_groups(db, sections)
+    removed = _intercompany(db, org_ids, start, end, plan=plan, labels=labels, drop_ids=drop_ids)
     removed["summary"]["rule"] = IC_RULE_HE.format(days=removed["summary"]["window_days"])
     position = liquidity.combine([
         {"label": section["label"], "liquidity": section["view"].get("liquidity")} for section in sections
     ])
+    position = _apply_shared_liquidity(position, sections)
     # The plan budget is the group's budget, so the combined forecast uses all of it.
     outlook = forecast.build_forecast(
         forecast.combined_pnl_months(sections), as_of=end, plan=plan,
         debt_service=position["debt_service"], budget_sums=view_model.plan_budget_sums(plan),
         opening_balance=position["balance"],
     )
-    return {
+    combined = {
         "pnl": _combine_pnl(views),
         "cashflow": _combine_cashflow(sections, removed),
         "budget_vs_actual": _combine_budget(views),
@@ -163,6 +542,7 @@ def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | N
         "sources": _combine_sources(sections),
         "provider_calls": 0,
     }
+    return _apply_shared_identity(db, combined, sections, groups, start, end)
 
 
 def _combine_sources(sections: list[dict]) -> dict:
@@ -384,7 +764,8 @@ def intercompany_settings(plan: dict | None) -> dict:
     return {"window_days": window, "account_ids": accounts}
 
 
-def _candidates(db, org_ids: list[int], start: date, end: date, plan: dict | None, account_ids: set[int]):
+def _candidates(db, org_ids: list[int], start: date, end: date, plan: dict | None, account_ids: set[int],
+                drop_ids: set[int] | None = None):
     """The rows each entity's cash flow sums, filed, and limited to the configured accounts."""
     from ..bank_coverage import cashflow_row_objects
     from .activity_quality import confirmed_drop_ids
@@ -399,16 +780,23 @@ def _candidates(db, org_ids: list[int], start: date, end: date, plan: dict | Non
         # An organization none of whose accounts is configured keeps all its accounts.
         if account_ids and any(row.account_id in account_ids for row in rows):
             rows = [row for row in rows if row.account_id in account_ids]
+        dropped_accounts = drop_ids or set()
         for row in rows:
+            if row.account_id in dropped_accounts:
+                continue
             txn = filing.txn_from_row(row)
             category = filing.classify(txn, decisions=decisions, custom_rules=rules).category
-            if category in IC_CATEGORIES or _marked(row.description):
+            raw = row.raw_data if isinstance(row.raw_data, dict) else {}
+            party = " ".join(part for part in (
+                row.description or "", str(raw.get("debtorName") or ""), str(raw.get("creditorName") or ""),
+            ) if part)
+            if category in IC_CATEGORIES or _marked(row.description) or filing.is_intercompany_counterparty(party):
                 out.append((row, Decimal(str(row.amount)), category))
     return out
 
 
 def _intercompany(db, org_ids: list[int], start: date, end: date, plan: dict | None = None,
-                  labels: dict | None = None) -> dict:
+                  labels: dict | None = None, drop_ids: set[int] | None = None) -> dict:
     """Intercompany netting of the combined cash flow, an explicit rule:
 
     1. rows: what each entity's cash flow sums (BOOKED, not superseded, no card rows,
@@ -435,7 +823,7 @@ def _intercompany(db, org_ids: list[int], start: date, end: date, plan: dict | N
     if len(set(org_ids)) < 2:
         return empty
     labels = labels or {}
-    rows = _candidates(db, org_ids, start, end, plan, settings["account_ids"])
+    rows = _candidates(db, org_ids, start, end, plan, settings["account_ids"], drop_ids)
     outs = sorted((item for item in rows if item[1] < 0), key=lambda item: (item[0].transaction_date, item[0].id))
     ins = [item for item in rows if item[1] > 0]
     used: set[int] = set()

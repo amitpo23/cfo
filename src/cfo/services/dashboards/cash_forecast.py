@@ -26,7 +26,8 @@ WEEKS = 13
 RUN_RATE_MONTHS = 3
 # ``internal`` stays in each entity's run-rate: a transfer from Food Group is cash
 # in Eliav's account. The other side sits in Food Group's ``transfers_out``, so the
-# combined sum nets the pair. Financing (new loans, discounting) is not a run-rate.
+# combined sum nets the pair. Financing (new loans) is not a run-rate.
+# Cheque discounting is an advance on customer receipts, so it stays in operating inflows.
 RUN_RATE_GROUPS = {
     "operating_in": "כניסות תפעוליות (הערכה לפי קצב)",
     "operating_out": "יציאות תפעוליות (הערכה לפי קצב)",

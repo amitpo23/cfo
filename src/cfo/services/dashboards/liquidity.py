@@ -22,8 +22,11 @@ No provider calls.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import date, timedelta
+
+from sqlalchemy import func
 
 from ...models import Account, BankTransaction, DashboardEntityAccount
 
@@ -53,6 +56,52 @@ def _num(value) -> float | None:
 def _sum_or_none(values) -> float | None:
     known = [v for v in values if v is not None]
     return _r(sum(known)) if known else None
+
+
+# Cheque discounting is an advance on customer receipts, not a loan.
+_DISCOUNTING_NAME = re.compile(r"ניכיון|צ['׳\"״]?קים\s*דחויים|שיקים\s*דחויים")
+_DISCOUNTING_KINDS = frozenset({"check_discounting", "cheque_discounting"})
+ADVANCE_LABEL = "ניכיון שיקים — מקדמה על תקבולי לקוחות"
+ADVANCE_NOTE = "מקדמה על תקבולי לקוחות, לא הלוואה ולא תשלום. אינו נכלל בחוב."
+BALANCE_VS_FLOW_NOTE = (
+    "שפל וסוף חודש הם יתרות סוף יום: הנמוכה בחודש, והאחרונה שנצפתה. "
+    "הנטו החודשי בתזרים הוא סכום התנועות. אלה מדדים שונים, והם לא אמורים להיות שווים. "
+    "השינוי ביתרה שווה לסכום התנועות רק כשיתרת הפתיחה ויתרת הסגירה ידועות. "
+    "השפל אינו יתרת הפתיחה."
+)
+MIN_DEFINITION = "יתרת סוף היום הנמוכה בחודש. זו יתרה, לא תזרים."
+LAST_DEFINITION = "יתרת סוף היום האחרון בחודש שיש לו יתרת ספק. זו יתרה, לא הנטו החודשי."
+CARD_ACTIVITY_DEFINITION = (
+    "סכום מסומן של תנועות BOOKED בחשבונות הכרטיס בחלון (חיוב שלילי, זיכוי חיובי) ומספרן. "
+    "זה אינו יתרת החיוב, אינו המסגרת הפנויה, ואינו נכלל בסה״כ ההתחייבויות."
+)
+_IDENTITY_DIGITS = 6
+
+
+def is_check_discounting(name, kind=None) -> bool:
+    if str(kind or "").strip().casefold() in _DISCOUNTING_KINDS:
+        return True
+    return bool(_DISCOUNTING_NAME.search(str(name or "")))
+
+
+def bank_key(account) -> str | None:
+    """Public stand-in for ``account_identity``. Same account, same key; not the account number."""
+    ident = account_identity(account)
+    if ident is None:
+        return None
+    return hashlib.sha256(ident.encode()).hexdigest()[:16]
+
+
+def account_identity(account) -> str | None:
+    """Stable bank identity across organizations. Unknown (too short, or absent) is None.
+
+    Fewer than six digits is not collapsed with another account: a short tail
+    collides, and a missing number is not a zero and not a match.
+    """
+    digits = re.sub(r"\D", "", str(getattr(account, "provider_account_number", None) or ""))
+    if len(digits) < _IDENTITY_DIGITS:
+        return None
+    return f"{_account_kind(account)}:{digits}"
 
 
 # Evidence and a live loan are one loan when their names match and the balances are
@@ -293,22 +342,135 @@ def _daily_balances(db, account_ids: list[int], start: date, end: date) -> tuple
 
 
 def _months(days: list[dict], limit: float | None) -> list[dict]:
-    by_month: dict[str, dict] = {}
+    """Daily low and last close of the combined checking position.
+
+    Each ``days`` row is one account on one date. A date counts only once every
+    account that has any end-of-day balance in the month already has one (carried
+    forward from its previous day in the month). A partial sum of the accounts
+    that happened to move that day is not the company's balance.
+    """
+    by_month: dict[str, dict[int, list[tuple[str, float]]]] = {}
     for day in days:
-        month = day["date"][:7]
-        slot = by_month.setdefault(month, {
-            "month": month, "days": 0, "min": None, "negative_days": 0,
-            "beyond_limit_days": None if limit is None else 0, "last": None,
+        by_month.setdefault(day["date"][:7], {}).setdefault(day["account_id"], []).append(
+            (day["date"], day["balance"])
+        )
+    out = []
+    for month in sorted(by_month):
+        series = {aid: sorted(points) for aid, points in by_month[month].items()}
+        dates = sorted({day for points in series.values() for day, _balance in points})
+        carried = {aid: None for aid in series}
+        index = {aid: 0 for aid in series}
+        combined: list[tuple[str, float]] = []
+        for day in dates:
+            ready = True
+            for aid, points in series.items():
+                while index[aid] < len(points) and points[index[aid]][0] <= day:
+                    carried[aid] = points[index[aid]][1]
+                    index[aid] += 1
+                if carried[aid] is None:
+                    ready = False
+            if not ready:
+                continue
+            combined.append((day, _r(sum(carried.values()))))
+        if not combined:
+            continue
+        balances = [balance for _day, balance in combined]
+        min_balance = min(balances)
+        last_day, last_balance = combined[-1]
+        out.append({
+            "month": month,
+            "days": len(combined),
+            "min": min_balance,
+            "min_date": next(day for day, balance in combined if balance == min_balance),
+            "min_definition": MIN_DEFINITION,
+            "negative_days": sum(1 for balance in balances if balance < 0),
+            "beyond_limit_days": None if limit is None else sum(1 for balance in balances if balance < -limit),
+            "last": last_balance,
+            "last_date": last_day,
+            "last_definition": LAST_DEFINITION,
         })
-        balance = day["balance"]
-        slot["days"] += 1
-        slot["min"] = balance if slot["min"] is None else min(slot["min"], balance)
-        if balance < 0:
-            slot["negative_days"] += 1
-        if limit is not None and balance < -limit:
-            slot["beyond_limit_days"] += 1
-        slot["last"] = balance
-    return [by_month[key] for key in sorted(by_month)]
+    return out
+
+
+def _reconcile_months(db, account_ids: list[int], start: date, end: date) -> dict[str, dict]:
+    """opening + booked net − closing, per month, across checking accounts that report a balance.
+
+    An account with no end-of-day balance in the whole read is left out (the daily
+    table does not include it either). A month is unknown when any included
+    account lacks an opening before the month or a close inside it. The diff is
+    never filled with zero.
+    """
+    if not account_ids:
+        return {}
+    rows = (
+        db.query(BankTransaction)
+        .filter(
+            BankTransaction.account_id.in_(account_ids),
+            BankTransaction.transaction_date <= end,
+            BankTransaction.superseded_by_id.is_(None),
+        )
+        .all()
+    )
+    per: dict[int, dict] = {aid: {"eod": {}, "net": {}} for aid in account_ids}
+    for row in rows:
+        raw = row.raw_data if isinstance(row.raw_data, dict) else {}
+        if str(raw.get("status") or "").upper() != "BOOKED" or row.account_id not in per:
+            continue
+        if start <= row.transaction_date <= end:
+            month = row.transaction_date.strftime("%Y-%m")
+            per[row.account_id]["net"][month] = per[row.account_id]["net"].get(month, 0.0) + float(row.amount or 0)
+        value = _num(raw.get("balancePerEndDay"))
+        if value is None:
+            continue
+        per[row.account_id]["eod"].setdefault(row.transaction_date, set()).add(_r(value))
+    active = []
+    for aid in account_ids:
+        clean = {}
+        for day, values in per[aid]["eod"].items():
+            if len(values) == 1:
+                clean[day] = next(iter(values))
+        per[aid]["eod"] = clean
+        if clean:
+            active.append(aid)
+    result = {}
+    for key in _month_keys(start, end):
+        year, month = (int(key[:4]), int(key[5:]))
+        first = date(year, month, 1)
+        nxt = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        last = min(nxt - timedelta(days=1), end)
+        openings, closings, nets = [], [], []
+        open_ok = close_ok = bool(active)
+        for aid in active:
+            eod = per[aid]["eod"]
+            before = [day for day in eod if day < first]
+            inside = [day for day in eod if first <= day <= last]
+            nets.append(per[aid]["net"].get(key, 0.0))
+            if before:
+                openings.append(eod[max(before)])
+            else:
+                open_ok = False
+            if inside:
+                closings.append(eod[max(inside)])
+            else:
+                close_ok = False
+        booked_net = _r(sum(nets)) if active else None
+        opening = _r(sum(openings)) if open_ok else None
+        closing = _r(sum(closings)) if close_ok else None
+        diff = None if opening is None or closing is None or booked_net is None else _r(opening + booked_net - closing)
+        if diff is None:
+            note = "אין יתרת פתיחה וסגירה לכל חשבונות העו״ש עם יתרת סוף יום, ולכן אי אפשר לבדוק אם סכום התנועות שווה לשינוי ביתרה."
+        elif abs(diff) < 0.05:
+            note = "סכום התנועות שווה לשינוי ביתרה (יתרת פתיחה + נטו = יתרת סגירה)."
+        else:
+            note = f"פער של {diff:.2f} ₪ בין השינוי ביתרה לבין סכום התנועות. השפל אינו יתרת הפתיחה."
+        result[key] = {
+            "opening": opening,
+            "booked_net": booked_net,
+            "closing_balance": closing,
+            "reconciliation_diff": diff,
+            "reconciliation_note": note,
+        }
+    return result
 
 
 def match_checks(checks: list[dict], bank_rows: list, *, last_covered: date | None, today: date) -> list[dict]:
@@ -404,18 +566,28 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
 
     # מסגרת ופנוי כפי שהבנק מסר (creditLimit, interimAvailable). לא ידוע נשאר
     # None — לא נגזר "פנוי" ממסגרת פחות יתרה.
-    cards = [
-        {"name": a.name, "balance": None if _balance(a) is None else _r(abs(_balance(a))),
-         "credit_limit": _num(a.credit_limit), "available": _num(a.available_limit),
-         "as_of": a.balance_as_of.date().isoformat() if a.balance_as_of else None}
-        for a in by_kind.get("card", [])
-    ]
-    loans = [
-        {"name": a.name, "balance": None if _balance(a) is None else _r(abs(_balance(a))),
+    card_accounts = by_kind.get("card", [])
+    cards = present_cards(db, card_accounts)
+    live_loans = [
+        {"name": a.name, "bank_key": bank_key(a),
+         "balance": None if _balance(a) is None else _r(abs(_balance(a))),
          "as_of": a.balance_as_of.date().isoformat() if a.balance_as_of else None, "source": "accounts"}
         for a in by_kind.get("loan", [])
     ]
-    loans = merge_loan_evidence(loans, evidence["loans"])
+    discount_live = [row for row in live_loans if is_check_discounting(row.get("name"))]
+    real_live = [row for row in live_loans if not is_check_discounting(row.get("name"))]
+    discount_evidence = [
+        item for item in evidence["loans"] if is_check_discounting(item.get("label"), item.get("kind"))
+    ]
+    real_evidence = [
+        item for item in evidence["loans"] if not is_check_discounting(item.get("label"), item.get("kind"))
+    ]
+    loans = merge_loan_evidence(real_live, real_evidence)
+    advances = merge_loan_evidence(discount_live, discount_evidence)
+    for row in advances:
+        row["counts_as_debt"] = False
+        row["label"] = ADVANCE_LABEL if not row.get("name") else f"{ADVANCE_LABEL} — {row['name']}"
+        row["note"] = ADVANCE_NOTE
     mirrors = [{"name": a.name, "balance": _balance(a)} for a in by_kind.get("credit_line_mirror", [])]
 
     bank_rows = (
@@ -451,6 +623,15 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         if loan.get("maturity") and today <= date.fromisoformat(loan["maturity"]) <= today + timedelta(days=EVENT_HORIZON_DAYS):
             upcoming.append({"date": loan["maturity"], "label": f"{loan['name']} · סיום הלוואה",
                              "kind": "loan_maturity", **_outstanding(loan.get("balance"), loan.get("as_of"))})
+    for advance in advances:
+        if advance.get("maturity") and today <= date.fromisoformat(advance["maturity"]) <= today + timedelta(days=EVENT_HORIZON_DAYS):
+            upcoming.append({
+                "date": advance["maturity"],
+                "label": f"{advance.get('name') or 'ניכיון שיקים'} · מקדמה על תקבולי לקוחות",
+                "kind": "check_discounting",
+                "amount": None,
+                "note": ADVANCE_NOTE,
+            })
     upcoming.sort(key=lambda item: item["date"])
 
     debts = []
@@ -467,6 +648,18 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         debts.append({"label": "כרטיסי אשראי", "amount": _sum_or_none(c["balance"] for c in cards),
                       "as_of": cards[0]["as_of"]})
     debts += [{"label": f"הלוואה — {loan['name']}", "amount": loan["balance"], "as_of": loan["as_of"]} for loan in loans]
+    month_rows = _months(days, limit)
+    reconciled = _reconcile_months(db, [a.id for a in checking], start, end)
+    for row in month_rows:
+        row.update(reconciled.get(row["month"]) or {})
+    seen_days = {day["account_id"] for day in days}
+    omitted = [account for account in checking if account.id not in seen_days]
+    if checking and not days:
+        daily_balance_note = "אין יתרת סוף יום לחשבונות העו״ש בחלון, ולכן אין שפל ואין סוף חודש."
+    elif omitted:
+        daily_balance_note = "אין יתרת סוף יום לחלק מחשבונות העו״ש, ולכן השפל וסוף החודש אינם כוללים אותם."
+    else:
+        daily_balance_note = None
 
     if classified is None:
         from .books import classified_bank
@@ -483,7 +676,7 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
             "available_to_limit": None if balance is None or limit is None else _r(limit + balance),
         },
         "accounts": [
-            {"account_id": a.id, "name": a.name, "kind": _account_kind(a),
+            {"account_id": a.id, "name": a.name, "kind": _account_kind(a), "bank_key": bank_key(a),
              "balance": known[a.id]["balance"] if a.id in known else _balance(a),
              "credit_limit": _num(a.credit_limit),
              "as_of": known[a.id]["as_of"].isoformat() if a.id in known else (
@@ -494,9 +687,13 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         ],
         "cards": cards,
         "card_summary": card_summary(cards),
+        "card_activity": card_activity(db, card_accounts, start, end),
         "loans": loans,
+        "advances": advances,
         "credit_line_mirrors": mirrors,
-        "months": _months(days, limit),
+        "months": month_rows,
+        "balance_vs_flow_note": BALANCE_VS_FLOW_NOTE,
+        "daily_balance_note": daily_balance_note,
         "balance_conflicts": conflicts,
         "debt_service": _debt_service(classified, month_keys),
         "checks": checks,
@@ -565,14 +762,151 @@ def _month_keys(start: date, end: date):
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
 
 
+def present_cards(db, accounts: list) -> list[dict]:
+    """One row per card: statement balance, limit, available, and the last transaction date."""
+    ids = [account.id for account in accounts if getattr(account, "id", None) is not None]
+    last: dict[int, date] = {}
+    if ids:
+        for account_id, day in (
+            db.query(BankTransaction.account_id, func.max(BankTransaction.transaction_date))
+            .filter(BankTransaction.account_id.in_(ids), BankTransaction.superseded_by_id.is_(None))
+            .group_by(BankTransaction.account_id)
+        ):
+            last[account_id] = day
+    cards = []
+    for account in accounts:
+        as_of = account.balance_as_of.date().isoformat() if account.balance_as_of else None
+        last_day = last.get(account.id)
+        last_iso = last_day.isoformat() if last_day else None
+        mismatch = bool(as_of and last_iso and as_of != last_iso)
+        if mismatch:
+            note = f"יתרת הכרטיס נכונה ל־{as_of}. התנועה האחרונה בכרטיס היא {last_iso}."
+        elif as_of and not last_iso:
+            note = f"יתרת הכרטיס נכונה ל־{as_of}. אין תנועת כרטיס שמורה להשוואה."
+        else:
+            note = None
+        cards.append({
+            "name": account.name,
+            "bank_key": bank_key(account),
+            "balance": None if _balance(account) is None else _r(abs(_balance(account))),
+            "credit_limit": _num(account.credit_limit),
+            "available": _num(account.available_limit),
+            "as_of": as_of,
+            "last_data": last_iso,
+            "date_mismatch": mismatch,
+            "date_note": note,
+        })
+    return cards
+
+
+def card_activity(db, accounts: list, start: date, end: date) -> dict:
+    """The 'cards' transaction bucket. A plain number is not a balance and not a debt.
+
+    Rows whose Open Finance status is neither BOOKED nor PENDING make the bucket
+    undefined: the amount stays null instead of a partial sum.
+    """
+    base = {
+        "key": "cards",
+        "label": "עסקאות כרטיסי אשראי",
+        "counts_as_debt": False,
+        "counts_as_balance": False,
+        "definition": CARD_ACTIVITY_DEFINITION,
+    }
+    if not accounts:
+        return {**base, "amount": None, "count": None, "defined": False,
+                "definition": "אין חשבונות כרטיס — דלי העסקאות אינו מוגדר."}
+    ids = [account.id for account in accounts]
+    rows = (
+        db.query(BankTransaction)
+        .filter(
+            BankTransaction.account_id.in_(ids),
+            BankTransaction.transaction_date >= start,
+            BankTransaction.transaction_date <= end,
+            BankTransaction.superseded_by_id.is_(None),
+        )
+        .all()
+    )
+    booked = []
+    unclassified = False
+    for row in rows:
+        status = str((row.raw_data or {}).get("status") or "").strip().upper() if isinstance(row.raw_data, dict) else ""
+        if row.source == "open_finance":
+            if status == "PENDING":
+                continue
+            if status != "BOOKED":
+                unclassified = True
+                continue
+        if row.amount is None:
+            unclassified = True
+            continue
+        booked.append(row)
+    if unclassified:
+        return {**base, "amount": None, "count": None, "defined": False,
+                "definition": "יש תנועות כרטיס במצב לא מסווג או בלי סכום. הדלי אינו מוגדר ולא מוצג כמספר."}
+    return {**base, "amount": _r(sum(float(row.amount or 0) for row in booked)), "count": len(booked), "defined": True}
+
+
 def card_summary(cards: list[dict]) -> dict:
     """Card totals: a total is known only when every card's value is known;
-    ``*_known`` sums the cards that are."""
+    ``*_known`` sums the cards that are, and ``*_unknown`` counts the rest."""
     out = {}
-    for key, field in (("available", "available"), ("credit_limit", "credit_limit")):
+    for key, field in (("available", "available"), ("credit_limit", "credit_limit"), ("balance", "balance")):
         values = [card.get(field) for card in cards]
-        out[key] = None if not values or any(v is None for v in values) else _r(sum(values))
+        missing = sum(1 for value in values if value is None)
+        out[key] = None if not values or missing else _r(sum(value for value in values if value is not None))
         out[f"{key}_known"] = _sum_or_none(values)
+        out[f"{key}_unknown"] = missing
+    return out
+
+
+def _combine_card_activity(parts) -> dict | None:
+    acts = [part.get("card_activity") for _label, part in parts if isinstance(part.get("card_activity"), dict)]
+    if not acts:
+        return None
+    undefined = {
+        "key": "cards", "label": "עסקאות כרטיסי אשראי", "defined": False,
+        "amount": None, "count": None, "counts_as_debt": False, "counts_as_balance": False,
+        "definition": "לחלק מהישויות דלי עסקאות הכרטיס אינו מוגדר, ולכן אין סכום מאוחד.",
+    }
+    if any(act.get("defined") is False for act in acts):
+        return undefined
+    amounts = [act.get("amount") for act in acts]
+    counts = [act.get("count") for act in acts]
+    if any(value is None for value in amounts) or any(value is None for value in counts):
+        return undefined
+    return {
+        "key": "cards", "label": "עסקאות כרטיסי אשראי", "defined": True,
+        "amount": _r(sum(amounts)), "count": int(sum(counts)),
+        "counts_as_debt": False, "counts_as_balance": False,
+        "definition": CARD_ACTIVITY_DEFINITION,
+    }
+
+
+def _collapse_advances(rows: list[dict]) -> list[dict]:
+    grouped: dict[str, list] = {}
+    order: list[str] = []
+    for row in rows:
+        key = re.sub(r"\s+", " ", str(row.get("name") or row.get("label") or "")).strip()
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(row)
+    out = []
+    for key in order:
+        items = grouped[key]
+        if len(items) == 1:
+            out.append(items[0])
+            continue
+        known = [item.get("balance") for item in items if item.get("balance") is not None]
+        kept = dict(items[0])
+        kept["counts_as_debt"] = False
+        if not known or len({_r(float(value)) for value in known}) > 1:
+            kept["balance"] = None
+            kept["note"] = "אותה מקדמה רשומה ביותר מישות והסכום לא ידוע. אינה חוב."
+        else:
+            kept["balance"] = _r(float(known[0]))
+            kept["note"] = "אותה מקדמה רשומה ביותר מישות ונספרת פעם אחת. אינה חוב."
+        out.append(kept)
     return out
 
 
@@ -614,6 +948,9 @@ def combine(sections: list[dict]) -> dict:
             for key in ("principal", "interest", "new_loans"):
                 slot[key] = _r(slot[key] + (row.get(key) or 0.0))
     cards = [{**card, "entity": label} for label, part in parts for card in part.get("cards") or []]
+    advances = _collapse_advances(
+        [{**item, "entity": label} for label, part in parts for item in part.get("advances") or [] if isinstance(item, dict)]
+    )
     balance = None if missing else _r(sum(balances))
     limit = None if any(value is None for value in limits) else _r(sum(limits))
     return {
@@ -635,6 +972,9 @@ def combine(sections: list[dict]) -> dict:
         "upcoming": upcoming,
         "cards": cards,
         "card_summary": card_summary(cards),
+        "card_activity": _combine_card_activity(parts),
+        "advances": advances,
+        "balance_vs_flow_note": BALANCE_VS_FLOW_NOTE,
         "debt_service": [service[key] for key in sorted(service)],
         "provider_calls": 0,
     }
