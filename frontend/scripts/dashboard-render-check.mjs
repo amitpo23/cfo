@@ -20,14 +20,17 @@ import { createElement } from 'react';
 import { BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard } from ${JSON.stringify(join(components, 'ClientDashboardPage.tsx'))};
 import { LiquidityEvidenceCard, LiquidityPanel, OpeningBalanceCard, draftFromItem, evidenceItems, itemFromDraft, upcomingAmount, withEvidenceItem, withOpeningBalance, ZReportsCard, withZReport, zReportsFromPayload } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
-import { DashboardFrame, DashboardSkeleton, EmptyState, KpiCards, StatusTabs } from ${JSON.stringify(join(components, 'dashboardUi.tsx'))};
+import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, KpiCards, StatusTabs } from ${JSON.stringify(join(components, 'dashboardUi.tsx'))};
 import { BalanceSheetCard } from ${JSON.stringify(join(components, 'balanceSheetTab.tsx'))};
+import { ProviderAccessCard } from ${JSON.stringify(join(components, 'dashboardProviders.tsx'))};
+import { dashboardLoginHref, safeDashboardReturn, safeLoginHref } from ${JSON.stringify(join(components, 'dashboardReturn.ts'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
 export { renderToStaticMarkup, createElement, BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
   LiquidityEvidenceCard, draftFromItem, evidenceItems, itemFromDraft, withEvidenceItem, ZReportsCard, withZReport, zReportsFromPayload,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
-  categoryLabel, pieSlices, DashboardFrame, DashboardSkeleton, EmptyState, KpiCards, StatusTabs, BalanceSheetCard };
+  categoryLabel, pieSlices, DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, KpiCards, StatusTabs,
+  BalanceSheetCard, ProviderAccessCard, dashboardLoginHref, safeDashboardReturn, safeLoginHref };
 `;
 
 const dir = mkdtempSync(join(tmpdir(), 'dashboard-render-'));
@@ -55,6 +58,47 @@ try {
   });
   const ui = createRequire(import.meta.url)(out);
   const html = (component, props) => ui.renderToStaticMarkup(ui.createElement(component, props));
+
+  check('a link-mode visitor gets a login link back to the same dashboard', () => {
+    expect(ui.safeDashboardReturn('/d/eliav') === '/d/eliav', 'a dashboard path is not accepted');
+    expect(ui.safeDashboardReturn('https://evil.example/d/eliav') === null, 'an absolute url is accepted');
+    expect(ui.safeDashboardReturn('//evil.example/d/eliav') === null, 'a protocol-relative url is accepted');
+    expect(ui.dashboardLoginHref('eliav') === '/?login=1&next=%2Fd%2Feliav', 'login href dropped the return path');
+    const href = ui.safeLoginHref('/?login=1&next=/d/eliav', 'eliav');
+    const markup = html(ui.DashboardLoginPrompt, {
+      message: 'הדשבורד הזה פתוח לבעלים מחובר או למי שקיבל קישור. התחברו כדי לחזור אליו.',
+      loginPath: href,
+    });
+    expect(markup.includes('התחברות'), 'no login link');
+    expect(markup.includes('next=/d/eliav'), 'the login link is not the return path');
+    expect(markup.includes('login=1'), 'the login link does not open the login screen');
+    expect(!markup.includes('הדשבורד לא נמצא'), 'the login prompt still says the dashboard is missing');
+  });
+
+  check('provider controls stay disarmed until the admin confirms', () => {
+    const status = {
+      sumit: { connected: false, status: 'missing', last_synced_at: null },
+      open_finance: { connected: false, status: 'missing', last_synced_at: null, bank_connections: 0, last_refresh_at: null },
+      sumit_quota: { limit: 50, used: 7, remaining: 43, live_shared_cap: 50, shared: true },
+      confirmations: { sumit: 'משוך מ-SUMIT', open_finance: 'רענן Open Finance' },
+      provider_calls: 0,
+    };
+    const idle = html(ui.ProviderAccessCard, {
+      status, sumitArmed: false, financeArmed: false, pending: null, notice: null,
+      onSumitArmed: () => {}, onFinanceArmed: () => {}, onSumit: () => {}, onFinance: () => {},
+    });
+    expect(idle.includes('43') && idle.includes('50'), 'the shared SUMIT remainder is missing');
+    expect(idle.includes('תקרה משותפת'), 'the shared cap is not named');
+    expect((idle.match(/disabled=""/g) || []).length === 2, 'a confirm button is enabled before the checkbox');
+    const armed = html(ui.ProviderAccessCard, {
+      status, sumitArmed: true, financeArmed: false, pending: null, notice: null,
+      onSumitArmed: () => {}, onFinanceArmed: () => {}, onSumit: () => {}, onFinance: () => {},
+    });
+    expect(armed.includes('אשר קריאה ל-SUMIT'), 'the SUMIT confirm button is missing');
+    const sumitButton = armed.slice(Math.max(0, armed.indexOf('אשר קריאה ל-SUMIT') - 240), armed.indexOf('אשר קריאה ל-SUMIT'));
+    expect(!sumitButton.includes('disabled=""'), 'SUMIT stays disabled after the checkbox');
+    expect((armed.match(/disabled=""/g) || []).length === 1, 'Open Finance refresh is enabled without approval');
+  });
 
   check('consolidated budget vs actual without totals renders', () => {
     // The shape /view sent for the combined scope before the fix: no totals.

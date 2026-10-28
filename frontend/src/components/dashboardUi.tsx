@@ -96,6 +96,15 @@ export function KpiCards({ items }: { items: Kpi[] }) {
   );
 }
 
+export function DashboardLoginPrompt({ message, loginPath }: { message: string; loginPath: string }) {
+  return (
+    <EmptyState title={message}>
+      <a className="mt-3 inline-block font-medium text-navy-800 underline" href={loginPath}>התחברות</a>
+      <p className="mt-1">אחרי ההתחברות חוזרים לדשבורד הזה.</p>
+    </EmptyState>
+  );
+}
+
 export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="rounded-lg border border-dashed border-navy-200 bg-white px-4 py-8 text-center">
