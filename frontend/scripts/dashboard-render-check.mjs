@@ -21,12 +21,13 @@ import { BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, Sourc
 import { LiquidityEvidenceCard, LiquidityPanel, OpeningBalanceCard, draftFromItem, evidenceItems, itemFromDraft, upcomingAmount, withEvidenceItem, withOpeningBalance, ZReportsCard, withZReport, zReportsFromPayload } from ${JSON.stringify(join(components, 'dashboardTabs.tsx'))};
 import { BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal } from ${JSON.stringify(join(components, 'dashboardFiling.tsx'))};
 import { DashboardFrame, DashboardSkeleton, EmptyState, KpiCards, StatusTabs } from ${JSON.stringify(join(components, 'dashboardUi.tsx'))};
+import { BalanceSheetCard } from ${JSON.stringify(join(components, 'balanceSheetTab.tsx'))};
 import { categoryLabel } from ${JSON.stringify(join(components, '..', 'services', 'categoryLabels.ts'))};
 import { pieSlices } from ${JSON.stringify(join(components, 'budgetChart.ts'))};
 export { renderToStaticMarkup, createElement, BudgetVsActual, CashStatementCard, IntercompanyCard, JournalCard, SourcesCard, LiquidityPanel, upcomingAmount, OpeningBalanceCard, withOpeningBalance,
   LiquidityEvidenceCard, draftFromItem, evidenceItems, itemFromDraft, withEvidenceItem, ZReportsCard, withZReport, zReportsFromPayload,
   BudgetEditor, budgetLinesPayload, firstPlanMonth, lineDefaultsFromPayload, linesFromPayload, monthTotal,
-  categoryLabel, pieSlices, DashboardFrame, DashboardSkeleton, EmptyState, KpiCards, StatusTabs };
+  categoryLabel, pieSlices, DashboardFrame, DashboardSkeleton, EmptyState, KpiCards, StatusTabs, BalanceSheetCard };
 `;
 
 const dir = mkdtempSync(join(tmpdir(), 'dashboard-render-'));
@@ -315,6 +316,49 @@ try {
     expect(ui.zReportsFromPayload(ui.withZReport(replaced, 6, '2026-07', null)).length === 1, 'not removed');
     const markup = html(ui.ZReportsCard, { entities: [{ organization_id: 6, label: 'פוד גרופ' }], items: ui.zReportsFromPayload(next), saving: false, onSave: () => {} });
     expect(markup.includes('הכנסות פיצה מדוחות Z') && markup.includes('76,511') && markup.includes('פוד גרופ'), 'card');
+  });
+
+  check('balance sheet: missing is unknown, a posted amount keeps its source and sync date', () => {
+    const line = {
+      code: '1000', name: 'קופה', amount: 1500.5, mapped: true, reason: null,
+      source: 'sumit_portal_export', source_label: 'ייצוא פורטל SUMIT', synced_at: '2026-09-30T08:00:00+00:00',
+    };
+    const known = {
+      status: 'ready', total: 1500.5, source: 'sumit_portal_export', source_label: 'ייצוא פורטל SUMIT',
+      synced_at: '2026-09-30T08:00:00+00:00', lines: [line],
+    };
+    const unknown = {
+      status: 'unknown', total: null, source: null, source_label: null, synced_at: null, lines: [],
+    };
+    const markup = html(ui.BalanceSheetCard, {
+      sheet: {
+        status: 'partial', basis: 'sumit_portal_export', basis_label: 'ייצוא פורטל SUMIT',
+        as_of: '2026-09-30', synced_at: '2026-09-30T08:00:00+00:00', balanced: null,
+        message: 'חלק מהמאזן לא ידוע', disclaimer: 'ייצוא שהועלה מפורטל SUMIT',
+        assets: known,
+        liabilities: unknown,
+        equity: { ...unknown, opening_equity: null, retained_earnings: null },
+        unclassified: [],
+        imports: { profit_loss: { status: 'unknown' }, ledger_cards: { status: 'unknown' } },
+      },
+    });
+    expect(markup.includes('קופה') && markup.includes('ייצוא פורטל SUMIT') && markup.includes('2026-09-30'), 'amount, source or sync date missing');
+    expect(markup.includes('לא ידוע'), 'a missing section was not shown as unknown');
+    expect(markup.includes('1,501') || markup.includes('1,500'), 'the known asset amount is missing');
+    const zero = html(ui.BalanceSheetCard, {
+      sheet: {
+        status: 'partial', basis: 'rezef_books', basis_label: 'ספרים ברצף (נגזר מהמסמכים)',
+        as_of: '2026-08-31', synced_at: '2026-08-31T00:00:00', balanced: null, message: '',
+        assets: { ...known, total: 100, lines: [{ ...line, name: 'לקוחות', code: '1100', amount: 100 }] },
+        liabilities: {
+          status: 'ready', total: 0, source: 'rezef_books', source_label: 'ספרים ברצף (נגזר מהמסמכים)',
+          synced_at: '2026-08-31T00:00:00',
+          lines: [{ ...line, name: 'מע״מ', code: '2200', amount: 0, source: 'rezef_books', source_label: 'ספרים ברצף (נגזר מהמסמכים)', synced_at: '2026-08-31T00:00:00' }],
+        },
+        equity: { ...unknown, status: 'partial', source: 'rezef_books', source_label: 'ספרים ברצף (נגזר מהמסמכים)', synced_at: '2026-08-31T00:00:00', opening_equity: null, retained_earnings: 100 },
+      },
+    });
+    expect(zero.includes('מע״מ') && zero.includes('הון פתיחה') && zero.includes('לא ידוע'), 'opening equity was not left unknown');
   });
 
   const importedPlan = process.env.REZEF_IMPORTED_PLAN;
