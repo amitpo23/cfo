@@ -1,5 +1,8 @@
-"""Client dashboard API. Unknown and forbidden dashboards both return 404.
+"""Client dashboard API.
 
+Unknown dashboards, member-only dashboards and inactive dashboards return 404.
+An active link-mode dashboard without a share cookie returns 401 login_required
+so a visitor can sign in and come back. It does not return the books.
 Public reads set no-referrer and noindex. They do not call SUMIT or Open Finance.
 """
 from __future__ import annotations
@@ -21,7 +24,7 @@ from ...config import settings
 from ...database import get_db_session
 from ...models import DashboardRateLimit, PublishedSnapshot, User
 from ...services.build_timing import log_build, measured, server_timing
-from ...services.dashboards import budget, multi_entity, service, view_model
+from ...services.dashboards import budget, multi_entity, provider_gate, service, view_model
 from ...services.dashboards.service import READ_ROLES, DashboardError
 
 logger = logging.getLogger(__name__)
@@ -99,6 +102,27 @@ class EntityAccountsBody(BaseModel):
 class SessionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     token: str = Field(min_length=1, max_length=200)
+
+
+class WorkspaceEntity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    organization_id: int
+    label: str = Field(default="", max_length=255)
+
+
+class WorkspaceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=255)
+    slug: str = Field(min_length=3, max_length=48)
+    title: str | None = Field(default=None, max_length=255)
+    template: str = "generic"
+    access_mode: str = "members"
+    entities: list[WorkspaceEntity] = Field(default_factory=list)
+
+
+class ProviderConfirm(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmation: str = ""
 
 
 def _error(exc: DashboardError) -> JSONResponse:
@@ -185,6 +209,22 @@ def manageable_organizations(db: Session = Depends(get_db_session), user: User =
     return {"organizations": service.manageable_organizations(db, user), "provider_calls": 0}
 
 
+@router.post("/dashboards/workspaces", status_code=201)
+def create_workspace(body: WorkspaceCreate, db: Session = Depends(get_db_session),
+                     user: User = Depends(get_current_user)):
+    try:
+        created = service.create_workspace(
+            db, user, name=body.name, slug=body.slug, title=body.title,
+            template=body.template, access_mode=body.access_mode,
+            entities=[item.model_dump() for item in body.entities],
+        )
+    except DashboardError as exc:
+        return _error(exc)
+    created["providers"] = provider_gate.provider_status(db, created["organization"]["id"])
+    created["provider_calls"] = 0
+    return created
+
+
 @router.get("/dashboards/by-slug/{slug}")
 def read_dashboard_by_slug(slug: str, db: Session = Depends(get_db_session),
                            user: User = Depends(get_current_user)):
@@ -203,6 +243,37 @@ def read_dashboard(dashboard_id: int, db: Session = Depends(get_db_session),
         return _error(exc)
     return {"id": row.id, "slug": row.slug, "title": row.title, "status": row.status,
             "access_mode": row.access_mode, "provider_calls": 0}
+
+
+@router.get("/dashboards/{dashboard_id}/providers")
+def dashboard_providers(dashboard_id: int, db: Session = Depends(get_db_session),
+                        user: User = Depends(get_current_user)):
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed={"owner"})
+    except DashboardError as exc:
+        return _error(exc)
+    return provider_gate.provider_status(db, row.primary_organization_id)
+
+
+@router.post("/dashboards/{dashboard_id}/providers/sumit")
+def confirm_sumit_read(dashboard_id: int, body: ProviderConfirm, db: Session = Depends(get_db_session),
+                       user: User = Depends(get_current_user)):
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed={"owner"})
+        return provider_gate.confirm_sumit(db, user, row, body.confirmation)
+    except DashboardError as exc:
+        return _error(exc)
+
+
+@router.post("/dashboards/{dashboard_id}/providers/open-finance/refresh")
+def confirm_open_finance_refresh(dashboard_id: int, body: ProviderConfirm,
+                                 db: Session = Depends(get_db_session),
+                                 user: User = Depends(get_current_user)):
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed={"owner"})
+        return provider_gate.confirm_open_finance_refresh(db, user, row, body.confirmation)
+    except DashboardError as exc:
+        return _error(exc)
 
 
 @router.patch("/dashboards/{dashboard_id}")
@@ -389,6 +460,20 @@ def save_budget(dashboard_id: int, body: BudgetBody, db: Session = Depends(get_d
         return _error(exc)
 
 
+def _login_required(slug: str) -> JSONResponse:
+    """An active link-mode dashboard exists, but this visitor has no share cookie."""
+    login_path = "/?login=1"
+    if service.SLUG_RE.fullmatch(slug or ""):
+        login_path = f"/?login=1&next=/d/{slug}"
+    return _public_response({
+        "error": {
+            "code": "login_required",
+            "message_he": "הדשבורד הזה פתוח לבעלים מחובר או למי שקיבל קישור. התחברו כדי לחזור אליו.",
+            "login_path": login_path,
+        },
+    }, 401)
+
+
 def _public_response(payload: dict, status_code: int = 200) -> JSONResponse:
     response = JSONResponse(status_code=status_code, content=payload)
     for key, value in _PUBLIC_HEADERS.items():
@@ -559,7 +644,7 @@ def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get
     if dashboard.access_mode != "public":
         link = _cookie_dashboard(db, request, dashboard.id)
         if link is None:
-            return _public_response({"error": {"code": "not_found", "message_he": "הדשבורד לא נמצא"}}, 404)
+            return _login_required(slug)
         service.mark_link_used(db, link)
     snapshot = None
     if dashboard.current_snapshot_id:
