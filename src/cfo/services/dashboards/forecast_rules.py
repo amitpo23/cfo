@@ -1,7 +1,10 @@
 """Cash rules for the 13-week forecast and the monthly cash lines.
 
-The forecast starts at the known cash position. Supplier payments are שוטף 30:
-30 days after the last day of the supply month. Payroll is the plan's payroll
+The forecast starts at the known cash position. Supplier payments default to
+the last day of the month after the supply month (``end_of_next_month``).
+A Saturday due date moves to the next Sunday and is counted once. September
+2026 is therefore Sunday 1/11, not 30/10. ``eom_plus_30_days`` remains an
+org setting. Payroll is the plan's payroll
 definition, else the budget's payroll categories, paid on ``PAYROLL_DAY`` (the
 10th). Expected income is the budget's revenue lines, which ``/budget-entry``
 stores on ``plan.budgetLines``. A bridge loan is repaid on its own maturity,
@@ -17,7 +20,7 @@ from calendar import monthrange
 from datetime import date, timedelta
 
 from .budget import REVENUE_KEYS
-from .cashflow_truth import payroll_date, resolve_settings, supplier_due
+from .cashflow_truth import payroll_date, resolve_settings, supplier_due, supplier_terms_label
 from .plan_budget import PlanBudgetError, validate_budget_lines
 
 PAYROLL_DAY = 10
@@ -37,7 +40,7 @@ UNKNOWN_HE = {
 
 RULES = {
     "opening": "today_position",
-    "suppliers": "shotef_30",
+    "suppliers": "end_of_next_month",
     "payroll": "budget_payroll_definition",
     "income": "budget_income",
     "short_loans": "close_on_maturity_against_receipt",
@@ -78,8 +81,9 @@ def _add_month(year: int, month: int, step: int = 1) -> tuple[int, int]:
 
 
 def shotef_30(year: int, month: int) -> date:
-    """שוטף 30: 30 days after the last day of the supply month."""
-    return supplier_due(date(year, month, 1), {"type": "eom_plus_days", "days": 30})
+    """Alternative mode: 30 days after the last day of the supply month, before the Saturday rule."""
+    from .cashflow_truth import supplier_contract_date
+    return supplier_contract_date(date(year, month, 1), {"type": "eom_plus_30_days"})
 
 
 def previous_month(year: int, month: int, step: int = 1) -> tuple[int, int]:
@@ -332,9 +336,9 @@ def supplier_and_payroll(plan: dict | None, lines: list[dict] | None, first: dat
             unknown.append((due, "suppliers"))
         else:
             items.append({
-                "date": due, "label": f"ספקים שוטף 30 (אספקה {supply})",
+                "date": due, "label": f"{supplier_terms_label(settings.terms())} (אספקה {supply})",
                 "amount": -round(abs(amount), 2), "certainty": SCHEDULED,
-                "source": "plan.budgetLines", "rule": RULES["suppliers"],
+                "source": "plan.budgetLines", "rule": settings.terms().get("type") or RULES["suppliers"],
             })
     return items, unknown
 
@@ -358,15 +362,24 @@ def monthly_table(plan: dict | None, months: list[str]) -> dict | None:
         year, mon = int(month[:4]), int(month[5:])
         income = income_amount(lines, month)
         payroll, payroll_source = payroll_amount(plan, lines, month)
-        supply, due, suppliers = None, None, None
+        hits = []
         for step in (1, 2, 3):
             supply_year, supply_month = previous_month(year, mon, step)
             candidate = supplier_due(date(supply_year, supply_month, 1), settings.terms())
             if candidate is not None and candidate.year == year and candidate.month == mon:
-                supply = f"{supply_year}-{supply_month:02d}"
-                due = candidate
-                suppliers = supplier_amount(lines, supply)
-                break
+                hits.append((
+                    f"{supply_year}-{supply_month:02d}",
+                    candidate,
+                    supplier_amount(lines, f"{supply_year}-{supply_month:02d}"),
+                ))
+        if not hits:
+            supply, due, suppliers = None, None, None
+            supply_months, dues = [], []
+        else:
+            supply_months = [item[0] for item in hits]
+            dues = [item[1] for item in hits]
+            supply, due = supply_months[0], dues[0]
+            suppliers = None if any(item[2] is None for item in hits) else round(sum(item[2] for item in hits), 2)
         out[month] = {
             "income": _cell(income, source="plan.budgetLines" if income is not None else None,
                             rule=RULES["income"], label=UNKNOWN_HE["income"]),
@@ -378,8 +391,10 @@ def monthly_table(plan: dict | None, months: list[str]) -> dict | None:
             "suppliers": _cell(
                 None if suppliers is None else -abs(suppliers),
                 source="plan.budgetLines" if suppliers is not None else None,
-                rule=RULES["suppliers"], label=UNKNOWN_HE["suppliers"],
+                rule=settings.terms().get("type") or RULES["suppliers"], label=UNKNOWN_HE["suppliers"],
                 supply_month=supply, due=due.isoformat() if isinstance(due, date) else None,
+                supply_months=supply_months,
+                dues=[day.isoformat() for day in dues],
             ),
         }
     return {"months": out, "rules": RULES, "provider_calls": 0}

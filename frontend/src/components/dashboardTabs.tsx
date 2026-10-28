@@ -457,7 +457,7 @@ const SOURCE_LABELS: Record<string, string> = {
 const RULE_ROWS: { key: string; label: string }[] = [
   { key: 'income', label: 'הכנסה לפי התקציב' },
   { key: 'payroll', label: 'שכר לפי הגדרת התקציב' },
-  { key: 'suppliers', label: 'ספקים — שוטף 30' },
+  { key: 'suppliers', label: 'ספקים — סוף החודש העוקב' },
 ];
 
 export function ForecastPanel({ forecast }: { forecast: Forecast | null | undefined }) {
@@ -502,7 +502,7 @@ export function ForecastPanel({ forecast }: { forecast: Forecast | null | undefi
       {forecast.cash_rules ? (
         <div className="mt-6 overflow-x-auto">
           <h3 className="font-medium">תזרים לפי הכללים</h3>
-          <p className="mt-1 text-sm text-stone-600">הכנסה ושכר מהתקציב. ספקים בשוטף 30, בתאריך הפירעון של חודש האספקה. חסר נשאר לא ידוע.</p>
+          <p className="mt-1 text-sm text-stone-600">הכנסה ושכר מהתקציב. ספקים בסוף החודש העוקב; שבת נדחית ליום ראשון. חסר נשאר לא ידוע.</p>
           <table className="mt-3 d-table">
             <thead><tr><Th>סעיף</Th>{forecast.months.map((month) => <Th key={month}>{month}</Th>)}</tr></thead>
             <tbody>

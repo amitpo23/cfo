@@ -141,7 +141,7 @@ def _forecast_columns(forecast: dict | None) -> dict | None:
     for key, label in (
         ("income", "הכנסה לפי התקציב"),
         ("payroll", "שכר לפי הגדרת התקציב"),
-        ("suppliers", "ספקים — שוטף 30"),
+        ("suppliers", "ספקים — סוף החודש העוקב"),
     ):
         if not any(isinstance(rule_months.get(month), dict) and key in rule_months[month] for month in forecast["months"]):
             continue
@@ -161,7 +161,7 @@ def _forecast_columns(forecast: dict | None) -> dict | None:
         "note": FORECAST_NOTE,
         "line_items": bool(rule_lines),
         "line_note": (
-            "שורות הכללים (הכנסה, שכר, ספקים בשוטף 30) מולאו מהתקציב. סעיף בנק בלי כלל נשאר ריק. "
+            "שורות הכללים (הכנסה, שכר, ספקים לסוף החודש העוקב) מולאו מהתקציב. סעיף בנק בלי כלל נשאר ריק. "
             "סכום חסר הוא לא ידוע, לא אפס."
             if rule_lines else FORECAST_LINE_NOTE
         ),

@@ -22,8 +22,10 @@ CERTAIN, LIKELY, RISKY, ESTIMATE = "מאושר", "סביר", "מסוכן", "הע
 MISSING, ASSUMPTION, CONFIRMED = "missing", "assumption", "confirmed"
 STATUSES = frozenset({MISSING, ASSUMPTION, CONFIRMED})
 TERM_TYPES = frozenset({
-    "eom_plus_days", "fixed_day_of_month", "days_from_invoice", "on_receipt", "per_order", "other_text",
+    "end_of_next_month", "eom_plus_30_days", "eom_plus_days",
+    "fixed_day_of_month", "days_from_invoice", "on_receipt", "per_order", "other_text",
 })
+DEFAULT_SUPPLIER_TERMS = {"type": "end_of_next_month"}
 INQUIRY_TERMS = frozenset({"per_order", "other_text"})
 VAT_EXEMPT = frozenset({"payroll", "national_insurance", "pension", "fees", "interest", "arnona"})
 
@@ -88,7 +90,7 @@ class CashflowSettings:
     overridden: tuple = ()
 
     def terms(self) -> dict:
-        return dict(self.supplier_terms or {"type": "eom_plus_days", "days": 30})
+        return dict(self.supplier_terms or DEFAULT_SUPPLIER_TERMS)
 
     def as_dict(self) -> dict:
         terms = self.terms()
@@ -190,16 +192,25 @@ def payroll_date(year: int, month: int, payroll_day: int = 10) -> date:
     return roll_saturday(date(year, month, min(int(payroll_day), last)))
 
 
-def supplier_due(doc_date: date, terms: dict | None) -> date | None:
-    """When a supplier document is paid.
+def _next_month(year: int, month: int) -> tuple[int, int]:
+    return (year + 1, 1) if month == 12 else (year, month + 1)
 
-    Default is end of the document's month plus 30 days (שוטף+30), the same
-    date for every document in that month. Free-text and per-order terms are
-    not guessed.
+
+def supplier_contract_date(doc_date: date, terms: dict | None) -> date | None:
+    """The supplier date before the Saturday rule.
+
+    Default ``end_of_next_month`` is the last day of the month after the
+    supply month, the same day for every document in that month. September
+    2026 is 31 October. ``eom_plus_30_days`` is the alternative: 30 days after
+    the supply month ends (30 October for September). Free text is not guessed.
+    Later months use this default until the owner confirms a general rule.
     """
-    kind = "eom_plus_days" if not isinstance(terms, dict) else str(terms.get("type") or "eom_plus_days")
-    if kind == "eom_plus_days":
-        days = 30 if not isinstance(terms, dict) or terms.get("days") is None else int(terms["days"])
+    kind = "end_of_next_month" if not isinstance(terms, dict) else str(terms.get("type") or "end_of_next_month")
+    if kind == "end_of_next_month":
+        year, month = _next_month(doc_date.year, doc_date.month)
+        return end_of_month(year, month)
+    if kind in ("eom_plus_30_days", "eom_plus_days"):
+        days = 30 if kind == "eom_plus_30_days" or not isinstance(terms, dict) or terms.get("days") is None else int(terms["days"])
         return end_of_month(doc_date.year, doc_date.month) + timedelta(days=days)
     if kind == "fixed_day_of_month":
         day = int(terms["day_of_month"])
@@ -214,12 +225,29 @@ def supplier_due(doc_date: date, terms: dict | None) -> date | None:
     return None
 
 
+def supplier_due(doc_date: date, terms: dict | None) -> date | None:
+    """When the cash moves: the contract date, Saturday shifted to the next Sunday, once."""
+    raw = supplier_contract_date(doc_date, terms)
+    return None if raw is None else roll_saturday(raw)
+
+
+def supplier_terms_label(terms: dict | None) -> str:
+    kind = "end_of_next_month" if not isinstance(terms, dict) else str(terms.get("type") or "end_of_next_month")
+    if kind in ("eom_plus_30_days", "eom_plus_days"):
+        return "ספקים שוטף 30"
+    return "ספקים — סוף החודש העוקב"
+
+
 def _check_terms(terms, *, where: str) -> None:
     if not isinstance(terms, dict) or terms.get("type") not in TERM_TYPES:
         raise _settings_error(f"תנאי ספק לא תקינים ({where})")
     kind = terms["type"]
+    if kind == "eom_plus_30_days" and "days" in terms and terms.get("days") not in (None, 30):
+        raise _settings_error("שוטף+30 הוא 30 יום אחרי סוף החודש, לא מספר ימים אחר")
     if kind == "eom_plus_days" and not _int_in(terms.get("days", 30), 0, 365):
         raise _settings_error("ימי שוטף חייבים להיות 0 עד 365")
+    if kind == "end_of_next_month" and "days" in terms:
+        raise _settings_error("סוף החודש העוקב אינו מקבל מספר ימים")
     if kind == "fixed_day_of_month" and not _int_in(terms.get("day_of_month"), 1, 31):
         raise _settings_error("יום קבוע בחודש חייב להיות 1 עד 31")
     if kind == "days_from_invoice" and not _int_in(terms.get("days"), 0, 365):
@@ -324,7 +352,7 @@ def resolve_settings(plan: dict | None, organization_id: int | None = None) -> C
         "stale_balance_days", "match_tolerance", "match_window_days", "loss_cap",
         "funding_source",
     })
-    terms = org_block.get("supplier_terms") or base.get("supplier_terms") or {"type": "eom_plus_days", "days": 30}
+    terms = org_block.get("supplier_terms") or base.get("supplier_terms") or dict(DEFAULT_SUPPLIER_TERMS)
     suppliers = {}
     for source in (base.get("suppliers"), org_block.get("suppliers")):
         if isinstance(source, dict):
@@ -1251,14 +1279,14 @@ def _scaffold_events(settings: CashflowSettings, today: date, horizon_end: date,
                     amount=-abs(driven["amount_gross"]), source_id=f"payroll:{year:04d}-{month:02d}",
                     due_date_raw=pay.isoformat(),
                 ))
-        due = supplier_due(date(year, month, 1), settings.terms())
-        if due is not None:
-            adjusted = roll_saturday(due)
+        raw = supplier_contract_date(date(year, month, 1), settings.terms())
+        if raw is not None:
+            adjusted = roll_saturday(raw)
             if today <= adjusted <= horizon_end:
                 events.append(_line(
-                    "suppliers_future", f"ספקים שוטף+{settings.terms().get('days', 30)} (אספקה {year:04d}-{month:02d})",
+                    "suppliers_future", supplier_terms_label(settings.terms()) + f" (אספקה {year:04d}-{month:02d})",
                     LAYER_ASSUMPTION, ESTIMATE, status=MISSING,
-                    source_id=f"suppliers:{year:04d}-{month:02d}", due_date_raw=due.isoformat(),
+                    source_id=f"suppliers:{year:04d}-{month:02d}", due_date_raw=raw.isoformat(),
                     unknown_label="תשלום הספקים לא ידוע: אין דרייבר ספקים לחודש האספקה. לא הוזן 0.",
                 ))
     return events

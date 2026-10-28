@@ -18,7 +18,7 @@ def test_defaults_are_the_owner_rules_and_an_org_can_override_them():
     settings = truth.resolve_settings(None, organization_id=99)
 
     assert settings.payroll_day == 10
-    assert settings.terms() == {"type": "eom_plus_days", "days": 30}
+    assert settings.terms() == {"type": "end_of_next_month"}
     assert settings.saturday_cash == "next_sunday"
     assert settings.opening_accounts == "checking_only"
     assert settings.credit_facility == "separate_headroom"
@@ -63,19 +63,35 @@ def test_saturday_cash_moves_to_the_next_sunday_once():
     assert october["week_end"] == "2026-10-30"
 
 
-def test_supplier_due_is_end_of_month_plus_30_unless_the_supplier_overrides_it():
-    assert truth.supplier_due(date(2026, 9, 3), None) == date(2026, 10, 30)
-    assert truth.supplier_due(date(2026, 9, 30), None) == date(2026, 10, 30)
+def test_september_suppliers_default_to_the_sunday_after_month_end():
+    """31/10/2026 is a Saturday. The default cash date is Sunday 1/11, not 30/10."""
+    assert date(2026, 10, 31).weekday() == 5
+    assert truth.supplier_contract_date(date(2026, 9, 3), None) == date(2026, 10, 31)
+    assert truth.supplier_contract_date(date(2026, 9, 30), None) == date(2026, 10, 31)
+    assert truth.supplier_due(date(2026, 9, 3), None) == date(2026, 11, 1)
+    assert truth.supplier_due(date(2026, 9, 30), {"type": "end_of_next_month"}) == date(2026, 11, 1)
+    assert truth.supplier_due(date(2026, 9, 3), None) != date(2026, 10, 30)
+    # January's next month-end is Saturday 28/02/2026, so the cash date is Sunday 01/03.
+    assert truth.supplier_due(date(2026, 1, 15), None) == date(2026, 3, 1)
+    # October's next month-end is Monday 30/11, so it does not move.
+    assert truth.supplier_due(date(2026, 10, 1), None) == date(2026, 11, 30)
+
+
+def test_eom_plus_30_days_stays_available_per_org():
+    september = date(2026, 9, 15)
+    assert truth.supplier_due(september, {"type": "eom_plus_30_days"}) == date(2026, 10, 30)
+    assert truth.supplier_due(september, {"type": "eom_plus_days", "days": 30}) == date(2026, 10, 30)
     assert truth.supplier_due(date(2026, 1, 15), {"type": "eom_plus_days", "days": 30}) == date(2026, 3, 2)
     assert truth.supplier_due(date(2026, 2, 10), {"type": "eom_plus_days", "days": 30}) == date(2026, 3, 30)
-    assert truth.supplier_due(date(2026, 9, 1), {"type": "fixed_day_of_month", "day_of_month": 10}) == date(2026, 10, 10)
+    assert truth.supplier_contract_date(date(2026, 9, 1), {"type": "fixed_day_of_month", "day_of_month": 10}) == date(2026, 10, 10)
+    assert truth.supplier_due(date(2026, 9, 1), {"type": "fixed_day_of_month", "day_of_month": 10}) == date(2026, 10, 11)
     assert truth.supplier_due(date(2026, 9, 1), {"type": "other_text", "free_text": "כל חמישי"}) is None
 
     settings = truth.resolve_settings({"cashflowSettings": {"suppliers": {
         "s1": {"type": "days_from_invoice", "days": 7},
     }}})
     assert truth.supplier_due(date(2026, 9, 1), truth.terms_for(settings, "s1")) == date(2026, 9, 8)
-    assert truth.supplier_due(date(2026, 9, 1), truth.terms_for(settings, "other")) == date(2026, 10, 30)
+    assert truth.supplier_due(date(2026, 9, 1), truth.terms_for(settings, "other")) == date(2026, 11, 1)
 
 
 def test_payroll_uses_the_org_day_and_leaves_saturday():
@@ -411,7 +427,7 @@ def test_the_live_view_of_a_new_org_carries_that_scaffold(fresh_org):
     source = view["cashflow_source"]
     assert source["provider_calls"] == 0
     assert source["settings"]["payroll_day"] == 10
-    assert source["settings"]["supplier_terms"]["days"] == 30
+    assert source["settings"]["supplier_terms"] == {"type": "end_of_next_month"}
     opening = next(row for row in source["lines"] if row["line_key"] == "opening")
     facility = next(row for row in source["lines"] if row["line_key"] == "credit_facility")
     assert opening["amount"] is None and opening["status"] == "missing"

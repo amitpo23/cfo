@@ -5,15 +5,17 @@ Worked week, Sunday 25/10/2026–Friday 30/10/2026, opening dated 28/10/2026
 are still ahead of the opening and inside this Sunday–Friday week, so
 October's budget income of 62,000 contributes 62,000 × 2/31 = 4,000 here.
 31/10 is a Saturday; its 2,000 is taken on Sunday 01/11 and is not in this
-week. September's supplier budget of 30,000 is paid on 30/10, thirty days
-after 30/09. Checking facility 50,000 is headroom, not part of the balance.
+week. September's supplier budget of 30,000 is due on the last day of
+October. 31/10/2026 is a Saturday, so the cash date is Sunday 01/11 and the
+payment is not in this week. Checking facility 50,000 is headroom, not part
+of the balance.
 
     opening                         -12,000   accounts, as of 28/10
     income 29–30/10                  +4,000   plan.budgetLines
-    suppliers, supply 2026-09       -30,000   due 30/10
-    net                             -26,000
-    closing                         -38,000
-    headroom                 50,000 - 38,000 = 12,000   not a breach
+    suppliers, supply 2026-09            —    due Sunday 01/11, not this week
+    net                              +4,000
+    closing                          -8,000
+    headroom                  50,000 - 8,000 = 42,000   not a breach
 
 Payroll of 18,000 is the plan's payroll definition, paid on the 10th, so it
 lands on 10/11, not in this week. The bridge of 61,000 closes on 25/11
@@ -98,15 +100,19 @@ def test_the_forecast_starts_at_todays_position_and_ignores_cash_already_in_it()
     assert result["provider_calls"] == 0
 
 
-def test_suppliers_are_paid_on_shotef_30_from_the_supply_months_budget():
-    week = _week(_run(), "2026-10-25")
-    supplier = _item(_run(), "שוטף 30")
+def test_september_suppliers_are_due_the_sunday_after_31_october():
+    october = _week(_run(), "2026-10-25")
+    supplier = _item(_run(), "סוף החודש העוקב")
 
-    assert supplier["date"] == "2026-10-30"
+    assert date(2026, 10, 31).weekday() == 5
+    assert supplier["date"] == "2026-11-01"
     assert supplier["amount"] == -30000.0
     assert supplier["source"] == "plan.budgetLines"
-    assert supplier["rule"] == "shotef_30"
-    assert week["out"] == -30000.0
+    assert supplier["rule"] == "end_of_next_month"
+    assert "שוטף" not in (supplier.get("label") or "")
+    assert october["out"] == 0.0
+    assert all(item.get("date") != "2026-10-30" for week in _run()["weeks"] for item in week["items"])
+    assert all(item.get("date") != "2026-10-31" for week in _run()["weeks"] for item in week["items"])
 
 
 def test_payroll_comes_from_the_budget_definition_on_the_first():
@@ -215,13 +221,15 @@ def test_the_worked_week_of_25_to_31_october():
     assert week["start"] == "2026-10-25"
     assert week["end"] == "2026-10-30"
     assert week["in"] == 4000.0
-    assert week["out"] == -30000.0
-    assert week["net"] == -26000.0
-    assert week["closing"] == -38000.0
+    assert week["out"] == 0.0
+    assert week["net"] == 4000.0
+    assert week["closing"] == -8000.0
     assert week["limit"] == 50000.0
-    assert week["headroom"] == 12000.0
-    rolled = next(item for item in _week(_run(), "2026-11-01")["items"] if item["label"] == "הכנסה לפי התקציב")
+    assert week["headroom"] == 42000.0
+    next_week = _week(_run(), "2026-11-01")
+    rolled = next(item for item in next_week["items"] if item["label"] == "הכנסה לפי התקציב")
     assert rolled["amount"] == 2000.0
+    assert any(item.get("date") == "2026-11-01" and item.get("amount") == -30000.0 for item in next_week["items"])
     assert _run()["first_breach"] is None
 
 
@@ -279,10 +287,11 @@ def test_monthly_cells_are_filled_from_the_rules_and_missing_ones_stay_null():
         "amount": -18000.0, "source": "plan.payroll", "rule": "budget_payroll_definition",
         "pay_date": "2026-11-10",
     }
-    # September's suppliers are paid in October, which is the current month and not in the horizon.
-    # October has no supplier line, so November's שוטף 30 payment stays unknown.
+    # September's cash date is 01/11 and October's is 30/11. October has no
+    # supplier line, so November stays unknown rather than showing only September.
     assert november["suppliers"]["amount"] is None
-    assert november["suppliers"]["supply_month"] == "2026-10"
+    assert november["suppliers"]["supply_months"] == ["2026-10", "2026-09"]
+    assert november["suppliers"]["dues"] == ["2026-11-30", "2026-11-01"]
     assert november["suppliers"]["due"] == "2026-11-30"
     assert "לא ידוע" in november["suppliers"]["label"]
     assert out["cash_rules"]["provider_calls"] == 0
