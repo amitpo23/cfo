@@ -89,7 +89,7 @@ export const BudgetDashboard: React.FC = () => {
   });
 
   // Fetch budget vs actual — backend מחזיר {status, data: BudgetSummary}
-  const { data: budgetResult, isLoading: loadingBudget } = useQuery({
+  const { data: budgetResult, isLoading: loadingBudget, isError: budgetFailed } = useQuery({
     queryKey: ['budget-vs-actual', selectedPeriod, scope],
     queryFn: async () => {
       const res = await api.get<{ status: string; data: any }>('/api/financial/budget/vs-actual', {
@@ -205,6 +205,15 @@ export const BudgetDashboard: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  if (budgetFailed || !budgetResult) {
+    return (
+      <div className="p-6 bg-gray-50 min-h-screen" dir="rtl">
+        <h1 className="text-3xl font-bold text-gray-900">ניהול תקציב</h1>
+        <p className="mt-3 text-gray-600">אין נתוני תקציב להצגה עד שנבחר ארגון פעיל.</p>
       </div>
     );
   }

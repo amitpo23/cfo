@@ -75,6 +75,55 @@ class BudgetBulkRequest(BaseModel):
     items: List[BudgetBulkItem]
 
 
+class BudgetLineUpdate(BaseModel):
+    id: str
+    month: Optional[str] = None
+    status: Optional[str] = None
+    amount: Optional[float] = None
+    label: Optional[str] = None
+    category: Optional[str] = None
+    kind: Optional[str] = None
+    remove: bool = False
+
+
+class BudgetLinesWrite(BaseModel):
+    updates: List[BudgetLineUpdate]
+
+
+@router.get("/budget/lines")
+async def budget_entry_lines(
+    year: int = Query(..., ge=2000, le=2100),
+    from_month: int = Query(1, ge=1, le=12),
+    to_month: int = Query(12, ge=1, le=12),
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """Active income and expense lines with filled / none / missing. No provider calls."""
+    if from_month > to_month:
+        raise HTTPException(status_code=422, detail="טווח החודשים הפוך")
+    from ...services.dashboards.budget_fill import entry_lines
+    return {"status": "success", "data": entry_lines(db, org_id, year, from_month, to_month)}
+
+
+@router.put("/budget/lines")
+async def save_budget_entry_lines(
+    body: BudgetLinesWrite,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+    user=Depends(get_current_user),
+):
+    """Save line amounts or structure onto the dashboard plan. The next dashboard read sees it."""
+    from ...services.dashboards.budget_fill import save_entry
+    from ...services.dashboards.service import DashboardError
+    try:
+        saved = save_entry(db, user, org_id, [item.model_dump() for item in body.updates])
+    except DashboardError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message_he)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"status": "success", "data": saved}
+
+
 @router.post("/budget/bulk")
 async def create_budgets_bulk(
     request: BudgetBulkRequest,

@@ -15,11 +15,56 @@ from ..financial_reports_service import FinancialReportsService
 from ..live_cash_flow_service import LiveCashFlowService
 from .. import bank_status
 from . import (
-    activity_quality, balance_sheet as balance_sheet_report, books, budget, cash_forecast,
-    cash_statement, forecast, freshness, liquidity,
+    activity_quality, balance_sheet as balance_sheet_report, books, books_pnl, budget,
+    cash_forecast, cash_statement, forecast, freshness, liquidity,
 )
 
 MAX_RANGE_DAYS = 366
+
+
+def _plan_version(db, dashboard_id: int) -> str:
+    from ...models import DashboardPlan
+    row = db.get(DashboardPlan, dashboard_id)
+    return row.version if row is not None else ""
+
+
+def dashboard_revision(db, dashboard) -> dict:
+    """A cheap token the open dashboard polls. It changes when the plan or a budget row changes."""
+    from sqlalchemy import func
+    from ...models import Budget
+    latest = db.query(func.max(Budget.updated_at)).filter(
+        Budget.organization_id == dashboard.primary_organization_id,
+    ).scalar()
+    return {
+        "plan_version": _plan_version(db, dashboard.id) or None,
+        "budget_updated_at": latest.isoformat() if latest is not None else None,
+        "provider_calls": 0,
+    }
+
+
+def snapshot_is_current(db, dashboard, snapshot) -> bool:
+    """A published snapshot is current only while the plan and budget rows it was built from are unchanged.
+
+    A snapshot from before plan versions were stored stays until the plan or a
+    budget row is newer than it.
+    """
+    if snapshot is None:
+        return False
+    from sqlalchemy import func
+    from ...models import Budget, DashboardPlan
+    plan = db.get(DashboardPlan, dashboard.id)
+    current = plan.version if plan is not None else ""
+    if snapshot.plan_version is not None and snapshot.plan_version != current:
+        return False
+    if snapshot.plan_version is None and plan is not None and plan.updated_at and snapshot.snapshot_at:
+        if plan.updated_at > snapshot.snapshot_at:
+            return False
+    latest = db.query(func.max(Budget.updated_at)).filter(
+        Budget.organization_id == dashboard.primary_organization_id,
+    ).scalar()
+    if latest is not None and snapshot.snapshot_at is not None and latest > snapshot.snapshot_at:
+        return False
+    return True
 
 
 def plan_payload(db, dashboard_id: int | None) -> dict | None:
@@ -60,6 +105,9 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
     reports = FinancialReportsService(db, memoize=True)
     filed = books.classified_bank(db, organization_id, start, end, plan)
     pnl = _profit_and_loss(db, organization_id, start, end, plan=plan, filed=filed, reports=reports)
+    division_pnl = books_pnl.books_pnl(
+        db, organization_id, start=start, end=end, plan=plan,
+    )
     budget_vs_actual = budget.budget_vs_actual(
         db, organization_id, start, end, books_known=pnl["status"] != "unknown",
         pnl_months=pnl.get("months"), reports=reports,
@@ -76,6 +124,7 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
         "status": "unknown" if pnl["status"] == "unknown" and not cashflow.get("months") else "ready",
         "cashflow": cashflow,
         "pnl": pnl,
+        "books_pnl": division_pnl,
         "budget_vs_actual": budget_vs_actual,
         "card_breakdown": bank_status.card_breakdown(db, organization_id, start, end),
         "liquidity": position,
@@ -88,6 +137,7 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
             "cashflow": "books" if cashflow.get("months") else "unknown",
             "pnl": pnl["status"],
             "pnl_basis": pnl.get("basis"),
+            "books_pnl": division_pnl.get("basis"),
             "budget_vs_actual": budget_vs_actual["status"],
             "liquidity": position["status"],
             "forecast": outlook["status"],
@@ -182,7 +232,7 @@ def publish_view(db, dashboard, view: dict, *, day: date | None = None) -> dict:
             dashboard_id=dashboard.id,
             refreshed_day=day,
             snapshot_at=datetime.utcnow(),
-            plan_version=None,
+            plan_version=_plan_version(db, dashboard.id),
             view_model=view,
             freshness=view.get("freshness") or {},
             content_sha256=digest,
@@ -192,6 +242,7 @@ def publish_view(db, dashboard, view: dict, *, day: date | None = None) -> dict:
         db.flush()
     else:
         row.snapshot_at = datetime.utcnow()
+        row.plan_version = _plan_version(db, dashboard.id)
         row.view_model = view
         row.freshness = view.get("freshness") or {}
         row.content_sha256 = digest

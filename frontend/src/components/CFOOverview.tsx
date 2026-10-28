@@ -63,8 +63,11 @@ interface DashboardOverview {
 
 interface PNLDataPoint {
   month: string;
-  revenue: number;
-  net_profit: number;
+  revenue: number | null;
+  net_profit: number | null;
+  basis?: string | null;
+  basis_label?: string | null;
+  stale_sources?: { label?: string | null; source_label?: string; age_days?: number | null; status_label?: string }[];
 }
 
 interface CashflowDataPoint {
@@ -495,6 +498,19 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
               <Bar dataKey="net_profit" fill="#10b981" radius={[4, 4, 0, 0]} name="Net Profit" />
             </BarChart>
           </ResponsiveContainer>
+          {pnlData && pnlData.length > 0 ? (
+            <ul className={`mt-2 text-xs ${darkMode ? 'text-stone-300' : 'text-stone-600'}`}>
+              {pnlData.map((point) => (
+                <li key={point.month}>{point.month}: {point.basis_label || (point.basis === 'no_books' ? 'אין נתוני ספרים' : 'ספרים')}</li>
+              ))}
+              {(pnlData[0]?.stale_sources ?? []).map((item) => (
+                <li key={`${item.source_label}-${item.age_days}`} className="text-amber-700">
+                  {item.source_label || item.label}: {item.status_label}
+                  {item.age_days != null ? ` (${item.age_days} ימים)` : ''}
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </FinanceCard>
 
         {/* Cash Flow Projection */}

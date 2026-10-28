@@ -1,49 +1,91 @@
 import React, { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { Target, Upload, Download, Plus, Trash2, Save } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Target, Upload, Download, Save } from 'lucide-react';
 import apiService from '../services/api';
 
 interface Props {
   darkMode?: boolean;
 }
 
-interface Row {
+type LineMonth = { status: 'filled' | 'none' | 'missing'; status_he: string; amount: string | null };
+type BudgetLine = {
+  id: string;
+  label: string;
+  kind: string;
   category: string;
-  amount: number;
-}
+  months: Record<string, LineMonth>;
+};
+type LinesPayload = {
+  lines: BudgetLine[];
+  counts: { active: number; filled: number; none: number; missing: number };
+  declared_payroll: { monthly: string; note_he: string };
+};
 
 const MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+
+function monthKey(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
 
 const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [rows, setRows] = useState<Row[]>([
-    { category: 'sales', amount: 0 },
-    { category: 'materials', amount: 0 },
-    { category: 'rent', amount: 0 },
-    { category: 'salaries', amount: 0 },
-  ]);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const fromMonth = 1;
+  const toMonth = year === now.getFullYear() ? Math.max(month, now.getMonth() + 1) : 12;
 
   const card = darkMode ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-200';
   const input = `px-3 py-2 rounded-lg border ${darkMode ? 'bg-gray-700 border-gray-600 text-white' : 'border-gray-300'}`;
 
+  const linesQuery = useQuery({
+    queryKey: ['budget-lines', year, fromMonth, toMonth],
+    queryFn: () => apiService.get<{ status: string; data: LinesPayload }>('/financial/budget/lines', {
+      params: { year, from_month: fromMonth, to_month: toMonth },
+    }),
+  });
+  const data = linesQuery.data?.data;
+  const key = monthKey(year, month);
+
   const saveMutation = useMutation({
-    mutationFn: () => apiService.saveBudgetsBulk(
-      rows.filter(r => r.category.trim()).map(r => ({ category: r.category.trim(), year, month, amount: r.amount || 0 }))
-    ),
-    onSuccess: (res: any) => setMessage(`נשמרו ${res?.data?.saved ?? rows.length} שורות תקציב`),
-    onError: (e: any) => setMessage(e?.response?.data?.detail || 'שגיאה בשמירה'),
+    mutationFn: (updates: Array<Record<string, unknown>>) => apiService.put('/financial/budget/lines', { updates }),
+    onSuccess: async () => {
+      setDrafts({});
+      setMessage('הסכומים נשמרו. הדשבורד יציג אותם בלי רענון ידני.');
+      await queryClient.invalidateQueries({ queryKey: ['budget-lines'] });
+      await queryClient.invalidateQueries({ queryKey: ['budget-vs-actual'] });
+      await queryClient.invalidateQueries({ queryKey: ['budget-alerts'] });
+      await queryClient.invalidateQueries({ queryKey: ['dashboard-pnl'] });
+    },
+    onError: (error: { response?: { data?: { detail?: string } } }) => {
+      setMessage(error?.response?.data?.detail || 'שגיאה בשמירה');
+    },
   });
 
   const importMutation = useMutation({
     mutationFn: (file: File) => apiService.importBudgetExcel(file),
-    onSuccess: (res: any) => setMessage(`יובאו ${res?.data?.saved ?? 0} שורות (${res?.data?.skipped ?? 0} דולגו)`),
-    onError: (e: any) => setMessage(e?.response?.data?.detail || 'שגיאה בייבוא'),
+    onSuccess: async (res: { data?: { saved?: number; skipped?: number } }) => {
+      setMessage(`יובאו ${res?.data?.saved ?? 0} שורות (${res?.data?.skipped ?? 0} דולגו)`);
+      await queryClient.invalidateQueries({ queryKey: ['budget-lines'] });
+      await queryClient.invalidateQueries({ queryKey: ['budget-vs-actual'] });
+    },
+    onError: (error: { response?: { data?: { detail?: string } } }) => setMessage(error?.response?.data?.detail || 'שגיאה בייבוא'),
   });
 
-  const total = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  function save() {
+    const updates = Object.entries(drafts).map(([id, raw]) => {
+      const text = raw.trim();
+      if (text === 'none') return { id, month: key, status: 'none' };
+      return { id, month: key, status: 'filled', amount: Number(text) };
+    }).filter((update) => update.status === 'none' || Number.isFinite(update.amount as number));
+    if (updates.length === 0) {
+      setMessage('אין שינוי לשמירה');
+      return;
+    }
+    saveMutation.mutate(updates);
+  }
 
   return (
     <div dir="rtl" className="p-6 space-y-6">
@@ -51,21 +93,26 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
         <Target className="w-8 h-8 text-blue-600" />
         <div>
           <h1 className="text-2xl font-bold">הזנת תקציב</h1>
-          <p className="text-sm text-gray-500">הזנה ידנית נוחה או ייבוא מקובץ Excel</p>
+          <p className="text-sm text-gray-500">כל שורת הכנסה והוצאה פעילה, עם סכום או סימון חסר. אין סכום מומצא.</p>
         </div>
       </div>
 
       {message && <div className={`p-3 rounded-lg border ${card}`}>{message}</div>}
+      {data?.declared_payroll ? (
+        <p className={`text-sm ${darkMode ? 'text-amber-200' : 'text-amber-800'}`}>
+          שכר מוצהר לחודש: ₪{Number(data.declared_payroll.monthly).toLocaleString('he-IL')}. {data.declared_payroll.note_he}
+        </p>
+      ) : null}
 
       <div className={`rounded-xl border p-5 ${card} flex flex-wrap items-end gap-4`}>
         <div>
           <label className="block text-sm mb-1">שנה</label>
-          <input type="number" className={input} value={year} onChange={(e) => setYear(parseInt(e.target.value) || year)} />
+          <input type="number" className={input} value={year} onChange={(e) => setYear(parseInt(e.target.value, 10) || year)} />
         </div>
         <div>
           <label className="block text-sm mb-1">חודש</label>
-          <select className={input} value={month} onChange={(e) => setMonth(parseInt(e.target.value))}>
-            {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+          <select className={input} value={month} onChange={(e) => setMonth(parseInt(e.target.value, 10))}>
+            {MONTHS.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
           </select>
         </div>
         <button onClick={() => apiService.downloadBudgetTemplate()}
@@ -80,45 +127,56 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
       </div>
 
       <div className={`rounded-xl border p-5 ${card}`}>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-right border-b">
-              <th className="py-2">קטגוריה</th>
-              <th>סכום מתוכנן</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="border-b">
-                <td className="py-2">
-                  <input className={input + ' w-full'} value={r.category}
-                    onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, category: e.target.value } : x))} />
-                </td>
-                <td>
-                  <input type="number" className={input + ' w-40'} value={r.amount}
-                    onChange={(e) => setRows(rows.map((x, j) => j === i ? { ...x, amount: parseFloat(e.target.value) || 0 } : x))} />
-                </td>
-                <td>
-                  <button onClick={() => setRows(rows.filter((_, j) => j !== i))} className="text-red-500 p-1">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="flex items-center justify-between mt-4">
-          <button onClick={() => setRows([...rows, { category: '', amount: 0 }])}
-            className="px-3 py-2 border border-gray-400 rounded-lg flex items-center gap-2 hover:bg-gray-50">
-            <Plus className="w-4 h-4" /> הוספת שורה
-          </button>
-          <div className="text-lg font-bold">סה"כ: ₪{total.toLocaleString()}</div>
-        </div>
-        <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}
-          className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2">
-          <Save className="w-4 h-4" /> {saveMutation.isPending ? 'שומר...' : 'שמירת תקציב'}
-        </button>
+        {linesQuery.isLoading ? <p>טוען שורות…</p> : null}
+        {linesQuery.isError ? <p>לא ניתן לטעון את שורות התקציב לפני בחירת ארגון.</p> : null}
+        {data ? (
+          <>
+            <p className="mb-3 text-sm text-gray-600">
+              {MONTHS[month - 1]} {year}: {data.counts.filled} עם סכום, {data.counts.none} מסומנות «אין», {data.counts.missing} חסרות מתוך {data.counts.active}.
+            </p>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-right border-b">
+                  <th className="py-2">שורה</th>
+                  <th>סטטוס</th>
+                  <th>סכום</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.lines.map((line) => {
+                  const cell = line.months[key];
+                  const draft = drafts[line.id];
+                  const shown = draft !== undefined ? draft : (cell?.amount ?? '');
+                  return (
+                    <tr key={line.id} className="border-b">
+                      <td className="py-2">{line.label}</td>
+                      <td className={cell?.status === 'missing' ? 'text-amber-700' : ''}>{cell?.status_he ?? 'חסר, הבעלים יזין'}</td>
+                      <td>
+                        <input
+                          className={input + ' w-40'}
+                          value={shown}
+                          placeholder={cell?.status === 'missing' ? 'חסר' : ''}
+                          onChange={(event) => setDrafts({ ...drafts, [line.id]: event.target.value })}
+                        />
+                      </td>
+                      <td>
+                        <button type="button" className="text-stone-600 underline"
+                          onClick={() => setDrafts({ ...drafts, [line.id]: 'none' })}>
+                          סמן אין
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <button onClick={save} disabled={saveMutation.isPending}
+              className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2">
+              <Save className="w-4 h-4" /> {saveMutation.isPending ? 'שומר...' : 'שמירת תקציב'}
+            </button>
+          </>
+        ) : null}
       </div>
     </div>
   );
