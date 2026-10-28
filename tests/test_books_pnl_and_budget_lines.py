@@ -123,6 +123,96 @@ def test_books_pnl_reconciles_to_documents_and_does_not_borrow_the_bank(fresh_or
     assert report["provider_calls"] == 0
 
 
+def _division(month, division_id):
+    return next(row for row in month["divisions"] if row["id"] == division_id)
+
+
+def _shared_books(org_id, *, pizza_revenue="600", culinary_revenue="400", shared="200", pizza_cost="50"):
+    with SessionLocal() as db:
+        db.add(Invoice(
+            organization_id=org_id, invoice_number="p", issue_date=date(2026, 8, 2),
+            status=InvoiceStatus.SENT, subtotal=Decimal(pizza_revenue), tax=Decimal("0"),
+            total=Decimal(pizza_revenue), raw_data={"division": "pizza"},
+        ))
+        db.add(Invoice(
+            organization_id=org_id, invoice_number="c", issue_date=date(2026, 8, 3),
+            status=InvoiceStatus.SENT, subtotal=Decimal(culinary_revenue), tax=Decimal("0"),
+            total=Decimal(culinary_revenue), raw_data={"division": "culinary"},
+        ))
+        db.add(Expense(
+            organization_id=org_id, supplier_name="פוד גרופ", expense_date=date(2026, 8, 4),
+            status="filed", amount=Decimal(shared), vat_amount=Decimal("0"), total=Decimal(shared),
+            raw_data={"division": "common"},
+        ))
+        db.add(Expense(
+            organization_id=org_id, supplier_name="פיצה", expense_date=date(2026, 8, 5),
+            status="filed", amount=Decimal(pizza_cost), vat_amount=Decimal("0"), total=Decimal(pizza_cost),
+            raw_data={"division": "pizza"},
+        ))
+        db.commit()
+
+
+def test_shared_costs_stay_unallocated_until_a_month_has_a_key(fresh_org):
+    from cfo.services.dashboards.books_pnl import books_pnl
+
+    org_id = fresh_org()["org_id"]
+    _shared_books(org_id)
+    with SessionLocal() as db:
+        report = books_pnl(db, org_id, as_of=AS_OF, months=4)
+    august = next(month for month in report["months"] if month["month"] == "2026-08")
+    shared = _division(august, "shared")
+    pizza = _division(august, "pizza")
+    culinary = _division(august, "culinary")
+    assert shared["label"] == "עלויות משותפות"
+    assert shared["costs"] == 200.0 and shared["remaining"] == 200.0
+    assert shared["allocation_applied"] is False
+    assert august["shared_allocation"]["applied"] is False
+    assert pizza["profit_before_shared"] == 550.0
+    assert culinary["profit_before_shared"] == 400.0
+    assert pizza["allocated_shared"] is None and culinary["allocated_shared"] is None
+
+
+def test_manual_and_revenue_share_keys_allocate_the_whole_shared_total(fresh_org):
+    from cfo.services.dashboards.books_pnl import books_pnl
+
+    org_id = fresh_org()["org_id"]
+    _shared_books(org_id)
+    manual = {"sharedCostAllocation": {"2026-08": {"method": "manual", "percentages": {"pizza": 25, "culinary": 75}}}}
+    revenue = {"sharedCostAllocation": {"2026-08": {"method": "revenue_share"}}}
+    with SessionLocal() as db:
+        by_hand = books_pnl(db, org_id, as_of=AS_OF, months=4, plan=manual)
+        by_revenue = books_pnl(db, org_id, as_of=AS_OF, months=4, plan=revenue)
+        untouched = books_pnl(db, org_id, as_of=AS_OF, months=4, plan={
+            "sharedCostAllocation": {"2026-07": {"method": "revenue_share"}},
+        })
+    august = next(month for month in by_hand["months"] if month["month"] == "2026-08")
+    pizza, culinary, shared = _division(august, "pizza"), _division(august, "culinary"), _division(august, "shared")
+    assert pizza["profit_before_shared"] == 550.0
+    assert pizza["allocated_shared"] == 50.0 and culinary["allocated_shared"] == 150.0
+    assert pizza["allocated_shared"] + culinary["allocated_shared"] == shared["costs"]
+    assert shared["remaining"] == 0.0 and shared["costs"] == 200.0
+    revenue_month = next(month for month in by_revenue["months"] if month["month"] == "2026-08")
+    pizza_r, culinary_r = _division(revenue_month, "pizza"), _division(revenue_month, "culinary")
+    assert pizza_r["allocated_shared"] == 120.0 and culinary_r["allocated_shared"] == 80.0
+    assert pizza_r["allocated_shared"] + culinary_r["allocated_shared"] == 200.0
+    from cfo.services.dashboards.books_pnl import validate_shared_cost_allocation
+    validate_shared_cost_allocation(manual["sharedCostAllocation"])
+    with pytest.raises(ValueError):
+        validate_shared_cost_allocation({"2026-08": {"method": "manual", "percentages": {"pizza": 80, "culinary": 30}}})
+    # A key for another month does not allocate August, and zero revenue does not become 50/50.
+    august_untouched = next(month for month in untouched["months"] if month["month"] == "2026-08")
+    assert _division(august_untouched, "shared")["remaining"] == 200.0
+    assert _division(august_untouched, "pizza")["allocated_shared"] is None
+    org_id = fresh_org()["org_id"]
+    _shared_books(org_id, pizza_revenue="0", culinary_revenue="0")
+    with SessionLocal() as db:
+        empty = books_pnl(db, org_id, as_of=AS_OF, months=4, plan=revenue)
+    empty_august = next(month for month in empty["months"] if month["month"] == "2026-08")
+    assert empty_august["shared_allocation"]["applied"] is False
+    assert _division(empty_august, "shared")["remaining"] == 200.0
+    assert _division(empty_august, "pizza")["allocated_shared"] is None
+
+
 def test_seed_payroll_is_the_four_filled_lines_and_the_rest_stay_missing():
     import json
     from pathlib import Path

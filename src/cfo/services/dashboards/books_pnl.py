@@ -5,13 +5,17 @@ or a mapped SUMIT journal when that month has no such documents) or an explicit
 "אין נתוני ספרים". Bank rows are never substituted for a missing month.
 
 A document lands in פיצה / משלוחים / קולינרי only when it carries that
-division itself (or a plan ``divisionMap`` names its account). Anything else
-is לבירור, with its share of the month.
+division itself (or a plan ``divisionMap`` names its account). Costs marked
+shared (Food Group, common to pizza and culinary) stay in עלויות משותפות.
+Division profit is before those costs. They are allocated only when the plan
+has a key for that month: manual percentages, or the month's pizza/culinary
+revenue share. Anything else is לבירור, with its share of the month.
 """
 from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+import re
 
 from ...models import Account, BankTransaction, Bill, Expense, Invoice, JournalEntry
 from ..vat_utils import bill_counts, expense_counts, invoice_counts
@@ -22,11 +26,15 @@ from .plan_budget import PlanBudgetError, monthly_line_sums, validate_budget_lin
 BOOKS = "books"
 NO_BOOKS = "no_books"
 CLARIFY = "clarify"
-DIVISIONS = ("pizza", "deliveries", "culinary", CLARIFY)
+SHARED = "shared"
+# Shared Food Group costs are split only between pizza and culinary.
+SHARED_TARGETS = ("pizza", "culinary")
+DIVISIONS = ("pizza", "deliveries", "culinary", SHARED, CLARIFY)
 LABELS = {
     "pizza": "פיצה",
     "deliveries": "משלוחים",
     "culinary": "קולינרי",
+    SHARED: "עלויות משותפות",
     CLARIFY: "לבירור",
 }
 BASIS_BOOKS = "ספרים — מסמכי SUMIT שכבר במערכת"
@@ -42,7 +50,14 @@ _ALIASES = {
     "קולינרי": "culinary",
     "chef": "culinary",
     "שף": "culinary",
+    "shared": "shared",
+    "common": "shared",
+    "food_group": "shared",
+    "משותף": "shared",
+    "משותפות": "shared",
+    "עלויות משותפות": "shared",
 }
+_MONTH_KEY = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 _MONEY = Decimal("0.01")
 _SPLIT_TOLERANCE = Decimal("0.02")
 _JOURNAL_SOURCES = ("reviewed_local_import", "hashavshevet_mdb")
@@ -177,24 +192,148 @@ def _empty_divisions() -> dict[str, dict[str, Decimal]]:
     return {key: {"revenue": Decimal("0"), "costs": Decimal("0")} for key in DIVISIONS}
 
 
-def _division_rows(buckets: dict[str, dict[str, Decimal]] | None) -> list[dict] | None:
+def validate_shared_cost_allocation(value) -> None:
+    """Reject a plan key that would require inventing a percentage."""
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise ValueError("מפתח החלוקה חייב להיות אובייקט לפי חודש")
+    for month, cell in value.items():
+        if not isinstance(month, str) or not _MONTH_KEY.fullmatch(month):
+            raise ValueError("חודש החלוקה חייב להיות YYYY-MM")
+        if not isinstance(cell, dict):
+            raise ValueError("הגדרת החלוקה לא תקינה")
+        method = cell.get("method")
+        if method == "revenue_share":
+            if set(cell) - {"method"}:
+                raise ValueError("חלוקה לפי הכנסות אינה מקבלת אחוזים")
+            continue
+        if method != "manual":
+            raise ValueError("שיטת החלוקה אינה מוכרת")
+        percentages = cell.get("percentages")
+        if not isinstance(percentages, dict) or not percentages or set(percentages) - set(SHARED_TARGETS):
+            raise ValueError("חלוקה ידנית היא אחוזים לפיצה ולקולינרי בלבד")
+        total = Decimal("0")
+        for raw in percentages.values():
+            number = _percent(raw)
+            if number is None:
+                raise ValueError("אחוז החלוקה חייב להיות בין 0 ל-100")
+            total += number
+        if total > Decimal("100"):
+            raise ValueError("סכום האחוזים גדול מ-100")
+
+
+def _percent(value) -> Decimal | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str, Decimal)):
+        return None
+    try:
+        number = Decimal(str(value))
+    except Exception:
+        return None
+    if not number.is_finite() or number < 0 or number > 100:
+        return None
+    return number
+
+
+def _allocation_key(plan: dict, month: str) -> dict | None:
+    raw = plan.get("sharedCostAllocation") if isinstance(plan, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    cell = raw.get(month)
+    if not isinstance(cell, dict):
+        return None
+    try:
+        validate_shared_cost_allocation({month: cell})
+    except ValueError:
+        return None
+    if cell.get("method") == "revenue_share":
+        return {"method": "revenue_share"}
+    percentages = {
+        key: _percent(cell["percentages"][key])
+        for key in SHARED_TARGETS if key in cell.get("percentages", {})
+    }
+    if any(value is None for value in percentages.values()) or not percentages:
+        return None
+    return {"method": "manual", "percentages": percentages}
+
+
+def _split(total: Decimal, weights: list[tuple[str, Decimal]]) -> dict[str, Decimal]:
+    if not weights:
+        return {}
+    full = sum((weight for _, weight in weights), Decimal("0"))
+    out: dict[str, Decimal] = {}
+    running = Decimal("0")
+    for index, (name, weight) in enumerate(weights):
+        if index == len(weights) - 1 and full == 1:
+            amount = _q(total - running)
+        else:
+            amount = _q(total * weight)
+            running += amount
+        out[name] = amount
+    return out
+
+
+def _allocate_shared(buckets: dict[str, dict[str, Decimal]], key: dict | None) -> tuple[dict[str, Decimal], dict]:
+    """Allocate only after a valid key. Missing revenue does not become 50/50."""
+    shared = buckets[SHARED]["costs"]
+    info = {"applied": False, "method": None, "reason": None, "percentages": None, "derived_percentages": None}
+    if key is None or shared == 0:
+        return {}, info
+    if key["method"] == "revenue_share":
+        pizza = buckets["pizza"]["revenue"]
+        culinary = buckets["culinary"]["revenue"]
+        base = pizza + culinary
+        if base == 0:
+            info["method"] = "revenue_share"
+            info["reason"] = "אין הכנסות פיצה או קולינרי בחודש, ולכן העלויות המשותפות לא חולקו"
+            return {}, info
+        weights = [("pizza", pizza / base), ("culinary", culinary / base)]
+        info["derived_percentages"] = {
+            name: float(_q(weight * Decimal(100))) for name, weight in weights
+        }
+    else:
+        weights = [(name, pct / Decimal(100)) for name, pct in key["percentages"].items()]
+        info["percentages"] = {name: float(pct) for name, pct in key["percentages"].items()}
+    allocated = _split(shared, weights)
+    info["applied"] = True
+    info["method"] = key["method"]
+    return allocated, info
+
+
+def _division_rows(buckets: dict[str, dict[str, Decimal]] | None, allocated: dict[str, Decimal] | None = None,
+                   applied: bool = False) -> list[dict] | None:
     if buckets is None:
         return None
+    allocated = allocated or {}
     whole = sum((abs(side["revenue"]) + abs(side["costs"]) for side in buckets.values()), Decimal("0"))
     clarify = abs(buckets[CLARIFY]["revenue"]) + abs(buckets[CLARIFY]["costs"])
     share = None if whole == 0 else float(_q(clarify / whole * Decimal(100)))
+    shared_total = buckets[SHARED]["costs"]
+    allocated_sum = sum(allocated.values(), Decimal("0")) if applied else Decimal("0")
+    remaining = shared_total - allocated_sum if applied else shared_total
     rows = []
     for key in DIVISIONS:
         side = buckets[key]
+        own = side["revenue"] - side["costs"]
         row = {
             "id": key,
             "label": LABELS[key],
             "revenue": float(_q(side["revenue"])),
             "costs": float(_q(side["costs"])),
-            "net": float(_q(side["revenue"] - side["costs"])),
+            "net": float(_q(own)),
+            "profit_before_shared": None if key in (SHARED, CLARIFY) else float(_q(own)),
+            "allocated_shared": None,
         }
         if key == CLARIFY:
             row["share_pct"] = share
+        if key == SHARED:
+            row["remaining"] = float(_q(remaining))
+            row["allocation_applied"] = applied
+        elif applied and key in allocated:
+            row["allocated_shared"] = float(_q(allocated[key]))
+            row["profit"] = float(_q(own - allocated[key]))
+        elif key not in (SHARED, CLARIFY):
+            row["profit"] = float(_q(own))
         rows.append(row)
     return rows
 
@@ -388,7 +527,8 @@ def books_pnl(db, organization_id: int, *, as_of: date | None = None, months: in
             else:
                 buckets[division]["costs"] += amount
                 costs += amount
-        rows = _division_rows(buckets)
+        allocated, allocation = _allocate_shared(buckets, _allocation_key(plan, key))
+        rows = _division_rows(buckets, allocated, allocation["applied"])
         clarify = next(row for row in rows if row["id"] == CLARIFY)
         public_docs = [
             {"kind": item["kind"], "id": item["id"], "side": item["side"],
@@ -408,6 +548,7 @@ def books_pnl(db, organization_id: int, *, as_of: date | None = None, months: in
             "net": float(_q(revenue - costs)),
             "divisions": rows,
             "clarify_share_pct": clarify.get("share_pct"),
+            "shared_allocation": allocation,
             "document_count": len(used),
             "journal_not_added": journal_not_added,
             "bank_rows_present": key in bank_months,
