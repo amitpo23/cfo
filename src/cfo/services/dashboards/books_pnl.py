@@ -5,14 +5,16 @@ or a mapped SUMIT journal when that month has no such documents) or an explicit
 "אין נתוני ספרים". Bank rows are never substituted for a missing month.
 
 A document lands in פיצה / משלוחים / קולינרי only when it carries that
-division itself (or a plan ``divisionMap`` names its account). Costs marked
-shared (Food Group, common to pizza and culinary) stay in עלויות משותפות.
+division itself (or a plan ``divisionMap`` names its account). Names such as
+a group or a chef belong on ``plan.divisionAliases``, not in code. Costs
+marked shared stay in עלויות משותפות.
 Division profit is before those costs. They are allocated only when the plan
 has a key for that month: manual percentages, or the month's pizza/culinary
 revenue share. Anything else is לבירור, with its share of the month.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import re
@@ -48,11 +50,8 @@ _ALIASES = {
     "משלוח": "deliveries",
     "culinary": "culinary",
     "קולינרי": "culinary",
-    "chef": "culinary",
-    "שף": "culinary",
     "shared": "shared",
     "common": "shared",
-    "food_group": "shared",
     "משותף": "shared",
     "משותפות": "shared",
     "עלויות משותפות": "shared",
@@ -61,6 +60,7 @@ _MONTH_KEY = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 _MONEY = Decimal("0.01")
 _SPLIT_TOLERANCE = Decimal("0.02")
 _JOURNAL_SOURCES = ("reviewed_local_import", "hashavshevet_mdb")
+_DIVISION_EXTRA: ContextVar[dict] = ContextVar("books_division_aliases", default={})
 
 
 def _row_side(row_id: str) -> str:
@@ -88,13 +88,27 @@ def _net(row, net_attr: str, gross_attr: str, tax_attr: str) -> Decimal:
     return _num(getattr(row, gross_attr, None)) - _num(getattr(row, tax_attr, None))
 
 
-def _alias(value) -> str | None:
+def division_aliases(plan: dict | None) -> dict[str, str]:
+    """``plan.divisionAliases``: a name this org uses, mapped to a division code."""
+    raw = (plan or {}).get("divisionAliases") if isinstance(plan, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, value in raw.items():
+        if isinstance(key, str) and isinstance(value, str) and value.strip():
+            out[key.strip()] = value.strip()
+            out[key.strip().casefold()] = value.strip()
+    return out
+
+
+def _alias(value, extra: dict | None = None) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
-    if text in _ALIASES:
-        return _ALIASES[text]
-    return _ALIASES.get(text.casefold())
+    table = {**_ALIASES, **(_DIVISION_EXTRA.get() if extra is None else extra)}
+    if text in table:
+        return table[text]
+    return table.get(text.casefold())
 
 
 def _month_end(day: date) -> date:
@@ -374,6 +388,10 @@ def _journal_slices(db, organization_id: int, start: date, end: date, plan: dict
             if amount == 0:
                 continue
             division = _alias(division_map.get(code)) or CLARIFY
+            reference = str(line.get("reference") or line.get("document") or "")
+            if not reference and entry.memo:
+                found = re.search(r"\b(\d{3,})\b", entry.memo)
+                reference = found.group(1) if found else ""
             by_month.setdefault(key, []).append({
                 "kind": "journal",
                 "id": entry.id,
@@ -381,6 +399,7 @@ def _journal_slices(db, organization_id: int, start: date, end: date, plan: dict
                 "division": division,
                 "net": amount,
                 "account": code,
+                "reference": reference,
             })
     return by_month
 
@@ -389,6 +408,19 @@ def books_pnl(db, organization_id: int, *, as_of: date | None = None, months: in
               start: date | None = None, end: date | None = None,
               plan: dict | None = None, include_documents: bool = False) -> dict:
     """Last ``months`` calendar months ending at ``as_of``, unless ``start``/``end`` are set."""
+    token = _DIVISION_EXTRA.set(division_aliases(plan))
+    try:
+        return _books_pnl(
+            db, organization_id, as_of=as_of, months=months, start=start, end=end,
+            plan=plan, include_documents=include_documents,
+        )
+    finally:
+        _DIVISION_EXTRA.reset(token)
+
+
+def _books_pnl(db, organization_id: int, *, as_of: date | None = None, months: int = 4,
+               start: date | None = None, end: date | None = None,
+               plan: dict | None = None, include_documents: bool = False) -> dict:
     plan = plan if isinstance(plan, dict) else {}
     if start is None or end is None:
         as_of = as_of or date.today()
@@ -439,6 +471,7 @@ def books_pnl(db, organization_id: int, *, as_of: date | None = None, months: in
         return _alias(division_map.get(code)) if code else None
 
     docs: dict[str, list] = {}
+    invoice_numbers: dict[str, set[str]] = {}
 
     def _add(key: str, kind: str, row_id: int, side: str, net: Decimal, division: str):
         docs.setdefault(key, []).append({
@@ -449,6 +482,8 @@ def books_pnl(db, organization_id: int, *, as_of: date | None = None, months: in
         if row.issue_date is None or not invoice_counts(row.status):
             continue
         key = f"{row.issue_date.year:04d}-{row.issue_date.month:02d}"
+        if row.invoice_number:
+            invoice_numbers.setdefault(key, set()).add(str(row.invoice_number))
         net = _net(row, "subtotal", "total", "tax")
         for division, amount in _slices(net, row.raw_data, row.line_items, None):
             _add(key, "invoice", row.id, "revenue", amount, division)
@@ -486,8 +521,17 @@ def books_pnl(db, organization_id: int, *, as_of: date | None = None, months: in
         if month_docs:
             source = "documents"
             basis_label = BASIS_BOOKS
-            used = month_docs
-            journal_not_added = bool(journal_rows)
+            used = list(month_docs)
+            known_numbers = set(invoice_numbers.get(key, set()))
+            added_journal = False
+            for item in journal_rows:
+                reference = str(item.get("reference") or "")
+                if not reference or reference in known_numbers:
+                    continue
+                used.append(item)
+                known_numbers.add(reference)
+                added_journal = True
+            journal_not_added = bool(journal_rows) and not added_journal
         elif journal_rows:
             source = "journal"
             basis_label = BASIS_JOURNAL

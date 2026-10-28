@@ -48,7 +48,9 @@ class ExpenseFilingWorkflow:
             connection, source, credentials = get_connection_configuration(self.db, self.organization_id, 'sumit')
         except ValueError as exc:
             raise ActionValidationError('An active SUMIT connection requires owner configuration') from exc
-        company_id = credentials.get('company_id') or (settings.sumit_company_id if self.organization_id == 1 else None)
+        company_id = credentials.get('company_id') or (
+            settings.sumit_company_id if settings.env_sumit_allowed(self.organization_id) else None
+        )
         if not company_id:
             raise ActionValidationError('The destination SUMIT company requires owner configuration')
         return {'source': source, 'connection_id': connection.id if connection else None, 'company_id': str(company_id)}

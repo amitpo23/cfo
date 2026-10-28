@@ -236,9 +236,8 @@ def _resolve_sumit_key(db: Session, org_id: int) -> Optional[str]:
         org = db.query(Organization).filter(Organization.id == org_id).first()
         creds = (org.api_credentials if org and org.api_credentials else {}) or {}
 
-    # אישורי סביבה שייכים לארגון 1 בלבד — נפילה רחבה יותר הייתה שולחת
-    # קריאות של תיק אחד בשם תיק אחר.
-    env_allowed = org_id == 1
+    # אישורי סביבה רק לארגונים שברשימה. רשימה ריקה — אף ארגון, כולל 1.
+    env_allowed = settings.env_sumit_allowed(org_id)
     return creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
 
 

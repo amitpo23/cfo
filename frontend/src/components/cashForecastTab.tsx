@@ -1,11 +1,10 @@
-// The "תזרים חזוי" tab of /d/: thirteen weeks of projected cash per entity and combined
-// (backend: services/dashboards/cash_forecast.py). Every number is from the view model;
-// an unknown balance stays "לא ידוע" and the tab says which input is missing.
+// The "תזרים חזוי" tab of /d/: thirteen weeks from cashflow_source.forecast.
+// Every number is from that one engine. A missing amount is "חסר נכון ל-<תאריך>".
 import { Fragment, useEffect, useState } from 'react';
 import {
   Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { EmptyState, KpiCards, type Kpi } from './dashboardUi';
+import { EmptyState, KpiCards, missingAsOf, type Kpi } from './dashboardUi';
 import { money } from './dashboardTabs';
 
 export type Certainty = 'certain' | 'scheduled' | 'manual' | 'estimate';
@@ -42,6 +41,7 @@ export type CashForecast = {
   weeks: ForecastWeek[];
   first_breach: { week_start: string; week_end: string; headroom: number; reasons: string[] } | null;
   overdue?: Overdue[];
+  discounted_cheque_balances?: { check?: string | null; amount: number; closes_on: string; outstanding: boolean }[];
   missing: string[];
   shared_identity_note?: string | null;
   run_rate?: Record<string, number>;
@@ -58,8 +58,9 @@ const CERTAINTY: Record<Certainty, string> = {
 
 const MISSING: Record<string, string> = {
   opening_balance: 'יתרת העו״ש לא ידועה, ולכן גם היתרה החזויה והמרווח. מזינים "יתרת פתיחה ידנית" בלשונית נזילות והתחייבויות.',
-  facility_limit: 'גובה המסגרת לא ידוע. מוסיפים מסגרת בראיות הנזילות.',
+  facility_limit: 'גובה המסגרת לא ידוע. מוסיפים מסגרת בראיות הנזילות. חריגה לא מחושבת מול אפס.',
   run_rate: 'אין שלושה חודשים מלאים של תנועות בנק, ולכן אין קצב ריצה.',
+  forecast_rules: 'חלק מכללי התזרים חסרים (הכנסה, שכר, ספקים לסוף החודש העוקב או הלוואה קצרה). החסר לא הוזן כ־0, והיתרה שאחריו לא ידועה.',
 };
 
 function day(iso: string): string {
@@ -87,28 +88,28 @@ function kpis(forecast: CashForecast): Kpi[] {
   const ceiling = weeks.some((week) => week.items.some((item) => item.upper_bound));
   const breach = forecast.first_breach;
   return [
-    { label: 'יתרה היום', value: money(start.amount), note: start.as_of ? `נכון ל־${start.as_of}` : null },
+    { label: 'יתרה היום', value: money(start.amount, start.as_of), note: start.as_of ? `נכון ל־${start.as_of}` : null },
     {
       label: 'פנוי במסגרת השבוע',
-      value: money(weeks[0]?.headroom),
+      value: money(weeks[0]?.headroom, weeks[0]?.end),
       note: (weeks[0]?.headroom ?? 0) < 0 ? 'חריגה מהמסגרת' : null,
       tone: (weeks[0]?.headroom ?? 0) < 0 ? 'warn' : null,
     },
     {
       label: 'השבוע הקשה',
-      value: tightest ? money(tightest.headroom) : 'לא ידוע',
+      value: tightest ? money(tightest.headroom, tightest.end) : missingAsOf(weeks[0]?.end),
       note: tightest ? weekLabel(tightest) : null,
       tone: (tightest?.headroom ?? 0) < 0 ? 'warn' : null,
     },
     {
       label: 'חריגה ראשונה',
-      value: breach ? weekLabel({ start: breach.week_start, end: breach.week_end }) : known.length ? 'אין חריגה צפויה' : 'לא ידוע',
+      value: breach ? weekLabel({ start: breach.week_start, end: breach.week_end }) : known.length ? 'אין חריגה צפויה' : missingAsOf(weeks[0]?.end),
       note: breach ? money(breach.headroom) : null,
       tone: breach ? 'warn' : null,
     },
     {
       label: 'תזרים 13 שבועות',
-      value: money(net),
+      value: money(net, weeks[weeks.length - 1]?.end),
       note: ceiling ? 'כולל סיום הלוואות לפי הסכום המרבי' : null,
     },
   ];
@@ -214,13 +215,13 @@ function WeeksTable({ forecast }: { forecast: CashForecast }) {
                         {expanded ? '▾' : '◂'} {weekLabel(week)}
                       </button>
                     </td>
-                    <td>{money(week.in)}</td>
-                    <td>{money(week.out)}</td>
-                    <td className={(week.net ?? 0) < 0 ? 'text-red-700' : ''}>{money(week.net)}</td>
-                    <td>{money(week.closing)}</td>
-                    <td>{money(week.limit)}</td>
+                    <td>{money(week.in, week.end)}</td>
+                    <td>{money(week.out, week.end)}</td>
+                    <td className={(week.net ?? 0) < 0 ? 'text-red-700' : ''}>{money(week.net, week.end)}</td>
+                    <td>{money(week.closing, week.end)}</td>
+                    <td>{money(week.limit, week.end)}</td>
                     <td className={breach ? 'font-medium text-red-700' : ''}>
-                      {money(week.headroom)}{breach ? ' · חריגה' : ''}
+                      {money(week.headroom, week.end)}{breach ? ' · חריגה' : ''}
                     </td>
                   </tr>
                   {expanded ? (
@@ -235,7 +236,7 @@ function WeeksTable({ forecast }: { forecast: CashForecast }) {
         </table>
       </div>
       <p className="mt-3 text-xs text-stone-500">
-        ודאי: צ׳ק דחוי או סיום הלוואה מתוארכים. קבוע: החזר קרן חודשי. ידני: פריט שבעלי הדשבורד הזינו. הערכה: ממוצע שלושת החודשים המלאים
+        ברירת המחדל לספקים היא סוף החודש העוקב: ספטמבר נפרע ב־1/11 (31/10 הוא שבת), אוקטובר ב־30/11, נובמבר ב־31/12, דצמבר ב־31/1. בשבוע 25–30/10 הספקים של ספטמבר (30,000−) אינם נכללים; במנוע הקודם הם נפלו ב־30/10. שוטף+30 נשאר חלופה לארגון. שבוע הוא מיום ראשון עד יום שישי. מזומן שחל בשבת נזקף ליום ראשון שאחריו, פעם אחת. ודאי: צ׳ק דחוי או סיום הלוואה מתוארכים. קבוע: החזר קרן חודשי. ידני: פריט שבעלי הדשבורד הזינו. הערכה: ממוצע שלושת החודשים המלאים
         האחרונים בבנק, לפי קבוצה. צ׳ק ידוע נגרע מקצב היציאות של החודש שלו ולא נוסף עליו.
       </p>
     </section>
@@ -269,6 +270,31 @@ export function CashForecastPanel({ forecast, overdue }: { forecast: CashForecas
               </li>
             ))}
           </ul>
+        </section>
+      ) : null}
+      {(forecast.discounted_cheque_balances ?? []).length ? (
+        <section className="d-card" aria-label="יתרות ניכיון">
+          <h2>ניכיון שיקים — יתרת הלוואה עד הפירעון</h2>
+          <table className="mt-2 w-full text-sm">
+            <thead>
+              <tr className="text-right text-stone-500">
+                <th className="py-1">שיק</th>
+                <th>יתרה</th>
+                <th>נסגר ב</th>
+                <th>מצב</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(forecast.discounted_cheque_balances ?? []).map((row, index) => (
+                <tr key={`${row.check ?? index}-${row.closes_on}`} className="border-t border-stone-200">
+                  <td className="py-1">{row.check || 'שיק מנוכה'}</td>
+                  <td className="tabular-nums">{money(row.amount)}</td>
+                  <td>{day(row.closes_on)}</td>
+                  <td>{row.outstanding ? 'פתוח' : 'נסגר'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </section>
       ) : null}
       <KpiCards items={kpis(forecast)} />

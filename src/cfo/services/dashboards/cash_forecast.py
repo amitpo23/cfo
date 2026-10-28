@@ -22,6 +22,8 @@ from calendar import monthrange
 from datetime import date, timedelta
 from statistics import median
 
+from . import forecast_rules
+
 WEEKS = 13
 RUN_RATE_MONTHS = 3
 # ``internal`` stays in each entity's run-rate: a transfer from Food Group is cash
@@ -94,9 +96,37 @@ def validate_items(payload: dict) -> str | None:
 
 
 def week_windows(today: date, weeks: int = WEEKS) -> list[tuple[date, date]]:
-    """Sunday-to-Saturday weeks, starting with the week of ``today``."""
-    start = today - timedelta(days=(today.weekday() + 1) % 7)
-    return [(start + timedelta(weeks=i), start + timedelta(weeks=i, days=6)) for i in range(weeks)]
+    """Sunday-to-Friday weeks, starting with the week of ``today``.
+
+    Saturday is not a business day. Cash that falls on a Saturday is moved to
+    the next Sunday by ``business_day``, so it is counted in exactly one week.
+    """
+    from .cashflow_truth import week_windows as windows
+    return windows(today, weeks)
+
+
+def business_day(day: date) -> date:
+    """Saturday cash is taken on the following Sunday, once."""
+    from .cashflow_truth import roll_saturday
+    return roll_saturday(day)
+
+
+def _roll_to_business_days(items: list[dict], streams: dict[date, dict[str, float]],
+                           unknown: list[tuple[date, str]]) -> tuple[list[dict], dict[date, dict[str, float]], list[tuple[date, str]]]:
+    rolled_items = []
+    for item in items:
+        when = item.get("date")
+        if isinstance(when, date):
+            moved = business_day(when)
+            if moved != when:
+                item = dict(item, date=moved, saturday_rolled=True)
+        rolled_items.append(item)
+    rolled_streams: dict[date, dict[str, float]] = {}
+    for day, values in streams.items():
+        slot = rolled_streams.setdefault(business_day(day), {})
+        for key, value in values.items():
+            slot[key] = slot.get(key, 0.0) + value
+    return rolled_items, rolled_streams, [(business_day(day), key) for day, key in unknown]
 
 
 def _month(day: date) -> str:
@@ -133,25 +163,38 @@ def _facilities(plan: dict | None, organization_id: int, upcoming: list[dict]) -
                 (_date(event["date"]) for event, amount in expiries if amount is not None and abs(amount - limit) < 0.01),
                 default=None,
             )
-        out.append({"name": item.get("name") or item.get("label"), "limit": limit,
-                    "start": _date(item.get("validFrom")), "end": end})
+        kind = str(item.get("kind") or "")
+        out.append({
+            "name": item.get("name") or item.get("label"), "limit": limit,
+            "start": _date(item.get("validFrom")), "end": end,
+            # Cheque discounting is a separate facility, not the checking overdraft.
+            "headroom": kind not in forecast_rules.SHORT_LOAN_KINDS,
+        })
     return out
 
 
 def _limit(facilities: list[dict], fallback: float | None, week_start: date, week_end: date) -> float | None:
-    if not facilities:
-        return fallback
-    return _r(sum(
-        f["limit"] for f in facilities
-        if (f["start"] is None or f["start"] <= week_end) and (f["end"] is None or f["end"] >= week_start)
-    ))
+    """The facility that covers the week. An ended facility falls back to the account
+    limit. A missing limit stays None: headroom is not computed against zero."""
+    active = [
+        facility for facility in facilities
+        if facility.get("headroom", True)
+        and (facility["start"] is None or facility["start"] <= week_end)
+        and (facility["end"] is None or facility["end"] >= week_start)
+    ]
+    if active:
+        return _r(sum(facility["limit"] for facility in active))
+    return fallback
 
 
 def _dated_items(view: dict, plan: dict | None, organization_id: int, first: date, last: date) -> list[dict]:
     liquidity = view.get("liquidity") or {}
     items = []
+    discounted = forecast_rules.discounted_cheque_keys(plan, organization_id)
     for check in liquidity.get("checks") or []:
         when, amount = _date(check.get("date")), _num(check.get("amount"))
+        if (str(check.get("check") or ""), when) in discounted:
+            continue
         if check.get("state") in CHECK_STATES and when and amount and first <= when <= last:
             label = " · ".join(part for part in (f"צ׳ק {check.get('check')}", check.get("payee")) if part)
             items.append({"date": when, "label": label, "amount": _r(-abs(amount)), "certainty": CERTAIN,
@@ -243,10 +286,17 @@ def _daily_streams(rates: dict[str, float], principal: float | None, items: list
     for day in _days(first, last):
         in_window.setdefault(_month(day), []).append(day)
     known_out = {}
+    known_principal = {}
     for item in items:
+        when = item.get("date")
+        if not isinstance(when, date):
+            continue
         if item.get("consumes") == "operating_out":
-            key = _month(item["date"])
+            key = _month(when)
             known_out[key] = known_out.get(key, 0.0) + item["amount"]
+        elif item.get("consumes") == "principal":
+            key = _month(when)
+            known_principal[key] = known_principal.get(key, 0.0) + abs(item["amount"])
     streams: dict[date, dict[str, float]] = {}
     for month, days in in_window.items():
         year, mon = int(month[:4]), int(month[5:])
@@ -255,7 +305,7 @@ def _daily_streams(rates: dict[str, float], principal: float | None, items: list
         if "operating_out" in budget:
             budget["operating_out"] = min(0.0, budget["operating_out"] - known_out.get(month, 0.0))
         if principal:
-            budget["principal"] = -principal * share
+            budget["principal"] = -max(0.0, principal * share - known_principal.get(month, 0.0))
         spread = {key: _spread(value, len(days)) for key, value in budget.items()}
         for index, day in enumerate(days):
             streams[day] = {key: parts[index] for key, parts in spread.items()}
@@ -271,7 +321,13 @@ def _spread(total: float, count: int) -> list[float]:
     return [sign * (base + (1 if i < remainder else 0)) / 100 for i in range(count)]
 
 
-STREAM_LABELS = dict(RUN_RATE_GROUPS, principal="החזרי קרן — הלוואות (חציון 3 חודשים)")
+STREAM_LABELS = dict(
+    RUN_RATE_GROUPS,
+    principal="החזרי קרן — הלוואות (חציון 3 חודשים)",
+    income="הכנסה לפי התקציב",
+)
+STREAM_SOURCE = {"income": "plan.budgetLines"}
+STREAM_CERTAINTY = {"principal": SCHEDULED, "income": SCHEDULED}
 
 
 def _week(start: date, end: date, items: list[dict], streams: dict[date, dict[str, float]]) -> dict:
@@ -283,8 +339,11 @@ def _week(start: date, end: date, items: list[dict], streams: dict[date, dict[st
                 sums[key] = sums.get(key, 0.0) + value
     for key, value in sums.items():
         if round(value, 2):
-            week_items.append({"date": None, "label": STREAM_LABELS[key], "amount": _r(value),
-                               "certainty": SCHEDULED if key == "principal" else ESTIMATE, "source": "cash_statement"})
+            week_items.append({
+                "date": None, "label": STREAM_LABELS[key], "amount": _r(value),
+                "certainty": STREAM_CERTAINTY.get(key, ESTIMATE),
+                "source": STREAM_SOURCE.get(key, "cash_statement"), "stream": key,
+            })
     for item in week_items:
         item.pop("consumes", None)
         if isinstance(item.get("date"), date):
@@ -299,7 +358,7 @@ def _week(start: date, end: date, items: list[dict], streams: dict[date, dict[st
 def _walk(weeks: list[dict], opening: float | None) -> None:
     closing = opening
     for week in weeks:
-        closing = None if closing is None else _r(closing + week["net"])
+        closing = None if closing is None or week.get("net") is None else _r(closing + week["net"])
         week["closing"] = closing
         week["headroom"] = None if closing is None or week["limit"] is None else _r(week["limit"] + closing)
 
@@ -318,8 +377,17 @@ def first_breach(weeks: list[dict], opening: float | None = None) -> dict | None
     return None
 
 
+def _apply_unknown(week: dict, unknown: list[tuple[date, str]], start: date, end: date, first: date) -> None:
+    keys = [key for day, key in unknown if start <= day <= end and day >= first]
+    if not keys:
+        week["unknown"] = []
+        return
+    week["unknown"] = [forecast_rules.UNKNOWN_HE[key] for key in dict.fromkeys(keys)]
+    week["in"] = week["out"] = week["net"] = None
+
+
 def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int, label: str | None,
-                          today: date, weeks: int = WEEKS) -> dict:
+                          today: date, weeks: int = WEEKS, apply_budget_rules: bool = True) -> dict:
     liquidity = view.get("liquidity") or {}
     position = liquidity.get("position") or {}
     opening = _num(position.get("balance"))
@@ -329,13 +397,35 @@ def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int
     last = windows[-1][1]
     items = _dated_items(view, plan, organization_id, first, last)
     rates = run_rate(view, today)
+    use_rules = apply_budget_rules and forecast_rules.rules_active(plan)
+    unknown: list[tuple[date, str]] = []
+    if use_rules:
+        rates = {key: value for key, value in rates.items() if key not in ("operating_in", "operating_out")}
+        lines = forecast_rules.load_lines(plan)
+        ruled, ruled_unknown = forecast_rules.supplier_and_payroll(plan, lines, first, last)
+        budget_cash = forecast_rules.budget_outflow_items(plan, lines, first, last)
+        loans, loan_unknown = forecast_rules.loan_items(plan, organization_id, first, last)
+        cheques, cheque_unknown = forecast_rules.discounted_cheque_items(plan, organization_id, first, last)
+        items = items + ruled + budget_cash + loans + cheques
+        unknown = ruled_unknown + loan_unknown + cheque_unknown
+        income_days, income_unknown = forecast_rules.income_for_window(lines, first, last)
+        unknown += [(day, "income") for day in income_unknown]
+    else:
+        income_days = {}
     streams = _daily_streams(rates, _principal(view, today), items, first, last)
+    for day, amount in income_days.items():
+        streams.setdefault(day, {})["income"] = amount
+    items, streams, unknown = _roll_to_business_days(items, streams, unknown)
     facilities = _facilities(plan, organization_id, liquidity.get("upcoming") or [])
     out_weeks = []
     for index, (start, end) in enumerate(windows):
         week = _week(first if index == 0 and first < start else start, end, items, streams)
         week["start"] = start.isoformat()
-        week["limit"] = _limit(facilities, _num(position.get("limit")), start, end)
+        # A limit copied from evidence is already in ``facilities`` and ends with
+        # them. Using it again as the fallback would keep an expired facility alive.
+        fallback = None if position.get("limit_source") == "plan.liquidityEvidence" else _num(position.get("limit"))
+        week["limit"] = _limit(facilities, fallback, start, end)
+        _apply_unknown(week, unknown, start, end, first)
         out_weeks.append(week)
     _walk(out_weeks, opening)
     missing = []
@@ -343,17 +433,25 @@ def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int
         missing.append("opening_balance")
     if out_weeks[0]["limit"] is None:
         missing.append("facility_limit")
-    if not rates:
+    if not rates and not use_rules:
         missing.append("run_rate")
+    if any(week.get("unknown") for week in out_weeks):
+        missing.append("forecast_rules")
     return {
         "label": label,
         "status": "ready" if opening is not None else ("partial" if rates or items else "unknown"),
-        "opening": {"amount": opening, "as_of": as_of.isoformat() if as_of else None},
+        "opening": {
+            "amount": opening, "as_of": as_of.isoformat() if as_of else None,
+            "source": position.get("balance_source"), "rule": forecast_rules.RULES["opening"],
+        },
         "run_rate": rates,
+        "rules": {**forecast_rules.RULES, "active": use_rules},
         "weeks": out_weeks,
         "first_breach": first_breach(out_weeks, opening),
         "overdue": overdue(view, plan, organization_id, today, as_of, first),
+        "discounted_cheque_balances": forecast_rules.discounted_cheque_balances(plan, organization_id, today),
         "missing": missing,
+        "engine": "cashflow_source",
         "provider_calls": 0,
     }
 
@@ -378,6 +476,71 @@ def combine(entities: list[dict]) -> dict:
         })
     openings = [entity["opening"]["amount"] for entity in entities]
     opening = None if any(v is None for v in openings) else _r(sum(openings))
+    as_ofs = [entity["opening"].get("as_of") for entity in entities if entity["opening"].get("as_of")]
     missing = sorted({key for entity in entities for key in entity["missing"]})
-    return {"weeks": weeks, "opening": opening, "first_breach": first_breach(weeks, opening),
-            "missing": missing, "provider_calls": 0}
+    return {"weeks": weeks, "opening": opening, "opening_as_of": max(as_ofs) if as_ofs else None,
+            "first_breach": first_breach(weeks, opening), "missing": missing, "provider_calls": 0}
+
+
+def overlay_budget_rules(combined: dict, plan: dict | None) -> dict:
+    """Put the group's budget rules on the combined forecast once.
+
+    Each entity keeps its own run-rate. Operating run-rate items are removed here
+    and replaced by the budget rules, so the group budget is not added on top of
+    the sum and is not counted once per entity.
+    """
+    if not isinstance(combined, dict) or not forecast_rules.rules_active(plan):
+        return combined
+    weeks = combined.get("weeks") or []
+    if not weeks:
+        return combined
+    as_of = _date(combined.get("opening_as_of"))
+    first = as_of + timedelta(days=1) if as_of else _date(weeks[0]["start"])
+    last = _date(weeks[-1]["end"])
+    if first is None or last is None or first > last:
+        return combined
+    lines = forecast_rules.load_lines(plan)
+    extra, unknown = forecast_rules.supplier_and_payroll(plan, lines, first, last)
+    income_days, income_unknown = forecast_rules.income_for_window(lines, first, last)
+    unknown = unknown + [(day, "income") for day in income_unknown]
+    extra, income_streams, unknown = _roll_to_business_days(extra, {day: {"income": amount} for day, amount in income_days.items()}, unknown)
+    income_days = {day: values["income"] for day, values in income_streams.items()}
+    new_weeks = []
+    for week in weeks:
+        start, end = _date(week["start"]), _date(week["end"])
+        kept = [item for item in week.get("items") or [] if item.get("stream") not in ("operating_in", "operating_out")]
+        added = []
+        for item in extra:
+            when = item["date"] if isinstance(item["date"], date) else _date(item["date"])
+            if when and start and end and start <= when <= end and when >= first:
+                added.append({**item, "date": when.isoformat()})
+        income = _r(sum(amount for day, amount in income_days.items() if start and end and start <= day <= end))
+        if income:
+            added.append({
+                "date": None, "label": STREAM_LABELS["income"], "amount": income,
+                "certainty": SCHEDULED, "source": "plan.budgetLines",
+                "rule": forecast_rules.RULES["income"], "stream": "income",
+            })
+        keys = [key for day, key in unknown if start and end and start <= day <= end and day >= first]
+        items = kept + added
+        nxt = dict(week, items=items)
+        if keys or week.get("net") is None:
+            nxt["in"] = nxt["out"] = nxt["net"] = None
+            nxt["unknown"] = [forecast_rules.UNKNOWN_HE[key] for key in dict.fromkeys(keys)]
+        else:
+            inflow = _r(sum(item["amount"] for item in items if item.get("amount") and item["amount"] > 0))
+            outflow = _r(sum(item["amount"] for item in items if item.get("amount") and item["amount"] < 0))
+            nxt["in"], nxt["out"], nxt["net"] = inflow, outflow, _r(inflow + outflow)
+            nxt["unknown"] = []
+        new_weeks.append(nxt)
+    opening = combined.get("opening")
+    opening_amount = opening.get("amount") if isinstance(opening, dict) else opening
+    _walk(new_weeks, opening_amount)
+    missing = list(combined.get("missing") or [])
+    if any(week.get("unknown") for week in new_weeks) and "forecast_rules" not in missing:
+        missing.append("forecast_rules")
+    return {
+        **combined, "weeks": new_weeks, "missing": missing,
+        "first_breach": first_breach(new_weeks, opening_amount),
+        "rules": {**forecast_rules.RULES, "active": True}, "provider_calls": 0,
+    }

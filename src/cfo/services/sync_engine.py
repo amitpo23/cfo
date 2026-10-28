@@ -1198,15 +1198,16 @@ def get_connector_for_org(
     """
     conn, source, creds = get_connection_configuration(db, organization_id, preferred_source)
 
-    # Env credentials belong to the default organization only — other
-    # tenants must configure their own via /integration/{source}/configure.
-    env_allowed = organization_id == 1
+    from ..config import settings
+    # SUMIT env credentials follow SUMIT_ENV_CREDENTIAL_ORG_IDS.
+    # Open Finance user_id still falls back to env only for organization 1.
+    sumit_env = settings.env_sumit_allowed(organization_id)
+    of_user_env = organization_id == 1
 
     if source == "sumit":
         from .sumit_connector import SumitConnector
-        from ..config import settings
-        api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
-        company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
+        api_key = creds.get("api_key") or (settings.sumit_api_key if sumit_env else None)
+        company_id = creds.get("company_id") or (settings.sumit_company_id if sumit_env else None)
         if not api_key:
             from .data_sync_service import SumitNotConfiguredError
             raise SumitNotConfiguredError("SUMIT API key not configured")
@@ -1226,7 +1227,7 @@ def get_connector_for_org(
         # to env for org 1 (the original pilot) — see open_finance_onboarding.py.
         client_id = creds.get("client_id") or settings.open_finance_client_id
         client_secret = creds.get("client_secret") or settings.open_finance_client_secret
-        user_id = creds.get("user_id") or (settings.open_finance_user_id if env_allowed else None)
+        user_id = creds.get("user_id") or (settings.open_finance_user_id if of_user_env else None)
         api_base_url = creds.get("api_base_url") or settings.open_finance_api_base_url
         oauth_url = creds.get("oauth_url") or settings.open_finance_oauth_url
 

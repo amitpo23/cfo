@@ -17,6 +17,7 @@ import api from '../services/api';
 import { categoryLabel } from '../services/categoryLabels';
 import ExportButtons from './ExportButtons';
 import { PIE_LABEL_MIN_SHARE, pieSlices } from './budgetChart';
+import { missingAsOf } from './dashboardUi';
 
 interface BudgetComparison {
   category: string;
@@ -176,7 +177,7 @@ export const BudgetDashboard: React.FC = () => {
   const totalVariance = totals.planned - totals.actual;
   const totalVariancePct = totals.planned ? ((totalVariance / totals.planned) * 100) : 0;
 
-  const formatCurrency = (value: number | null) => (value === null ? 'לא ידוע' : `₪${value.toLocaleString()}`);
+  const formatCurrency = (value: number | null) => (value === null ? missingAsOf() : `₪${value.toLocaleString()}`);
   const byKind = meta.totals ?? null;
   // The pie splits the cost budget (all rows on a page without kinds).
   const slices = pieSlices((budgetData ?? []).filter((row) => !row.kind || row.kind === 'cost'));
@@ -278,13 +279,13 @@ export const BudgetDashboard: React.FC = () => {
               planned: item.planned,
               actual: item.actual,
               variance: item.variance,
-              variance_pct: item.variance_pct === null ? 'לא ידוע' : `${item.variance_pct.toFixed(1)}%`,
+              variance_pct: item.variance_pct === null ? missingAsOf() : `${item.variance_pct.toFixed(1)}%`,
               status: STATUS_LABELS[item.status] ?? item.status,
             }))}
             summary={[
               { label: 'תקציב מתוכנן', value: formatCurrency(totals.planned) },
-              { label: 'ביצוע בפועל', value: actualKnown ? formatCurrency(totals.actual) : 'לא ידוע' },
-              { label: 'סטייה', value: actualKnown ? formatCurrency(Math.abs(totalVariance)) : 'לא ידוע' },
+              { label: 'ביצוע בפועל', value: actualKnown ? formatCurrency(totals.actual) : missingAsOf() },
+              { label: 'סטייה', value: actualKnown ? formatCurrency(Math.abs(totalVariance)) : missingAsOf() },
             ]}
           />
         </div>
@@ -319,7 +320,7 @@ export const BudgetDashboard: React.FC = () => {
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
           <h3 className="text-sm font-medium text-gray-500">ביצוע בפועל</h3>
           <p className="text-2xl font-bold text-gray-900 mt-2">
-            {actualKnown ? formatCurrency(totals.actual) : 'לא ידוע'}
+            {actualKnown ? formatCurrency(totals.actual) : missingAsOf()}
           </p>
         </div>
         <div className={`rounded-xl shadow-sm p-6 border ${
@@ -329,7 +330,7 @@ export const BudgetDashboard: React.FC = () => {
           <p className={`text-2xl font-bold mt-2 ${
             totalVariance >= 0 ? 'text-green-700' : 'text-red-700'
           }`}>
-            {actualKnown ? `${formatCurrency(Math.abs(totalVariance))} ${totalVariance >= 0 ? '+' : '-'}` : 'לא ידוע'}
+            {actualKnown ? `${formatCurrency(Math.abs(totalVariance))} ${totalVariance >= 0 ? '+' : '-'}` : missingAsOf()}
           </p>
           <p className={`text-sm ${totalVariance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
             {actualKnown ? `${totalVariancePct.toFixed(1)}%` : ''}

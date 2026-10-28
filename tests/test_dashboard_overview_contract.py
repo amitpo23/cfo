@@ -30,7 +30,7 @@ def test_cash_balance_only_from_open_finance_checking_accounts(fresh_org):
         # OF checking — נספר
         db.add(Account(organization_id=org_id, name='עו"ש', account_type=AccountType.BANK,
                        balance=Decimal("28459.68"), source="open_finance",
-                       balance_as_of=datetime(2026, 7, 12), raw_account_type="CHECKING"))
+                       balance_as_of=datetime.utcnow(), raw_account_type="CHECKING"))
         # OF savings — לא נספר במזומן
         db.add(Account(organization_id=org_id, name="חיסכון", account_type=AccountType.ASSET,
                        balance=Decimal("5000"), source="open_finance",

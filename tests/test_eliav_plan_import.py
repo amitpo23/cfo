@@ -338,7 +338,7 @@ def _long_line_id(data):
 @pytest.mark.parametrize("case, mutate, code", [
     ("rule-category", lambda data: data["statusRules"][0].update(category="suppliers"), "unknown_category"),
     ("rule-field", lambda data: data["statusRules"][0].update(field="reference"), "invalid_plan"),
-    ("balance-sheet-category", lambda data: data["lines"][0].update(category="vehicles"), "unknown_category"),
+    ("balance-sheet-category", lambda data: data["lines"][0].update(category="inventory"), "unknown_category"),
     ("kind-mismatch", lambda data: data["lines"][0].update(category="salaries"), "invalid_plan"),
     ("long-line-id", _long_line_id, "invalid_plan"),
 ])

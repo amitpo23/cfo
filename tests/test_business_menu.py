@@ -50,7 +50,9 @@ def test_menu_route_requires_auth(client):
     assert client.get("/api/business/menu").status_code == 403
 
 
-def test_menu_route_for_default_org(client, owner):
+def test_menu_route_for_default_org(client, owner, monkeypatch):
+    from cfo.config import settings
+    monkeypatch.setattr(settings, "sumit_env_credential_org_ids", "1")
     r = client.get("/api/business/menu", headers=owner["headers"])
     assert r.status_code == 200, r.text
     body = r.json()

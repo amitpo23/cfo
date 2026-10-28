@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from . import forecast_rules
+
 DEFAULT_PARAMETERS = {
     "scenario": "בסיס", "horizonMonths": 6, "revenueGrowthPct": 0.0,
     "costGrowthPct": 0.0, "vatRate": 0.18,
@@ -138,6 +140,7 @@ def build_forecast(pnl_months: list[dict], *, as_of: date, plan: dict | None = N
             "הסכומים ללא מע״מ; תזרים = תוצאה פחות החזרי קרן (קירוב)."
         ),
         "provider_calls": 0,
+        "cash_rules": forecast_rules.monthly_table(plan, months),
     }
 
 

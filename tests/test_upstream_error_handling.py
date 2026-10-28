@@ -40,6 +40,9 @@ def test_httpx_error_returns_503_not_500(client, owner, monkeypatch):
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr(SumitIntegration, "list_documents", _boom)
+    import cfo.config as config_module
+    org_id = owner["user"]["organization_id"]
+    monkeypatch.setattr(config_module.settings, "sumit_env_credential_org_ids", str(org_id))
     resp = client.get("/api/accounting/documents", headers=owner["headers"])
     assert resp.status_code == 503
     assert "upstream" in resp.json()["detail"].lower()
@@ -118,16 +121,19 @@ def test_get_connector_for_org_raises_sumit_not_configured_error(fresh_org, monk
         db.close()
 
 
-def test_data_sync_service_env_fallback_still_works_for_default_org(owner, monkeypatch):
-    """אין רגרסיה: ארגון ברירת המחדל (org 1) עדיין יכול ליפול חזרה למפתח ה-env,
-    בדיוק כמו ב-get_sumit_integration/get_connector_for_org."""
+def test_data_sync_service_env_fallback_only_when_the_org_is_listed(owner, monkeypatch):
+    """רשימה ריקה לא נותנת מפתח סביבה לאף ארגון, גם לא לארגון 1.
+    ארגון שברשימה כן מקבל אותו."""
     import cfo.config as config_module
     from cfo.database import SessionLocal
     from cfo.services.data_sync_service import DataSyncService
 
     monkeypatch.setattr(config_module.settings, "sumit_api_key", "fake-env-key-for-default-org")
+    monkeypatch.setattr(config_module.settings, "sumit_env_credential_org_ids", "")
+    assert config_module.settings.env_sumit_allowed(1) is False
 
     org_id = owner["user"]["organization_id"]
+    monkeypatch.setattr(config_module.settings, "sumit_env_credential_org_ids", str(org_id))
 
     async def _run():
         db = SessionLocal()

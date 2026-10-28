@@ -326,6 +326,85 @@ def dashboard_view(dashboard_id: int, response: Response, start: date | None = N
     return view
 
 
+def _bank_pack_for(db, row) -> dict:
+    from ...services.dashboards.budget_assumptions import bank_pack, list_assumptions
+    today = date.today()
+    plan = view_model.plan_payload(db, row.id)
+    view = multi_entity.build_dashboard_view(db, row, date(today.year, 1, 1), today, plan=plan)
+    pack_view = view.get("combined") if len(view.get("entities") or []) > 1 else view
+    months = [f"{today.year:04d}-{month:02d}" for month in range(1, 13)]
+    opening = ((pack_view or {}).get("cash_forecast") or {}).get("opening") or {}
+    assumptions = list_assumptions(
+        plan, months, as_of=today,
+        bank_balance=opening.get("amount") if isinstance(opening, dict) else None,
+        bank_as_of=opening.get("as_of") if isinstance(opening, dict) else None,
+    )
+    pack = bank_pack(pack_view or view, assumptions, as_of=today)
+    pack["dashboard_id"] = row.id
+    pack["title"] = row.title
+    pack["slug"] = row.slug
+    return pack
+
+
+@router.get("/dashboards/{dashboard_id}/bank-pack")
+def dashboard_bank_pack(dashboard_id: int, db: Session = Depends(get_db_session),
+                        user: User = Depends(get_current_user)):
+    """P&L, forecast and budget-vs-actual for a bank, with the assumptions listed."""
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
+        pack = _bank_pack_for(db, row)
+    except DashboardError as exc:
+        return _error(exc)
+    return pack
+
+
+class ClassificationAccept(BaseModel):
+    counterparty: str = Field(min_length=1, max_length=120)
+    category: str
+
+
+class ClassificationWrite(BaseModel):
+    accepts: list[ClassificationAccept]
+
+
+@router.get("/dashboards/{dashboard_id}/unclassified-transfers")
+def unclassified_transfers(dashboard_id: int, start: date | None = None, end: date | None = None,
+                           db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    """Unclassified transfers in the window. A suggestion is not a classification."""
+    from ...services.dashboards.transfer_queue import load_queue
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
+    except DashboardError as exc:
+        return _error(exc)
+    today = date.today()
+    window_end = end or today
+    window_start = start or date(window_end.year, 7, 1)
+    if window_start > window_end:
+        return _error(DashboardError(422, "bad_window", "טווח התאריכים הפוך"))
+    plan = view_model.plan_payload(db, row.id)
+    return load_queue(db, row.primary_organization_id, window_start, window_end, plan)
+
+
+@router.post("/dashboards/{dashboard_id}/classification-rules")
+def accept_classification(dashboard_id: int, body: ClassificationWrite,
+                          db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    """The owner accepts a suggestion or chooses a category. That becomes a rule."""
+    from ...models import DashboardPlan
+    from ...services.dashboards.transfer_queue import apply_accepts
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=service.PLAN_ROLES)
+        current = db.get(DashboardPlan, row.id)
+        payload = dict(current.payload) if current is not None and isinstance(current.payload, dict) else {}
+        updated = apply_accepts(payload, [item.model_dump() for item in body.accepts])
+        version = current.version if current is not None else "null"
+        saved = service.save_plan(db, user, row.id, updated, version)
+    except DashboardError as exc:
+        return _error(exc)
+    except ValueError as exc:
+        return _error(DashboardError(422, "invalid_rule", str(exc)))
+    return {"version": saved["version"], "rules": len(updated.get("statusRules") or []), "provider_calls": 0}
+
+
 @router.post("/dashboards/{dashboard_id}/snapshots", status_code=201)
 def publish_snapshot(dashboard_id: int, db: Session = Depends(get_db_session),
                      user: User = Depends(get_current_user)):
@@ -621,6 +700,19 @@ def _public_dashboard_or_error(slug: str, request: Request, db: Session):
             return None, _public_response({"error": {"code": "not_found", "message_he": "הדשבורד לא נמצא"}}, 404)
         service.mark_link_used(db, link)
     return dashboard, None
+
+
+@public_router.get("/d/{slug}/bank-pack")
+def public_bank_pack(slug: str, request: Request, db: Session = Depends(get_db_session)):
+    """The same bank pack as JSON, for the print page. Missing stays missing."""
+    dashboard, error = _public_dashboard_or_error(slug, request, db)
+    if error is not None:
+        return error
+    try:
+        pack = _bank_pack_for(db, dashboard)
+    except DashboardError as exc:
+        return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
+    return _public_response(pack)
 
 
 @public_router.get("/d/{slug}/revision")

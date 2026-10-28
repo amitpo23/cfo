@@ -14,9 +14,10 @@ import {
   CashForecast, CashForecastItemsCard, CashForecastPanel, Overdue, cashForecastItemsFromPayload,
 } from './cashForecastTab';
 import { BalanceSheetView, BalanceSheetCard } from './balanceSheetTab';
-import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs } from './dashboardUi';
+import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs, missingAsOf } from './dashboardUi';
 import { safeLoginHref } from './dashboardReturn';
 import { DASHBOARD_POLL_MS, revisionToken, shouldReloadView } from './dashboardLive';
+import TransferClassification from './TransferClassification';
 
 type CashMonth = {
   month: string;
@@ -157,7 +158,11 @@ type CashStatement = {
   groups?: { id: string; label: string }[];
   lines?: { id: string; label: string; group: string; review?: boolean; values: StatementCells; total: number }[];
   totals?: Record<string, StatementCells>;
-  forecast?: { status?: string; months: string[]; rows: Record<string, StatementCells>; note: string; line_items?: boolean; line_note?: string } | null;
+  forecast?: {
+    status?: string; months: string[]; rows: Record<string, StatementCells>; note: string;
+    line_items?: boolean; line_note?: string;
+    rule_lines?: { id: string; label: string; values: StatementCells; unknown?: string | null }[];
+  } | null;
   message?: string | null;
   netting_note?: string | null;
   scope?: Record<string, { label: string; entities: string[]; missing: string[] }>;
@@ -205,6 +210,7 @@ type DashboardView = {
   liquidity?: EntityLiquidity | null;
   forecast?: Forecast | null;
   cash_forecast?: CashForecast | null;
+  cashflow_source?: { forecast?: CashForecast | null } | null;
   sources?: Sources | null;
   cash_statement?: CashStatement | null;
   balance_sheet?: BalanceSheetView | null;
@@ -216,6 +222,7 @@ type DashboardView = {
     liquidity?: EntityLiquidity | null;
     forecast?: Forecast | null;
     cash_forecast?: CashForecast | null;
+    cashflow_source?: { forecast?: CashForecast | null } | null;
     books_pnl?: BooksPnl | null;
     intercompany_removed?: IntercompanyRemoved;
     sources?: Sources | null;
@@ -427,8 +434,8 @@ export function SourcesCard({ sources }: { sources: Sources | null | undefined }
                 {withEntity ? <td>{item.entity ?? '—'}</td> : null}
                 <td>{item.source_label}</td>
                 <td>{item.kind === 'bank' ? item.label : item.kind_label}</td>
-                <td>{item.last_date ?? 'לא ידוע'}</td>
-                <td>{item.last_sync ? item.last_sync.slice(0, 16).replace('T', ' ') : 'לא ידוע'}</td>
+                <td>{item.last_date ?? missingAsOf()}</td>
+                <td>{item.last_sync ? item.last_sync.slice(0, 16).replace('T', ' ') : missingAsOf()}</td>
                 <td>{item.rows.toLocaleString('he-IL')}</td>
                 <td className={`py-2 ${STATUS_TONE[item.status] ?? ''}`}>
                   {item.status_label}{item.age_days !== null ? ` (${item.age_days} ימים)` : ''}
@@ -443,8 +450,8 @@ export function SourcesCard({ sources }: { sources: Sources | null | undefined }
   );
 }
 
-function cell(value: number | null | undefined): string {
-  return value === null || value === undefined ? 'לא ידוע' : money(value);
+function cell(value: number | null | undefined, asOf?: string | null): string {
+  return money(value, asOf);
 }
 
 // Cash flow by line item × month: actual months from filed BOOKED rows, then the forecast months.
@@ -487,26 +494,37 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
                 ...rows.map((line) => (
                   <tr key={line.id}>
                     <td className={`py-1 ${line.review ? 'text-amber-700' : ''}`}>{line.label}</td>
-                    {months.map((month) => <td key={month}>{cell(line.values[month])}</td>)}
+                    {months.map((month) => <td key={month}>{cell(line.values[month], month)}</td>)}
                     {blank}
                   </tr>
                 )),
                 <tr key={`total-${group.id}`} className="border-b font-medium">
                   <td>סה״כ {group.label}</td>
-                  {months.map((month) => <td key={month}>{cell(totals[group.id]?.[month])}</td>)}
+                  {months.map((month) => <td key={month}>{cell(totals[group.id]?.[month], month)}</td>)}
                   {forecastMonths.map((month) => (
                     <td key={`f-${month}`} className={`bg-stone-50 py-1 ${forecastRow ? '' : 'font-normal text-stone-400'}`}>
-                      {forecastRow ? cell(forecastRow[month]) : 'לא נחזה'}
+                      {forecastRow ? cell(forecastRow[month], month) : 'לא נחזה'}
                     </td>
                   ))}
                 </tr>,
               ];
             })}
+            {(forecast?.rule_lines ?? []).map((line) => (
+              <tr key={line.id}>
+                <td>{line.label}</td>
+                {months.map((month) => <td key={month} className="text-stone-400">—</td>)}
+                {forecastMonths.map((month) => (
+                  <td key={`f-${month}`} className="bg-stone-50 py-1" title={line.values[month] == null ? (line.unknown ?? missingAsOf(month)) : ''}>
+                    {cell(line.values[month], month)}
+                  </td>
+                ))}
+              </tr>
+            ))}
             <tr className="font-semibold">
               <td>תזרים נטו</td>
-              {months.map((month) => <td key={month}>{cell(totals.net?.[month])}</td>)}
+              {months.map((month) => <td key={month}>{cell(totals.net?.[month], month)}</td>)}
               {forecastMonths.map((month) => (
-                <td key={`f-${month}`} className="bg-stone-50 py-2">{cell(forecast?.rows.net?.[month])}</td>
+                <td key={`f-${month}`} className="bg-stone-50 py-2">{cell(forecast?.rows.net?.[month], month)}</td>
               ))}
             </tr>
           </tbody>
@@ -837,23 +855,26 @@ export default function ClientDashboardPage() {
     budget_vs_actual: view.combined?.budget_vs_actual,
     liquidity: view.combined?.liquidity,
     forecast: view.combined?.forecast,
-    cash_forecast: view.combined?.cash_forecast,
+    cash_forecast: view.combined?.cashflow_source?.forecast ?? view.combined?.cash_forecast,
+    cashflow_source: view.combined?.cashflow_source,
     books_pnl: view.combined?.books_pnl,
     sources: view.combined?.sources,
     cash_statement: view.combined?.cash_statement,
     balance_sheet: view.combined?.balance_sheet,
   } : entities[Number(scope)]?.view ?? view;
   // Past-due items are per entity; the combined scope lists every entity's, named.
-  const overdue: Overdue[] = !view ? [] : !multi ? (view.cash_forecast?.overdue ?? [])
+  const forecastOf = (entityView: DashboardView | null | undefined) =>
+    entityView?.cashflow_source?.forecast ?? entityView?.cash_forecast;
+  const overdue: Overdue[] = !view ? [] : !multi ? (forecastOf(view)?.overdue ?? [])
     : scope === 'combined'
-      ? entities.flatMap((entity) => (entity.view.cash_forecast?.overdue ?? []).map((item) => ({ ...item, entity: entity.label })))
-      : (entities[Number(scope)]?.view.cash_forecast?.overdue ?? []);
+      ? entities.flatMap((entity) => (forecastOf(entity.view)?.overdue ?? []).map((item) => ({ ...item, entity: entity.label })))
+      : (forecastOf(entities[Number(scope)]?.view)?.overdue ?? []);
   const parameters = parametersFromPayload(plan?.payload);
 
   return (
     <DashboardFrame
       title={editor?.title || cachedTitle || 'דשבורד לקוח'}
-      subtitle={editor ? `${ROLE_LABELS[editor.role] || editor.role}${editor.canEdit ? ' · אפשר לערוך' : ' · צפייה בלבד'}` : null}
+      subtitle={editor ? `${ROLE_LABELS[editor.role] || editor.role}${editor.canEdit ? ' · אפשר לערוך' : ' · צפייה בלבד'} · הדפסה לבנק: /d/${slugFromLocation()}/bank-pack` : null}
     >
         {notice ? <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">{notice}</p> : null}
         {error ? (
@@ -948,7 +969,7 @@ export default function ClientDashboardPage() {
                   onSave={(organizationId, item) => void savePayload(withOpeningBalance(plan.payload, organizationId, item), false)}
                 />
               ) : null}
-              {tab === 'cashforecast' ? <CashForecastPanel forecast={scoped.cash_forecast} overdue={overdue} /> : null}
+              {tab === 'cashforecast' ? <CashForecastPanel forecast={scoped.cashflow_source?.forecast ?? scoped.cash_forecast} overdue={overdue} /> : null}
               {tab === 'cashforecast' && editor?.role === 'owner' && plan && filing ? (
                 <CashForecastItemsCard
                   entities={filing.entities ?? []}
@@ -958,6 +979,7 @@ export default function ClientDashboardPage() {
                 />
               ) : null}
               {tab === 'forecast' ? <ForecastPanel forecast={scoped.forecast} /> : null}
+              {tab === 'classify' && editor ? <TransferClassification dashboardId={editor.id} /> : null}
               {tab === 'budget' && editor ? (
                 <>
                   {filing ? (
@@ -1003,6 +1025,7 @@ const TABS = [
   { id: 'bva', label: 'תקציב מול ביצוע' },
   { id: 'liquidity', label: 'נזילות והתחייבויות' },
   { id: 'forecast', label: 'תחזית' },
+  { id: 'classify', label: 'סיווג העברות' },
   { id: 'budget', label: 'תקציב ופרמטרים' },
 ] as const;
 
@@ -1011,12 +1034,16 @@ export type TabId = (typeof TABS)[number]['id'];
 function StatusKpis({ view, reviewCount }: { view: DashboardView; reviewCount: number | null }) {
   const liquidity = view.liquidity;
   const balance = liquidity ? (liquidity.position ? liquidity.position.balance : liquidity.balance) : null;
+  const stale = liquidity?.stale_balances ?? [];
+  const staleNote = balance == null && stale.length
+    ? missingAsOf(stale.map((row) => row.as_of).filter(Boolean).sort()[0] ?? liquidity?.position?.as_of ?? liquidity?.as_of)
+    : null;
   const partial = !liquidity?.position && (balance === null || balance === undefined)
     && liquidity?.balance_known !== null && liquidity?.balance_known !== undefined;
   const items = [
     { label: 'הכנסות בתקופה', value: money(view.pnl?.total_revenue) },
     { label: 'הוצאות בתקופה', value: money(view.pnl?.total_expenses) },
-    { label: 'יתרת עו״ש', value: partial ? `${money(liquidity?.balance_known)} (חלקי)` : money(balance ?? null) },
+    { label: 'יתרת עו״ש', value: staleNote ?? (partial ? `${money(liquidity?.balance_known, liquidity?.position?.as_of ?? liquidity?.as_of)} (חלקי)` : money(balance ?? null, liquidity?.position?.as_of ?? liquidity?.as_of)) },
     { label: 'התחייבויות ידועות', value: money(liquidity?.debts_known_total ?? null) },
     ...(reviewCount === null ? [] : [{ label: 'תנועות לבירור', value: String(reviewCount), tone: reviewCount > 0 ? 'warn' as const : null }]),
   ];

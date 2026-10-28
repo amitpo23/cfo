@@ -151,7 +151,7 @@ try {
   check('upcoming amount: documented, facility limit, unknown', () => {
     expect(ui.upcomingAmount({ amount: -62708.33 }).includes('62,708'), 'documented amount');
     expect(ui.upcomingAmount({ amount: null, reference_amount: 80000 }).includes('80,000'), 'facility limit');
-    expect(ui.upcomingAmount({ amount: null }) === 'לא ידוע', 'unknown amount');
+    expect(ui.upcomingAmount({ amount: null, date: '2026-10-28' }) === 'חסר נכון ל-2026-10-28', 'unknown amount');
   });
 
   check('budget editor shows quantity × rate of canonical lines and seed defaults', () => {
@@ -293,7 +293,7 @@ try {
       forecast: { months: ['2026-11'], rows: { operating_in: { '2026-11': 10000 }, operating_out: { '2026-11': -8000 }, financing: { '2026-11': -1000 }, net: { '2026-11': 1000 } }, note: 'ללא מע״מ' },
     };
     const markup = html(ui.CashStatementCard, { statement });
-    expect(markup.includes('11,800') && markup.includes('9,800') && markup.includes('לא ידוע'), 'actual cells');
+    expect(markup.includes('11,800') && markup.includes('9,800') && markup.includes('חסר נכון ל-2026-07-01'), 'actual cells');
     expect(markup.includes('2026-11 (תחזית)') && markup.includes('10,000') && markup.includes('ללא מע״מ'), 'forecast columns');
     // Line cells under the forecast are marked, not blank, and the note says why.
     expect(markup.includes('title="תחזית לפי קבוצה בלבד">—</td>') && markup.includes('לפי קבוצה בלבד'), 'forecast line cells unlabelled');
@@ -309,7 +309,7 @@ try {
       scope_note: 'חודש שמסומן "בלבד"; 2026-06: שף בלבד (פוד גרופ — אין תנועות בנק).',
     };
     const markup = html(ui.CashStatementCard, { statement });
-    expect(markup.includes('שף בלבד') && markup.includes('11,800') && markup.includes('לא ידוע'), 'partial month label or unknown month');
+    expect(markup.includes('שף בלבד') && markup.includes('11,800') && markup.includes('חסר נכון ל-2026-05-01'), 'partial month label or unknown month');
     expect(markup.includes('פוד גרופ — אין תנועות בנק'), 'scope note');
   });
 

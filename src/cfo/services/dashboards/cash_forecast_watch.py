@@ -70,15 +70,19 @@ def findings(forecast: dict, today: date, label: str | None) -> list[dict]:
     weeks = forecast.get("weeks") or []
     for previous, week in zip(weeks, weeks[1:]):
         before, after = previous.get("limit"), week.get("limit")
-        if before is None or after is None or after >= before:
+        if before is None or (after is not None and after >= before):
             continue
         if date.fromisoformat(week["start"]) > today + timedelta(days=FACILITY_WITHIN_DAYS):
             continue
+        if after is None:
+            title = f"{who}מסגרת של {before:,.0f} ₪ מסתיימת בשבוע {_week(week['start'], week['end'])} ואין מסגרת ידועה במקומה"
+        else:
+            title = f"{who}מסגרת יורדת מ-{before:,.0f} ל-{after:,.0f} ₪ בשבוע {_week(week['start'], week['end'])}"
         out.append({
             "insight_type": "cash_forecast_facility_drop",
             "fingerprint": f"cash_forecast_facility_drop:{week['start']}",
             "severity": "medium",
-            "title": f"{who}מסגרת יורדת מ-{before:,.0f} ל-{after:,.0f} ₪ בשבוע {_week(week['start'], week['end'])}",
+            "title": title,
             "message": "תוקף מסגרת מסתיים. בלי חידוש, המרווח יורד מאותו שבוע.",
             "recommended_action": "לתאם חידוש מסגרת עם הבנק.",
             "evidence": {"week_start": week["start"], "limit_before": before, "limit_after": after},

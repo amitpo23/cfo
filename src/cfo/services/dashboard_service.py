@@ -127,21 +127,21 @@ class DashboardService:
                 return None
             return float(sum((a.balance or Decimal("0")) for a in accounts))
 
-        cash_balance = _sum_or_none(checking)
-        cash_as_of = None
-        cash_by_account = []
-        if checking:
-            as_of_values = [a.balance_as_of for a in checking if a.balance_as_of]
-            cash_as_of = min(as_of_values).isoformat() if as_of_values else None
-            cash_by_account = [
-                {"id": a.id, "name": a.name, "balance": float(a.balance or 0), "currency": a.currency,
-                 "credit_limit": float(a.credit_limit) if a.credit_limit is not None else None}
-                for a in checking
-            ]
+        from .dashboards.liquidity import checking_snapshot
+        snap = checking_snapshot(self.db, self.org_id)
+        cash_balance = snap["balance"]
+        cash_as_of = snap["as_of"]
+        cash_by_account = [
+            {"id": a.id, "name": a.name, "balance": float(a.balance or 0), "currency": a.currency,
+             "credit_limit": float(a.credit_limit) if a.credit_limit is not None else None}
+            for a in checking
+        ]
 
         return {
             "cash_balance": cash_balance,
             "cash_as_of": cash_as_of,
+            "transactions_missing_after": snap["transactions_missing_after"],
+            "transactions_through": snap["transactions_through"],
             "cash_by_account": cash_by_account,
             "savings_balance": _sum_or_none(savings),
             "loans_total": _sum_or_none(loans),

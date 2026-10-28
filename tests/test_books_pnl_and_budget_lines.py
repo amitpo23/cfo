@@ -213,6 +213,39 @@ def test_manual_and_revenue_share_keys_allocate_the_whole_shared_total(fresh_org
     assert _division(empty_august, "pizza")["allocated_shared"] is None
 
 
+def test_june_keeps_invoice_20055_and_credit_note_2008_when_the_journal_has_them(fresh_org):
+    """Documents win, but a journal document number that is not on an invoice is not dropped."""
+    from cfo.services.dashboards.books_pnl import books_pnl
+
+    org_id = fresh_org()["org_id"]
+    plan = {"journalAccountMap": {"40000": "revenue"}}
+    with SessionLocal() as db:
+        db.add(Invoice(
+            organization_id=org_id, invoice_number="100", issue_date=date(2026, 6, 2),
+            status=InvoiceStatus.SENT, subtotal=Decimal("1000"), tax=Decimal("0"), total=Decimal("1000"),
+        ))
+        db.add(JournalEntry(
+            organization_id=org_id, source="reviewed_local_import", external_id="j-20055",
+            entry_date=date(2026, 6, 30), memo="חשבונית 20055",
+            lines=[
+                {"account": "3000", "debit": 70483, "credit": 0},
+                {"account": "40000", "debit": 0, "credit": 70483, "reference": "20055"},
+            ],
+        ))
+        db.add(JournalEntry(
+            organization_id=org_id, source="reviewed_local_import", external_id="j-2008",
+            entry_date=date(2026, 6, 30), memo="זיכוי 2008",
+            lines=[
+                {"account": "40000", "debit": 11092, "credit": 0, "reference": "2008"},
+                {"account": "3000", "debit": 0, "credit": 11092},
+            ],
+        ))
+        db.commit()
+        report = books_pnl(db, org_id, start=date(2026, 6, 1), end=date(2026, 6, 30), plan=plan)
+    june = report["months"][0]
+    assert june["revenue"] == 1000 + 70483 - 11092
+
+
 def test_seed_payroll_is_the_four_filled_lines_and_the_rest_stay_missing():
     import json
     from pathlib import Path
@@ -221,7 +254,8 @@ def test_seed_payroll_is_the_four_filled_lines_and_the_rest_stay_missing():
     seed = json.loads(Path("tests/fixtures/eliav_budget_seed_shape.json").read_text(encoding="utf-8"))
     report = seed_status(seed)
     assert [line["id"] for line in report["filled"]] == ["wage_05", "wage_06", "wage_08", "wage_11"]
-    assert report["declared_payroll"]["matches_declared"] is True
+    assert report["declared_payroll"]["matches_declared"] is None
+    assert report["declared_payroll"]["monthly"] is None
     assert report["declared_payroll"]["filled_sum"] == "49700.00"
     missing_ids = {line["id"] for line in report["missing"]}
     assert "rev_pizza" in missing_ids and "rev_chef" in missing_ids
@@ -237,12 +271,13 @@ def test_budget_lines_are_not_four_zeros(client, fresh_org):
     data = response.json()["data"]
     assert data["counts"]["active"] > 4
     labels = {line["label"] for line in data["lines"]}
-    assert "מכירות" in labels or any("מכיר" in label for label in labels)
+    assert any("הכנסות" in label for label in labels)
+    assert "sales" not in labels and "materials" not in labels
     january = data["lines"][0]["months"]["2026-01"]
     assert january["status"] == "missing"
     assert january["amount"] is None
     assert january["status_he"] == "חסר, הבעלים יזין"
-    assert data["declared_payroll"]["monthly"] == "49700.00"
+    assert data["declared_payroll"]["monthly"] is None
     assert data["provider_calls"] == 0
 
 
@@ -375,6 +410,34 @@ def test_budget_entry_writes_plan_lines_and_the_dashboard_forecast(client, fresh
     forecast = view.json()["forecast"]["rows"][0]["months"][future]
     assert forecast["source"] == "budget"
     assert forecast["value"] == 3210.0
+
+
+def test_budget_entry_saves_a_negative_opening_balance(client, fresh_org):
+    owner = fresh_org()
+    dashboard_id = _create(client, owner["headers"], owner["org_id"], "opening-input")
+    saved = client.put("/api/financial/budget/lines", headers=owner["headers"], json={"updates": [{
+        "id": "opening_balance",
+        "label": "יתרת פתיחה",
+        "category": "opening_balance",
+        "kind": "financing",
+        "month": "2026-10-28",
+        "status": "filled",
+        "amount": -12000,
+    }]})
+    assert saved.status_code == 200, saved.text
+    lines = client.get("/api/financial/budget/lines", headers=owner["headers"], params={
+        "year": 2026, "from_month": 10, "to_month": 10,
+    })
+    assert lines.status_code == 200, lines.text
+    opening = next(row for row in lines.json()["data"]["assumptions"] if row["kind"] == "opening_balance")
+    assert opening["amount"] == -12000.0
+    assert opening["source"] == "owner"
+    plan = client.get(f"/api/dashboards/{dashboard_id}/plan", headers=owner["headers"])
+    rows = plan.json()["payload"]["liquidityEvidence"]["openingBalances"]
+    assert rows == [{
+        "date": "2026-10-28", "amount": -12000.0, "source": "assumption by owner",
+        "override": False, "organizationId": owner["org_id"],
+    }]
 
 
 def test_super_admin_with_a_single_active_org_skips_the_chooser(client, platform_admin):

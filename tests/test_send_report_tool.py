@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -465,7 +465,7 @@ def test_a_real_account_reaches_the_pdf_through_the_real_view_builder(
         db.add(Account(
             organization_id=org["org_id"], name="עו״ש בדיקה", account_type=AccountType.BANK,
             balance=Decimal("28459.68"), credit_limit=Decimal("50000"), source="open_finance",
-            balance_as_of=datetime(2026, 10, 20), raw_account_type="CHECKING",
+            balance_as_of=datetime.combine(date.today(), datetime.min.time()), raw_account_type="CHECKING",
         ))
         db.commit()
     finally:
@@ -475,14 +475,14 @@ def test_a_real_account_reaches_the_pdf_through_the_real_view_builder(
     result = _run(org["org_id"], channel="whatsapp", external_id=external_id)
 
     assert result["status"] == "sent", result
-    assert result["balance_as_of"] == "2026-10-20"
+    assert result["balance_as_of"] == date.today().isoformat()
     document = pdfium.PdfDocument(gateways["whatsapp"].documents[0]["content"])
     try:
         text = "\n".join(document[i].get_textpage().get_text_bounded() for i in range(len(document)))
     finally:
         document.close()
     assert "28,459.68" in text        # the balance
-    assert "20/10/2026" in text       # its as-of date
+    assert date.today().strftime("%d/%m/%Y") in text
     assert "50,000.00" in text        # the credit limit
     assert "78,459.68" in text        # headroom = limit + balance
     assert "עו״ש בדיקה" in text

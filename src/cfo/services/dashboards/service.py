@@ -202,6 +202,14 @@ _RULE_FIELDS = {"description", "counterparty", "any"}
 _RULE_DIRECTIONS = {"in", "out", "both"}
 
 
+def _validate_cashflow_settings(value) -> None:
+    from .cashflow_truth import CashflowSettingsError, validate_settings
+    try:
+        validate_settings(value)
+    except CashflowSettingsError as exc:
+        raise _invalid_plan(exc.message_he)
+
+
 def _validate_shared_allocation(value) -> None:
     from .books_pnl import validate_shared_cost_allocation
     try:
@@ -262,6 +270,7 @@ def validate_filing_payload(payload: dict) -> None:
     _validate_intercompany(payload.get("intercompany"))
     _validate_z_reports(payload.get("zReports"))
     _validate_shared_allocation(payload.get("sharedCostAllocation"))
+    _validate_cashflow_settings(payload.get("cashflowSettings"))
     closed = payload.get("booksClosedMonths")
     if closed is not None:
         if not isinstance(closed, list) or not all(
@@ -278,6 +287,8 @@ _PARAMETER_KEYS = {
 }
 EVIDENCE_LIMIT = 200
 _EVIDENCE_KINDS = {"facilities", "loans", "checks", "events", "openingBalances"}
+_FACILITY_KINDS = {"cheque_discounting", "check_discounting", "credit_line", "overdraft"}
+_LOAN_KINDS = {"bridge", "cheque_discounting", "check_discounting", "term"}
 # Only the dashboard owner (an admin of the organization) may enter an opening balance.
 OPENING_BALANCE_ROLES = {"owner"}
 # Facilities, loans, checks and events too: the liquidity form is the owner's (G-11).
@@ -351,23 +362,34 @@ def _validate_evidence(evidence) -> None:
                 raise _invalid_plan("לפריט ראיה ארגון לא תקין")
             ok = _short_text(item.get("note"), limit=300) and _short_text(item.get("source"), limit=300)
             if kind == "facilities":
+                facility_kind = item.get("kind")
                 ok = ok and _short_text(item.get("label"), required=True) and _optional_amount(item.get("limit")) \
-                    and _optional_date(item.get("validFrom")) and _optional_date(item.get("validTo"))
+                    and _optional_date(item.get("validFrom")) and _optional_date(item.get("validTo")) \
+                    and _optional_date(item.get("asOf")) \
+                    and (facility_kind is None or facility_kind in _FACILITY_KINDS)
             elif kind == "loans":
+                loan_kind = item.get("kind")
+                approximate = item.get("approximate")
                 ok = ok and _short_text(item.get("label"), required=True) and _optional_amount(item.get("balance")) \
-                    and _optional_date(item.get("asOf")) and _optional_date(item.get("maturity"))
+                    and _optional_date(item.get("asOf")) and _optional_date(item.get("maturity")) \
+                    and _optional_amount(item.get("paymentAmount")) and _optional_date(item.get("paymentDate")) \
+                    and (loan_kind is None or loan_kind in _LOAN_KINDS) \
+                    and (approximate is None or isinstance(approximate, bool))
             elif kind == "openingBalances":
                 account = item.get("accountId")
                 ok = ok and isinstance(org, int) and not isinstance(org, bool) \
                     and (account is None or (isinstance(account, int) and not isinstance(account, bool))) \
                     and item.get("date") is not None and _optional_date(item.get("date")) \
                     and _number(item.get("amount"), low=-MAX_PLAN_AMOUNT, high=MAX_PLAN_AMOUNT) \
-                    and _short_text(item.get("source"), required=True, limit=300)
+                    and _short_text(item.get("source"), required=True, limit=300) \
+                    and (item.get("override") is None or isinstance(item.get("override"), bool))
             elif kind == "checks":
+                discounted = item.get("discounted")
                 ok = ok and _short_text(item.get("check"), required=True, limit=40) \
                     and _optional_date(item.get("date")) and item.get("date") is not None \
                     and _number(item.get("amount"), low=0.01, high=MAX_PLAN_AMOUNT) \
-                    and _short_text(item.get("payee"))
+                    and _short_text(item.get("payee")) \
+                    and (discounted is None or isinstance(discounted, bool))
             else:
                 ok = ok and _short_text(item.get("label"), required=True) and item.get("date") is not None \
                     and _optional_date(item.get("date")) and _optional_amount(item.get("amount"), allow_negative=True) \

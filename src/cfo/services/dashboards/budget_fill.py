@@ -2,19 +2,20 @@
 
 A line is filled only when both quantity and rate are already stored, or the
 owner saved an amount. ``none`` is an explicit mark. Everything else is
-``missing`` ("חסר, הבעלים יזין"). The declared payroll of 49,700 is the sum of
-the wage lines that already have both numbers in the Eliav seed; it is not
-spread onto the other lines.
+``missing`` ("חסר, הבעלים יזין"). There is no fixed payroll amount. A wage
+total is only the sum of wage lines that already have both numbers. A P&L
+row with no saved amount is prefilled from the same month last year when
+that history exists, and stays missing when it does not.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from calendar import monthrange
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 
 from ...models import Budget, ClientDashboard, DashboardEntity, DashboardPlan
 from .plan_budget import FINANCING, budget_catalog
 
-DECLARED_PAYROLL_MONTHLY = Decimal("49700.00")
 NONE_MARK = "none"
 NONE_NOTE = "budget-line:none"
 STATUS_HE = {
@@ -104,6 +105,40 @@ def _stored_budget(db, organization_id: int, year: int, month: int, category: st
     return sorted(matches, key=lambda row: (row.updated_at or datetime.min, row.id or 0), reverse=True)[0]
 
 
+def _history_amounts(db, organization_id: int, year: int, months: list[int]) -> dict[tuple[int, str], Decimal]:
+    """Same calendar month last year, by P&L row. No history stays absent."""
+    from .books import cash_basis_month, classified_bank
+    if not months:
+        return {}
+    prior = year - 1
+    start = date(prior, min(months), 1)
+    end = date(prior, max(months), monthrange(prior, max(months))[1])
+    filed = classified_bank(db, organization_id, start, end, None)
+    found = {}
+    for month in months:
+        prefix = f"{prior:04d}-{month:02d}"
+        items = [(txn, row) for txn, row in filed if str(txn.date).startswith(prefix)]
+        if not items:
+            continue
+        report = cash_basis_month(items)
+        for line in report["lines"]:
+            amount = line.get("amount")
+            if amount:
+                found[(month, line["id"])] = Decimal(str(amount)).quantize(_MONEY)
+    return found
+
+
+def _assumptions(db, organization_id: int, payload, year: int, from_month: int, to_month: int) -> list[dict]:
+    from .budget_assumptions import list_assumptions
+    from .liquidity import checking_snapshot
+    months = [f"{year:04d}-{month:02d}" for month in range(from_month, to_month + 1)]
+    snap = checking_snapshot(db, organization_id)
+    return list_assumptions(
+        payload if isinstance(payload, dict) else None, months, as_of=date.today(),
+        bank_balance=snap.get("balance"), bank_as_of=snap.get("as_of"),
+    )
+
+
 def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: int) -> dict:
     dashboard = dashboard_for_org(db, organization_id)
     payload = None
@@ -116,6 +151,7 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
     imported = ((payload or {}).get("eliavImport") or {}).get("lines") if isinstance(payload, dict) else None
     imported = imported if isinstance(imported, dict) else {}
     months = list(range(from_month, to_month + 1))
+    history = _history_amounts(db, organization_id, year, months) if source == "catalog" else {}
     lines = []
     missing = []
     filled = none = 0
@@ -149,10 +185,22 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
                     status, amount = "none", None
                 elif stored is not None:
                     status, amount = "filled", Decimal(str(stored.budgeted_amount or 0)).quantize(_MONEY)
+            source_name = None
+            if status == "missing":
+                prior = history.get((month, line_id))
+                if prior is not None:
+                    status, amount = "filled", prior
+                    source_name = "history"
+            warning = None
+            income = kind == "revenue" or str(raw.get("category") or "") in {"revenue", "sales", "income"}
+            if income and status == "filled":
+                warning = looks_like_placeholder(amount)
             by_month[key] = {
                 "status": status,
                 "status_he": STATUS_HE[status],
                 "amount": None if amount is None else _q(amount),
+                **({"source": source_name} if source_name else {}),
+                **({"placeholder_warning": warning} if warning else {}),
             }
             if status == "missing":
                 line_missing.append(key)
@@ -163,12 +211,16 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
         if all(cell["status"] == "none" for cell in by_month.values()):
             none += 1
             filled -= 1
+        line_warning = next((
+            cell["placeholder_warning"] for cell in by_month.values() if cell.get("placeholder_warning")
+        ), None)
         lines.append({
             "id": line_id,
             "label": raw.get("label") or line_id,
             "kind": "revenue" if kind == "revenue" else "cost",
             "category": raw.get("category"),
             "months": by_month,
+            **({"placeholder_warning": line_warning} if line_warning else {}),
         })
     wage_months = []
     for month in months:
@@ -188,7 +240,7 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
         wage_months.append({
             "month": key,
             "filled_sum": _q(total) if any_filled else None,
-            "matches_declared": any_filled and total == DECLARED_PAYROLL_MONTHLY,
+            "matches_declared": None,
             "line_ids": ids,
         })
     return {
@@ -200,11 +252,12 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
         "counts": {"active": len(lines), "filled": filled, "none": none, "missing": len(missing)},
         "missing": missing,
         "declared_payroll": {
-            "monthly": _q(DECLARED_PAYROLL_MONTHLY),
-            "note_he": "השכר המוצהר הוא סכום שורות השכר שכבר יש להן כמות ותעריף. הוא לא מחולק לשורות בלי סכום.",
+            "monthly": None,
+            "note_he": "השכר המוצהר הוא סכום שורות השכר שכבר יש להן כמות ותעריף. אין סכום קבוע.",
             "months": wage_months,
         },
         "provider_calls": 0,
+        "assumptions": _assumptions(db, organization_id, payload, year, from_month, to_month),
     }
 
 
@@ -228,7 +281,7 @@ def apply_updates(payload: dict, updates: list[dict]) -> dict:
             kind = update.get("kind")
             if not isinstance(label, str) or not label.strip():
                 raise ValueError("לשורה חדשה חסרה כותרת")
-            if kind not in {"revenue", "cost"} or not isinstance(category, str) or not category:
+            if kind not in {"revenue", "cost", "financing"} or not isinstance(category, str) or not category:
                 raise ValueError("שורה חדשה צריכה קטגוריה וסוג")
             line = {"id": line_id, "label": label.strip(), "category": category, "kind": kind, "months": {}}
             lines.append(line)
@@ -269,7 +322,21 @@ def _save_budget_rows(db, organization_id: int, updates: list[dict]) -> dict:
     """Orgs without a dashboard keep amounts on ``budgets``. Missing stays absent, not zero."""
     for update in updates:
         month = update.get("month")
-        if update.get("remove") or not isinstance(month, str) or len(month) != 7:
+        if update.get("remove"):
+            category = str(update.get("category") or update.get("id") or "")
+            if not category:
+                continue
+            year = int(month[:4]) if isinstance(month, str) and len(month) >= 7 else None
+            month_number = int(month[5:7]) if isinstance(month, str) and len(month) >= 7 else None
+            query = db.query(Budget).filter(
+                Budget.organization_id == organization_id, Budget.category_name == category,
+            )
+            if year is not None and month_number is not None:
+                query = query.filter(Budget.year == year, Budget.month == month_number)
+            for row in query.all():
+                db.delete(row)
+            continue
+        if not isinstance(month, str) or len(month) != 7:
             continue
         status = update.get("status")
         category = str(update.get("category") or update.get("id") or "")
@@ -301,10 +368,65 @@ def _save_budget_rows(db, organization_id: int, updates: list[dict]) -> dict:
     return {"version": None, "provider_calls": 0}
 
 
+PLACEHOLDER_MIN = Decimal("1000000")
+
+
+def looks_like_placeholder(amount, actual=None) -> str | None:
+    """A warning for an income figure that looks invented. Never a deletion."""
+    if amount is None:
+        return None
+    try:
+        number = Decimal(str(amount))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    if number < PLACEHOLDER_MIN:
+        return None
+    if actual is None:
+        if number % PLACEHOLDER_MIN == 0:
+            return "סכום עגול של מיליון ומעלה, בלי ביצוע להשוואה. אזהרה בלבד — לא נמחק."
+        return None
+    actual_abs = abs(Decimal(str(actual)))
+    if number >= max(actual_abs * 10, PLACEHOLDER_MIN):
+        return "תקציב ההכנסה גבוה בהרבה מהביצוע הידוע. אזהרה בלבד — לא נמחק."
+    return None
+
+
+def _split_opening(payload: dict, updates: list[dict], organization_id: int) -> tuple[dict, list[dict]]:
+    """An opening balance is evidence, including a negative checking balance."""
+    from .budget_assumptions import upsert_assumption
+    kept = []
+    plan = payload
+    as_of = date.today()
+    for update in updates:
+        line_id = str(update.get("id") or "")
+        if update.get("category") != "opening_balance" and line_id != "opening_balance":
+            kept.append(update)
+            continue
+        status = update.get("status")
+        amount = None if status in {"missing", "none"} else update.get("amount")
+        when = update.get("month")
+        if isinstance(when, str) and len(when) == 7:
+            when = f"{when}-01"
+        if not isinstance(when, str) or len(when) < 10:
+            when = as_of.isoformat()
+        plan = upsert_assumption(
+            plan, kind="opening_balance", month=when[:10], amount=amount,
+            as_of=as_of, organization_id=organization_id,
+            note=update.get("note"), override=update.get("override") is True,
+        )
+    return plan, kept
+
+
 def save_entry(db, user, organization_id: int, updates: list[dict]) -> dict:
     from .service import save_plan
     dashboard = dashboard_for_org(db, organization_id)
+    opening = any(
+        item.get("category") == "opening_balance" or str(item.get("id") or "") == "opening_balance"
+        for item in updates
+    )
     if dashboard is None:
+        if opening:
+            raise ValueError("יתרת פתיחה נשמרת בדשבורד של הארגון")
         return _save_budget_rows(db, organization_id, updates)
     current = db.get(DashboardPlan, dashboard.id)
     payload = dict(current.payload) if current is not None and isinstance(current.payload, dict) else {}
@@ -313,6 +435,7 @@ def save_entry(db, user, organization_id: int, updates: list[dict]) -> dict:
             {"id": line["id"], "label": line["label"], "category": line["category"], "kind": line["kind"], "months": {}}
             for line in _catalog_lines()
         ]
+    payload, updates = _split_opening(payload, updates, organization_id)
     updated = apply_updates(payload, updates)
     version = current.version if current is not None else "null"
     saved = save_plan(db, user, dashboard.id, updated, version)
@@ -342,9 +465,9 @@ def seed_status(seed: list[dict]) -> dict:
         "filled": filled,
         "missing": missing,
         "declared_payroll": {
-            "monthly": _q(DECLARED_PAYROLL_MONTHLY),
+            "monthly": None,
             "filled_sum": _q(wage) if wage_ids else None,
-            "matches_declared": bool(wage_ids) and wage == DECLARED_PAYROLL_MONTHLY,
+            "matches_declared": None,
             "line_ids": wage_ids,
         },
     }

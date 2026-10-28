@@ -217,7 +217,7 @@ def test_liquidity_reads_accounts_daily_balances_checks_and_debt_service(client,
         )
     assert section["provider_calls"] == 0
     assert section["position"] == {
-        "balance": -31873.87, "as_of": "2026-10-19", "balance_source": "accounts", "limit": 15000.0,
+        "balance": -31873.87, "as_of": "2026-10-19", "balance_source": "open_finance", "limit": 15000.0,
         "limit_source": "accounts.credit_limit", "available_to_limit": -16873.87,
     }
     # The manual account is not Open Finance and is not read without a binding.
@@ -255,6 +255,7 @@ def test_bound_accounts_limit_what_liquidity_reads(client, fresh_org, platform_a
     dashboard_id = _create(client, platform_admin["headers"], owner["org_id"], "eliav-bound-accounts")
     with SessionLocal() as db:
         checking = _liquidity_fixture(db, owner["org_id"])
+        checking.balance_as_of = datetime.combine(date.today(), datetime.min.time())
         manual = db.query(Account).filter_by(organization_id=owner["org_id"], source="manual").one()
         entity = db.query(DashboardEntity).filter_by(dashboard_id=dashboard_id).one()
         db.commit()
@@ -380,7 +381,8 @@ def test_consolidated_dashboard_adds_food_group_and_files_both(client, fresh_org
         _roster(db, office["org_id"], chef["org_id"], "השף")
         _roster(db, office["org_id"], food["org_id"], "פוד גרופ")
         _roster(db, other["org_id"], other["org_id"], "זר")
-        _account(db, chef["org_id"], "עו״ש 8954", "CHECKING", -100, limit=15000)
+        _account(db, chef["org_id"], "עו״ש 8954", "CHECKING", -100, limit=15000,
+                 as_of=datetime.combine(date.today(), datetime.min.time()))
         _bank(db, chef["org_id"], date(2026, 9, 3), 500, "העברה נכנסת לא ידועה")
         _bank(db, food["org_id"], date(2026, 9, 4), -800, "העברה לספק")
         db.commit()
@@ -428,6 +430,9 @@ def test_public_view_has_no_account_ids(client, fresh_org, platform_admin):
     dashboard_id = _create(client, platform_admin["headers"], owner["org_id"], "eliav-public-ids")
     with SessionLocal() as db:
         _liquidity_fixture(db, owner["org_id"])
+        fresh = datetime.combine(date.today(), datetime.min.time())
+        for account in db.query(Account).filter_by(organization_id=owner["org_id"], source="open_finance"):
+            account.balance_as_of = fresh
         db.commit()
     client.patch(f"/api/dashboards/{dashboard_id}", headers=platform_admin["headers"],
                  json={"status": "active", "access_mode": "public"})

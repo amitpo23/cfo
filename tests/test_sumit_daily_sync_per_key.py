@@ -145,4 +145,4 @@ def test_the_key_resolver_matches_the_one_the_sync_actually_uses():
     resolver = inspect.getsource(cron._resolve_sumit_key)
 
     assert "api_credentials" in resolver
-    assert "org_id == 1" in resolver, "כלל אישורי-הסביבה חסר — דליפה בין ארגונים"
+    assert "env_sumit_allowed" in resolver, "כלל אישורי-הסביבה חסר — דליפה בין ארגונים"

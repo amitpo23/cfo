@@ -20,7 +20,7 @@ from .service import PLAN_ROLES, READ_ROLES, DashboardError, get_dashboard
 UNCATEGORIZED = "other"
 UNCATEGORIZED_HE = "לא מסווג"
 NO_BUDGET_HE = "אין תקציב"
-REVENUE_KEYS = {"sales", "services", "other_income", "interest_income", "rent_income"}
+REVENUE_KEYS = {"sales", "services", "other_income", "interest_income", "rent_income", "revenue"}
 MAX_ROWS = 500
 # budgets.budgeted_amount is Numeric(12, 2).
 MAX_AMOUNT = Decimal("9999999999.99")
@@ -482,7 +482,9 @@ def dashboard_summary(db, user: User | None, dashboard, year: int, month: int | 
         view, entities = None, []
     labels = [section.get("label") or "" for section in entities]
     can_combine = len(entities) > 1 and role_for(db, user, dashboard) in READ_ROLES
+    from .budget_assumptions import comparison_allowed
     chosen = "combined" if can_combine and scope in (None, "combined") else "primary"
+    allowed, reason = comparison_allowed(plan, chosen)
     if view is None:
         section = {"status": "unknown", "months": [], "message": None}
     elif chosen == "combined":
@@ -503,7 +505,15 @@ def dashboard_summary(db, user: User | None, dashboard, year: int, month: int | 
         "scopes": ["combined", "primary"] if can_combine else ["primary"],
         "window_start": window_start.isoformat(),
         "window_end": window_end.isoformat(),
+        "comparable": allowed,
+        "comparable_reason": reason,
     })
+    if not allowed:
+        summary["totals"] = {
+            key: {**slot, "budget": None, "variance": None, "variance_pct": None}
+            if isinstance(slot, dict) else slot
+            for key, slot in (summary.get("totals") or {}).items()
+        }
     return summary
 
 

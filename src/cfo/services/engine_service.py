@@ -36,12 +36,12 @@ def status(db, organization_id: int) -> dict[str, Any]:
         IntegrationConnection.organization_id == organization_id).all()
     providers = {c.source: (c.status == "active") for c in connections}
 
-    # Env credentials apply only to the default org (id 1) — mirror the logic in
-    # /api/integration/status so the org where SUMIT actually works isn't reported
-    # as disconnected just because it has no IntegrationConnection row.
-    env_allowed = organization_id == 1
-    sumit_ok = providers.get("sumit", False) or (env_allowed and bool(settings.sumit_api_key))
-    of_ok = providers.get("open_finance", False) or (env_allowed and all([
+    # SUMIT env credentials follow the org list. Open Finance user-id fallback
+    # stays on organization 1.
+    sumit_ok = providers.get("sumit", False) or (
+        settings.env_sumit_allowed(organization_id) and bool(settings.sumit_api_key)
+    )
+    of_ok = providers.get("open_finance", False) or (organization_id == 1 and all([
         settings.open_finance_client_id,
         settings.open_finance_client_secret,
         settings.open_finance_user_id,

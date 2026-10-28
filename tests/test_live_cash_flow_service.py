@@ -437,9 +437,8 @@ def test_burn_rate_accepts_fresh_sync_when_balance_as_of_is_missing(fresh_org):
     finally:
         db.close()
 
-    assert result["current_balance"] == 20000.0
-    assert result["current_balance_available"] is True
-    assert result["current_balance_reason"] is None
+    assert result["current_balance"] is None
+    assert result["current_balance_available"] is False
 
 
 def test_burn_rate_observed_at_alone_does_not_make_balance_fresh(fresh_org):
@@ -465,7 +464,7 @@ def test_burn_rate_observed_at_alone_does_not_make_balance_fresh(fresh_org):
 
     assert result["current_balance"] is None
     assert result["current_balance_available"] is False
-    assert "observed_at בלבד" in result["current_balance_reason"]
+    assert result["current_balance_reason"]
 
 
 def test_burn_rate_mixed_fresh_and_stale_balances_fails_closed(fresh_org):

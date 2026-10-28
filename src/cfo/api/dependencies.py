@@ -536,9 +536,9 @@ async def get_sumit_integration(
     """Get a SUMIT integration instance scoped to the caller's organization.
 
     Resolves credentials from the per-org encrypted vault (IntegrationConnection,
-    source="sumit"). Environment credentials are honored ONLY for the default org
-    (org 1); every other tenant must configure its own SUMIT key, so its requests
-    never silently run against another org's SUMIT account.
+    source="sumit").     Environment credentials are honored only for organizations listed in
+    ``SUMIT_ENV_CREDENTIAL_ORG_IDS``. An empty list allows nobody, including
+    organization 1, so a request never silently uses another org's SUMIT account.
 
     Raises:
         HTTPException 400: if no SUMIT credentials are configured for this org.
@@ -554,7 +554,7 @@ async def get_sumit_integration(
     ).order_by(IntegrationConnection.id).first()
     creds = decrypt_credentials(conn.credentials_encrypted) if conn else {}
 
-    env_allowed = org_id == 1
+    env_allowed = settings.env_sumit_allowed(org_id)
     api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
     company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
 
@@ -585,7 +585,7 @@ def sumit_for_org(db: Session, org_id: int):
     ).order_by(IntegrationConnection.id).first()
     creds = decrypt_credentials(conn.credentials_encrypted) if conn else {}
 
-    env_allowed = org_id == 1
+    env_allowed = settings.env_sumit_allowed(org_id)
     api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
     company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
     if not api_key:

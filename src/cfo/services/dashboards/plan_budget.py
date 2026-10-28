@@ -42,20 +42,42 @@ def _invalid(message_he: str) -> PlanBudgetError:
     return PlanBudgetError(message_he)
 
 
+def _pnl_ids() -> set[str]:
+    from .filing import PNL_ROWS
+    return {row["id"] for row in PNL_ROWS}
+
+
 def _known_key(name: str) -> str:
     key = category_key(name)
-    if key in FINANCING_CATEGORIES:
+    if key in FINANCING_CATEGORIES or key in _pnl_ids() or key in _LABELS or key in {"headcount", "opening_balance"}:
         return key
     for code, label in FINANCING_CATEGORIES.items():
         if label == name:
             return code
-    if key not in _LABELS:
-        raise _invalid("קטגוריית התקציב אינה מוכרת")
-    return key
+    raise _invalid("קטגוריית התקציב אינה מוכרת")
+
+
+# Detail keys the books already use. The editor offers the P&L rows; these stay
+# valid so an imported plan is not rejected.
+_DETAIL_KEYS = (
+    "sales", "services", "other_income", "interest_income", "rent_income",
+    "cost_of_goods", "materials", "direct_labor", "salaries", "rent",
+    "utilities", "marketing", "insurance", "office_supplies", "professional_fees",
+    "travel", "vehicle", "hospitality", "refreshments", "depreciation",
+    "interest_expense", "bank_fees", "taxes", "other",
+)
+
+
+def category_kinds() -> dict[str, str]:
+    """Editor rows plus the detail keys an import may already use."""
+    kinds = {row["key"]: row["kind"] for row in budget_catalog()}
+    for key in _DETAIL_KEYS:
+        kinds.setdefault(key, _kind_for(key))
+    return kinds
 
 
 def _kind_for(key: str) -> str:
-    if key in FINANCING_CATEGORIES:
+    if key in FINANCING_CATEGORIES or key == "opening_balance":
         return FINANCING
     return "revenue" if key in REVENUE_KEYS else "cost"
 
@@ -155,7 +177,7 @@ def _sums(lines: list[dict]) -> dict[tuple[int, int, str], Decimal]:
 def _category_row(db, organization_id: int, key: str) -> Category | None:
     rows = db.query(Category).filter(Category.organization_id == organization_id).all()
     for row in rows:
-        if row.external_id == f"eliav:group:{key}":
+        if isinstance(row.external_id, str) and row.external_id.endswith(f":group:{key}"):
             return row
         if category_key(row.name or "") == key:
             return row
@@ -205,17 +227,15 @@ def project_budget_lines(db, organization_id: int, version: str, lines: list[dic
 
 
 def budget_catalog() -> list[dict]:
-    """Operating categories the editor offers. Kind follows the budget report."""
-    keys = (
-        "sales", "services", "other_income", "interest_income", "rent_income",
-        "cost_of_goods", "materials", "direct_labor", "salaries", "rent",
-        "utilities", "marketing", "insurance", "office_supplies", "professional_fees",
-        "travel", "vehicle", "hospitality", "refreshments", "depreciation",
-        "interest_expense", "bank_fees", "taxes", "other",
-    )
+    """The SUMIT P&L rows, in Hebrew. Financing stays off the P&L."""
+    from .filing import PNL_ROWS
     return [
-        {"key": key, "label_he": _LABELS[key], "kind": _kind_for(key)}
-        for key in keys
+        {
+            "key": row["id"],
+            "label_he": row["label"],
+            "kind": "revenue" if row["side"] == "revenue" else "cost",
+        }
+        for row in PNL_ROWS
     ] + [
         {"key": key, "label_he": label, "kind": FINANCING}
         for key, label in FINANCING_CATEGORIES.items()

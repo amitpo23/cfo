@@ -34,7 +34,7 @@ from ...models import (
 from .budget import category_key, category_label
 from .filing import DECISION_CATEGORIES
 from .plan_budget import (
-    FINANCING_CATEGORIES, PLAN_NOTE_PREFIX, PlanBudgetError, budget_catalog,
+    FINANCING_CATEGORIES, PLAN_NOTE_PREFIX, PlanBudgetError, budget_catalog, category_kinds,
     project_budget_lines, validate_budget_lines,
 )
 from .service import PLAN_LIMIT_BYTES, DashboardError, validate_filing_payload
@@ -103,7 +103,7 @@ GROUPS = {
     "הנהלה וכלליות": "other",
     "השקעות ומימון": "interest_expense",
 }
-CATALOG = {row["key"]: row["kind"] for row in budget_catalog()}
+CATALOG = category_kinds()
 BUDGET_KEY = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])\|([^|\s]{1,40})$")
 DATE_KEY = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 MONTH_KEY = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")

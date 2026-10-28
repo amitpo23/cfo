@@ -16,6 +16,21 @@ from cfo.services.dashboards import cash_statement, filing, liquidity
 from cfo.services.dashboards.books import cash_basis_month
 
 
+_ELIAV_SCOPE = {
+    "pairs": [
+        {"organizationId": 2, "accountId": 35},
+        {"organizationId": 6},
+    ],
+    "aliases": [
+        ["אליאב", "כהן"],
+        ["אליהב", "כהן"],
+        "פוד גרופ",
+        "פודגרופ",
+        "food group",
+    ],
+}
+
+
 def _txn(**kwargs):
     defaults = dict(id=None, organization_id=2, account_id=35, date="2026-10-01", amount=1000.0,
                     description="", debtor="", creditor="")
@@ -23,18 +38,24 @@ def _txn(**kwargs):
     return filing.Txn(**defaults)
 
 
-def test_cheque_discounting_is_income_not_financing():
+def test_cheque_discounting_is_financing_until_it_matches_an_invoice():
+    """Advance in, repayment out. A collection belongs to the invoice's entity."""
     meta = filing.CATEGORIES["check_discounting"]
-    assert meta["group"] == "operating"
-    assert "מקדמה" in meta["label"]
-    assert "מימון" not in meta["label"]
-    txn = _txn(description="ניכיון שיקים", amount=1180.0)
-    filed = filing.classify(txn)
-    assert filed.category == "check_discounting"
-    statement = cash_statement.build_cash_statement([(txn, filed)], date(2026, 10, 1), date(2026, 10, 31))
-    line = next(item for item in statement["lines"] if item["id"] == "check_discounting")
-    assert line["group"] == "operating_in"
-    assert cash_basis_month([(txn, filed)])["revenue"] == pytest.approx(1000.0, abs=0.05)
+    assert meta["group"] == "financing"
+    advance = _txn(description="ניכיון שיקים", amount=132000.0, organization_id=6)
+    repay = _txn(description="צ'קים דחויים", amount=-70000.0, organization_id=6)
+    collected = _txn(description="צקים דחויים", amount=70483.0, organization_id=6)
+    invoices = [{
+        "organization_id": 2, "number": "20055", "date": "2026-06-30", "total": 70483.0,
+    }]
+    filed = filing.classify_all([advance, repay, collected], invoices=invoices)
+    assert filed[id(advance)].category == "loans_in"
+    assert filed[id(repay)].category == "loans_out"
+    assert filed[id(collected)].category == "intercompany"
+    assert filed[id(collected)].extra["customer_receipt_for"] == 2
+    assert filed[id(collected)].extra["invoice"] == "20055"
+    month = cash_basis_month([(collected, filed[id(collected)])])
+    assert month["revenue"] == 0.0
 
 
 def test_discounting_evidence_is_not_in_debts_known_total(fresh_org):
@@ -43,7 +64,7 @@ def test_discounting_evidence_is_not_in_debts_known_total(fresh_org):
         db.add(Account(
             organization_id=owner["org_id"], name="עו״ש", account_type=AccountType.BANK,
             raw_account_type="CHECKING", source="open_finance", external_id="chk-1",
-            balance=Decimal("-1000"), balance_as_of=datetime(2026, 10, 20), currency="ILS",
+            balance=Decimal("-1000"), balance_as_of=datetime(2026, 10, 31), currency="ILS",
         ))
         db.commit()
         section = liquidity.build_liquidity(
@@ -70,7 +91,7 @@ def test_unknown_discounting_balance_stays_null(fresh_org):
         db.add(Account(
             organization_id=owner["org_id"], name="עו״ש", account_type=AccountType.BANK,
             raw_account_type="CHECKING", source="open_finance", external_id="chk-2",
-            balance=Decimal("-1000"), balance_as_of=datetime(2026, 10, 20), currency="ILS",
+            balance=Decimal("-1000"), balance_as_of=datetime(2026, 10, 31), currency="ILS",
         ))
         db.commit()
         section = liquidity.build_liquidity(
@@ -118,8 +139,8 @@ def test_a_live_discounting_loan_is_an_advance(fresh_org):
 def test_intercompany_aliases_ignore_order_and_punctuation(debtor, creditor, description):
     chef = _txn(organization_id=2, account_id=35, debtor=debtor, creditor=creditor, description=description, amount=500)
     food = _txn(organization_id=6, account_id=9, debtor=debtor, creditor=creditor, description=description, amount=-500)
-    assert filing.classify_builtin(chef)[0] == "intercompany"
-    assert filing.classify_builtin(food)[0] == "intercompany"
+    assert filing.classify_builtin(chef, scope=_ELIAV_SCOPE)[0] == "intercompany"
+    assert filing.classify_builtin(food, scope=_ELIAV_SCOPE)[0] == "intercompany"
 
 
 @pytest.mark.parametrize("debtor,creditor,description,org,account", [
@@ -131,7 +152,7 @@ def test_intercompany_aliases_ignore_order_and_punctuation(debtor, creditor, des
 def test_unknown_or_out_of_scope_counterparty_is_not_intercompany(debtor, creditor, description, org, account):
     txn = _txn(organization_id=org, account_id=account, debtor=debtor, creditor=creditor,
                description=description or "תקבול", amount=500)
-    assert filing.classify_builtin(txn)[0] != "intercompany"
+    assert filing.classify_builtin(txn, scope=_ELIAV_SCOPE)[0] != "intercompany"
     assert filing.is_intercompany_counterparty("") is False
     assert filing.is_intercompany_counterparty("כהן") is False
 
@@ -216,9 +237,10 @@ def test_card_totals_name_unknowns_and_the_transaction_bucket_is_not_a_balance(f
         clean = liquidity.build_liquidity(
             db, owner["org_id"], date(2026, 10, 1), date(2026, 10, 31), classified=[], today=date(2026, 10, 31),
         )
-    assert odd["card_activity"]["defined"] is False
+    assert odd["card_activity"]["defined"] is True
     assert odd["card_activity"]["amount"] is None
-    assert "לא מוגדר" in odd["card_activity"]["definition"] or "אינו מוגדר" in odd["card_activity"]["definition"]
+    assert odd["card_activity"]["excluded_count"] == 1
+    assert "לא ידוע" in odd["card_activity"]["definition"]
     summary = clean["card_summary"]
     assert summary["available"] is None and summary["available_unknown"] == 1
     assert summary["credit_limit"] is None and summary["credit_limit_unknown"] == 1
@@ -257,7 +279,7 @@ def _shared_account(db, org_id, number, balance, external):
         organization_id=org_id, name="עו״ש משותף", account_type=AccountType.BANK,
         raw_account_type="CHECKING", source="open_finance", external_id=external,
         provider_account_number=number, balance=Decimal(str(balance)),
-        balance_as_of=datetime(2026, 10, 20), credit_limit=Decimal("5000"), currency="ILS",
+        balance_as_of=datetime(2026, 10, 28), credit_limit=Decimal("5000"), currency="ILS",
     )
     db.add(account)
     db.flush()

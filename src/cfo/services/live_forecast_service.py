@@ -56,6 +56,31 @@ from sqlalchemy.orm import Session
 from ..models import BankTransaction, Bill, BillStatus, Expense, Invoice, InvoiceStatus
 
 
+def _age_slots(rows, as_of: date, periods: int) -> tuple[list[dict], dict]:
+    """Place overdue balances by age. Older than 90 days is not cash this horizon."""
+    slots = [{"amount": 0.0, "count": 0} for _ in range(periods)]
+    unscheduled_amount = 0.0
+    unscheduled_count = 0
+    for row in rows:
+        age = (as_of - row.due_date).days
+        amount = float(row.balance or 0)
+        if age <= 30:
+            index = 0
+        elif age <= 60:
+            index = 1
+        elif age <= 90:
+            index = 2
+        else:
+            index = None
+        if index is None or index >= periods:
+            unscheduled_amount += amount
+            unscheduled_count += 1
+            continue
+        slots[index]["amount"] = round(slots[index]["amount"] + amount, 2)
+        slots[index]["count"] += 1
+    return slots, {"amount": round(unscheduled_amount, 2), "count": unscheduled_count}
+
+
 def _add_months(d: date, months: int) -> date:
     """מחזיר את היום ה-1 של (d.month + months), עם גלישת שנה נכונה."""
     month_index = d.month - 1 + months
@@ -138,9 +163,9 @@ class LiveForecastService:
         # ייכנסו לאף בקצת-חודש רגיל (כולם נבדקים כ-m_start<=due<=m_end
         # מ-month_anchor והלאה) — בלי הטיפול הזה הם היו נעלמים בשקט.
         overdue_invoices = [inv for inv in open_invoices if inv.due_date < month_anchor]
-        overdue_ar_total = float(sum((inv.balance for inv in overdue_invoices), Decimal("0")))
         overdue_bills = [b for b in open_bills if b.due_date < month_anchor]
-        overdue_ap_total = float(sum((b.balance for b in overdue_bills), Decimal("0")))
+        overdue_ar_by_slot, unscheduled_ar = _age_slots(overdue_invoices, as_of_date, periods)
+        overdue_ap_by_slot, unscheduled_ap = _age_slots(overdue_bills, as_of_date, periods)
 
         recurring_rows, recurring_months_count = self._recurring_expense_rows(as_of_date)
         recurring_sum = sum((r[0] for r in recurring_rows), Decimal("0"))
@@ -204,10 +229,10 @@ class LiveForecastService:
             ap_matches = [b for b in open_bills if m_start <= b.due_date <= m_end]
             ap_amount = float(sum((b.balance for b in ap_matches), Decimal("0")))
 
-            month_overdue_ar = overdue_ar_total if is_first_month else 0.0
-            month_overdue_ar_count = len(overdue_invoices) if is_first_month else 0
-            month_overdue_ap = overdue_ap_total if is_first_month else 0.0
-            month_overdue_ap_count = len(overdue_bills) if is_first_month else 0
+            month_overdue_ar = overdue_ar_by_slot[i]["amount"]
+            month_overdue_ar_count = overdue_ar_by_slot[i]["count"]
+            month_overdue_ap = overdue_ap_by_slot[i]["amount"]
+            month_overdue_ap_count = overdue_ap_by_slot[i]["count"]
 
             recurring_amount = float(recurring_monthly_avg)
 
@@ -229,7 +254,7 @@ class LiveForecastService:
                     },
                     {
                         "source": "invoices_overdue_ar",
-                        "label": "חשבוניות פתוחות בפירעון שעבר (overdue) — מוצג בחודש הנוכחי",
+                        "label": "חשבוניות בפיגור לפי גיל (30 יום לחודש; מעל 90 יום לא משובץ)",
                         "direction": "inflow",
                         "amount": round(month_overdue_ar, 2),
                         "count": month_overdue_ar_count,
@@ -243,7 +268,7 @@ class LiveForecastService:
                     },
                     {
                         "source": "bills_overdue_ap",
-                        "label": "חשבונות ספק פתוחים בפירעון שעבר (overdue) — מוצג בחודש הנוכחי",
+                        "label": "חשבונות ספק בפיגור לפי גיל (30 יום לחודש; מעל 90 יום לא משובץ)",
                         "direction": "outflow",
                         "amount": round(month_overdue_ap, 2),
                         "count": month_overdue_ap_count,
@@ -269,9 +294,9 @@ class LiveForecastService:
         assumptions: list[str] = []
         if overdue_invoices or overdue_bills:
             assumptions.append(
-                "100% מיתרת החשבוניות/חשבונות-הספק שבפיגור (overdue) משובצת "
-                "במלואה לחודש הנוכחי — הנחת-שיבוץ לצורך התחזית, לא תאריך "
-                "גבייה/תשלום ידוע בפועל."
+                "יתרת פיגור (overdue) משובצת לפי גיל: עד 30 יום בחודש הנוכחי, "
+                "31–60 בחודש הבא, 61–90 בחודש שאחריו. מעל 90 יום לא נכנס לתזרים "
+                "הצפוי — אין הנחה שהכל ייגבה החודש."
             )
         if recurring_rows:
             assumptions.append(
@@ -288,6 +313,10 @@ class LiveForecastService:
             "historical_context": bank_context,
             "excluded_no_due_date": excluded_no_due_date,
             "assumptions": assumptions,
+            "unscheduled_overdue": {
+                "invoices": unscheduled_ar,
+                "bills": unscheduled_ap,
+            },
             "message": None,
         }
 

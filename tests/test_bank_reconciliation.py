@@ -43,6 +43,17 @@ def test_equal_amount_candidates_do_not_claim_document():
     assert len(res["unmatched_txns"]) == 2
 
 
+def test_one_receipt_is_a_candidate_for_one_invoice_only():
+    txns = [BankTxnLite(1, 106200.0, date(2026, 1, 12), "תקבול")]
+    invoices = [
+        DocLite(f"i{n}", "invoice", 106200.0, date(2026, 1, 12), "לקוח")
+        for n in range(1, 7)
+    ]
+    res = reconcile(txns, invoices, [], [])
+    assert res["candidate_count"] == 1
+    assert res["candidates"][0]["bank_txn_id"] == 1
+
+
 def test_score_capped_at_one():
     txns = [BankTxnLite(1, 1000.0, date(2026, 6, 5), "אקמה בעמ")]
     invoices = [DocLite("i1", "invoice", 1000.0, date(2026, 6, 5), "אקמה בעמ")]

@@ -90,6 +90,7 @@ def classified_bank(db, organization_id: int, start: date, end: date, plan: dict
         txns, invoices=invoices,
         decisions=plan.get("statusDecisions") if isinstance(plan.get("statusDecisions"), dict) else None,
         custom_rules=plan.get("statusRules") if isinstance(plan.get("statusRules"), list) else None,
+        scope=filing.scope_from_plan(plan),
     )
     return [(t, filed[id(t)]) for t in txns]
 

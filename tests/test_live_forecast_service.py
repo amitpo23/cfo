@@ -244,16 +244,15 @@ def test_monthly_forecast_overdue_ar_and_ap_are_not_dropped(fresh_org):
     assert "bills_overdue_ap" in result["data_sources"]
 
     m0, m1 = result["months"]
-    assert m0["inflow_total"] == 2000.0
-    assert m0["outflow_total"] == 800.0
+    # 40 days before the month start is about two months old on 28/10.
+    # It is not dumped into October. 20 days before the month start for the
+    # bill is the next 30-day slot, not this month's whole balance.
     by_source0 = {c["source"]: c for c in m0["components"]}
-    assert by_source0["invoices_overdue_ar"]["amount"] == 2000.0
-    assert by_source0["invoices_overdue_ar"]["count"] == 1
-    assert by_source0["bills_overdue_ap"]["amount"] == 800.0
-
-    # החודש השני לא סוחב את ה-overdue שוב (זה כבר "טופל" בחודש הראשון).
+    assert by_source0["invoices_overdue_ar"]["amount"] == 0.0
+    assert m0["inflow_total"] == 0.0
+    assert result["unscheduled_overdue"]["invoices"]["amount"] == 2000.0
     by_source1 = {c["source"]: c for c in m1["components"]}
-    assert by_source1["invoices_overdue_ar"]["amount"] == 0.0
+    assert by_source1["bills_overdue_ap"]["amount"] == 800.0
     assert m1["inflow_total"] == 0.0
 
 
@@ -463,7 +462,8 @@ def test_assumptions_discloses_overdue_bucketing_when_overdue_present(fresh_org)
         db.close()
 
     assert len(result["assumptions"]) == 1
-    assert "100%" in result["assumptions"][0]
+    assert "90" in result["assumptions"][0]
+    assert "100%" not in result["assumptions"][0]
     assert "overdue" in result["assumptions"][0] or "בפיגור" in result["assumptions"][0]
 
 

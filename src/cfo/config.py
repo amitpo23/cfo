@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     # SUMIT API
     sumit_api_key: Optional[str] = None
     sumit_company_id: Optional[str] = None
+    # Environment SUMIT credentials apply only to these organization ids.
+    # Empty means nobody, including organization 1. Not a live call.
+    sumit_env_credential_org_ids: str = ""
     # Fail closed into the free SUMIT testing track.  A live environment must
     # be selected explicitly; misspellings must never enable live behavior.
     sumit_environment: str = "test"
@@ -325,6 +328,18 @@ class Settings(BaseSettings):
     def normalize_sumit_environment(cls, value):
         normalized = value.strip().lower() if isinstance(value, str) else "test"
         return normalized if normalized in {"test", "live"} else "test"
+
+    @property
+    def sumit_env_credential_org_id_set(self) -> set[int]:
+        """Listed organization ids. Any token that is not an id clears the list."""
+        tokens = [token.strip() for token in self.sumit_env_credential_org_ids.split(",") if token.strip()]
+        if not all(token.isdigit() for token in tokens):
+            return set()
+        return {int(token) for token in tokens}
+
+    def env_sumit_allowed(self, organization_id: int | None) -> bool:
+        """True only when this org is listed for the environment SUMIT key."""
+        return organization_id in self.sumit_env_credential_org_id_set
 
     @property
     def open_finance_scheduled_sync_org_id_set(self) -> set[int]:
