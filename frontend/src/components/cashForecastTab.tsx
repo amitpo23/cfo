@@ -1,10 +1,10 @@
 // The "תזרים חזוי" tab of /d/: thirteen weeks from cashflow_source.forecast.
-// Every number is from that one engine. An unknown balance stays "לא ידוע".
+// Every number is from that one engine. A missing amount is "חסר נכון ל-<תאריך>".
 import { Fragment, useEffect, useState } from 'react';
 import {
   Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { EmptyState, KpiCards, type Kpi } from './dashboardUi';
+import { EmptyState, KpiCards, missingAsOf, type Kpi } from './dashboardUi';
 import { money } from './dashboardTabs';
 
 export type Certainty = 'certain' | 'scheduled' | 'manual' | 'estimate';
@@ -88,28 +88,28 @@ function kpis(forecast: CashForecast): Kpi[] {
   const ceiling = weeks.some((week) => week.items.some((item) => item.upper_bound));
   const breach = forecast.first_breach;
   return [
-    { label: 'יתרה היום', value: money(start.amount), note: start.as_of ? `נכון ל־${start.as_of}` : null },
+    { label: 'יתרה היום', value: money(start.amount, start.as_of), note: start.as_of ? `נכון ל־${start.as_of}` : null },
     {
       label: 'פנוי במסגרת השבוע',
-      value: money(weeks[0]?.headroom),
+      value: money(weeks[0]?.headroom, weeks[0]?.end),
       note: (weeks[0]?.headroom ?? 0) < 0 ? 'חריגה מהמסגרת' : null,
       tone: (weeks[0]?.headroom ?? 0) < 0 ? 'warn' : null,
     },
     {
       label: 'השבוע הקשה',
-      value: tightest ? money(tightest.headroom) : 'לא ידוע',
+      value: tightest ? money(tightest.headroom, tightest.end) : missingAsOf(weeks[0]?.end),
       note: tightest ? weekLabel(tightest) : null,
       tone: (tightest?.headroom ?? 0) < 0 ? 'warn' : null,
     },
     {
       label: 'חריגה ראשונה',
-      value: breach ? weekLabel({ start: breach.week_start, end: breach.week_end }) : known.length ? 'אין חריגה צפויה' : 'לא ידוע',
+      value: breach ? weekLabel({ start: breach.week_start, end: breach.week_end }) : known.length ? 'אין חריגה צפויה' : missingAsOf(weeks[0]?.end),
       note: breach ? money(breach.headroom) : null,
       tone: breach ? 'warn' : null,
     },
     {
       label: 'תזרים 13 שבועות',
-      value: money(net),
+      value: money(net, weeks[weeks.length - 1]?.end),
       note: ceiling ? 'כולל סיום הלוואות לפי הסכום המרבי' : null,
     },
   ];
@@ -215,13 +215,13 @@ function WeeksTable({ forecast }: { forecast: CashForecast }) {
                         {expanded ? '▾' : '◂'} {weekLabel(week)}
                       </button>
                     </td>
-                    <td>{money(week.in)}</td>
-                    <td>{money(week.out)}</td>
-                    <td className={(week.net ?? 0) < 0 ? 'text-red-700' : ''}>{money(week.net)}</td>
-                    <td>{money(week.closing)}</td>
-                    <td>{money(week.limit)}</td>
+                    <td>{money(week.in, week.end)}</td>
+                    <td>{money(week.out, week.end)}</td>
+                    <td className={(week.net ?? 0) < 0 ? 'text-red-700' : ''}>{money(week.net, week.end)}</td>
+                    <td>{money(week.closing, week.end)}</td>
+                    <td>{money(week.limit, week.end)}</td>
                     <td className={breach ? 'font-medium text-red-700' : ''}>
-                      {money(week.headroom)}{breach ? ' · חריגה' : ''}
+                      {money(week.headroom, week.end)}{breach ? ' · חריגה' : ''}
                     </td>
                   </tr>
                   {expanded ? (
@@ -236,7 +236,7 @@ function WeeksTable({ forecast }: { forecast: CashForecast }) {
         </table>
       </div>
       <p className="mt-3 text-xs text-stone-500">
-        שבוע הוא מיום ראשון עד יום שישי. מזומן שחל בשבת נזקף ליום ראשון שאחריו, פעם אחת. ודאי: צ׳ק דחוי או סיום הלוואה מתוארכים. קבוע: החזר קרן חודשי. ידני: פריט שבעלי הדשבורד הזינו. הערכה: ממוצע שלושת החודשים המלאים
+        ברירת המחדל לספקים היא סוף החודש העוקב: ספטמבר נפרע ב־1/11 (31/10 הוא שבת), אוקטובר ב־30/11, נובמבר ב־31/12, דצמבר ב־31/1. בשבוע 25–30/10 הספקים של ספטמבר (30,000−) אינם נכללים; במנוע הקודם הם נפלו ב־30/10. שוטף+30 נשאר חלופה לארגון. שבוע הוא מיום ראשון עד יום שישי. מזומן שחל בשבת נזקף ליום ראשון שאחריו, פעם אחת. ודאי: צ׳ק דחוי או סיום הלוואה מתוארכים. קבוע: החזר קרן חודשי. ידני: פריט שבעלי הדשבורד הזינו. הערכה: ממוצע שלושת החודשים המלאים
         האחרונים בבנק, לפי קבוצה. צ׳ק ידוע נגרע מקצב היציאות של החודש שלו ולא נוסף עליו.
       </p>
     </section>

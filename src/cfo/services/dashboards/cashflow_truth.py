@@ -25,9 +25,11 @@ TERM_TYPES = frozenset({
     "end_of_next_month", "eom_plus_30_days", "eom_plus_days",
     "fixed_day_of_month", "days_from_invoice", "on_receipt", "per_order", "other_text",
 })
-SUPPLIER_TERM_MODES = ("eom_plus_30_days", "end_of_next_month")
-# The owner has not confirmed which mode he meant. Do not switch this default.
-DEFAULT_SUPPLIER_TERMS_MODE = "eom_plus_30_days"
+SUPPLIER_TERM_MODES = ("end_of_next_month", "eom_plus_30_days")
+# Owner confirmed 28/10/2026: supplier terms are the end of the next month.
+# September 2026 is Saturday 31/10, so the cash date is Sunday 1/11.
+# eom_plus_30_days remains an optional per-org alternative.
+DEFAULT_SUPPLIER_TERMS_MODE = "end_of_next_month"
 DEFAULT_SUPPLIER_TERMS = {"type": DEFAULT_SUPPLIER_TERMS_MODE}
 INQUIRY_TERMS = frozenset({"per_order", "other_text"})
 VAT_EXEMPT = frozenset({"payroll", "national_insurance", "pension", "fees", "interest", "arnona"})
@@ -204,10 +206,11 @@ def _next_month(year: int, month: int) -> tuple[int, int]:
 def supplier_contract_date(doc_date: date, terms: dict | None) -> date | None:
     """The supplier date before the Saturday rule.
 
-    The default mode is ``eom_plus_30_days`` until the owner confirms which
-    rule he meant. ``end_of_next_month`` is the other mode: September 2026 is
-    31 October, a Saturday, so the cash date is Sunday 1 November. Both modes
-    then apply the Saturday rule. Free text is not guessed.
+    The default mode is ``end_of_next_month``: September 2026 is 31 October,
+    a Saturday, so the cash date is Sunday 1 November. October pays 30 November,
+    November pays 31 December, December pays 31 January. ``eom_plus_30_days``
+    is the optional per-org alternative (September pays 30 October). Both modes
+    then apply the Saturday rule once. Free text is not guessed.
     """
     kind = DEFAULT_SUPPLIER_TERMS_MODE if not isinstance(terms, dict) else str(terms.get("type") or DEFAULT_SUPPLIER_TERMS_MODE)
     if kind == "end_of_next_month":

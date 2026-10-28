@@ -340,10 +340,41 @@ def _save_budget_rows(db, organization_id: int, updates: list[dict]) -> dict:
     return {"version": None, "provider_calls": 0}
 
 
+def _split_opening(payload: dict, updates: list[dict], organization_id: int) -> tuple[dict, list[dict]]:
+    """An opening balance is evidence, including a negative checking balance."""
+    from .budget_assumptions import upsert_assumption
+    kept = []
+    plan = payload
+    as_of = date.today()
+    for update in updates:
+        line_id = str(update.get("id") or "")
+        if update.get("category") != "opening_balance" and line_id != "opening_balance":
+            kept.append(update)
+            continue
+        status = update.get("status")
+        amount = None if status in {"missing", "none"} else update.get("amount")
+        when = update.get("month")
+        if isinstance(when, str) and len(when) == 7:
+            when = f"{when}-01"
+        if not isinstance(when, str) or len(when) < 10:
+            when = as_of.isoformat()
+        plan = upsert_assumption(
+            plan, kind="opening_balance", month=when[:10], amount=amount,
+            as_of=as_of, organization_id=organization_id,
+        )
+    return plan, kept
+
+
 def save_entry(db, user, organization_id: int, updates: list[dict]) -> dict:
     from .service import save_plan
     dashboard = dashboard_for_org(db, organization_id)
+    opening = any(
+        item.get("category") == "opening_balance" or str(item.get("id") or "") == "opening_balance"
+        for item in updates
+    )
     if dashboard is None:
+        if opening:
+            raise ValueError("יתרת פתיחה נשמרת בדשבורד של הארגון")
         return _save_budget_rows(db, organization_id, updates)
     current = db.get(DashboardPlan, dashboard.id)
     payload = dict(current.payload) if current is not None and isinstance(current.payload, dict) else {}
@@ -352,6 +383,7 @@ def save_entry(db, user, organization_id: int, updates: list[dict]) -> dict:
             {"id": line["id"], "label": line["label"], "category": line["category"], "kind": line["kind"], "months": {}}
             for line in _catalog_lines()
         ]
+    payload, updates = _split_opening(payload, updates, organization_id)
     updated = apply_updates(payload, updates)
     version = current.version if current is not None else "null"
     saved = save_plan(db, user, dashboard.id, updated, version)

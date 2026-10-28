@@ -2,7 +2,7 @@
 
 Every row the forecast can use is here: income, payroll, headcount, suppliers,
 vehicle, interest, loan repayments, and the opening balance. A missing amount
-is ``None`` and labelled ``missing as of <date>``. It is never stored as 0.
+is ``None`` and labelled ``חסר נכון ל-<date>``. It is never stored as 0.
 Source is ``owner`` when the owner typed it, ``bank`` for an opening that came
 from the checking snapshot, and ``books`` when a row is marked that way.
 """
@@ -53,7 +53,7 @@ CASH_KINDS = frozenset({"payroll", "suppliers", "vehicle", "interest", "loan_rep
 
 
 def missing_label(as_of: date) -> str:
-    return f"missing as of {as_of.isoformat()}"
+    return f"חסר נכון ל-{as_of.isoformat()}"
 
 
 def _lines(plan: dict | None) -> list[dict]:
@@ -188,7 +188,7 @@ def _ensure_line(plan: dict, kind: str) -> dict:
     return line
 
 
-def upsert_assumption(plan: dict | None, *, kind: str, month: str | None, amount, quantity=None, as_of: date) -> dict:
+def upsert_assumption(plan: dict | None, *, kind: str, month: str | None, amount, quantity=None, as_of: date, organization_id: int | None = None) -> dict:
     """Add or change one assumption. ``amount is None`` deletes that month."""
     if kind not in KINDS:
         raise ValueError("סוג הנחה אינו מוכר")
@@ -201,9 +201,10 @@ def upsert_assumption(plan: dict | None, *, kind: str, month: str | None, amount
             evidence["openingBalances"] = []
         else:
             when = month or as_of.isoformat()
-            evidence["openingBalances"] = [{
-                "date": when, "amount": round(float(amount), 2), "source": "assumption by owner",
-            }]
+            row = {"date": when, "amount": round(float(amount), 2), "source": "assumption by owner"}
+            if organization_id is not None:
+                row["organizationId"] = int(organization_id)
+            evidence["openingBalances"] = [row]
         plan["liquidityEvidence"] = evidence
         return plan
     if not isinstance(month, str) or len(month) != 7:
@@ -242,7 +243,7 @@ def comparison_allowed(plan: dict | None, actual_scope: str) -> tuple[bool, str 
 def bank_pack(view: dict, assumptions: list[dict], *, as_of: date) -> dict:
     """P&L, forecast and budget-vs-actual for a bank, with the assumptions listed.
 
-    Missing figures stay null and carry ``missing as of <date>``. Nothing here
+    Missing figures stay null and carry ``חסר נכון ל-<date>``. Nothing here
     is replaced with 0.
     """
     forecast = (view or {}).get("cash_forecast") or {}

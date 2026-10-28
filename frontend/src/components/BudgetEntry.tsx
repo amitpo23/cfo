@@ -24,6 +24,16 @@ type Assumption = {
   source: string | null;
   status: string;
   missing_label: string | null;
+  as_of?: string | null;
+};
+type LineUpdate = {
+  id: string;
+  label?: string;
+  category?: string;
+  kind?: string;
+  month: string;
+  status: string;
+  amount?: number;
 };
 type LinesPayload = {
   lines: BudgetLine[];
@@ -106,9 +116,20 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   });
 
   function save() {
-    const updates = Object.entries(drafts).map(([id, raw]) => {
+    const updates = Object.entries(drafts).map(([id, raw]): LineUpdate => {
       const text = raw.trim();
       const assumption = monthAssumptions.find((row) => row.id === id);
+      if (assumption?.kind === 'opening_balance') {
+        const when = assumption.as_of && assumption.as_of.length >= 10 ? assumption.as_of.slice(0, 10) : `${key}-01`;
+        const target = {
+          id: 'opening_balance',
+          label: assumption.label_he,
+          category: 'opening_balance',
+          kind: 'financing',
+        };
+        if (text === '' || text === 'none') return { ...target, month: when, status: 'missing' };
+        return { ...target, month: when, status: 'filled', amount: Number(text) };
+      }
       const line = assumption ? ASSUMPTION_LINE[assumption.kind] : null;
       const target = line ? {
         id: `assumption:${assumption!.kind}`,
@@ -118,7 +139,7 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
       } : { id };
       if (text === '' || text === 'none') return { ...target, month: key, status: 'missing' };
       return { ...target, month: key, status: 'filled', amount: Number(text) };
-    }).filter((update) => update.status === 'missing' || update.status === 'none' || Number.isFinite(update.amount as number));
+    }).filter((update) => update.status === 'missing' || update.status === 'none' || Number.isFinite(update.amount));
     if (updates.length === 0) {
       setMessage('אין שינוי לשמירה');
       return;
@@ -179,7 +200,7 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
 
       <div className={`rounded-xl border p-5 ${card}`}>
         <h2 className="text-lg font-semibold mb-1">הנחות עבודה</h2>
-        <p className="text-sm text-gray-500 mb-3">הכנסות, שכר ומצבת, ספקים, רכב, ריבית, החזרי קרן ויתרת פתיחה. חסר אינו 0.</p>
+        <p className="text-sm text-gray-500 mb-3">הכנסות, שכר ומצבת, ספקים, רכב, ריבית, החזרי קרן ויתרת פתיחה. חסר אינו 0, ומוצג כחסר נכון לתאריך. ספקים נפרעים בסוף החודש העוקב: ספטמבר ב־1/11, אוקטובר ב־30/11, נובמבר ב־31/12, דצמבר ב־31/1.</p>
         <table className="w-full text-sm mb-2">
           <thead>
             <tr className="text-right border-b">
@@ -196,7 +217,7 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
                 <td>{row.source ? (SOURCE_HE[row.source] ?? row.source) : '—'}</td>
                 <td>{row.missing_label ?? (row.status === 'assumption' ? 'הנחת בעלים' : row.status === 'confirmed' ? 'מאושר' : row.status)}</td>
                 <td>
-                  {ASSUMPTION_LINE[row.kind] ? (
+                  {ASSUMPTION_LINE[row.kind] || row.kind === 'opening_balance' ? (
                     <input
                       className={input + ' w-40'}
                       value={drafts[row.id] !== undefined ? drafts[row.id] : (row.amount ?? '')}

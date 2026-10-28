@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { EmptyState } from './dashboardUi';
+import { EmptyState, missingAsOf } from './dashboardUi';
 
 // The Eliav tool's tabs inside /d/: liquidity and obligations, forecast,
-// budget parameters and share links. Unknown amounts are shown as "לא ידוע".
+// budget parameters and share links. A missing amount is "חסר נכון ל-<תאריך>".
 
 export type Debt = {
   label: string; amount: number | null; as_of?: string | null; entity?: string | null; note?: string | null;
@@ -114,8 +114,8 @@ export const DEFAULT_PARAMETERS: Parameters = {
   scenario: 'בסיס', horizonMonths: 6, revenueGrowthPct: 0, costGrowthPct: 0, vatRate: 0.18,
 };
 
-export function money(value: number | null | undefined): string {
-  if (value === null || value === undefined) return 'לא ידוע';
+export function money(value: number | null | undefined, asOf?: string | null): string {
+  if (value === null || value === undefined) return missingAsOf(asOf);
   return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(value);
 }
 
@@ -125,7 +125,7 @@ function cardTotal(summary: CardSummary, field: 'balance' | 'credit_limit' | 'av
   const complete = summary[field];
   const missing = typeof unknown === 'number' ? unknown : (complete == null ? 1 : 0);
   if (missing > 0) {
-    if (known == null) return 'לא ידוע';
+    if (known == null) return missingAsOf();
     return `${money(known)} (חלקי — ${missing} לא ידועים)`;
   }
   return money(complete ?? null);
@@ -164,7 +164,7 @@ const BALANCE_SOURCES: Record<string, string> = {
 export function upcomingAmount(item: Upcoming): string {
   if (item.amount !== null && item.amount !== undefined) return money(item.amount);
   if (item.reference_amount !== null && item.reference_amount !== undefined) return `מסגרת ${money(item.reference_amount)}`;
-  return 'לא ידוע';
+  return missingAsOf(item.date);
 }
 
 const ACCOUNT_KINDS: Record<string, string> = {
@@ -190,11 +190,10 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
         <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>
             <dt className="text-sm text-stone-500">יתרת עו״ש</dt>
-            <dd className="text-xl">{partial ? `${money(section.balance_known)} (חלקי)` : money(balance)}</dd>
+            <dd className="text-xl">{partial ? `${money(section.balance_known)} (חלקי)` : money(balance, asOf)}</dd>
             {balance == null && (section.stale_balances ?? []).length ? (
               <dd className="text-xs text-stone-500">
-                לא ידוע
-                {(section.stale_balances ?? []).map((row) => row.as_of ? ` · נכון ל־${row.as_of}` : ' · בלי תאריך').join('')}
+                {(section.stale_balances ?? []).map((row) => missingAsOf(row.as_of)).join(' · ')}
               </dd>
             ) : null}
             {asOf && !partial && balance != null ? <dd className="text-xs text-stone-500">נכון ל־{asOf}</dd> : null}
@@ -202,7 +201,7 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
           </div>
           <div>
             <dt className="text-sm text-stone-500">מסגרת אשראי</dt>
-            <dd className="text-xl">{combined && section.limit === null && section.limit_known !== null && section.limit_known !== undefined ? `${money(section.limit_known)} (חלקי)` : money(limit)}</dd>
+            <dd className="text-xl">{combined && section.limit === null && section.limit_known !== null && section.limit_known !== undefined ? `${money(section.limit_known, asOf)} (חלקי)` : money(limit, asOf)}</dd>
           </div>
           <div>
             <dt className="text-sm text-stone-500">פנוי עד המסגרת</dt>
@@ -242,11 +241,11 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
                 <tr key={month.month}>
                   <td>{month.month}</td>
                   <td>{month.days}</td>
-                  <td>{money(month.min)}</td>
+                  <td>{money(month.min, month.last_date ?? month.month)}</td>
                   <td>{month.negative_days}</td>
-                  <td>{month.beyond_limit_days ?? 'לא ידוע'}</td>
+                  <td>{month.beyond_limit_days ?? missingAsOf(month.last_date ?? month.month)}</td>
                   <td>
-                    {money(month.last)}
+                    {money(month.last, month.last_date ?? month.month)}
                     {month.last_date ? <div className="text-xs text-stone-500">נצפה {month.last_date}</div> : null}
                   </td>
                 </tr>
@@ -410,7 +409,7 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
               <p className="mt-1">
                 {section.card_activity.defined && section.card_activity.amount !== null && section.card_activity.amount !== undefined
                   ? `${section.card_activity.label ?? 'עסקאות'}: ${money(section.card_activity.amount)} · ${section.card_activity.count ?? 0} תנועות`
-                  : 'הסכום לא ידוע'}
+                  : missingAsOf()}
               </p>
             </div>
           ) : null}
@@ -490,7 +489,7 @@ export function ForecastPanel({ forecast }: { forecast: Forecast | null | undefi
                   const cell = row.months[month];
                   return (
                     <td key={month}>
-                      {money(cell?.value)}
+                      {money(cell?.value, month)}
                       {cell?.source ? <div className="text-xs text-stone-500">{SOURCE_LABELS[cell.source] ?? cell.source}</div> : null}
                     </td>
                   );
@@ -500,7 +499,7 @@ export function ForecastPanel({ forecast }: { forecast: Forecast | null | undefi
             {(['result', 'cash_flow', 'cumulative_cash', 'projected_balance'] as const).map((key) => (
               <tr key={key} className="border-b border-stone-100 font-medium">
                 <td>{{ result: 'תוצאה', cash_flow: 'תזרים (קירוב)', cumulative_cash: 'תזרים מצטבר', projected_balance: 'יתרה צפויה' }[key]}</td>
-                {forecast.months.map((month) => <td key={month}>{money(forecast.totals[month]?.[key])}</td>)}
+                {forecast.months.map((month) => <td key={month}>{money(forecast.totals[month]?.[key], month)}</td>)}
               </tr>
             ))}
           </tbody>
@@ -509,7 +508,7 @@ export function ForecastPanel({ forecast }: { forecast: Forecast | null | undefi
       {forecast.cash_rules ? (
         <div className="mt-6 overflow-x-auto">
           <h3 className="font-medium">תזרים לפי הכללים</h3>
-          <p className="mt-1 text-sm text-stone-600">הכנסה ושכר מהתקציב. ספקים בסוף החודש העוקב; שבת נדחית ליום ראשון. חסר נשאר לא ידוע.</p>
+          <p className="mt-1 text-sm text-stone-600">הכנסה ושכר מהתקציב. ברירת המחדל לספקים היא סוף החודש העוקב: ספטמבר נפרע ב־1/11 (31/10 שבת), אוקטובר ב־30/11, נובמבר ב־31/12, דצמבר ב־31/1. שבת נדחית ליום ראשון פעם אחת. שוטף+30 הוא חלופה לארגון, ומשאיר את ספטמבר ב־30/10. חסר נשאר חסר נכון לתאריך, לא 0.</p>
           <table className="mt-3 d-table">
             <thead><tr><Th>סעיף</Th>{forecast.months.map((month) => <Th key={month}>{month}</Th>)}</tr></thead>
             <tbody>
@@ -520,7 +519,7 @@ export function ForecastPanel({ forecast }: { forecast: Forecast | null | undefi
                     const cell = forecast.cash_rules?.months[month]?.[row.key];
                     return (
                       <td key={month} title={cell?.label || cell?.rule || ''}>
-                        {money(cell?.amount)}
+                        {money(cell?.amount, month)}
                         {cell?.source ? <div className="text-xs text-stone-500">{SOURCE_LABELS[cell.source] ?? cell.source}</div> : null}
                       </td>
                     );
@@ -805,7 +804,7 @@ export function itemFromDraft(kind: EvidenceKind, draft: EvidenceDraft, original
 }
 
 function evidenceCell(field: EvidenceField, value: unknown): string {
-  if (value === null || value === undefined || value === '') return field.type === 'amount' ? 'לא ידוע' : '—';
+  if (value === null || value === undefined || value === '') return field.type === 'amount' ? missingAsOf() : '—';
   return field.type === 'amount' && typeof value === 'number' ? money(value) : String(value);
 }
 
@@ -848,7 +847,7 @@ export function LiquidityEvidenceCard({
   return (
     <Card title="ראיות נזילות">
       <p className="mt-2 text-sm text-stone-600">
-        מסגרות, הלוואות, צ׳קים דחויים ומועדים שאינם מגיעים מהבנק. סכום שלא ידוע נשאר ריק ומוצג כ"לא ידוע". רק בעלי הדשבורד יכולים לשנות.
+        מסגרות, הלוואות, צ׳קים דחויים ומועדים שאינם מגיעים מהבנק. סכום שלא ידוע נשאר ריק ומוצג כחסר נכון לתאריך. רק בעלי הדשבורד יכולים לשנות.
       </p>
       <div className="mt-3 flex flex-wrap gap-2 text-sm" role="tablist">
         {EVIDENCE_KINDS.map((entry) => (

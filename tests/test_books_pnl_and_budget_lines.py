@@ -412,6 +412,34 @@ def test_budget_entry_writes_plan_lines_and_the_dashboard_forecast(client, fresh
     assert forecast["value"] == 3210.0
 
 
+def test_budget_entry_saves_a_negative_opening_balance(client, fresh_org):
+    owner = fresh_org()
+    dashboard_id = _create(client, owner["headers"], owner["org_id"], "opening-input")
+    saved = client.put("/api/financial/budget/lines", headers=owner["headers"], json={"updates": [{
+        "id": "opening_balance",
+        "label": "יתרת פתיחה",
+        "category": "opening_balance",
+        "kind": "financing",
+        "month": "2026-10-28",
+        "status": "filled",
+        "amount": -12000,
+    }]})
+    assert saved.status_code == 200, saved.text
+    lines = client.get("/api/financial/budget/lines", headers=owner["headers"], params={
+        "year": 2026, "from_month": 10, "to_month": 10,
+    })
+    assert lines.status_code == 200, lines.text
+    opening = next(row for row in lines.json()["data"]["assumptions"] if row["kind"] == "opening_balance")
+    assert opening["amount"] == -12000.0
+    assert opening["source"] == "owner"
+    plan = client.get(f"/api/dashboards/{dashboard_id}/plan", headers=owner["headers"])
+    rows = plan.json()["payload"]["liquidityEvidence"]["openingBalances"]
+    assert rows == [{
+        "date": "2026-10-28", "amount": -12000.0, "source": "assumption by owner",
+        "organizationId": owner["org_id"],
+    }]
+
+
 def test_super_admin_with_a_single_active_org_skips_the_chooser(client, platform_admin):
     from cfo.models import Organization
 

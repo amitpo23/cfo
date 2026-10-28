@@ -3,6 +3,17 @@
 // the loading skeleton and the empty state. Sections use .d-card / .d-table (index.css).
 import type { ReactNode } from 'react';
 
+export function missingAsOf(asOf?: string | null): string {
+  if (typeof asOf === 'string') {
+    const day = asOf.match(/^(\d{4}-\d{2}-\d{2})/)?.[1]
+      ?? (asOf.match(/^\d{4}-\d{2}$/) ? `${asOf}-01` : null);
+    if (day) return `חסר נכון ל-${day}`;
+  }
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return `חסר נכון ל-${today}`;
+}
+
 export function DashboardFrame({ title, subtitle, children }: { title: string; subtitle?: string | null; children: ReactNode }) {
   return (
     <main dir="rtl" className="min-h-screen bg-navy-50 text-stone-900">

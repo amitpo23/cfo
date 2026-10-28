@@ -1,10 +1,11 @@
 """Cash rules for the 13-week forecast and the monthly cash lines.
 
 The forecast starts at the known cash position. Supplier payments follow
-``cashflowSettings.supplierTermsMode``. The default, until the owner confirms
-otherwise, is ``eom_plus_30_days`` (September -> 30/10). ``end_of_next_month``
-is the other mode (September -> 31/10, then Sunday 1/11 because that day is a
-Saturday). Both modes move Saturday cash to the next Sunday, once. Salary budget lines win. ``plan.payroll`` fills a month only when that month
+``cashflowSettings.supplierTermsMode``. The default is ``end_of_next_month``:
+September -> 31/10, then Sunday 1/11 because that day is a Saturday; October
+-> 30/11; November -> 31/12; December -> 31/1. ``eom_plus_30_days`` is the
+optional per-org alternative (September -> 30/10). Both modes move Saturday
+cash to the next Sunday, once. Salary budget lines win. ``plan.payroll`` fills a month only when that month
 has no salary line. Pay day is ``PAYROLL_DAY`` (the 10th). Expected income is
 the budget's revenue lines, which ``/budget-entry`` stores on ``plan.budgetLines``.
 A bridge loan is repaid on its own maturity against a receipt the same day.
@@ -41,7 +42,7 @@ UNKNOWN_HE = {
 
 RULES = {
     "opening": "today_position",
-    "suppliers": "eom_plus_30_days",
+    "suppliers": "end_of_next_month",
     "payroll": "budget_payroll_definition",
     "income": "budget_income",
     "short_loans": "close_on_maturity_against_receipt",

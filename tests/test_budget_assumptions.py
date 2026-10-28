@@ -30,9 +30,9 @@ def test_every_working_assumption_is_listed_and_missing_is_not_zero():
     }
     income = next(row for row in rows if row["kind"] == "income")
     assert income["amount"] is None
-    assert income["missing_label"] == "missing as of 2026-10-28"
+    assert income["missing_label"] == "חסר נכון ל-2026-10-28"
     assert income["amount"] != 0
-    assert missing_label(AS_OF) == "missing as of 2026-10-28"
+    assert missing_label(AS_OF) == "חסר נכון ל-2026-10-28"
 
 
 def test_the_owner_can_add_change_and_delete_an_assumption():
@@ -45,7 +45,7 @@ def test_the_owner_can_add_change_and_delete_an_assumption():
     plan = upsert_assumption(plan, kind="income", month="2026-12", amount=None, as_of=AS_OF)
     cleared = next(row for row in list_assumptions(plan, ["2026-12"], as_of=AS_OF) if row["kind"] == "income")
     assert cleared["amount"] is None
-    assert cleared["missing_label"] == "missing as of 2026-10-28"
+    assert cleared["missing_label"] == "חסר נכון ל-2026-10-28"
 
 
 def test_december_budget_shows_up_in_the_forecast_outflows():
@@ -80,6 +80,6 @@ def test_the_bank_pack_lists_assumptions_and_does_not_zero_a_missing_pnl():
     assumptions = list_assumptions(None, ["2026-12"], as_of=AS_OF)
     pack = bank_pack(_view(), assumptions, as_of=AS_OF)
     assert pack["pnl"]["revenue"]["amount"] is None
-    assert pack["pnl"]["revenue"]["missing_label"] == "missing as of 2026-10-28"
+    assert pack["pnl"]["revenue"]["missing_label"] == "חסר נכון ל-2026-10-28"
     assert pack["assumptions"]
     assert pack["provider_calls"] == 0

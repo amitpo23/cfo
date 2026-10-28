@@ -5,16 +5,17 @@ Worked week, Sunday 25/10/2026–Friday 30/10/2026, opening dated 28/10/2026
 are still ahead of the opening and inside this Sunday–Friday week, so
 October's budget income of 62,000 contributes 62,000 × 2/31 = 4,000 here.
 31/10 is a Saturday; its 2,000 is taken on Sunday 01/11 and is not in this
-week. The default supplier mode is eom_plus_30_days, so September's 30,000
-is paid on 30/10. end_of_next_month is a per-org setting and is not the default.
+week. The default supplier mode is end_of_next_month, so September's 30,000
+is contracted for Saturday 31/10 and paid on Sunday 1/11, outside this week.
+eom_plus_30_days is an optional per-org alternative and still pays 30/10.
 Checking facility 50,000 is headroom, not part of the balance.
 
     opening                         -12,000   accounts, as of 28/10
     income 29–30/10                  +4,000   plan.budgetLines
-    suppliers, supply 2026-09       -30,000   due 30/10 (eom_plus_30_days)
-    net                             -26,000
-    closing                         -38,000
-    headroom                 50,000 - 38,000 = 12,000   not a breach
+    suppliers, supply 2026-09            0   due 01/11 (end_of_next_month)
+    net                              +4,000
+    closing                          -8,000
+    headroom                 50,000 - 8,000 = 42,000   not a breach
 
 Payroll of 18,000 is the plan's payroll definition, paid on the 10th, so it
 lands on 10/11, not in this week. The bridge of 61,000 closes on 25/11
@@ -223,28 +224,37 @@ def test_the_forecast_starts_at_todays_position_and_ignores_cash_already_in_it()
     assert result["engine"] == "cashflow_source"
 
 
-def test_default_supplier_mode_pays_september_on_30_october():
-    week = _week(_run(), "2026-10-25")
-    supplier = _item(_run(), "שוטף 30")
-
-    assert supplier["date"] == "2026-10-30"
-    assert supplier["amount"] == -30000.0
-    assert supplier["source"] == "plan.budgetLines"
-    assert supplier["rule"] == "eom_plus_30_days"
-    assert week["out"] == -30000.0
-
-
-def test_end_of_next_month_moves_september_off_saturday_to_1_november():
-    plan = _plan(cashflowSettings={"supplierTermsMode": "end_of_next_month"})
-    october = _week(_run(plan=plan), "2026-10-25")
-    supplier = _item(_run(plan=plan), "סוף החודש העוקב")
+def test_default_supplier_mode_pays_september_on_1_november():
+    result = _run()
+    week = _week(result, "2026-10-25")
+    supplier = _item(result, "סוף החודש העוקב")
 
     assert date(2026, 10, 31).weekday() == 5
     assert supplier["date"] == "2026-11-01"
     assert supplier["amount"] == -30000.0
+    assert supplier["source"] == "plan.budgetLines"
     assert supplier["rule"] == "end_of_next_month"
-    assert october["out"] == 0.0
-    assert all(item.get("date") != "2026-10-31" for week in _run(plan=plan)["weeks"] for item in week["items"])
+    assert week["out"] == 0.0
+    assert week["net"] == 4000.0
+    assert week["closing"] == -8000.0
+    assert week["headroom"] == 42000.0
+    assert all(item.get("date") != "2026-10-31" for item in week["items"])
+    assert forecast_rules.RULES["suppliers"] == "end_of_next_month"
+
+
+def test_eom_plus_30_days_still_pays_september_on_30_october():
+    plan = _plan(cashflowSettings={"supplierTermsMode": "eom_plus_30_days"})
+    result = _run(plan=plan)
+    week = _week(result, "2026-10-25")
+    supplier = _item(result, "שוטף 30")
+
+    assert supplier["date"] == "2026-10-30"
+    assert supplier["amount"] == -30000.0
+    assert supplier["rule"] == "eom_plus_30_days"
+    assert week["out"] == -30000.0
+    assert week["net"] == -26000.0
+    assert week["closing"] == -38000.0
+    assert week["headroom"] == 12000.0
 
 
 def test_salary_budget_lines_win_over_plan_payroll():
@@ -384,11 +394,11 @@ def test_the_worked_week_of_25_to_31_october():
     assert week["start"] == "2026-10-25"
     assert week["end"] == "2026-10-30"
     assert week["in"] == 4000.0
-    assert week["out"] == -30000.0
-    assert week["net"] == -26000.0
-    assert week["closing"] == -38000.0
+    assert week["out"] == 0.0
+    assert week["net"] == 4000.0
+    assert week["closing"] == -8000.0
     assert week["limit"] == 50000.0
-    assert week["headroom"] == 12000.0
+    assert week["headroom"] == 42000.0
     rolled = next(item for item in _week(_run(), "2026-11-01")["items"] if item["label"] == "הכנסה לפי התקציב")
     assert rolled["amount"] == 2000.0
     assert _run()["first_breach"] is None

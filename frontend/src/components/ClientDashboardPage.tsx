@@ -14,7 +14,7 @@ import {
   CashForecast, CashForecastItemsCard, CashForecastPanel, Overdue, cashForecastItemsFromPayload,
 } from './cashForecastTab';
 import { BalanceSheetView, BalanceSheetCard } from './balanceSheetTab';
-import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs } from './dashboardUi';
+import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs, missingAsOf } from './dashboardUi';
 import { safeLoginHref } from './dashboardReturn';
 import { DASHBOARD_POLL_MS, revisionToken, shouldReloadView } from './dashboardLive';
 
@@ -433,8 +433,8 @@ export function SourcesCard({ sources }: { sources: Sources | null | undefined }
                 {withEntity ? <td>{item.entity ?? '—'}</td> : null}
                 <td>{item.source_label}</td>
                 <td>{item.kind === 'bank' ? item.label : item.kind_label}</td>
-                <td>{item.last_date ?? 'לא ידוע'}</td>
-                <td>{item.last_sync ? item.last_sync.slice(0, 16).replace('T', ' ') : 'לא ידוע'}</td>
+                <td>{item.last_date ?? missingAsOf()}</td>
+                <td>{item.last_sync ? item.last_sync.slice(0, 16).replace('T', ' ') : missingAsOf()}</td>
                 <td>{item.rows.toLocaleString('he-IL')}</td>
                 <td className={`py-2 ${STATUS_TONE[item.status] ?? ''}`}>
                   {item.status_label}{item.age_days !== null ? ` (${item.age_days} ימים)` : ''}
@@ -449,8 +449,8 @@ export function SourcesCard({ sources }: { sources: Sources | null | undefined }
   );
 }
 
-function cell(value: number | null | undefined): string {
-  return value === null || value === undefined ? 'לא ידוע' : money(value);
+function cell(value: number | null | undefined, asOf?: string | null): string {
+  return money(value, asOf);
 }
 
 // Cash flow by line item × month: actual months from filed BOOKED rows, then the forecast months.
@@ -493,16 +493,16 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
                 ...rows.map((line) => (
                   <tr key={line.id}>
                     <td className={`py-1 ${line.review ? 'text-amber-700' : ''}`}>{line.label}</td>
-                    {months.map((month) => <td key={month}>{cell(line.values[month])}</td>)}
+                    {months.map((month) => <td key={month}>{cell(line.values[month], month)}</td>)}
                     {blank}
                   </tr>
                 )),
                 <tr key={`total-${group.id}`} className="border-b font-medium">
                   <td>סה״כ {group.label}</td>
-                  {months.map((month) => <td key={month}>{cell(totals[group.id]?.[month])}</td>)}
+                  {months.map((month) => <td key={month}>{cell(totals[group.id]?.[month], month)}</td>)}
                   {forecastMonths.map((month) => (
                     <td key={`f-${month}`} className={`bg-stone-50 py-1 ${forecastRow ? '' : 'font-normal text-stone-400'}`}>
-                      {forecastRow ? cell(forecastRow[month]) : 'לא נחזה'}
+                      {forecastRow ? cell(forecastRow[month], month) : 'לא נחזה'}
                     </td>
                   ))}
                 </tr>,
@@ -513,17 +513,17 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
                 <td>{line.label}</td>
                 {months.map((month) => <td key={month} className="text-stone-400">—</td>)}
                 {forecastMonths.map((month) => (
-                  <td key={`f-${month}`} className="bg-stone-50 py-1" title={line.values[month] == null ? (line.unknown ?? 'לא ידוע') : ''}>
-                    {cell(line.values[month])}
+                  <td key={`f-${month}`} className="bg-stone-50 py-1" title={line.values[month] == null ? (line.unknown ?? missingAsOf(month)) : ''}>
+                    {cell(line.values[month], month)}
                   </td>
                 ))}
               </tr>
             ))}
             <tr className="font-semibold">
               <td>תזרים נטו</td>
-              {months.map((month) => <td key={month}>{cell(totals.net?.[month])}</td>)}
+              {months.map((month) => <td key={month}>{cell(totals.net?.[month], month)}</td>)}
               {forecastMonths.map((month) => (
-                <td key={`f-${month}`} className="bg-stone-50 py-2">{cell(forecast?.rows.net?.[month])}</td>
+                <td key={`f-${month}`} className="bg-stone-50 py-2">{cell(forecast?.rows.net?.[month], month)}</td>
               ))}
             </tr>
           </tbody>
@@ -1033,14 +1033,14 @@ function StatusKpis({ view, reviewCount }: { view: DashboardView; reviewCount: n
   const balance = liquidity ? (liquidity.position ? liquidity.position.balance : liquidity.balance) : null;
   const stale = liquidity?.stale_balances ?? [];
   const staleNote = balance == null && stale.length
-    ? `לא ידוע${stale.filter((row) => row.as_of).map((row) => ` (נכון ל־${row.as_of})`).join('')}`
+    ? missingAsOf(stale.map((row) => row.as_of).filter(Boolean).sort()[0] ?? liquidity?.position?.as_of ?? liquidity?.as_of)
     : null;
   const partial = !liquidity?.position && (balance === null || balance === undefined)
     && liquidity?.balance_known !== null && liquidity?.balance_known !== undefined;
   const items = [
     { label: 'הכנסות בתקופה', value: money(view.pnl?.total_revenue) },
     { label: 'הוצאות בתקופה', value: money(view.pnl?.total_expenses) },
-    { label: 'יתרת עו״ש', value: staleNote ?? (partial ? `${money(liquidity?.balance_known)} (חלקי)` : money(balance ?? null)) },
+    { label: 'יתרת עו״ש', value: staleNote ?? (partial ? `${money(liquidity?.balance_known, liquidity?.position?.as_of ?? liquidity?.as_of)} (חלקי)` : money(balance ?? null, liquidity?.position?.as_of ?? liquidity?.as_of)) },
     { label: 'התחייבויות ידועות', value: money(liquidity?.debts_known_total ?? null) },
     ...(reviewCount === null ? [] : [{ label: 'תנועות לבירור', value: String(reviewCount), tone: reviewCount > 0 ? 'warn' as const : null }]),
   ];
