@@ -213,6 +213,39 @@ def test_manual_and_revenue_share_keys_allocate_the_whole_shared_total(fresh_org
     assert _division(empty_august, "pizza")["allocated_shared"] is None
 
 
+def test_june_keeps_invoice_20055_and_credit_note_2008_when_the_journal_has_them(fresh_org):
+    """Documents win, but a journal document number that is not on an invoice is not dropped."""
+    from cfo.services.dashboards.books_pnl import books_pnl
+
+    org_id = fresh_org()["org_id"]
+    plan = {"journalAccountMap": {"40000": "revenue"}}
+    with SessionLocal() as db:
+        db.add(Invoice(
+            organization_id=org_id, invoice_number="100", issue_date=date(2026, 6, 2),
+            status=InvoiceStatus.SENT, subtotal=Decimal("1000"), tax=Decimal("0"), total=Decimal("1000"),
+        ))
+        db.add(JournalEntry(
+            organization_id=org_id, source="reviewed_local_import", external_id="j-20055",
+            entry_date=date(2026, 6, 30), memo="חשבונית 20055",
+            lines=[
+                {"account": "3000", "debit": 70483, "credit": 0},
+                {"account": "40000", "debit": 0, "credit": 70483, "reference": "20055"},
+            ],
+        ))
+        db.add(JournalEntry(
+            organization_id=org_id, source="reviewed_local_import", external_id="j-2008",
+            entry_date=date(2026, 6, 30), memo="זיכוי 2008",
+            lines=[
+                {"account": "40000", "debit": 11092, "credit": 0, "reference": "2008"},
+                {"account": "3000", "debit": 0, "credit": 11092},
+            ],
+        ))
+        db.commit()
+        report = books_pnl(db, org_id, start=date(2026, 6, 1), end=date(2026, 6, 30), plan=plan)
+    june = report["months"][0]
+    assert june["revenue"] == 1000 + 70483 - 11092
+
+
 def test_seed_payroll_is_the_four_filled_lines_and_the_rest_stay_missing():
     import json
     from pathlib import Path

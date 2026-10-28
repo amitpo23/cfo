@@ -618,14 +618,16 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
     for account in checking:
         bal = _balance(account)
         bal_date = account.balance_as_of.date() if account.balance_as_of else None
-        if account.source == "open_finance" and bal is not None and (
+        observed = _num(account.balance)
+        if account.source == "open_finance" and observed is not None and (
             bal_date is None or (today - bal_date).days > 2
         ):
             stale_balances.append({
                 "account_id": account.id,
+                "name": account.name,
                 "as_of": bal_date.isoformat() if bal_date else None,
                 "balance": None,
-                "observed_balance": bal,
+                "observed_balance": observed,
                 "status": "unknown",
                 "reason": "יתרת Open Finance ישנה מיומיים" if bal_date else "אין תאריך ליתרת Open Finance",
             })
@@ -1237,6 +1239,41 @@ def combine(sections: list[dict]) -> dict:
         "advances": advances,
         "balance_vs_flow_note": BALANCE_VS_FLOW_NOTE,
         "debt_service": [service[key] for key in sorted(service)],
+        "provider_calls": 0,
+    }
+
+
+def checking_snapshot(db, organization_id: int, *, today: date | None = None) -> dict:
+    """The one checking balance and its date.
+
+    The figure is the account snapshot, never a snapshot plus a later cheque.
+    When booked transactions stop before that date, the balance stays the
+    snapshot and ``transactions_missing_after`` names the last transaction.
+    """
+    today = today or date.today()
+    section = build_liquidity(
+        db, organization_id, date(today.year, today.month, 1), today,
+        classified=[], today=today,
+    )
+    position = section["position"]
+    from sqlalchemy import func
+    from ...models import BankTransaction
+    last = (
+        db.query(func.max(BankTransaction.transaction_date))
+        .filter(BankTransaction.organization_id == organization_id)
+        .scalar()
+    )
+    as_of = position.get("as_of")
+    through = last.isoformat() if last is not None else None
+    missing = through if as_of and through and through < as_of else None
+    balance = position.get("balance")
+    return {
+        "balance": balance,
+        "as_of": as_of,
+        "transactions_through": through,
+        "transactions_missing_after": missing,
+        "stale_balances": section.get("stale_balances") or [],
+        "status": "unknown" if balance is None else ("partial" if missing else "ready"),
         "provider_calls": 0,
     }
 

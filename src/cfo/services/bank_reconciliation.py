@@ -61,15 +61,22 @@ def reconcile(
     outflow_pool = list(bills) + list(expenses or [])
     matches: list[Match] = []
 
-    # Process larger amounts first — they are the least ambiguous.
+    # One receipt is offered against one document: the best score only.
+    # A second invoice of the same amount does not become another candidate
+    # of the same receipt. Two receipts may still both name one document;
+    # that stays a review list and neither is confirmed.
     for txn in sorted(bank_txns, key=lambda t: abs(t.amount), reverse=True):
         pool = inflow_pool if txn.amount > 0 else outflow_pool
+        best: Optional[tuple[float, DocLite]] = None
         for doc in pool:
             score = _score(txn, doc, amount_tol=amount_tol, date_window=date_window)
-            if score is None:
+            if score is None or score < min_score:
                 continue
-            if score >= min_score:
-                matches.append(Match(txn.id, doc.entity_type, doc.id, round(score, 3), abs(txn.amount)))
+            if best is None or score > best[0]:
+                best = (score, doc)
+        if best is not None:
+            score, doc = best
+            matches.append(Match(txn.id, doc.entity_type, doc.id, round(score, 3), abs(txn.amount)))
 
     unmatched_docs = [
         {"entity_type": d.entity_type, "entity_id": d.id, "amount": d.amount}

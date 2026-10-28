@@ -38,18 +38,24 @@ def _txn(**kwargs):
     return filing.Txn(**defaults)
 
 
-def test_cheque_discounting_is_income_not_financing():
+def test_cheque_discounting_is_financing_until_it_matches_an_invoice():
+    """Advance in, repayment out. A collection belongs to the invoice's entity."""
     meta = filing.CATEGORIES["check_discounting"]
-    assert meta["group"] == "operating"
-    assert "מקדמה" in meta["label"]
-    assert "מימון" not in meta["label"]
-    txn = _txn(description="ניכיון שיקים", amount=1180.0)
-    filed = filing.classify(txn)
-    assert filed.category == "check_discounting"
-    statement = cash_statement.build_cash_statement([(txn, filed)], date(2026, 10, 1), date(2026, 10, 31))
-    line = next(item for item in statement["lines"] if item["id"] == "check_discounting")
-    assert line["group"] == "operating_in"
-    assert cash_basis_month([(txn, filed)])["revenue"] == pytest.approx(1000.0, abs=0.05)
+    assert meta["group"] == "financing"
+    advance = _txn(description="ניכיון שיקים", amount=132000.0, organization_id=6)
+    repay = _txn(description="צ'קים דחויים", amount=-70000.0, organization_id=6)
+    collected = _txn(description="צקים דחויים", amount=70483.0, organization_id=6)
+    invoices = [{
+        "organization_id": 2, "number": "20055", "date": "2026-06-30", "total": 70483.0,
+    }]
+    filed = filing.classify_all([advance, repay, collected], invoices=invoices)
+    assert filed[id(advance)].category == "loans_in"
+    assert filed[id(repay)].category == "loans_out"
+    assert filed[id(collected)].category == "intercompany"
+    assert filed[id(collected)].extra["customer_receipt_for"] == 2
+    assert filed[id(collected)].extra["invoice"] == "20055"
+    month = cash_basis_month([(collected, filed[id(collected)])])
+    assert month["revenue"] == 0.0
 
 
 def test_discounting_evidence_is_not_in_debts_known_total(fresh_org):

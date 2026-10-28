@@ -767,6 +767,34 @@ def classify_open_finance_account(
     }
 
 
+def _drop_cross_source_duplicates(rows: list) -> list:
+    """One movement that was imported twice, from two sources, is counted once.
+
+    Two rows of the same source, date and amount both stay: they can be two
+    real payments. The Open Finance copy wins when a second source repeats it.
+    """
+    groups: dict[tuple, list] = {}
+    order: list[tuple] = []
+    for row in rows:
+        amount = row.amount if isinstance(row.amount, Decimal) else Decimal(str(row.amount or 0))
+        key = (row.transaction_date, amount.quantize(Decimal("0.01")))
+        if key not in groups:
+            order.append(key)
+        groups.setdefault(key, []).append(row)
+    kept = []
+    for key in order:
+        group = groups[key]
+        sources = {getattr(row, "source", None) for row in group}
+        if len(sources) <= 1:
+            kept.extend(group)
+            continue
+        if any(getattr(row, "source", None) == "open_finance" for row in group):
+            kept.extend(row for row in group if getattr(row, "source", None) == "open_finance")
+        else:
+            kept.append(group[0])
+    return kept
+
+
 def cashflow_selection(db, org_id: int, start: date, end: date):
     """Rows that may be summed, plus the accounts withheld from that window.
 
@@ -784,6 +812,7 @@ def cashflow_selection(db, org_id: int, start: date, end: date):
     card_ids = card_account_ids(db, org_id)
     rows = [row for row in rows if counts_in_cash_flow(row, card_ids)]
     if not _org_has_reviewed_local_import(db, org_id):
+        rows = _drop_cross_source_duplicates(rows)
         return [(row.transaction_date, row.amount) for row in rows], None
     ctx = _classification_context(db, org_id)
     visible, excluded, matched, lines = _lines_from(db, rows, ctx)
@@ -805,7 +834,7 @@ def cashflow_row_objects(db, org_id: int, start: date, end: date) -> list:
     card_ids = card_account_ids(db, org_id)
     rows = [row for row in rows if counts_in_cash_flow(row, card_ids)]
     if not _org_has_reviewed_local_import(db, org_id):
-        return rows
+        return _drop_cross_source_duplicates(rows)
     ctx = _classification_context(db, org_id)
     return [row for row in rows if _decision(row, ctx)[0]]
 

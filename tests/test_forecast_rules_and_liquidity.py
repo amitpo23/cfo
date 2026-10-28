@@ -144,6 +144,61 @@ def test_combined_as_of_is_the_oldest_account_date_not_the_newest(fresh_org):
     assert section["position"]["as_of"] == "2026-10-27"
 
 
+def test_a_later_cheque_is_not_added_on_top_of_the_account_balance(fresh_org):
+    """Dashboard -71,947 was the bank -134,845.05 plus the 62,898 cheque again.
+
+    The stored snapshot is the balance. Missing transactions are named, not added.
+    """
+    from cfo.models import BankTransaction
+    from cfo.services.dashboards.liquidity import checking_snapshot
+
+    owner = fresh_org()
+    with SessionLocal() as db:
+        db.add(Account(
+            organization_id=owner["org_id"], name="הפועלים", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id="fg",
+            balance=Decimal("-134845.05"), credit_limit=None,
+            balance_as_of=datetime(2026, 10, 28), currency="ILS",
+        ))
+        db.add(BankTransaction(
+            organization_id=owner["org_id"], transaction_date=date(2026, 10, 13),
+            amount=Decimal("62898"), description="צקים דחויים", source="open_finance",
+            external_id="cheque-62898",
+        ))
+        db.commit()
+        snap = checking_snapshot(db, owner["org_id"], today=date(2026, 10, 28))
+    assert snap["balance"] == -134845.05
+    assert snap["as_of"] == "2026-10-28"
+    assert snap["transactions_missing_after"] == "2026-10-13"
+    assert snap["balance"] != round(-134845.05 + 62898, 2)
+
+
+def test_the_same_movement_from_two_sources_is_counted_once(fresh_org):
+    from cfo.models import BankTransaction
+    from cfo.services.bank_coverage import cashflow_selection
+
+    owner = fresh_org()
+    with SessionLocal() as db:
+        db.add(BankTransaction(
+            organization_id=owner["org_id"], transaction_date=date(2026, 8, 5),
+            amount=Decimal("1000"), description="הפקדה", source="open_finance",
+            external_id="of-1", raw_data={"status": "BOOKED"},
+        ))
+        db.add(BankTransaction(
+            organization_id=owner["org_id"], transaction_date=date(2026, 8, 5),
+            amount=Decimal("1000"), description="הפקדה", source="mizrahi_csv",
+            external_id="csv-1",
+        ))
+        db.add(BankTransaction(
+            organization_id=owner["org_id"], transaction_date=date(2026, 8, 5),
+            amount=Decimal("1000"), description="הפקדה שנייה", source="open_finance",
+            external_id="of-2", raw_data={"status": "BOOKED"},
+        ))
+        db.commit()
+        rows, _note = cashflow_selection(db, owner["org_id"], date(2026, 8, 1), date(2026, 8, 31))
+    assert sum(float(amount) for _day, amount in rows) == 2000.0
+
+
 def test_shotef_30_is_thirty_days_after_the_end_of_the_supply_month():
     assert forecast_rules.shotef_30(2026, 9) == date(2026, 10, 30)
     assert forecast_rules.shotef_30(2026, 10) == date(2026, 11, 30)

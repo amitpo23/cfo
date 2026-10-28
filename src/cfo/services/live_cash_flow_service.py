@@ -422,44 +422,23 @@ class LiveCashFlowService:
                 "לא ניתן לחשב יתרת מזומנים חיה."
             )
 
-        now = datetime.utcnow()
-        fresh: list[Account] = []
-        rejected: list[str] = []
-        max_age_hours = int(MAX_BALANCE_AGE.total_seconds() // 3600)
-        for a in accounts:
-            balance_as_of = _naive(a.balance_as_of)
-            synced_at = _naive(a.synced_at)
-            account_label = f"{a.name} (id={a.id})"
-
-            # Policy: a provider balance timestamp wins whenever present.
-            # A fresh account sync is acceptable only when balance_as_of is
-            # absent; observed_at never proves that the balance was refreshed.
-            ts = balance_as_of if balance_as_of is not None else synced_at
-            if ts is not None and (now - ts) <= MAX_BALANCE_AGE:
-                fresh.append(a)
-            else:
-                if ts is not None:
-                    timestamp_name = "balance_as_of" if balance_as_of is not None else "synced_at"
-                    rejected.append(
-                        f"{account_label}: {timestamp_name} ישנה מ-{max_age_hours} שעות"
-                    )
-                elif a.observed_at is not None:
-                    rejected.append(
-                        f"{account_label}: קיים observed_at בלבד, שאינו מעיד על עדכניות היתרה"
-                    )
-                else:
-                    rejected.append(
-                        f"{account_label}: חסרות חותמות balance_as_of ו-synced_at"
-                    )
-
-        if rejected:
+        from .dashboards.liquidity import checking_snapshot
+        snap = checking_snapshot(self.db, self.organization_id)
+        if snap["balance"] is None:
+            stale = snap["stale_balances"]
+            names = [row.get("name") for row in stale if row.get("name")]
+            dates = [row.get("as_of") for row in stale if row.get("as_of")]
+            if names or dates:
+                return None, (
+                    "יתרת Open Finance לא ידועה"
+                    + (": " + ", ".join(names) if names else "")
+                    + (". נכון ל־" + ", ".join(dates) if dates else "")
+                    + ". ישנה מ-48 שעות או בלי תאריך יתרה."
+                )
             return None, (
-                "יתרת המזומנים הארגונית אינה שלמה ולכן נפסלה (fail-closed). "
-                "החשבונות שנפסלו: " + "; ".join(rejected) + "."
+                "אין יתרת עו״ש ידועה — לא מחושב מספר מיתרה חלקית."
             )
-
-        total = sum((a.balance or Decimal("0")) for a in fresh)
-        return Decimal(total), None
+        return Decimal(str(snap["balance"])), None
 
     def _expected_open_amount(
         self, model, skip_statuses: list, as_of: date

@@ -388,6 +388,10 @@ def _journal_slices(db, organization_id: int, start: date, end: date, plan: dict
             if amount == 0:
                 continue
             division = _alias(division_map.get(code)) or CLARIFY
+            reference = str(line.get("reference") or line.get("document") or "")
+            if not reference and entry.memo:
+                found = re.search(r"\b(\d{3,})\b", entry.memo)
+                reference = found.group(1) if found else ""
             by_month.setdefault(key, []).append({
                 "kind": "journal",
                 "id": entry.id,
@@ -395,6 +399,7 @@ def _journal_slices(db, organization_id: int, start: date, end: date, plan: dict
                 "division": division,
                 "net": amount,
                 "account": code,
+                "reference": reference,
             })
     return by_month
 
@@ -466,6 +471,7 @@ def _books_pnl(db, organization_id: int, *, as_of: date | None = None, months: i
         return _alias(division_map.get(code)) if code else None
 
     docs: dict[str, list] = {}
+    invoice_numbers: dict[str, set[str]] = {}
 
     def _add(key: str, kind: str, row_id: int, side: str, net: Decimal, division: str):
         docs.setdefault(key, []).append({
@@ -476,6 +482,8 @@ def _books_pnl(db, organization_id: int, *, as_of: date | None = None, months: i
         if row.issue_date is None or not invoice_counts(row.status):
             continue
         key = f"{row.issue_date.year:04d}-{row.issue_date.month:02d}"
+        if row.invoice_number:
+            invoice_numbers.setdefault(key, set()).add(str(row.invoice_number))
         net = _net(row, "subtotal", "total", "tax")
         for division, amount in _slices(net, row.raw_data, row.line_items, None):
             _add(key, "invoice", row.id, "revenue", amount, division)
@@ -513,8 +521,17 @@ def _books_pnl(db, organization_id: int, *, as_of: date | None = None, months: i
         if month_docs:
             source = "documents"
             basis_label = BASIS_BOOKS
-            used = month_docs
-            journal_not_added = bool(journal_rows)
+            used = list(month_docs)
+            known_numbers = set(invoice_numbers.get(key, set()))
+            added_journal = False
+            for item in journal_rows:
+                reference = str(item.get("reference") or "")
+                if not reference or reference in known_numbers:
+                    continue
+                used.append(item)
+                known_numbers.add(reference)
+                added_journal = True
+            journal_not_added = bool(journal_rows) and not added_journal
         elif journal_rows:
             source = "journal"
             basis_label = BASIS_JOURNAL

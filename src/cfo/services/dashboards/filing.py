@@ -52,8 +52,8 @@ CATEGORIES: dict[str, dict] = {
     "loans_out": {"label": "החזרי הלוואות ומימון", "group": "financing", "dir": "out"},
     "check_discounting": {
         "label": "ניכיון שיקים (מקדמה על תקבולי לקוחות)",
-        "group": "operating",
-        "dir": "in",
+        "group": "financing",
+        "dir": "both",
     },
     "intercompany": {"label": "העברות בין ישויות", "group": "internal", "dir": "both"},
     "reversal": {"label": "חיובים שבוטלו והחזרם", "group": "internal", "dir": "both"},
@@ -70,7 +70,7 @@ def _re(pattern: str, flags: int = 0):
 _R = {
     "card_issuers_in": _re(r'מקס איט|ישראכרט|כאל|כא"ל|ויזה|אמריקן|לאומי קארד|סליקה|שב"א'),
     "card_issuers_out": _re(r'ויזה|כא"ל|כאל|ישראכרט|מקס איט|אמריקן|לאומי קארד'),
-    "check_discounting": _re(r"צ'קים דחויים|שיקים דחויים|ניכיון"),
+    "check_discounting": _re(r"צ['׳\"״]?קים דחויים|שיקים דחויים|ניכיון"),
     "loans_in": _re(r"הלואה קרן|הלוואה קרן|העמדת הלוואה|הלוואה-ז|הלואה-ז"),
     "loans_out": _re(r"הלוואה|הלואה|מימון ישיר|פרעון הלוואה|פיגור|קרן/כללי"),
     "interest": _re(r"ריבית|רבית"),
@@ -320,7 +320,7 @@ def txn_from_row(row) -> Txn:
 # categories feed each P&L line, and whether the bank amount carries VAT.
 REVENUE_CATS = (
     "sales_card", "sales_cash", "customer_receipts", "customer_checks",
-    "check_discounting", "other_income",
+    "other_income",
 )
 PNL_ROWS: list[dict] = [
     {"id": "revenue", "label": "הכנסות (סליקה, מזומן, לקוחות)", "side": "revenue", "cats": REVENUE_CATS, "vat": True},
@@ -334,6 +334,22 @@ PNL_ROWS: list[dict] = [
 # Rows that can hold wages or supplier money; a big unresolved amount hides their variance.
 UNASSIGNED_BLOCK = 5000.0
 BLOCKABLE = frozenset({"payroll", "suppliers"})
+
+
+def _invoice_for_amount(invoices, amount: float) -> dict | None:
+    """One receipt, one invoice. The first unused document of the same amount."""
+    for inv in invoices or []:
+        if inv.get("used"):
+            continue
+        try:
+            total = float(inv.get("total") or 0)
+        except (TypeError, ValueError):
+            continue
+        if total <= 0 or abs(total - amount) >= 1:
+            continue
+        inv["used"] = True
+        return inv
+    return None
 
 
 def _days(a: str, b: str) -> float:
@@ -361,9 +377,39 @@ def classify_all(
     def locked(t: Txn) -> bool:
         return out[id(t)].filed_by == "decision"
 
+    # A discounted-cheque line is never operating income.
+    # Advance (money in, no invoice) is financing. Repayment is financing out.
+    # A collection that equals an invoice is that invoice's customer receipt.
+    # Collected on another entity's bank, it is intercompany here and the
+    # receipt belongs to the invoice's organization — counted once.
+    for t in txns:
+        f = out[id(t)]
+        if locked(t) or f.category != "check_discounting":
+            continue
+        if t.amount < 0:
+            f.category = "loans_out"
+            f.filed_by = "rule:discount_repayment"
+            f.extra["financing"] = "repayment"
+            continue
+        match = _invoice_for_amount(invoices, t.amount)
+        if match is None:
+            f.category = "loans_in"
+            f.filed_by = "rule:discount_advance"
+            f.extra["financing"] = "advance"
+            continue
+        owner = match.get("organization_id")
+        f.extra["invoice"] = match.get("number")
+        f.extra["customer_receipt_for"] = owner
+        if owner not in (None, t.organization_id):
+            f.category = "intercompany"
+            f.filed_by = "rule:cheque_collected_for_other_entity"
+        else:
+            f.category = "customer_receipts"
+            f.filed_by = "rule:cheque_collection"
+
     # Invoice matching: inflows filed as other_in / bank_journal that equal an
     # invoice of the same organization (the tool does this for the chef only).
-    open_inv = [dict(i, used=False) for i in (invoices or []) if float(i.get("total") or 0) > 0]
+    open_inv = [dict(i, used=bool(i.get("used"))) for i in (invoices or []) if float(i.get("total") or 0) > 0]
     for t in txns:
         f = out[id(t)]
         if locked(t) or t.amount <= 0:
