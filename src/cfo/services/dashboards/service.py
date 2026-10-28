@@ -381,7 +381,8 @@ def _validate_evidence(evidence) -> None:
                     and (account is None or (isinstance(account, int) and not isinstance(account, bool))) \
                     and item.get("date") is not None and _optional_date(item.get("date")) \
                     and _number(item.get("amount"), low=-MAX_PLAN_AMOUNT, high=MAX_PLAN_AMOUNT) \
-                    and _short_text(item.get("source"), required=True, limit=300)
+                    and _short_text(item.get("source"), required=True, limit=300) \
+                    and (item.get("override") is None or isinstance(item.get("override"), bool))
             elif kind == "checks":
                 discounted = item.get("discounted")
                 ok = ok and _short_text(item.get("check"), required=True, limit=40) \

@@ -128,10 +128,15 @@ def _history_amounts(db, organization_id: int, year: int, months: list[int]) -> 
     return found
 
 
-def _assumptions(payload, year: int, from_month: int, to_month: int) -> list[dict]:
+def _assumptions(db, organization_id: int, payload, year: int, from_month: int, to_month: int) -> list[dict]:
     from .budget_assumptions import list_assumptions
+    from .liquidity import checking_snapshot
     months = [f"{year:04d}-{month:02d}" for month in range(from_month, to_month + 1)]
-    return list_assumptions(payload if isinstance(payload, dict) else None, months, as_of=date.today())
+    snap = checking_snapshot(db, organization_id)
+    return list_assumptions(
+        payload if isinstance(payload, dict) else None, months, as_of=date.today(),
+        bank_balance=snap.get("balance"), bank_as_of=snap.get("as_of"),
+    )
 
 
 def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: int) -> dict:
@@ -186,11 +191,16 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
                 if prior is not None:
                     status, amount = "filled", prior
                     source_name = "history"
+            warning = None
+            income = kind == "revenue" or str(raw.get("category") or "") in {"revenue", "sales", "income"}
+            if income and status == "filled":
+                warning = looks_like_placeholder(amount)
             by_month[key] = {
                 "status": status,
                 "status_he": STATUS_HE[status],
                 "amount": None if amount is None else _q(amount),
                 **({"source": source_name} if source_name else {}),
+                **({"placeholder_warning": warning} if warning else {}),
             }
             if status == "missing":
                 line_missing.append(key)
@@ -201,12 +211,16 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
         if all(cell["status"] == "none" for cell in by_month.values()):
             none += 1
             filled -= 1
+        line_warning = next((
+            cell["placeholder_warning"] for cell in by_month.values() if cell.get("placeholder_warning")
+        ), None)
         lines.append({
             "id": line_id,
             "label": raw.get("label") or line_id,
             "kind": "revenue" if kind == "revenue" else "cost",
             "category": raw.get("category"),
             "months": by_month,
+            **({"placeholder_warning": line_warning} if line_warning else {}),
         })
     wage_months = []
     for month in months:
@@ -243,7 +257,7 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
             "months": wage_months,
         },
         "provider_calls": 0,
-        "assumptions": _assumptions(payload, year, from_month, to_month),
+        "assumptions": _assumptions(db, organization_id, payload, year, from_month, to_month),
     }
 
 
@@ -308,7 +322,21 @@ def _save_budget_rows(db, organization_id: int, updates: list[dict]) -> dict:
     """Orgs without a dashboard keep amounts on ``budgets``. Missing stays absent, not zero."""
     for update in updates:
         month = update.get("month")
-        if update.get("remove") or not isinstance(month, str) or len(month) != 7:
+        if update.get("remove"):
+            category = str(update.get("category") or update.get("id") or "")
+            if not category:
+                continue
+            year = int(month[:4]) if isinstance(month, str) and len(month) >= 7 else None
+            month_number = int(month[5:7]) if isinstance(month, str) and len(month) >= 7 else None
+            query = db.query(Budget).filter(
+                Budget.organization_id == organization_id, Budget.category_name == category,
+            )
+            if year is not None and month_number is not None:
+                query = query.filter(Budget.year == year, Budget.month == month_number)
+            for row in query.all():
+                db.delete(row)
+            continue
+        if not isinstance(month, str) or len(month) != 7:
             continue
         status = update.get("status")
         category = str(update.get("category") or update.get("id") or "")
@@ -340,6 +368,29 @@ def _save_budget_rows(db, organization_id: int, updates: list[dict]) -> dict:
     return {"version": None, "provider_calls": 0}
 
 
+PLACEHOLDER_MIN = Decimal("1000000")
+
+
+def looks_like_placeholder(amount, actual=None) -> str | None:
+    """A warning for an income figure that looks invented. Never a deletion."""
+    if amount is None:
+        return None
+    try:
+        number = Decimal(str(amount))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    if number < PLACEHOLDER_MIN:
+        return None
+    if actual is None:
+        if number % PLACEHOLDER_MIN == 0:
+            return "סכום עגול של מיליון ומעלה, בלי ביצוע להשוואה. אזהרה בלבד — לא נמחק."
+        return None
+    actual_abs = abs(Decimal(str(actual)))
+    if number >= max(actual_abs * 10, PLACEHOLDER_MIN):
+        return "תקציב ההכנסה גבוה בהרבה מהביצוע הידוע. אזהרה בלבד — לא נמחק."
+    return None
+
+
 def _split_opening(payload: dict, updates: list[dict], organization_id: int) -> tuple[dict, list[dict]]:
     """An opening balance is evidence, including a negative checking balance."""
     from .budget_assumptions import upsert_assumption
@@ -361,6 +412,7 @@ def _split_opening(payload: dict, updates: list[dict], organization_id: int) -> 
         plan = upsert_assumption(
             plan, kind="opening_balance", month=when[:10], amount=amount,
             as_of=as_of, organization_id=organization_id,
+            note=update.get("note"), override=update.get("override") is True,
         )
     return plan, kept
 

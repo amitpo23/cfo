@@ -50,6 +50,7 @@ import {
 
 // Dashboard Components
 const ClientDashboardPage = lazy(() => import('./components/ClientDashboardPage'));
+const BankPackPage = lazy(() => import('./components/BankPackPage'));
 const CustomerDashboard = lazy(() => import('./components/CustomerDashboard'));
 const DocumentManager = lazy(() => import('./components/DocumentManager'));
 const PaymentInterface = lazy(() => import('./components/PaymentInterface'));
@@ -238,7 +239,15 @@ function App() {
 
   // Public client dashboard. Resolved before the auth gate so a share link
   // does not load the admin shell or the authenticated API client.
-  if (/^\/d\/[a-z0-9][a-z0-9-]{2,47}$/.test(window.location.pathname.replace(/\/+$/, ''))) {
+  const dashboardPath = window.location.pathname.replace(/\/+$/, '');
+  if (/^\/d\/[a-z0-9][a-z0-9-]{2,47}\/bank-pack$/.test(dashboardPath)) {
+    return (
+      <Suspense fallback={<p className="p-8">טוען חבילה לבנק…</p>}>
+        <BankPackPage />
+      </Suspense>
+    );
+  }
+  if (/^\/d\/[a-z0-9][a-z0-9-]{2,47}$/.test(dashboardPath)) {
     return (
       <Suspense fallback={<p className="p-8">טוען דשבורד…</p>}>
         <ClientDashboardPage />

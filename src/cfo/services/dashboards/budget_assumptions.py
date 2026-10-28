@@ -122,30 +122,49 @@ def list_assumptions(plan: dict | None, months: list[str], *, as_of: date, bank_
             })
     opening = _opening(plan)
     if opening is not None:
+        compared = compare_opening(
+            opening.get("amount"), opening.get("date"), opening.get("note"), opening.get("override") is True,
+            bank_balance, bank_as_of, as_of,
+        )
         rows.append({
             "id": "opening_balance",
             "kind": "opening_balance",
             "label_he": LABELS["opening_balance"],
             "month": opening.get("date"),
-            "amount": round(float(opening["amount"]), 2),
+            "amount": compared["owner_amount"],
             "quantity": None,
             "source": "owner",
             "status": "assumption",
             "missing_label": None,
             "as_of": as_of.isoformat(),
+            "note": compared["note"],
+            "override": compared["override"],
+            "bank_amount": compared["bank_amount"],
+            "bank_as_of": compared["bank_as_of"],
+            "bank_fresh": compared["bank_fresh"],
+            "differs": compared["differs"],
+            "used": compared["used"],
         })
     elif bank_balance is not None:
+        compared = compare_opening(None, None, None, False, bank_balance, bank_as_of, as_of)
         rows.append({
             "id": "opening_balance",
             "kind": "opening_balance",
             "label_he": LABELS["opening_balance"],
             "month": bank_as_of,
-            "amount": round(float(bank_balance), 2),
+            "amount": compared["bank_amount"],
             "quantity": None,
             "source": "bank",
             "status": "confirmed",
             "missing_label": None,
             "as_of": bank_as_of or as_of.isoformat(),
+            "note": None,
+            "override": False,
+            "bank_amount": compared["bank_amount"],
+            "bank_as_of": compared["bank_as_of"],
+            "bank_fresh": compared["bank_fresh"],
+            "differs": False,
+            "used": compared["used"],
         })
     else:
         rows.append({
@@ -159,6 +178,13 @@ def list_assumptions(plan: dict | None, months: list[str], *, as_of: date, bank_
             "status": "missing",
             "missing_label": missing_label(as_of),
             "as_of": as_of.isoformat(),
+            "note": None,
+            "override": False,
+            "bank_amount": None,
+            "bank_as_of": None,
+            "bank_fresh": False,
+            "differs": False,
+            "used": "missing",
         })
     return rows
 
@@ -188,7 +214,40 @@ def _ensure_line(plan: dict, kind: str) -> dict:
     return line
 
 
-def upsert_assumption(plan: dict | None, *, kind: str, month: str | None, amount, quantity=None, as_of: date, organization_id: int | None = None) -> dict:
+def compare_opening(owner_amount, owner_date, note, override, bank_amount, bank_as_of, today: date) -> dict:
+    """Bank snapshot wins while it is at most 2 days old, unless the owner overrides."""
+    fresh = False
+    if bank_as_of:
+        try:
+            fresh = (today - date.fromisoformat(str(bank_as_of)[:10])).days <= 2
+        except ValueError:
+            fresh = False
+    differs = (
+        owner_amount is not None and bank_amount is not None
+        and abs(float(owner_amount) - float(bank_amount)) >= 0.01
+    )
+    if override and owner_amount is not None:
+        used = "owner"
+    elif fresh and bank_amount is not None:
+        used = "bank"
+    elif owner_amount is not None:
+        used = "owner"
+    else:
+        used = "missing"
+    return {
+        "owner_amount": None if owner_amount is None else round(float(owner_amount), 2),
+        "owner_date": owner_date,
+        "note": note or None,
+        "override": bool(override),
+        "bank_amount": None if bank_amount is None else round(float(bank_amount), 2),
+        "bank_as_of": str(bank_as_of)[:10] if bank_as_of else None,
+        "bank_fresh": fresh,
+        "differs": differs,
+        "used": used,
+    }
+
+
+def upsert_assumption(plan: dict | None, *, kind: str, month: str | None, amount, quantity=None, as_of: date, organization_id: int | None = None, note: str | None = None, override: bool = False) -> dict:
     """Add or change one assumption. ``amount is None`` deletes that month."""
     if kind not in KINDS:
         raise ValueError("סוג הנחה אינו מוכר")
@@ -201,7 +260,13 @@ def upsert_assumption(plan: dict | None, *, kind: str, month: str | None, amount
             evidence["openingBalances"] = []
         else:
             when = month or as_of.isoformat()
-            row = {"date": when, "amount": round(float(amount), 2), "source": "assumption by owner"}
+            text = note.strip()[:300] if isinstance(note, str) else ""
+            row = {
+                "date": when, "amount": round(float(amount), 2), "source": "assumption by owner",
+                "override": bool(override),
+            }
+            if text:
+                row["note"] = text
             if organization_id is not None:
                 row["organizationId"] = int(organization_id)
             evidence["openingBalances"] = [row]
@@ -250,21 +315,39 @@ def bank_pack(view: dict, assumptions: list[dict], *, as_of: date) -> dict:
     pnl = (view or {}).get("pnl") or {}
     budget = (view or {}).get("budget_vs_actual") or {}
 
-    def marked(amount, source):
+    def marked(amount, source, figure_as_of: str | None = None):
+        day = figure_as_of or as_of.isoformat()
         if amount is None:
-            return {"amount": None, "missing_label": missing_label(as_of), "source": source}
-        return {"amount": amount, "missing_label": None, "source": source}
+            return {"amount": None, "missing_label": missing_label(as_of), "source": source, "as_of": day}
+        return {"amount": amount, "missing_label": None, "source": source, "as_of": day}
 
+    raw_opening = forecast.get("opening")
+    opening = raw_opening if isinstance(raw_opening, dict) else {}
+    opening_amount = opening.get("amount") if opening else raw_opening
+    opening_as_of = opening.get("as_of") if isinstance(opening.get("as_of"), str) else None
+    settings = ((view or {}).get("cashflow_source") or {}).get("settings") or {}
+    supplier_terms = settings.get("supplierTermsMode") or "end_of_next_month"
+    weeks = []
+    for week in forecast.get("weeks") or []:
+        if not isinstance(week, dict):
+            continue
+        copied = dict(week)
+        for key in ("in", "out", "net", "closing", "headroom"):
+            if copied.get(key) is None:
+                copied[f"{key}_missing"] = missing_label(as_of)
+        weeks.append(copied)
     return {
         "as_of": as_of.isoformat(),
+        "title_he": "חבילה לבנק",
         "pnl": {
             "revenue": marked(pnl.get("total_revenue"), "books"),
             "expenses": marked(pnl.get("total_expenses"), "books"),
         },
         "forecast": {
-            "opening": marked((forecast.get("opening") or {}).get("amount") if isinstance(forecast.get("opening"), dict) else forecast.get("opening"), "bank"),
-            "weeks": forecast.get("weeks") or [],
+            "opening": marked(opening_amount, "bank", opening_as_of),
+            "weeks": weeks,
             "engine": forecast.get("engine"),
+            "supplier_terms": supplier_terms,
         },
         "budget_vs_actual": budget,
         "assumptions": assumptions,

@@ -7,13 +7,14 @@ interface Props {
   darkMode?: boolean;
 }
 
-type LineMonth = { status: 'filled' | 'none' | 'missing'; status_he: string; amount: string | null };
+type LineMonth = { status: 'filled' | 'none' | 'missing'; status_he: string; amount: string | null; placeholder_warning?: string };
 type BudgetLine = {
   id: string;
   label: string;
   kind: string;
   category: string;
   months: Record<string, LineMonth>;
+  placeholder_warning?: string;
 };
 type Assumption = {
   id: string;
@@ -25,15 +26,24 @@ type Assumption = {
   status: string;
   missing_label: string | null;
   as_of?: string | null;
+  note?: string | null;
+  override?: boolean;
+  bank_amount?: number | null;
+  bank_as_of?: string | null;
+  differs?: boolean;
+  used?: string;
 };
 type LineUpdate = {
   id: string;
   label?: string;
   category?: string;
   kind?: string;
-  month: string;
-  status: string;
+  month?: string;
+  status?: string;
   amount?: number;
+  note?: string;
+  override?: boolean;
+  remove?: boolean;
 };
 type LinesPayload = {
   lines: BudgetLine[];
@@ -69,6 +79,9 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   const [message, setMessage] = useState<string | null>(null);
   const [orgs, setOrgs] = useState<OrgOption[]>([]);
   const [orgId, setOrgId] = useState(() => localStorage.getItem('active_org_id') || '');
+  const [openingDate, setOpeningDate] = useState('');
+  const [openingNote, setOpeningNote] = useState('');
+  const [openingOverride, setOpeningOverride] = useState(false);
   const queryClient = useQueryClient();
   const fromMonth = 1;
   const toMonth = year === now.getFullYear() ? Math.max(month, now.getMonth() + 1) : 12;
@@ -89,6 +102,16 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   const data = linesQuery.data?.data;
   const key = monthKey(year, month);
   const monthAssumptions = (data?.assumptions ?? []).filter((row) => row.month === key || row.kind === 'opening_balance');
+  const openingRow = monthAssumptions.find((row) => row.kind === 'opening_balance');
+  const savedOpeningDate = openingRow?.month && openingRow.month.length >= 10 ? openingRow.month.slice(0, 10) : '';
+  const savedOpeningNote = openingRow?.note ?? '';
+  const savedOpeningOverride = openingRow?.override === true;
+
+  useEffect(() => {
+    setOpeningDate(savedOpeningDate);
+    setOpeningNote(savedOpeningNote);
+    setOpeningOverride(savedOpeningOverride);
+  }, [savedOpeningDate, savedOpeningNote, savedOpeningOverride]);
 
   const saveMutation = useMutation({
     mutationFn: (updates: Array<Record<string, unknown>>) => apiService.put('/financial/budget/lines', { updates }),
@@ -120,12 +143,14 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
       const text = raw.trim();
       const assumption = monthAssumptions.find((row) => row.id === id);
       if (assumption?.kind === 'opening_balance') {
-        const when = assumption.as_of && assumption.as_of.length >= 10 ? assumption.as_of.slice(0, 10) : `${key}-01`;
+        const when = openingDate || (assumption.month && assumption.month.length >= 10 ? assumption.month.slice(0, 10) : `${key}-01`);
         const target = {
           id: 'opening_balance',
           label: assumption.label_he,
           category: 'opening_balance',
           kind: 'financing',
+          note: openingNote,
+          override: openingOverride,
         };
         if (text === '' || text === 'none') return { ...target, month: when, status: 'missing' };
         return { ...target, month: when, status: 'filled', amount: Number(text) };
@@ -218,12 +243,29 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
                 <td>{row.missing_label ?? (row.status === 'assumption' ? 'הנחת בעלים' : row.status === 'confirmed' ? 'מאושר' : row.status)}</td>
                 <td>
                   {ASSUMPTION_LINE[row.kind] || row.kind === 'opening_balance' ? (
-                    <input
-                      className={input + ' w-40'}
-                      value={drafts[row.id] !== undefined ? drafts[row.id] : (row.amount ?? '')}
-                      placeholder={row.missing_label ?? ''}
-                      onChange={(event) => setDrafts({ ...drafts, [row.id]: event.target.value })}
-                    />
+                    <div className="grid gap-1">
+                      <input
+                        className={input + ' w-40'}
+                        value={drafts[row.id] !== undefined ? drafts[row.id] : (row.amount ?? '')}
+                        placeholder={row.missing_label ?? ''}
+                        onChange={(event) => setDrafts({ ...drafts, [row.id]: event.target.value })}
+                      />
+                      {row.kind === 'opening_balance' ? (
+                        <>
+                          <input type="date" className={input + ' w-40'} value={openingDate} onChange={(event) => setOpeningDate(event.target.value)} />
+                          <input className={input + ' w-40'} value={openingNote} placeholder="הערה" onChange={(event) => setOpeningNote(event.target.value)} />
+                          <label className="text-xs">
+                            <input type="checkbox" checked={openingOverride} onChange={(event) => setOpeningOverride(event.target.checked)} />
+                            {' '}היתרה שלי גוברת על צילום הבנק
+                          </label>
+                          <p className="text-xs text-gray-500">
+                            בנק: {row.bank_amount == null ? (row.missing_label ?? 'חסר') : row.bank_amount}{row.bank_as_of ? ` נכון ל-${row.bank_as_of}` : ''}
+                            {row.differs ? ' · שונה מיתרת הבעלים' : ''}
+                            {row.used === 'bank' ? ' · צילום הבנק בתוקף' : row.used === 'owner' ? ' · יתרת הבעלים בתוקף' : ''}
+                          </p>
+                        </>
+                      ) : null}
+                    </div>
                   ) : (
                     <span>{row.amount ?? row.missing_label}</span>
                   )}
@@ -258,7 +300,10 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
                   const shown = draft !== undefined ? draft : (cell?.amount ?? '');
                   return (
                     <tr key={line.id} className="border-b">
-                      <td className="py-2">{line.label}</td>
+                      <td className="py-2">
+                        {line.label}
+                        {line.placeholder_warning ? <p className="text-xs text-amber-700">{line.placeholder_warning}</p> : null}
+                      </td>
                       <td className={cell?.status === 'missing' ? 'text-amber-700' : ''}>{cell?.status_he ?? 'חסר, הבעלים יזין'}</td>
                       <td>
                         <input
@@ -272,6 +317,13 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
                         <button type="button" className="text-stone-600 underline"
                           onClick={() => setDrafts({ ...drafts, [line.id]: 'none' })}>
                           סמן אין
+                        </button>
+                        <button type="button" className="mr-3 text-red-700 underline"
+                          onClick={() => {
+                            if (!window.confirm(`למחוק את «${line.label}»? המחיקה רק באישור, לא אוטומטית.`)) return;
+                            saveMutation.mutate([{ id: line.id, label: line.label, category: line.category, kind: line.kind, remove: true }]);
+                          }}>
+                          מחק שורה
                         </button>
                       </td>
                     </tr>

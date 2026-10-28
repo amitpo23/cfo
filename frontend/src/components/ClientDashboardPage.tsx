@@ -17,6 +17,7 @@ import { BalanceSheetView, BalanceSheetCard } from './balanceSheetTab';
 import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs, missingAsOf } from './dashboardUi';
 import { safeLoginHref } from './dashboardReturn';
 import { DASHBOARD_POLL_MS, revisionToken, shouldReloadView } from './dashboardLive';
+import TransferClassification from './TransferClassification';
 
 type CashMonth = {
   month: string;
@@ -873,7 +874,7 @@ export default function ClientDashboardPage() {
   return (
     <DashboardFrame
       title={editor?.title || cachedTitle || 'דשבורד לקוח'}
-      subtitle={editor ? `${ROLE_LABELS[editor.role] || editor.role}${editor.canEdit ? ' · אפשר לערוך' : ' · צפייה בלבד'}` : null}
+      subtitle={editor ? `${ROLE_LABELS[editor.role] || editor.role}${editor.canEdit ? ' · אפשר לערוך' : ' · צפייה בלבד'} · הדפסה לבנק: /d/${slugFromLocation()}/bank-pack` : null}
     >
         {notice ? <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">{notice}</p> : null}
         {error ? (
@@ -978,6 +979,7 @@ export default function ClientDashboardPage() {
                 />
               ) : null}
               {tab === 'forecast' ? <ForecastPanel forecast={scoped.forecast} /> : null}
+              {tab === 'classify' && editor ? <TransferClassification dashboardId={editor.id} /> : null}
               {tab === 'budget' && editor ? (
                 <>
                   {filing ? (
@@ -1023,6 +1025,7 @@ const TABS = [
   { id: 'bva', label: 'תקציב מול ביצוע' },
   { id: 'liquidity', label: 'נזילות והתחייבויות' },
   { id: 'forecast', label: 'תחזית' },
+  { id: 'classify', label: 'סיווג העברות' },
   { id: 'budget', label: 'תקציב ופרמטרים' },
 ] as const;
 

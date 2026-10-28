@@ -83,6 +83,8 @@ class BudgetLineUpdate(BaseModel):
     label: Optional[str] = None
     category: Optional[str] = None
     kind: Optional[str] = None
+    note: Optional[str] = None
+    override: Optional[bool] = None
     remove: bool = False
 
 

@@ -274,6 +274,46 @@ def imported_balance(db, account: Account) -> dict | None:
     return {"balance": closing.pop(), "as_of": last_day, "source": "imported_running_balance"}
 
 
+def _opening_comparison(items: list[dict], bank_before: dict, today: date) -> dict | None:
+    from .budget_assumptions import compare_opening
+    owners = [item for item in items or [] if isinstance(item, dict) and _num(item.get("amount")) is not None]
+    if not owners:
+        return None
+    owner = max(owners, key=lambda item: str(item.get("date") or ""))
+    bank = next(iter(bank_before.values()), None) if len(bank_before) == 1 else None
+    bank_amount = bank.get("balance") if bank else None
+    bank_as_of = bank.get("as_of") if bank else None
+    if hasattr(bank_as_of, "isoformat"):
+        bank_as_of = bank_as_of.isoformat()
+    return compare_opening(
+        owner.get("amount"), str(owner.get("date") or "")[:10] or None, owner.get("note"),
+        owner.get("override") is True, bank_amount, bank_as_of, today,
+    )
+
+
+def owner_override_balance(items: list[dict], account_id: int, organization_id: int, *, sole: bool) -> dict | None:
+    """The owner's opening replaces a fresh snapshot only when they set override."""
+    matches = []
+    for item in items or []:
+        if not isinstance(item, dict) or item.get("override") is not True:
+            continue
+        if _num(item.get("amount")) is None or not item.get("date"):
+            continue
+        if item.get("organizationId") not in (None, organization_id):
+            continue
+        account = item.get("accountId")
+        if account == account_id or (account is None and sole):
+            matches.append(item)
+    if not matches:
+        return None
+    chosen = max(matches, key=lambda item: str(item.get("date")))
+    try:
+        opened = date.fromisoformat(str(chosen["date"])[:10])
+    except ValueError:
+        return None
+    return {"balance": _r(float(chosen["amount"])), "as_of": opened, "source": "opening_balance"}
+
+
 def opening_balance(db, account: Account, items: list[dict], end: date, *, sole: bool) -> dict | None:
     """An owner-entered closing balance of one day plus the BOOKED rows after it.
 
@@ -645,6 +685,18 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         derived = opening_balance(db, account, evidence["openingBalances"], end, sole=len(unknown) == 1)
         if derived is not None:
             known[account.id] = derived
+    bank_before = {
+        account.id: dict(known[account.id])
+        for account in checking
+        if account.id in known and known[account.id].get("source") != "opening_balance"
+    }
+    sole_checking = len(checking) == 1
+    for account in checking:
+        replacement = owner_override_balance(
+            evidence["openingBalances"], account.id, organization_id, sole=sole_checking,
+        )
+        if replacement is not None and account.id in bank_before:
+            known[account.id] = replacement
     stale_ids = {row["account_id"]: row for row in stale_balances}
     balance = None if not checking or len(known) != len(checking) else _r(sum(k["balance"] for k in known.values()))
     as_of_dates = [k["as_of"] for k in known.values() if k.get("as_of")]
@@ -771,6 +823,7 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         from .books import classified_bank
         classified = classified_bank(db, organization_id, start, end, plan)
     status = "ready" if accounts or evidence["loans"] or evidence["checks"] else "unknown"
+    opening_comparison = _opening_comparison(evidence["openingBalances"], bank_before, today)
     return {
         "status": status,
         "position": {
@@ -786,6 +839,7 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
             for account_id, slot in known.items()
         ],
         "stale_balances": stale_balances,
+        **({"opening_comparison": opening_comparison} if opening_comparison else {}),
         "accounts": [
             {"account_id": a.id, "name": a.name, "kind": _account_kind(a), "bank_key": bank_key(a),
              "balance": known[a.id]["balance"] if a.id in known else (None if a.id in stale_ids else _balance(a)),
