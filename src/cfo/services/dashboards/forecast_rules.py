@@ -1,15 +1,16 @@
 """Cash rules for the 13-week forecast and the monthly cash lines.
 
-The forecast starts at the known cash position. Supplier payments default to
-the last day of the month after the supply month (``end_of_next_month``).
-A Saturday due date moves to the next Sunday and is counted once. September
-2026 is therefore Sunday 1/11, not 30/10. ``eom_plus_30_days`` remains an
-org setting. Payroll is the plan's payroll
-definition, else the budget's payroll categories, paid on ``PAYROLL_DAY`` (the
-10th). Expected income is the budget's revenue lines, which ``/budget-entry``
-stores on ``plan.budgetLines``. A bridge loan is repaid on its own maturity,
-and each discounted cheque is its own short loan, repaid on that cheque's date
-against its receipt. A term loan's stated instalment is that instalment only.
+The forecast starts at the known cash position. Supplier payments follow
+``cashflowSettings.supplierTermsMode``. The default, until the owner confirms
+otherwise, is ``eom_plus_30_days`` (September -> 30/10). ``end_of_next_month``
+is the other mode (September -> 31/10, then Sunday 1/11 because that day is a
+Saturday). Both modes move Saturday cash to the next Sunday, once. Salary budget lines win. ``plan.payroll`` fills a month only when that month
+has no salary line. Pay day is ``PAYROLL_DAY`` (the 10th). Expected income is
+the budget's revenue lines, which ``/budget-entry`` stores on ``plan.budgetLines``.
+A bridge loan is repaid on its own maturity against a receipt the same day.
+Each discounted cheque is a short-loan balance that stays outstanding until
+that cheque's due date and closes then, with no matching receipt. A term
+loan's stated instalment is that instalment only.
 
 A missing input stays None and is named. Nothing here writes 0 in its place.
 No database and no provider calls.
@@ -20,12 +21,12 @@ from calendar import monthrange
 from datetime import date, timedelta
 
 from .budget import REVENUE_KEYS
-from .cashflow_truth import payroll_date, resolve_settings, supplier_due, supplier_terms_label
+from .cashflow_truth import payroll_date, resolve_settings, roll_saturday, supplier_due, supplier_terms_label
 from .plan_budget import PlanBudgetError, validate_budget_lines
 
 PAYROLL_DAY = 10
-SUPPLIER_CATEGORIES = frozenset({"cost_of_goods", "materials"})
-PAYROLL_CATEGORIES = frozenset({"salaries", "direct_labor"})
+SUPPLIER_CATEGORIES = frozenset({"cost_of_goods", "materials", "suppliers"})
+PAYROLL_CATEGORIES = frozenset({"salaries", "direct_labor", "payroll"})
 SHORT_LOAN_KINDS = frozenset({"bridge", "cheque_discounting", "check_discounting"})
 SCHEDULED = "scheduled"
 CERTAIN = "certain"
@@ -40,7 +41,7 @@ UNKNOWN_HE = {
 
 RULES = {
     "opening": "today_position",
-    "suppliers": "end_of_next_month",
+    "suppliers": "eom_plus_30_days",
     "payroll": "budget_payroll_definition",
     "income": "budget_income",
     "short_loans": "close_on_maturity_against_receipt",
@@ -152,20 +153,22 @@ def supplier_amount(lines: list[dict] | None, supply_month: str) -> float | None
 
 
 def payroll_amount(plan: dict | None, lines: list[dict] | None, month: str) -> tuple[float | None, str | None]:
-    """The month's payroll and its source. The payroll definition wins over salary lines."""
+    """Salary budget lines win. ``plan.payroll`` fills only when those lines are absent."""
+    amount = _category_sum(lines, month, PAYROLL_CATEGORIES)
+    if amount is not None:
+        return amount, "plan.budgetLines"
     payroll = plan.get("payroll") if isinstance(plan, dict) else None
     if isinstance(payroll, list) and payroll:
         amounts = []
         for row in payroll:
             if not isinstance(row, dict):
                 return None, None
-            amount = _num(row.get("monthly"))
-            if amount is None:
+            value = _num(row.get("monthly"))
+            if value is None:
                 return None, None
-            amounts.append(amount)
+            amounts.append(value)
         return round(sum(amounts), 2), "plan.payroll"
-    amount = _category_sum(lines, month, PAYROLL_CATEGORIES)
-    return (amount, "plan.budgetLines") if amount is not None else (None, None)
+    return None, None
 
 
 def _spread(total: float, count: int) -> list[float]:
@@ -255,10 +258,11 @@ def loan_items(plan: dict | None, organization_id: int | None, first: date, last
 
 
 def discounted_cheque_items(plan: dict | None, organization_id: int | None, first: date, last: date) -> tuple[list[dict], list[tuple[date, str]]]:
-    """Each discounted cheque is a short loan repaid on that cheque's own date.
+    """Each discounted cheque is a short-loan balance that closes on its own date.
 
-    The receipt that closes it is the same amount on the same day. Nothing here
-    assumes the 25th.
+    The advance is already in the opening balance. Only the repayment is a
+    future cash movement. Nothing here assumes the 25th, and there is no
+    matching receipt on that date.
     """
     raw = (plan or {}).get("liquidityEvidence") if isinstance(plan, dict) else None
     checks = (raw or {}).get("checks") if isinstance(raw, dict) else None
@@ -282,12 +286,34 @@ def discounted_cheque_items(plan: dict | None, organization_id: int | None, firs
         items.append({
             "date": when, "label": f"{label} · פירעון ניכיון",
             "amount": -value, "certainty": CERTAIN, "source": source, "rule": RULES["short_loans"],
-        })
-        items.append({
-            "date": when, "label": f"{label} · תקבול שסוגר את הניכיון",
-            "amount": value, "certainty": CERTAIN, "source": source, "rule": RULES["short_loans"],
+            "loan_balance": value, "closes_balance": True,
         })
     return items, unknown
+
+
+def discounted_cheque_balances(plan: dict | None, organization_id: int | None, today: date) -> list[dict]:
+    """Outstanding discounted-cheque balances, each closing on its own due date."""
+    raw = (plan or {}).get("liquidityEvidence") if isinstance(plan, dict) else None
+    checks = (raw or {}).get("checks") if isinstance(raw, dict) else None
+    rows = []
+    if not isinstance(checks, list):
+        return rows
+    for check in checks:
+        if not isinstance(check, dict) or not check.get("discounted") or not _same_org(check, organization_id):
+            continue
+        raw = _date(check.get("date"))
+        amount = _num(check.get("amount"))
+        if raw is None or amount is None:
+            continue
+        when = roll_saturday(raw)
+        rows.append({
+            "check": check.get("check"),
+            "amount": round(abs(amount), 2),
+            "closes_on": when.isoformat(),
+            "outstanding": when >= today,
+            "as_of": today.isoformat(),
+        })
+    return rows
 
 
 def discounted_cheque_keys(plan: dict | None, organization_id: int | None) -> set[tuple[str, date]]:
@@ -397,4 +423,4 @@ def monthly_table(plan: dict | None, months: list[str]) -> dict | None:
                 dues=[day.isoformat() for day in dues],
             ),
         }
-    return {"months": out, "rules": RULES, "provider_calls": 0}
+    return {"months": out, "rules": {**RULES, "suppliers": settings.supplier_terms_mode}, "provider_calls": 0}

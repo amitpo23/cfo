@@ -55,7 +55,7 @@ CATEGORIES: dict[str, dict] = {
         "group": "operating",
         "dir": "in",
     },
-    "intercompany": {"label": "העברות בין השף לפוד גרופ", "group": "internal", "dir": "both"},
+    "intercompany": {"label": "העברות בין ישויות", "group": "internal", "dir": "both"},
     "reversal": {"label": "חיובים שבוטלו והחזרם", "group": "internal", "dir": "both"},
     "bank_journal": {"label": "זיכויי יומן בנק — לבירור", "group": "operating", "dir": "in", "review": True, "unresolved": True},
 }
@@ -88,8 +88,6 @@ _R = {
     "office": _re(r"בזק|טלפון|פרטנר|סלקום|הוט |אינטרנט רימון|גוגל|google", re.IGNORECASE),
     "cash_withdrawals": _re(r"משיכת מזומן|כספ\.|כספומט"),
     "transfers_out": _re(r"העברה|העב'"),
-    # Shown on the filing report. Matching is ``is_intercompany_counterparty``.
-    "food_group": _re(r"פוד[\s.\-]*גרו|food[\s.\-]*group"),
 }
 
 # (category, test(description, amount)) — same order as the tool.
@@ -128,7 +126,7 @@ RULE_DIRECTIONS = {
     "cash_withdrawals": "both", "transfers_out": "out", "other_in": "in", "suppliers_direct": "out",
 }
 FALLBACK_RULES = frozenset({"other_in", "suppliers_direct"})
-_PATTERN_KEY = {"sales_card": "card_issuers_in", "card_bills": "card_issuers_out", "intercompany": "food_group"}
+_PATTERN_KEY = {"sales_card": "card_issuers_in", "card_bills": "card_issuers_out"}
 
 
 def builtin_rules_manifest() -> dict:
@@ -164,29 +162,20 @@ def builtin_rules_manifest() -> dict:
     return {"count": len(rules), "sha256": digest, "rules": rules}
 
 
-# Intercompany shortcut of the tool: chef checking account 35 or Food Group org 6.
-CHEF_ORG, CHEF_ACCOUNT, FOOD_GROUP_ORG = 2, 35, 6
-# Counterparty aliases for that pair. Word order and punctuation do not matter.
+# Aliases and account pairs live on plan.intercompany, not in code.
 # "כהן" alone is not a match. An empty name is not a match.
-INTERCOMPANY_RULE_TEXT = (
-    "כינוי צד נגדי, בלי תלות בסדר המילים ובפיסוק: "
-    "פוד גרופ, food group, אליאב כהן, כהן אליאב, אליהב כהן, כהן אליהב"
-)
+INTERCOMPANY_RULE_TEXT = "כינוי צד נגדי לפי הגדרת הארגון, בלי תלות בסדר המילים ובפיסוק"
 _IGNORABLE_PARTY_TOKENS = frozenset({
     "בעמ", "ltd", "limited", "inc", "llc", "חברה", "מר", "גב", "עוסק", "מורשה",
 })
 _PARTY_PUNCT = re.compile(r"[\s\"'`״׳.,;:/\\()\[\]{}+\-–—־_]+")
-_ALIAS_SETS = (
-    frozenset({"פוד", "גרופ"}),
-    frozenset({"food", "group"}),
-    frozenset({"אליאב", "כהן"}),
-    frozenset({"אליהב", "כהן"}),
-    frozenset({"eliav", "cohen"}),
-)
-_COMPACT_ALIASES = frozenset({
-    "פודגרופ", "foodgroup",
-    "אליאבכהן", "כהןאליאב", "אליהבכהן", "כהןאליהב", "eliavcohen", "coheneliav",
-})
+def scope_from_plan(plan: dict | None) -> dict:
+    """``plan.intercompany.pairs`` and ``aliases``. Empty for an org that has not set them."""
+    raw = (plan or {}).get("intercompany") if isinstance(plan, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    pairs = raw.get("pairs") if isinstance(raw.get("pairs"), list) else []
+    aliases = raw.get("aliases") if isinstance(raw.get("aliases"), list) else []
+    return {"pairs": pairs, "aliases": aliases}
 
 
 def _party_tokens(value: str) -> list[str]:
@@ -194,24 +183,40 @@ def _party_tokens(value: str) -> list[str]:
     return [tok for tok in text.split() if tok and tok not in _IGNORABLE_PARTY_TOKENS]
 
 
-def is_intercompany_counterparty(*values: str) -> bool:
-    """True when any text names Food Group or Eliav Cohen, in either word order.
+def is_intercompany_counterparty(*values: str, aliases: list | None = None) -> bool:
+    """True when any text matches an alias configured for this organization.
 
-    Punctuation, extra legal suffixes and extra words do not block a match.
-    A single family name, or an empty string, does not match. Unknown stays
-    unmatched — this never returns a zero amount.
+    Punctuation and word order do not matter. A single token, or an empty
+    string, does not match. With no aliases configured, nothing matches.
     """
+    alias_sets = []
+    compact_aliases = set()
+    for item in aliases or []:
+        if isinstance(item, str) and item.strip():
+            compact_aliases.add(_PARTY_PUNCT.sub("", item.casefold()))
+        elif isinstance(item, (list, tuple, set, frozenset)) and len(item) >= 2:
+            alias_sets.append(frozenset(str(tok).casefold() for tok in item))
+    if not alias_sets and not compact_aliases:
+        return False
     for value in values:
         tokens = _party_tokens(value)
         if not tokens:
             continue
         bag = frozenset(tokens)
-        if any(alias <= bag for alias in _ALIAS_SETS):
-            return True
-        if any(tok in _COMPACT_ALIASES for tok in tokens):
+        if any(alias <= bag for alias in alias_sets):
             return True
         compact = "".join(tokens)
-        if any(alias in compact for alias in _COMPACT_ALIASES):
+        if any(alias and alias in compact for alias in compact_aliases):
+            return True
+    return False
+
+
+def _in_intercompany_pair(txn: Txn, pairs: list | None) -> bool:
+    for pair in pairs or []:
+        if not isinstance(pair, dict) or pair.get("organizationId") != txn.organization_id:
+            continue
+        account = pair.get("accountId")
+        if account is None or account == txn.account_id:
             return True
     return False
 
@@ -237,13 +242,12 @@ class Filed:
     extra: dict = field(default_factory=dict)
 
 
-def classify_builtin(t: Txn) -> tuple[str, str]:
+def classify_builtin(t: Txn, scope: dict | None = None) -> tuple[str, str]:
     d = t.description or ""
-    on_eliav_pair = (
-        (t.organization_id == CHEF_ORG and t.account_id == CHEF_ACCOUNT)
-        or t.organization_id == FOOD_GROUP_ORG
-    )
-    if on_eliav_pair and is_intercompany_counterparty(t.debtor, t.creditor, d):
+    scope = scope or {}
+    if _in_intercompany_pair(t, scope.get("pairs")) and is_intercompany_counterparty(
+        t.debtor, t.creditor, d, aliases=scope.get("aliases"),
+    ):
         return "intercompany", "rule:intercompany"
     for category, test in RULES:
         if test(d, t.amount):
@@ -284,8 +288,9 @@ def _decision_fits(decision: dict, t: Txn) -> bool:
     )
 
 
-def classify(t: Txn, *, decisions: dict | None = None, custom_rules: list | None = None) -> Filed:
-    rule_category, rule_by = classify_builtin(t)
+def classify(t: Txn, *, decisions: dict | None = None, custom_rules: list | None = None,
+             scope: dict | None = None) -> Filed:
+    rule_category, rule_by = classify_builtin(t, scope=scope)
     decision = (decisions or {}).get(str(t.id)) if t.id is not None else None
     if decision is not None and _decision_fits(decision, t):
         return Filed(decision["category"], "decision", rule_category)
@@ -341,6 +346,7 @@ def classify_all(
     invoices: list[dict] | None = None,
     decisions: dict | None = None,
     custom_rules: list | None = None,
+    scope: dict | None = None,
 ) -> dict[int, Filed]:
     """Port of ``classifyAll``: rules first, then evidence that crosses rows.
 
@@ -350,7 +356,7 @@ def classify_all(
     """
     out: dict[int, Filed] = {}
     for t in txns:
-        out[id(t)] = classify(t, decisions=decisions, custom_rules=custom_rules)
+        out[id(t)] = classify(t, decisions=decisions, custom_rules=custom_rules, scope=scope)
 
     def locked(t: Txn) -> bool:
         return out[id(t)].filed_by == "decision"
@@ -393,13 +399,25 @@ def classify_all(
                 fc.filed_by = "reversal_match"
                 break
 
-    # Intercompany: chef inflow vs Food Group outflow of the same amount (±4 days).
-    company_out = [c for c in txns if c.organization_id == FOOD_GROUP_ORG and c.amount < 0
+    # Intercompany amount match only for pairs configured on the plan.
+    pairs = (scope or {}).get("pairs") or []
+    company_ids = {
+        pair.get("organizationId") for pair in pairs
+        if isinstance(pair, dict) and pair.get("accountId") is None
+    }
+    primary = [
+        pair for pair in pairs
+        if isinstance(pair, dict) and pair.get("accountId") is not None
+    ]
+    company_out = [c for c in txns if c.organization_id in company_ids and c.amount < 0
                    and out[id(c)].category in ("transfers_out", "intercompany")]
     matched: set[int] = set()
     for t in txns:
         f = out[id(t)]
-        if not (t.organization_id == CHEF_ORG and t.account_id == CHEF_ACCOUNT and t.amount > 0):
+        if t.amount <= 0 or not any(
+            pair.get("organizationId") == t.organization_id and pair.get("accountId") == t.account_id
+            for pair in primary
+        ):
             continue
         if not (f.category == "intercompany" or (not locked(t) and "בנק הפועלים" in (t.description or ""))):
             continue

@@ -5,17 +5,16 @@ Worked week, Sunday 25/10/2026–Friday 30/10/2026, opening dated 28/10/2026
 are still ahead of the opening and inside this Sunday–Friday week, so
 October's budget income of 62,000 contributes 62,000 × 2/31 = 4,000 here.
 31/10 is a Saturday; its 2,000 is taken on Sunday 01/11 and is not in this
-week. September's supplier budget of 30,000 is due on the last day of
-October. 31/10/2026 is a Saturday, so the cash date is Sunday 01/11 and the
-payment is not in this week. Checking facility 50,000 is headroom, not part
-of the balance.
+week. The default supplier mode is eom_plus_30_days, so September's 30,000
+is paid on 30/10. end_of_next_month is a per-org setting and is not the default.
+Checking facility 50,000 is headroom, not part of the balance.
 
     opening                         -12,000   accounts, as of 28/10
     income 29–30/10                  +4,000   plan.budgetLines
-    suppliers, supply 2026-09            —    due Sunday 01/11, not this week
-    net                              +4,000
-    closing                          -8,000
-    headroom                  50,000 - 8,000 = 42,000   not a breach
+    suppliers, supply 2026-09       -30,000   due 30/10 (eom_plus_30_days)
+    net                             -26,000
+    closing                         -38,000
+    headroom                 50,000 - 38,000 = 12,000   not a breach
 
 Payroll of 18,000 is the plan's payroll definition, paid on the 10th, so it
 lands on 10/11, not in this week. The bridge of 61,000 closes on 25/11
@@ -77,6 +76,74 @@ def _item(result, label_part):
     return next(item for week in result["weeks"] for item in week["items"] if label_part in (item.get("label") or ""))
 
 
+def test_opening_stands_without_a_credit_limit_and_stale_open_finance_is_unknown(fresh_org):
+    owner = fresh_org()
+    with SessionLocal() as db:
+        db.add(Account(
+            organization_id=owner["org_id"], name="עו״ש", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id="fresh-chk",
+            balance=Decimal("-2500"), credit_limit=None,
+            balance_as_of=datetime(2026, 10, 28), currency="ILS",
+        ))
+        db.commit()
+        fresh = liquidity.build_liquidity(
+            db, owner["org_id"], date(2026, 10, 1), date(2026, 10, 31),
+            classified=[], today=date(2026, 10, 28),
+        )
+    assert fresh["position"]["balance"] == -2500.0
+    assert fresh["position"]["limit"] is None
+    assert fresh["position"]["available_to_limit"] is None
+    assert fresh["position"]["as_of"] == "2026-10-28"
+
+    other = fresh_org()
+    with SessionLocal() as db:
+        db.add(Account(
+            organization_id=other["org_id"], name="עו״ש ישן", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id="stale-chk",
+            balance=Decimal("-800"), credit_limit=None,
+            balance_as_of=datetime(2026, 10, 25), currency="ILS",
+        ))
+        db.add(Account(
+            organization_id=other["org_id"], name="עו״ש חדש", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id="newer-chk",
+            balance=Decimal("-100"), credit_limit=None,
+            balance_as_of=datetime(2026, 10, 28), currency="ILS",
+        ))
+        db.commit()
+        stale = liquidity.build_liquidity(
+            db, other["org_id"], date(2026, 10, 1), date(2026, 10, 31),
+            classified=[], today=date(2026, 10, 28),
+        )
+    assert stale["position"]["balance"] is None
+    assert stale["position"]["as_of"] is None
+    assert stale["stale_balances"][0]["as_of"] == "2026-10-25"
+    assert stale["stale_balances"][0]["status"] == "unknown"
+    shown = next(row for row in stale["accounts"] if row["name"] == "עו״ש ישן")
+    assert shown["balance"] is None and shown["as_of"] == "2026-10-25"
+
+
+def test_combined_as_of_is_the_oldest_account_date_not_the_newest(fresh_org):
+    owner = fresh_org()
+    with SessionLocal() as db:
+        db.add(Account(
+            organization_id=owner["org_id"], name="א", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id="a",
+            balance=Decimal("10"), balance_as_of=datetime(2026, 10, 27), currency="ILS",
+        ))
+        db.add(Account(
+            organization_id=owner["org_id"], name="ב", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id="b",
+            balance=Decimal("20"), balance_as_of=datetime(2026, 10, 28), currency="ILS",
+        ))
+        db.commit()
+        section = liquidity.build_liquidity(
+            db, owner["org_id"], date(2026, 10, 1), date(2026, 10, 31),
+            classified=[], today=date(2026, 10, 28),
+        )
+    assert section["position"]["balance"] == 30.0
+    assert section["position"]["as_of"] == "2026-10-27"
+
+
 def test_shotef_30_is_thirty_days_after_the_end_of_the_supply_month():
     assert forecast_rules.shotef_30(2026, 9) == date(2026, 10, 30)
     assert forecast_rules.shotef_30(2026, 10) == date(2026, 11, 30)
@@ -98,21 +165,62 @@ def test_the_forecast_starts_at_todays_position_and_ignores_cash_already_in_it()
     assert opening["rule"] == "today_position"
     assert all("old" not in (item.get("label") or "") for week in result["weeks"] for item in week["items"])
     assert result["provider_calls"] == 0
+    assert result["engine"] == "cashflow_source"
 
 
-def test_september_suppliers_are_due_the_sunday_after_31_october():
-    october = _week(_run(), "2026-10-25")
-    supplier = _item(_run(), "סוף החודש העוקב")
+def test_default_supplier_mode_pays_september_on_30_october():
+    week = _week(_run(), "2026-10-25")
+    supplier = _item(_run(), "שוטף 30")
+
+    assert supplier["date"] == "2026-10-30"
+    assert supplier["amount"] == -30000.0
+    assert supplier["source"] == "plan.budgetLines"
+    assert supplier["rule"] == "eom_plus_30_days"
+    assert week["out"] == -30000.0
+
+
+def test_end_of_next_month_moves_september_off_saturday_to_1_november():
+    plan = _plan(cashflowSettings={"supplierTermsMode": "end_of_next_month"})
+    october = _week(_run(plan=plan), "2026-10-25")
+    supplier = _item(_run(plan=plan), "סוף החודש העוקב")
 
     assert date(2026, 10, 31).weekday() == 5
     assert supplier["date"] == "2026-11-01"
     assert supplier["amount"] == -30000.0
-    assert supplier["source"] == "plan.budgetLines"
     assert supplier["rule"] == "end_of_next_month"
-    assert "שוטף" not in (supplier.get("label") or "")
     assert october["out"] == 0.0
-    assert all(item.get("date") != "2026-10-30" for week in _run()["weeks"] for item in week["items"])
-    assert all(item.get("date") != "2026-10-31" for week in _run()["weeks"] for item in week["items"])
+    assert all(item.get("date") != "2026-10-31" for week in _run(plan=plan)["weeks"] for item in week["items"])
+
+
+def test_salary_budget_lines_win_over_plan_payroll():
+    lines = _lines() + [{
+        "id": "pay", "label": "שכר", "category": "salaries",
+        "months": {"2026-11": {"quantity": 1, "rate": 22000}},
+    }]
+    plan = _plan(budgetLines=lines)
+
+    item = _item(_run(plan=plan), "שכר")
+
+    assert item["date"] == "2026-11-10"
+    assert item["amount"] == -22000.0
+    assert item["source"] == "plan.budgetLines"
+
+
+def test_discounted_cheques_stay_outstanding_until_each_due_date():
+    plan = _plan()
+    plan["liquidityEvidence"]["checks"] = [
+        {"check": "c1", "date": "2026-11-25", "amount": 4000, "discounted": True, "organizationId": ORG},
+        {"check": "c2", "date": "2026-12-25", "amount": 9000, "discounted": True, "organizationId": ORG},
+    ]
+    result = _run(plan=plan)
+    balances = {row["check"]: row for row in result["discounted_cheque_balances"]}
+
+    assert balances["c1"]["closes_on"] == "2026-11-25" and balances["c1"]["outstanding"] is True
+    assert balances["c2"]["closes_on"] == "2026-12-25" and balances["c2"]["amount"] == 9000.0
+    november = [item for week in result["weeks"] for item in week["items"] if "c1" in (item.get("label") or "")]
+    december = [item for week in result["weeks"] for item in week["items"] if "c2" in (item.get("label") or "")]
+    assert [(item["date"], item["amount"]) for item in november] == [("2026-11-25", -4000.0)]
+    assert [(item["date"], item["amount"]) for item in december] == [("2026-12-25", -9000.0)]
 
 
 def test_payroll_comes_from_the_budget_definition_on_the_first():
@@ -221,15 +329,13 @@ def test_the_worked_week_of_25_to_31_october():
     assert week["start"] == "2026-10-25"
     assert week["end"] == "2026-10-30"
     assert week["in"] == 4000.0
-    assert week["out"] == 0.0
-    assert week["net"] == 4000.0
-    assert week["closing"] == -8000.0
+    assert week["out"] == -30000.0
+    assert week["net"] == -26000.0
+    assert week["closing"] == -38000.0
     assert week["limit"] == 50000.0
-    assert week["headroom"] == 42000.0
-    next_week = _week(_run(), "2026-11-01")
-    rolled = next(item for item in next_week["items"] if item["label"] == "הכנסה לפי התקציב")
+    assert week["headroom"] == 12000.0
+    rolled = next(item for item in _week(_run(), "2026-11-01")["items"] if item["label"] == "הכנסה לפי התקציב")
     assert rolled["amount"] == 2000.0
-    assert any(item.get("date") == "2026-11-01" and item.get("amount") == -30000.0 for item in next_week["items"])
     assert _run()["first_breach"] is None
 
 
@@ -287,11 +393,10 @@ def test_monthly_cells_are_filled_from_the_rules_and_missing_ones_stay_null():
         "amount": -18000.0, "source": "plan.payroll", "rule": "budget_payroll_definition",
         "pay_date": "2026-11-10",
     }
-    # September's cash date is 01/11 and October's is 30/11. October has no
-    # supplier line, so November stays unknown rather than showing only September.
+    # Default mode: September is paid in October. October has no supplier line,
+    # so November's payment stays unknown.
     assert november["suppliers"]["amount"] is None
-    assert november["suppliers"]["supply_months"] == ["2026-10", "2026-09"]
-    assert november["suppliers"]["dues"] == ["2026-11-30", "2026-11-01"]
+    assert november["suppliers"]["supply_month"] == "2026-10"
     assert november["suppliers"]["due"] == "2026-11-30"
     assert "לא ידוע" in november["suppliers"]["label"]
     assert out["cash_rules"]["provider_calls"] == 0
@@ -472,13 +577,18 @@ def test_each_discounted_cheque_is_a_short_loan_on_its_own_date():
         {"check": "4401", "date": "2026-11-12", "amount": 7500, "payee": "לקוח א", "state": "future"},
     ]
 
-    items = [item for week in _run(view, plan)["weeks"] for item in week["items"] if "4401" in (item.get("label") or "")]
+    result = _run(view, plan)
+    items = [item for week in result["weeks"] for item in week["items"] if "4401" in (item.get("label") or "")]
 
-    assert [item["date"] for item in items] == ["2026-11-12", "2026-11-12"]
-    assert sorted(item["amount"] for item in items) == [-7500.0, 7500.0]
-    assert not any(item["amount"] == -7500.0 and "פירעון" not in item["label"] for item in items)
-    later = [item for week in _run(view, plan)["weeks"] for item in week["items"] if "4402" in (item.get("label") or "")]
-    assert {item["date"] for item in later} == {"2026-12-03"}
+    assert [item["date"] for item in items] == ["2026-11-12"]
+    assert [item["amount"] for item in items] == [-7500.0]
+    assert items[0]["loan_balance"] == 7500.0
+    later = [item for week in result["weeks"] for item in week["items"] if "4402" in (item.get("label") or "")]
+    assert [item["date"] for item in later] == ["2026-12-03"]
+    assert [item["amount"] for item in later] == [-2200.0]
+    balances = {row["check"]: row for row in result["discounted_cheque_balances"]}
+    assert balances["4401"]["closes_on"] == "2026-11-12" and balances["4401"]["outstanding"] is True
+    assert balances["4402"]["closes_on"] == "2026-12-03" and balances["4402"]["amount"] == 2200.0
 
 
 def _office_dashboard(client, platform_admin, fresh_org, slug):

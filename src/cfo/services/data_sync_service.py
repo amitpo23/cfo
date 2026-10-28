@@ -70,12 +70,9 @@ class DataSyncService:
             Organization.id == self.organization_id
         ).first()
 
-        # Environment credentials belong to the default organization only —
-        # every other tenant must configure its own SUMIT key so its requests
-        # never silently run against another org's SUMIT account. Mirrors the
-        # gate in get_sumit_integration/get_connector_for_org (dependencies.py,
-        # sync_engine.py).
-        env_allowed = self.organization_id == 1
+        # Environment SUMIT credentials apply only to orgs listed in
+        # SUMIT_ENV_CREDENTIAL_ORG_IDS. An empty list allows nobody.
+        env_allowed = settings.env_sumit_allowed(self.organization_id)
         creds = org.api_credentials if org and org.api_credentials else {}
 
         api_key = creds.get('api_key') or (settings.sumit_api_key if env_allowed else None)

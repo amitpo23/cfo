@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 import subprocess
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -100,7 +100,7 @@ def test_editor_save_of_the_imported_plan_is_accepted_and_keeps_the_projection(c
 def _food_without_balance(client, platform_admin, fresh_org, slug):
     dashboard_id, chef, food = _consolidated(client, platform_admin, fresh_org, slug)
     with SessionLocal() as db:
-        _account(db, chef["org_id"], "עו״ש 8954", -100, limit=15000)
+        _account(db, chef["org_id"], "עו״ש 8954", -100, limit=15000, as_of=datetime.combine(date.today(), datetime.min.time()))
         account = _account(db, food["org_id"], "Imported bank 1662", None, source="reviewed_local_import", as_of=None)
         # Imported rows without a balance column.
         _bank(db, food["org_id"], date(2026, 7, 21), -1000, "לפני הפתיחה", account_id=account.id,

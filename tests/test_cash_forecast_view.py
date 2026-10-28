@@ -35,7 +35,7 @@ def _consolidated(client, platform_admin, fresh_org, slug):
         db.add(Account(
             organization_id=chef["org_id"], name="עו״ש", account_type=AccountType.BANK,
             raw_account_type="CHECKING", balance=Decimal("-35000"), source="open_finance",
-            balance_as_of=datetime(2026, 10, 21),
+            balance_as_of=datetime.combine(date.today(), datetime.min.time()),
         ))
         db.commit()
     added = client.post(f"/api/dashboards/{dashboard_id}/entities", headers=platform_admin["headers"],
@@ -63,7 +63,7 @@ def test_the_view_carries_a_13_week_cash_forecast_per_entity_and_combined(client
     assert len(chef_forecast["weeks"]) == 13
     assert chef_forecast["weeks"][0]["start"] == "2026-10-25"
     assert chef_forecast["opening"]["amount"] == -35000.0
-    assert chef_forecast["opening"]["as_of"] == "2026-10-21"
+    assert chef_forecast["opening"]["as_of"] == date.today().isoformat()
     assert chef_forecast["opening"]["rule"] == "today_position"
     assert chef_forecast["first_breach"]["week_start"] == "2026-10-25"
     assert "opening_balance" in body["entities"][1]["view"]["cash_forecast"]["missing"]

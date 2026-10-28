@@ -25,7 +25,10 @@ TERM_TYPES = frozenset({
     "end_of_next_month", "eom_plus_30_days", "eom_plus_days",
     "fixed_day_of_month", "days_from_invoice", "on_receipt", "per_order", "other_text",
 })
-DEFAULT_SUPPLIER_TERMS = {"type": "end_of_next_month"}
+SUPPLIER_TERM_MODES = ("eom_plus_30_days", "end_of_next_month")
+# The owner has not confirmed which mode he meant. Do not switch this default.
+DEFAULT_SUPPLIER_TERMS_MODE = "eom_plus_30_days"
+DEFAULT_SUPPLIER_TERMS = {"type": DEFAULT_SUPPLIER_TERMS_MODE}
 INQUIRY_TERMS = frozenset({"per_order", "other_text"})
 VAT_EXEMPT = frozenset({"payroll", "national_insurance", "pension", "fees", "interest", "arnona"})
 
@@ -73,6 +76,7 @@ class CashflowSettings:
     week_end: str = "friday"
     saturday_cash: str = "next_sunday"
     payroll_day: int = 10
+    supplier_terms_mode: str = DEFAULT_SUPPLIER_TERMS_MODE
     supplier_terms: dict | None = None
     opening_accounts: str = "checking_only"
     credit_facility: str = "separate_headroom"
@@ -99,6 +103,7 @@ class CashflowSettings:
             "week_end": self.week_end,
             "saturday_cash": self.saturday_cash,
             "payroll_day": self.payroll_day,
+            "supplierTermsMode": self.supplier_terms_mode,
             "supplier_terms": terms,
             "opening_accounts": self.opening_accounts,
             "credit_facility": self.credit_facility,
@@ -199,13 +204,12 @@ def _next_month(year: int, month: int) -> tuple[int, int]:
 def supplier_contract_date(doc_date: date, terms: dict | None) -> date | None:
     """The supplier date before the Saturday rule.
 
-    Default ``end_of_next_month`` is the last day of the month after the
-    supply month, the same day for every document in that month. September
-    2026 is 31 October. ``eom_plus_30_days`` is the alternative: 30 days after
-    the supply month ends (30 October for September). Free text is not guessed.
-    Later months use this default until the owner confirms a general rule.
+    The default mode is ``eom_plus_30_days`` until the owner confirms which
+    rule he meant. ``end_of_next_month`` is the other mode: September 2026 is
+    31 October, a Saturday, so the cash date is Sunday 1 November. Both modes
+    then apply the Saturday rule. Free text is not guessed.
     """
-    kind = "end_of_next_month" if not isinstance(terms, dict) else str(terms.get("type") or "end_of_next_month")
+    kind = DEFAULT_SUPPLIER_TERMS_MODE if not isinstance(terms, dict) else str(terms.get("type") or DEFAULT_SUPPLIER_TERMS_MODE)
     if kind == "end_of_next_month":
         year, month = _next_month(doc_date.year, doc_date.month)
         return end_of_month(year, month)
@@ -232,7 +236,7 @@ def supplier_due(doc_date: date, terms: dict | None) -> date | None:
 
 
 def supplier_terms_label(terms: dict | None) -> str:
-    kind = "end_of_next_month" if not isinstance(terms, dict) else str(terms.get("type") or "end_of_next_month")
+    kind = DEFAULT_SUPPLIER_TERMS_MODE if not isinstance(terms, dict) else str(terms.get("type") or DEFAULT_SUPPLIER_TERMS_MODE)
     if kind in ("eom_plus_30_days", "eom_plus_days"):
         return "ספקים שוטף 30"
     return "ספקים — סוף החודש העוקב"
@@ -264,7 +268,7 @@ def _int_in(value, low: int, high: int) -> bool:
 
 def _partial_settings(value: dict, *, allow_nested: bool) -> None:
     allowed = {
-        "payroll_day", "supplier_terms", "near_limit_pct", "low_headroom_amt",
+        "payroll_day", "supplierTermsMode", "supplier_terms", "near_limit_pct", "low_headroom_amt",
         "stale_balance_days", "match_tolerance", "match_window_days", "loss_cap",
         "funding_source", "allocation_rule", "suppliers",
     }
@@ -274,6 +278,8 @@ def _partial_settings(value: dict, *, allow_nested: bool) -> None:
         raise _settings_error("הגדרות התזרים מכילות שדה לא מוכר")
     if "payroll_day" in value and not _int_in(value["payroll_day"], 1, 28):
         raise _settings_error("יום השכר חייב להיות 1 עד 28")
+    if "supplierTermsMode" in value and value["supplierTermsMode"] not in SUPPLIER_TERM_MODES:
+        raise _settings_error("מצב תנאי הספק חייב להיות eom_plus_30_days או end_of_next_month")
     if "supplier_terms" in value:
         _check_terms(value["supplier_terms"], where="ברירת מחדל")
     if "near_limit_pct" in value:
@@ -348,11 +354,18 @@ def resolve_settings(plan: dict | None, organization_id: int | None = None) -> C
         if isinstance(orgs, dict):
             org_block = _block(orgs.get(str(organization_id)))
     overridden = tuple(key for key in org_block if key in {
-        "payroll_day", "supplier_terms", "near_limit_pct", "low_headroom_amt",
+        "payroll_day", "supplierTermsMode", "supplier_terms", "near_limit_pct", "low_headroom_amt",
         "stale_balance_days", "match_tolerance", "match_window_days", "loss_cap",
         "funding_source",
     })
     terms = org_block.get("supplier_terms") or base.get("supplier_terms") or dict(DEFAULT_SUPPLIER_TERMS)
+    mode = org_block.get("supplierTermsMode", base.get("supplierTermsMode"))
+    if mode is None and isinstance(terms, dict) and terms.get("type") in SUPPLIER_TERM_MODES:
+        mode = terms["type"]
+    if mode not in SUPPLIER_TERM_MODES:
+        mode = DEFAULT_SUPPLIER_TERMS_MODE
+    if "supplierTermsMode" in org_block or "supplierTermsMode" in base:
+        terms = {"type": mode}
     suppliers = {}
     for source in (base.get("suppliers"), org_block.get("suppliers")):
         if isinstance(source, dict):
@@ -361,6 +374,7 @@ def resolve_settings(plan: dict | None, organization_id: int | None = None) -> C
     funding = org_block["funding_source"] if "funding_source" in org_block else base.get("funding_source")
     return CashflowSettings(
         payroll_day=int(org_block.get("payroll_day", base.get("payroll_day", 10))),
+        supplier_terms_mode=mode,
         supplier_terms=dict(terms),
         near_limit_pct=float(org_block.get("near_limit_pct", base.get("near_limit_pct", 0.90))),
         low_headroom_amt=float(org_block.get("low_headroom_amt", base.get("low_headroom_amt", 2000))),
@@ -1218,10 +1232,10 @@ def _daily_min(opening, events, start: date, end: date, week_known: bool):
 
 
 def discounted_cheque_lines(checks, *, today: date, settings: CashflowSettings) -> list[dict]:
-    """Each discounted cheque is a short loan that closes on that cheque's date.
+    """Each discounted cheque stays outstanding until its due date, then closes.
 
-    The repayment and the receipt that settles it are one pair. Net cash is
-    zero, and neither leg is operating income or an operating expense.
+    The advance is already in the bank balance. The forecast shows the
+    repayment only, not a receipt that cancels it on the same day.
     """
     lines = []
     for check in checks or []:
@@ -1240,19 +1254,11 @@ def discounted_cheque_lines(checks, *, today: date, settings: CashflowSettings) 
             ))
             continue
         source = f"cheque-discount:{check.get('check') or when.isoformat()}"
-        common = {
-            "due_date_raw": when.isoformat(),
-            "is_financing": True,
-            "offsets": source,
-            "verification": verification,
-        }
         lines.append(_line(
             "financing", f"צ׳ק {check.get('check')} · פירעון ניכיון" if check.get("check") else "שיק מנוכה · פירעון",
-            LAYER_BANK, CERTAIN, status=CONFIRMED, amount=-abs(amount), source_id=f"{source}:close", **common,
-        ))
-        lines.append(_line(
-            "financing", f"צ׳ק {check.get('check')} · תקבול שסוגר את הניכיון" if check.get("check") else "שיק מנוכה · תקבול סוגר",
-            LAYER_BANK, CERTAIN, status=CONFIRMED, amount=abs(amount), source_id=f"{source}:receipt", **common,
+            LAYER_BANK, CERTAIN, status=CONFIRMED, amount=-abs(amount), source_id=f"{source}:close",
+            due_date_raw=when.isoformat(), is_financing=True, verification=verification,
+            loan_balance=abs(amount), closes_balance=True,
         ))
     return lines
 
@@ -1290,6 +1296,27 @@ def _scaffold_events(settings: CashflowSettings, today: date, horizon_end: date,
                     unknown_label="תשלום הספקים לא ידוע: אין דרייבר ספקים לחודש האספקה. לא הוזן 0.",
                 ))
     return events
+
+
+def _discounted_balances(checks, today: date) -> list[dict]:
+    """Outstanding loan balance of each discounted cheque until its cash date."""
+    rows = []
+    for check in checks or []:
+        if not isinstance(check, dict) or not check.get("discounted"):
+            continue
+        raw = _date(check.get("date"))
+        amount = _money(check.get("amount"))
+        if raw is None or amount is None:
+            continue
+        when = roll_saturday(raw)
+        rows.append({
+            "check": check.get("check"),
+            "amount": abs(amount),
+            "closes_on": when.isoformat(),
+            "outstanding": when >= today,
+            "as_of": today.isoformat(),
+        })
+    return rows
 
 
 def scaffold(
@@ -1398,6 +1425,7 @@ def scaffold(
         ),
         "variance": {"status": MISSING, "label": "אין כמות ומחיר בפועל מול תקציב. לא הוזן 0."},
         "shared_costs": {"label": SHARED_LABEL, "allocated": False, "amount": None, "status": MISSING},
+        "discounted_cheque_balances": _discounted_balances(checks, as_of),
         "cheques": [
             cheque_verification(when=_date(check["date"]), today=as_of, state=check.get("state"), status=check.get("status"))
             | {"check": check.get("check"), "date": check.get("date")}
@@ -1454,3 +1482,16 @@ def attach_variance(report: dict, lines: list[dict], *, kind: str = "revenue") -
     nxt = dict(report)
     nxt["variance"] = variance_set(lines, kind=kind)
     return nxt
+
+
+def published_forecast(view: dict, *, plan: dict | None, organization_id: int, label: str | None,
+                       today: date, apply_budget_rules: bool = True) -> dict:
+    """The one 13-week forecast. The dashboard tab reads this object."""
+    from . import cash_forecast
+    forecast = cash_forecast.build_entity_forecast(
+        view, plan=plan, organization_id=organization_id, label=label, today=today,
+        apply_budget_rules=apply_budget_rules,
+    )
+    forecast["engine"] = "cashflow_source"
+    forecast["supplierTermsMode"] = resolve_settings(plan, organization_id).supplier_terms_mode
+    return forecast

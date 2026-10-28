@@ -172,7 +172,9 @@ def test_org_id_cannot_be_spoofed_via_query(client, tenant):
     assert resp.json()["organization_id"] == tenant["user"]["organization_id"]
 
 
-def test_env_credentials_only_for_default_org(client, owner, tenant):
+def test_env_credentials_only_for_default_org(client, owner, tenant, monkeypatch):
+    from cfo.config import settings
+    monkeypatch.setattr(settings, "sumit_env_credential_org_ids", "1")
     owner_status = client.get("/api/integration/status", headers=owner["headers"]).json()
     tenant_status = client.get("/api/integration/status", headers=tenant["headers"]).json()
     assert owner_status["configured"]["sumit"] is True
@@ -350,6 +352,7 @@ def test_cron_sync_pulls_pending_expenses_per_sumit_org(platform_admin, client, 
     """
     from cfo.config import settings
     monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
+    monkeypatch.setattr(settings, "sumit_env_credential_org_ids", "1")
     calls = []
 
     async def _fake_pull(self, from_date=None, to_date=None):
@@ -373,6 +376,7 @@ def test_cron_sync_expense_pull_failure_does_not_abort(platform_admin, client, o
 
     from cfo.config import settings
     monkeypatch.setattr(settings, "sumit_automatic_calls_enabled", True)
+    monkeypatch.setattr(settings, "sumit_env_credential_org_ids", "1")
 
     async def _boom(self, from_date=None, to_date=None):
         raise RuntimeError("SUMIT rate limit")

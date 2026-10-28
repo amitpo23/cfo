@@ -448,7 +448,9 @@ def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int
         "weeks": out_weeks,
         "first_breach": first_breach(out_weeks, opening),
         "overdue": overdue(view, plan, organization_id, today, as_of, first),
+        "discounted_cheque_balances": forecast_rules.discounted_cheque_balances(plan, organization_id, today),
         "missing": missing,
+        "engine": "cashflow_source",
         "provider_calls": 0,
     }
 

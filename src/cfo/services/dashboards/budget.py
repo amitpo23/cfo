@@ -20,7 +20,7 @@ from .service import PLAN_ROLES, READ_ROLES, DashboardError, get_dashboard
 UNCATEGORIZED = "other"
 UNCATEGORIZED_HE = "לא מסווג"
 NO_BUDGET_HE = "אין תקציב"
-REVENUE_KEYS = {"sales", "services", "other_income", "interest_income", "rent_income"}
+REVENUE_KEYS = {"sales", "services", "other_income", "interest_income", "rent_income", "revenue"}
 MAX_ROWS = 500
 # budgets.budgeted_amount is Numeric(12, 2).
 MAX_AMOUNT = Decimal("9999999999.99")

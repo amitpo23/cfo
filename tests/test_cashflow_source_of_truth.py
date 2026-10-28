@@ -18,7 +18,8 @@ def test_defaults_are_the_owner_rules_and_an_org_can_override_them():
     settings = truth.resolve_settings(None, organization_id=99)
 
     assert settings.payroll_day == 10
-    assert settings.terms() == {"type": "end_of_next_month"}
+    assert settings.supplier_terms_mode == "eom_plus_30_days"
+    assert settings.terms() == {"type": "eom_plus_30_days"}
     assert settings.saturday_cash == "next_sunday"
     assert settings.opening_accounts == "checking_only"
     assert settings.credit_facility == "separate_headroom"
@@ -51,30 +52,37 @@ def test_saturday_cash_moves_to_the_next_sunday_once():
     report = truth.scaffold(as_of=AS_OF, checks=[{
         "check": "1", "date": "2026-10-31", "amount": 50, "discounted": True, "status": "unverified",
     }])
-    legs = [event for event in report["events"] if event.get("offsets")]
+    legs = [event for event in report["events"] if event.get("closes_balance")]
 
-    assert {event["date"] for event in legs} == {"2026-11-01"}
-    assert len(legs) == 2
-    assert sum(event["amount"] for event in legs) == 0
-    assert all(event["line_key"] == "financing" for event in legs)
-    assert all(event["is_financing"] for event in legs)
+    assert [event["date"] for event in legs] == ["2026-11-01"]
+    assert [event["amount"] for event in legs] == [-50]
+    assert legs[0]["loan_balance"] == 50
+    assert report["discounted_cheque_balances"] == [{
+        "check": "1", "amount": 50, "closes_on": "2026-11-01", "outstanding": True, "as_of": "2026-10-28",
+    }]
     october = next(week for week in report["weeks"] if week["week_start"] == "2026-10-25")
     assert all(event["date"] != "2026-10-31" for event in report["events"])
     assert october["week_end"] == "2026-10-30"
 
 
-def test_september_suppliers_default_to_the_sunday_after_month_end():
-    """31/10/2026 is a Saturday. The default cash date is Sunday 1/11, not 30/10."""
+def test_supplier_terms_mode_defaults_to_eom_plus_30_and_both_modes_leave_saturday():
+    """The owner has not confirmed the mode. Default stays eom_plus_30_days."""
+    assert truth.supplier_due(date(2026, 9, 3), None) == date(2026, 10, 30)
+    assert truth.supplier_due(date(2026, 9, 30), {"type": "eom_plus_30_days"}) == date(2026, 10, 30)
     assert date(2026, 10, 31).weekday() == 5
-    assert truth.supplier_contract_date(date(2026, 9, 3), None) == date(2026, 10, 31)
-    assert truth.supplier_contract_date(date(2026, 9, 30), None) == date(2026, 10, 31)
-    assert truth.supplier_due(date(2026, 9, 3), None) == date(2026, 11, 1)
-    assert truth.supplier_due(date(2026, 9, 30), {"type": "end_of_next_month"}) == date(2026, 11, 1)
-    assert truth.supplier_due(date(2026, 9, 3), None) != date(2026, 10, 30)
-    # January's next month-end is Saturday 28/02/2026, so the cash date is Sunday 01/03.
-    assert truth.supplier_due(date(2026, 1, 15), None) == date(2026, 3, 1)
-    # October's next month-end is Monday 30/11, so it does not move.
-    assert truth.supplier_due(date(2026, 10, 1), None) == date(2026, 11, 30)
+    assert truth.supplier_contract_date(date(2026, 9, 15), {"type": "end_of_next_month"}) == date(2026, 10, 31)
+    assert truth.supplier_due(date(2026, 9, 15), {"type": "end_of_next_month"}) == date(2026, 11, 1)
+    chosen = truth.resolve_settings({"cashflowSettings": {"supplierTermsMode": "end_of_next_month"}}, 7)
+    assert chosen.supplier_terms_mode == "end_of_next_month"
+    assert truth.supplier_due(date(2026, 9, 1), chosen.terms()) == date(2026, 11, 1)
+    # 28/02/2026 is a Saturday, so end_of_next_month for January moves to Sunday 01/03.
+    assert date(2026, 2, 28).weekday() == 5
+    assert truth.supplier_contract_date(date(2026, 1, 15), {"type": "end_of_next_month"}) == date(2026, 2, 28)
+    assert truth.supplier_due(date(2026, 1, 15), {"type": "end_of_next_month"}) == date(2026, 3, 1)
+    # eom+30 that lands on a Saturday also moves once. 30/04/2026 + 30 days = 30/05/2026, a Saturday.
+    assert date(2026, 5, 30).weekday() == 5
+    assert truth.supplier_contract_date(date(2026, 4, 2), {"type": "eom_plus_30_days"}) == date(2026, 5, 30)
+    assert truth.supplier_due(date(2026, 4, 2), {"type": "eom_plus_30_days"}) == date(2026, 5, 31)
 
 
 def test_eom_plus_30_days_stays_available_per_org():
@@ -91,7 +99,7 @@ def test_eom_plus_30_days_stays_available_per_org():
         "s1": {"type": "days_from_invoice", "days": 7},
     }}})
     assert truth.supplier_due(date(2026, 9, 1), truth.terms_for(settings, "s1")) == date(2026, 9, 8)
-    assert truth.supplier_due(date(2026, 9, 1), truth.terms_for(settings, "other")) == date(2026, 11, 1)
+    assert truth.supplier_due(date(2026, 9, 1), truth.terms_for(settings, "other")) == date(2026, 10, 30)
 
 
 def test_payroll_uses_the_org_day_and_leaves_saturday():
@@ -427,7 +435,10 @@ def test_the_live_view_of_a_new_org_carries_that_scaffold(fresh_org):
     source = view["cashflow_source"]
     assert source["provider_calls"] == 0
     assert source["settings"]["payroll_day"] == 10
-    assert source["settings"]["supplier_terms"] == {"type": "end_of_next_month"}
+    assert source["settings"]["supplierTermsMode"] == "eom_plus_30_days"
+    assert view["cash_forecast"]["engine"] == "cashflow_source"
+    assert source["forecast"]["engine"] == "cashflow_source"
+    assert source["forecast"] is view["cash_forecast"]
     opening = next(row for row in source["lines"] if row["line_key"] == "opening")
     facility = next(row for row in source["lines"] if row["line_key"] == "credit_facility")
     assert opening["amount"] is None and opening["status"] == "missing"
@@ -437,6 +448,33 @@ def test_the_live_view_of_a_new_org_carries_that_scaffold(fresh_org):
     blob = __import__("json").dumps(source, ensure_ascii=False)
     for token in FORBIDDEN:
         assert token not in blob
+
+
+def test_supplier_documents_build_september_provision_minus_what_was_paid(fresh_org, monkeypatch):
+    from datetime import date as real_date
+    from cfo.models import Bill, BillStatus
+    import cfo.services.dashboards.view_model as view_model
+
+    class Clock(real_date):
+        @classmethod
+        def today(cls):
+            return real_date(2026, 10, 28)
+
+    monkeypatch.setattr(view_model, "date", Clock)
+    owner = fresh_org()
+    with SessionLocal() as db:
+        db.add(Bill(
+            organization_id=owner["org_id"], bill_number="ספק-9", issue_date=real_date(2026, 9, 15),
+            status=BillStatus.RECEIVED, subtotal=1000, tax=0, total=1000, paid_amount=400, balance=600,
+        ))
+        db.commit()
+        view = build_view(db, owner["org_id"], real_date(2026, 9, 1), real_date(2026, 9, 30), plan=None)
+    source = view["cashflow_source"]
+    provisions = [event for event in source["events"] if event.get("line_key") == "suppliers_provision" and event.get("amount") is not None]
+    assert [event["amount"] for event in provisions] == [-600]
+    assert provisions[0]["date"] == "2026-10-30"
+    assert source["duplicates"]["status"] == "clear"
+    assert view["cash_forecast"]["weeks"][0]["start"] == "2026-10-25"
 
 
 def test_settings_reject_an_unknown_field_and_a_guessed_free_text_term():

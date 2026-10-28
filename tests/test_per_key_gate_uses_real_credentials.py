@@ -56,12 +56,12 @@ def test_the_gate_and_the_sync_share_the_same_source():
         assert marker in runner, f"{marker} חסר בנתיב הסנכרון"
 
 
-def test_the_env_fallback_stays_restricted_to_org_one():
-    """אישורי סביבה שייכים לארגון 1 בלבד. נפילה רחבה יותר הייתה שולחת
-    קריאות של תיק אחד בשם תיק אחר."""
+def test_the_env_fallback_is_an_explicit_org_list():
+    """אישורי סביבה רק לארגונים שברשימה. אין נפילה קשיחה לארגון 1."""
     src = inspect.getsource(cron._resolve_sumit_key)
 
-    assert "org_id == 1" in src or "organization_id == 1" in src
+    assert "env_sumit_allowed" in src
+    assert "org_id == 1" not in src
 
 
 def test_a_configured_org_resolves_a_key(client, monkeypatch):

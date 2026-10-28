@@ -48,7 +48,8 @@ def test_it_answers_with_the_breach_week_and_its_reasons(client, fresh_org, plat
     with SessionLocal() as db:
         db.add(Account(
             organization_id=org["org_id"], name="עו״ש", account_type=AccountType.BANK, raw_account_type="CHECKING",
-            balance=Decimal("-20000"), source="open_finance", balance_as_of=datetime(2026, 10, 21),
+            balance=Decimal("-20000"), source="open_finance",
+            balance_as_of=datetime.combine(date.today(), datetime.min.time()),
         ))
         db.commit()
     assert _put(client, platform_admin["headers"], dashboard_id, {"liquidityEvidence": {"facilities": [
@@ -60,7 +61,7 @@ def test_it_answers_with_the_breach_week_and_its_reasons(client, fresh_org, plat
     assert result["status"] == "ready"
     entity = result["entities"][0]
     assert entity["opening"]["amount"] == -20000.0
-    assert entity["opening"]["as_of"] == "2026-10-21"
+    assert entity["opening"]["as_of"] == date.today().isoformat()
     assert entity["first_breach"]["week_start"] == "2026-10-25"
     assert entity["first_breach"]["reasons"]
     assert len(entity["weeks"]) == 13

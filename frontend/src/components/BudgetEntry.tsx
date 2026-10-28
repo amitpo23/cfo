@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Target, Upload, Download, Save } from 'lucide-react';
 import apiService from '../services/api';
@@ -18,8 +18,10 @@ type BudgetLine = {
 type LinesPayload = {
   lines: BudgetLine[];
   counts: { active: number; filled: number; none: number; missing: number };
-  declared_payroll: { monthly: string; note_he: string };
+  declared_payroll: { monthly: string | null; note_he: string };
 };
+
+type OrgOption = { id: number; name: string };
 
 const MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
 
@@ -33,6 +35,8 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
+  const [orgs, setOrgs] = useState<OrgOption[]>([]);
+  const [orgId, setOrgId] = useState(() => localStorage.getItem('active_org_id') || '');
   const queryClient = useQueryClient();
   const fromMonth = 1;
   const toMonth = year === now.getFullYear() ? Math.max(month, now.getMonth() + 1) : 12;
@@ -40,8 +44,12 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   const card = darkMode ? 'bg-gray-800 border-gray-700 text-gray-100' : 'bg-white border-gray-200';
   const input = `px-3 py-2 rounded-lg border ${darkMode ? 'bg-gray-700 border-gray-600 text-white' : 'border-gray-300'}`;
 
+  useEffect(() => {
+    apiService.get<OrgOption[]>('/admin/auth/organizations').then(setOrgs).catch(() => setOrgs([]));
+  }, []);
+
   const linesQuery = useQuery({
-    queryKey: ['budget-lines', year, fromMonth, toMonth],
+    queryKey: ['budget-lines', orgId, year, fromMonth, toMonth],
     queryFn: () => apiService.get<{ status: string; data: LinesPayload }>('/financial/budget/lines', {
       params: { year, from_month: fromMonth, to_month: toMonth },
     }),
@@ -98,13 +106,25 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
       </div>
 
       {message && <div className={`p-3 rounded-lg border ${card}`}>{message}</div>}
-      {data?.declared_payroll ? (
+      {data?.declared_payroll?.monthly ? (
         <p className={`text-sm ${darkMode ? 'text-amber-200' : 'text-amber-800'}`}>
           שכר מוצהר לחודש: ₪{Number(data.declared_payroll.monthly).toLocaleString('he-IL')}. {data.declared_payroll.note_he}
         </p>
       ) : null}
 
       <div className={`rounded-xl border p-5 ${card} flex flex-wrap items-end gap-4`}>
+        <div>
+          <label className="block text-sm mb-1" htmlFor="budget-org">ארגון</label>
+          <select id="budget-org" className={input} value={orgId} onChange={(event) => {
+            const next = event.target.value;
+            if (next) localStorage.setItem('active_org_id', next);
+            setOrgId(next);
+            setDrafts({});
+          }}>
+            <option value="">הארגון הפעיל</option>
+            {orgs.map((org) => <option key={org.id} value={String(org.id)}>{org.name}</option>)}
+          </select>
+        </div>
         <div>
           <label className="block text-sm mb-1">שנה</label>
           <input type="number" className={input} value={year} onChange={(e) => setYear(parseInt(e.target.value, 10) || year)} />

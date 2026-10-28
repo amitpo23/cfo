@@ -53,8 +53,10 @@ def test_run_pipeline_aggregates_stages_with_state_tags(fresh_org):
         db.close()
 
 
-def test_status_default_org_sees_env_sumit_credentials(owner):
-    # The default org (id 1) gets SUMIT from env credentials, not a connection row.
+def test_status_default_org_sees_env_sumit_credentials(owner, monkeypatch):
+    # Listed orgs get SUMIT from env credentials. The test lists organization 1.
+    from cfo.config import settings
+    monkeypatch.setattr(settings, "sumit_env_credential_org_ids", "1")
     org_id = owner["user"]["organization_id"]
     db = SessionLocal()
     try:

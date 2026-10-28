@@ -26,7 +26,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   "funding": "מימון שהתקבל",
   "hospitality": "אירוח",
   "insurance": "ביטוח",
-  "intercompany": "העברות בין השף לפוד גרופ",
+  "intercompany": "העברות בין ישויות",
   "interest": "ריבית",
   "interest_authorities": "ריבית לרשויות",
   "interest_expense": "הוצאות ריבית",

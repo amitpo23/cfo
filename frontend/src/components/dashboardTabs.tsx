@@ -81,6 +81,7 @@ export type EntityLiquidity = {
   upcoming?: Upcoming[];
   debts?: Debt[];
   debts_known_total?: number | null;
+  stale_balances?: { account_id?: number; as_of: string | null; status?: string; reason?: string }[];
   debts_complete?: boolean;
   debt_service?: DebtService[];
   message?: string | null;
@@ -190,7 +191,13 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
           <div>
             <dt className="text-sm text-stone-500">יתרת עו״ש</dt>
             <dd className="text-xl">{partial ? `${money(section.balance_known)} (חלקי)` : money(balance)}</dd>
-            {asOf && !partial ? <dd className="text-xs text-stone-500">נכון ל־{asOf}</dd> : null}
+            {balance == null && (section.stale_balances ?? []).length ? (
+              <dd className="text-xs text-stone-500">
+                לא ידוע
+                {(section.stale_balances ?? []).map((row) => row.as_of ? ` · נכון ל־${row.as_of}` : ' · בלי תאריך').join('')}
+              </dd>
+            ) : null}
+            {asOf && !partial && balance != null ? <dd className="text-xs text-stone-500">נכון ל־{asOf}</dd> : null}
             {balanceSource && balanceSource !== 'accounts' ? <dd className="text-xs text-stone-500">{BALANCE_SOURCES[balanceSource] ?? balanceSource}</dd> : null}
           </div>
           <div>

@@ -18,6 +18,20 @@ from cfo.services.dashboards.view_model import build_view
 from cfo.services.live_cash_flow_service import LiveCashFlowService
 
 GOLDEN = Path(__file__).parent / "fixtures" / "eliav_filing_golden.json"
+# The Eliav tool's counterparties. Production code does not carry these names.
+_ELIAV_FILING_SCOPE = {
+    "pairs": [
+        {"organizationId": 2, "accountId": 35},
+        {"organizationId": 6},
+    ],
+    "aliases": [
+        ["אליאב", "כהן"],
+        ["אליהב", "כהן"],
+        "פוד גרופ",
+        "פודגרופ",
+        "food group",
+    ],
+}
 DUMP = os.environ.get("REZEF_ELIAV_DUMP")  # read-only copy of org 2 / account 35 rows
 
 
@@ -168,7 +182,7 @@ def test_filing_matches_the_eliav_tool(case):
     t = filing.Txn(id=None, organization_id=case["org"], account_id=case["account"], date="2026-08-01",
                    amount=float(case["amount"]), description=case["description"],
                    debtor=case["debtor"], creditor=case["creditor"])
-    assert filing.classify_builtin(t)[0] == case["expected"]
+    assert filing.classify_builtin(t, scope=_ELIAV_FILING_SCOPE)[0] == case["expected"]
 
 
 def test_filing_precedence_decision_then_custom_rule_then_builtin():

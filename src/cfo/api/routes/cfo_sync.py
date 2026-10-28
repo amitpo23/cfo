@@ -90,11 +90,12 @@ async def integration_status(
         ).all()
     }
 
-    # Env credentials only apply to the default organization; every other
-    # tenant must configure its own credentials.
-    env_allowed = org_id == 1
-    sumit_configured = connections.get("sumit") == "active" or (env_allowed and bool(settings.sumit_api_key))
-    open_finance_configured = connections.get("open_finance") == "active" or (env_allowed and all([
+    # SUMIT env credentials follow SUMIT_ENV_CREDENTIAL_ORG_IDS. Open Finance
+    # user-id fallback stays on organization 1.
+    sumit_env = settings.env_sumit_allowed(org_id)
+    of_env = org_id == 1
+    sumit_configured = connections.get("sumit") == "active" or (sumit_env and bool(settings.sumit_api_key))
+    open_finance_configured = connections.get("open_finance") == "active" or (of_env and all([
         settings.open_finance_client_id,
         settings.open_finance_client_secret,
         settings.open_finance_user_id,
@@ -143,7 +144,7 @@ async def integration_status(
     if not open_finance_configured:
         if connections.get("open_finance") == "active":
             missing["open_finance"] = []
-        elif env_allowed:
+        elif of_env:
             missing["open_finance"] = [
                 name for name, value in {
                     "OPEN_FINANCE_CLIENT_ID": settings.open_finance_client_id,

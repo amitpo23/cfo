@@ -1,6 +1,5 @@
-// The "תזרים חזוי" tab of /d/: thirteen weeks of projected cash per entity and combined
-// (backend: services/dashboards/cash_forecast.py). Every number is from the view model;
-// an unknown balance stays "לא ידוע" and the tab says which input is missing.
+// The "תזרים חזוי" tab of /d/: thirteen weeks from cashflow_source.forecast.
+// Every number is from that one engine. An unknown balance stays "לא ידוע".
 import { Fragment, useEffect, useState } from 'react';
 import {
   Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -42,6 +41,7 @@ export type CashForecast = {
   weeks: ForecastWeek[];
   first_breach: { week_start: string; week_end: string; headroom: number; reasons: string[] } | null;
   overdue?: Overdue[];
+  discounted_cheque_balances?: { check?: string | null; amount: number; closes_on: string; outstanding: boolean }[];
   missing: string[];
   shared_identity_note?: string | null;
   run_rate?: Record<string, number>;
@@ -270,6 +270,31 @@ export function CashForecastPanel({ forecast, overdue }: { forecast: CashForecas
               </li>
             ))}
           </ul>
+        </section>
+      ) : null}
+      {(forecast.discounted_cheque_balances ?? []).length ? (
+        <section className="d-card" aria-label="יתרות ניכיון">
+          <h2>ניכיון שיקים — יתרת הלוואה עד הפירעון</h2>
+          <table className="mt-2 w-full text-sm">
+            <thead>
+              <tr className="text-right text-stone-500">
+                <th className="py-1">שיק</th>
+                <th>יתרה</th>
+                <th>נסגר ב</th>
+                <th>מצב</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(forecast.discounted_cheque_balances ?? []).map((row, index) => (
+                <tr key={`${row.check ?? index}-${row.closes_on}`} className="border-t border-stone-200">
+                  <td className="py-1">{row.check || 'שיק מנוכה'}</td>
+                  <td className="tabular-nums">{money(row.amount)}</td>
+                  <td>{day(row.closes_on)}</td>
+                  <td>{row.outstanding ? 'פתוח' : 'נסגר'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </section>
       ) : null}
       <KpiCards items={kpis(forecast)} />

@@ -614,10 +614,24 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
 
     checking = by_kind.get("checking", [])
     known = {}
+    stale_balances = []
     for account in checking:
-        if _balance(account) is not None:
+        bal = _balance(account)
+        bal_date = account.balance_as_of.date() if account.balance_as_of else None
+        if account.source == "open_finance" and bal is not None and (
+            bal_date is None or (today - bal_date).days > 2
+        ):
+            stale_balances.append({
+                "account_id": account.id,
+                "as_of": bal_date.isoformat() if bal_date else None,
+                "balance": None,
+                "observed_balance": bal,
+                "status": "unknown",
+                "reason": "יתרת Open Finance ישנה מיומיים" if bal_date else "אין תאריך ליתרת Open Finance",
+            })
+        elif bal is not None and bal_date is not None:
             known[account.id] = {
-                "balance": _balance(account), "as_of": account.balance_as_of.date(),
+                "balance": bal, "as_of": bal_date,
                 "source": "open_finance" if account.source == "open_finance" else "accounts",
             }
         elif account.source != "open_finance":
@@ -629,8 +643,11 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         derived = opening_balance(db, account, evidence["openingBalances"], end, sole=len(unknown) == 1)
         if derived is not None:
             known[account.id] = derived
+    stale_ids = {row["account_id"]: row for row in stale_balances}
     balance = None if not checking or len(known) != len(checking) else _r(sum(k["balance"] for k in known.values()))
-    as_of = max((k["as_of"] for k in known.values()), default=None)
+    as_of_dates = [k["as_of"] for k in known.values() if k.get("as_of")]
+    # The sum is only as fresh as the oldest account. Never the newest date.
+    as_of = min(as_of_dates) if as_of_dates and balance is not None else None
     sources = {k["source"] for k in known.values()}
     balance_source = None if balance is None else (sources.pop() if len(sources) == 1 else "mixed")
     limits = [_num(account.credit_limit) for account in checking]
@@ -762,12 +779,21 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
             "limit_source": limit_source,
             "available_to_limit": None if balance is None or limit is None else _r(limit + balance),
         },
+        "account_as_of": [
+            {"account_id": account_id, "as_of": slot["as_of"].isoformat() if hasattr(slot.get("as_of"), "isoformat") else slot.get("as_of")}
+            for account_id, slot in known.items()
+        ],
+        "stale_balances": stale_balances,
         "accounts": [
             {"account_id": a.id, "name": a.name, "kind": _account_kind(a), "bank_key": bank_key(a),
-             "balance": known[a.id]["balance"] if a.id in known else _balance(a),
+             "balance": known[a.id]["balance"] if a.id in known else (None if a.id in stale_ids else _balance(a)),
              "credit_limit": _num(a.credit_limit),
-             "as_of": known[a.id]["as_of"].isoformat() if a.id in known else (
-                 a.balance_as_of.date().isoformat() if a.balance_as_of else None),
+             "as_of": (
+                 known[a.id]["as_of"].isoformat() if a.id in known and hasattr(known[a.id].get("as_of"), "isoformat")
+                 else known[a.id]["as_of"] if a.id in known
+                 else stale_ids[a.id]["as_of"] if a.id in stale_ids
+                 else (a.balance_as_of.date().isoformat() if a.balance_as_of else None)
+             ),
              "balance_source": known[a.id]["source"] if a.id in known else None,
              **({"opening": known[a.id]["opening"]} if "opening" in known.get(a.id, {}) else {})}
             for a in accounts
@@ -1225,4 +1251,10 @@ def redact_public(section):
             {key: value for key, value in account.items() if key != "account_id"}
             for account in copied["accounts"] if isinstance(account, dict)
         ]
+    for key in ("stale_balances", "account_as_of"):
+        if isinstance(copied.get(key), list):
+            copied[key] = [
+                {field: value for field, value in row.items() if field != "account_id"}
+                for row in copied[key] if isinstance(row, dict)
+            ]
     return copied

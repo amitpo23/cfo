@@ -2,19 +2,20 @@
 
 A line is filled only when both quantity and rate are already stored, or the
 owner saved an amount. ``none`` is an explicit mark. Everything else is
-``missing`` ("חסר, הבעלים יזין"). The declared payroll of 49,700 is the sum of
-the wage lines that already have both numbers in the Eliav seed; it is not
-spread onto the other lines.
+``missing`` ("חסר, הבעלים יזין"). There is no fixed payroll amount. A wage
+total is only the sum of wage lines that already have both numbers. A P&L
+row with no saved amount is prefilled from the same month last year when
+that history exists, and stays missing when it does not.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from calendar import monthrange
+from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 
 from ...models import Budget, ClientDashboard, DashboardEntity, DashboardPlan
 from .plan_budget import FINANCING, budget_catalog
 
-DECLARED_PAYROLL_MONTHLY = Decimal("49700.00")
 NONE_MARK = "none"
 NONE_NOTE = "budget-line:none"
 STATUS_HE = {
@@ -104,6 +105,29 @@ def _stored_budget(db, organization_id: int, year: int, month: int, category: st
     return sorted(matches, key=lambda row: (row.updated_at or datetime.min, row.id or 0), reverse=True)[0]
 
 
+def _history_amounts(db, organization_id: int, year: int, months: list[int]) -> dict[tuple[int, str], Decimal]:
+    """Same calendar month last year, by P&L row. No history stays absent."""
+    from .books import cash_basis_month, classified_bank
+    if not months:
+        return {}
+    prior = year - 1
+    start = date(prior, min(months), 1)
+    end = date(prior, max(months), monthrange(prior, max(months))[1])
+    filed = classified_bank(db, organization_id, start, end, None)
+    found = {}
+    for month in months:
+        prefix = f"{prior:04d}-{month:02d}"
+        items = [(txn, row) for txn, row in filed if str(txn.date).startswith(prefix)]
+        if not items:
+            continue
+        report = cash_basis_month(items)
+        for line in report["lines"]:
+            amount = line.get("amount")
+            if amount:
+                found[(month, line["id"])] = Decimal(str(amount)).quantize(_MONEY)
+    return found
+
+
 def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: int) -> dict:
     dashboard = dashboard_for_org(db, organization_id)
     payload = None
@@ -116,6 +140,7 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
     imported = ((payload or {}).get("eliavImport") or {}).get("lines") if isinstance(payload, dict) else None
     imported = imported if isinstance(imported, dict) else {}
     months = list(range(from_month, to_month + 1))
+    history = _history_amounts(db, organization_id, year, months) if source == "catalog" else {}
     lines = []
     missing = []
     filled = none = 0
@@ -149,10 +174,17 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
                     status, amount = "none", None
                 elif stored is not None:
                     status, amount = "filled", Decimal(str(stored.budgeted_amount or 0)).quantize(_MONEY)
+            source_name = None
+            if status == "missing":
+                prior = history.get((month, line_id))
+                if prior is not None:
+                    status, amount = "filled", prior
+                    source_name = "history"
             by_month[key] = {
                 "status": status,
                 "status_he": STATUS_HE[status],
                 "amount": None if amount is None else _q(amount),
+                **({"source": source_name} if source_name else {}),
             }
             if status == "missing":
                 line_missing.append(key)
@@ -188,7 +220,7 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
         wage_months.append({
             "month": key,
             "filled_sum": _q(total) if any_filled else None,
-            "matches_declared": any_filled and total == DECLARED_PAYROLL_MONTHLY,
+            "matches_declared": None,
             "line_ids": ids,
         })
     return {
@@ -200,8 +232,8 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
         "counts": {"active": len(lines), "filled": filled, "none": none, "missing": len(missing)},
         "missing": missing,
         "declared_payroll": {
-            "monthly": _q(DECLARED_PAYROLL_MONTHLY),
-            "note_he": "השכר המוצהר הוא סכום שורות השכר שכבר יש להן כמות ותעריף. הוא לא מחולק לשורות בלי סכום.",
+            "monthly": None,
+            "note_he": "השכר המוצהר הוא סכום שורות השכר שכבר יש להן כמות ותעריף. אין סכום קבוע.",
             "months": wage_months,
         },
         "provider_calls": 0,
@@ -342,9 +374,9 @@ def seed_status(seed: list[dict]) -> dict:
         "filled": filled,
         "missing": missing,
         "declared_payroll": {
-            "monthly": _q(DECLARED_PAYROLL_MONTHLY),
+            "monthly": None,
             "filled_sum": _q(wage) if wage_ids else None,
-            "matches_declared": bool(wage_ids) and wage == DECLARED_PAYROLL_MONTHLY,
+            "matches_declared": None,
             "line_ids": wage_ids,
         },
     }

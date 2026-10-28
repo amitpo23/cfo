@@ -30,7 +30,7 @@ def _dashboard(client, platform_admin, fresh_org, slug, *, balance="-35000"):
         db.add(Account(
             organization_id=chef["org_id"], name="עו״ש", account_type=AccountType.BANK,
             raw_account_type="CHECKING", balance=Decimal(balance), source="open_finance",
-            balance_as_of=datetime(2026, 10, 21),
+            balance_as_of=datetime(2026, 10, 26),
         ))
         db.commit()
     added = client.post(f"/api/dashboards/{dashboard_id}/entities", headers=platform_admin["headers"],

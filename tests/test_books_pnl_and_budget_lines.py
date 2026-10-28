@@ -221,7 +221,8 @@ def test_seed_payroll_is_the_four_filled_lines_and_the_rest_stay_missing():
     seed = json.loads(Path("tests/fixtures/eliav_budget_seed_shape.json").read_text(encoding="utf-8"))
     report = seed_status(seed)
     assert [line["id"] for line in report["filled"]] == ["wage_05", "wage_06", "wage_08", "wage_11"]
-    assert report["declared_payroll"]["matches_declared"] is True
+    assert report["declared_payroll"]["matches_declared"] is None
+    assert report["declared_payroll"]["monthly"] is None
     assert report["declared_payroll"]["filled_sum"] == "49700.00"
     missing_ids = {line["id"] for line in report["missing"]}
     assert "rev_pizza" in missing_ids and "rev_chef" in missing_ids
@@ -237,12 +238,13 @@ def test_budget_lines_are_not_four_zeros(client, fresh_org):
     data = response.json()["data"]
     assert data["counts"]["active"] > 4
     labels = {line["label"] for line in data["lines"]}
-    assert "מכירות" in labels or any("מכיר" in label for label in labels)
+    assert any("הכנסות" in label for label in labels)
+    assert "sales" not in labels and "materials" not in labels
     january = data["lines"][0]["months"]["2026-01"]
     assert january["status"] == "missing"
     assert january["amount"] is None
     assert january["status_he"] == "חסר, הבעלים יזין"
-    assert data["declared_payroll"]["monthly"] == "49700.00"
+    assert data["declared_payroll"]["monthly"] is None
     assert data["provider_calls"] == 0
 
 

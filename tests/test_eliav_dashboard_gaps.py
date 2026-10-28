@@ -16,6 +16,21 @@ from cfo.services.dashboards import cash_statement, filing, liquidity
 from cfo.services.dashboards.books import cash_basis_month
 
 
+_ELIAV_SCOPE = {
+    "pairs": [
+        {"organizationId": 2, "accountId": 35},
+        {"organizationId": 6},
+    ],
+    "aliases": [
+        ["אליאב", "כהן"],
+        ["אליהב", "כהן"],
+        "פוד גרופ",
+        "פודגרופ",
+        "food group",
+    ],
+}
+
+
 def _txn(**kwargs):
     defaults = dict(id=None, organization_id=2, account_id=35, date="2026-10-01", amount=1000.0,
                     description="", debtor="", creditor="")
@@ -43,7 +58,7 @@ def test_discounting_evidence_is_not_in_debts_known_total(fresh_org):
         db.add(Account(
             organization_id=owner["org_id"], name="עו״ש", account_type=AccountType.BANK,
             raw_account_type="CHECKING", source="open_finance", external_id="chk-1",
-            balance=Decimal("-1000"), balance_as_of=datetime(2026, 10, 20), currency="ILS",
+            balance=Decimal("-1000"), balance_as_of=datetime(2026, 10, 31), currency="ILS",
         ))
         db.commit()
         section = liquidity.build_liquidity(
@@ -70,7 +85,7 @@ def test_unknown_discounting_balance_stays_null(fresh_org):
         db.add(Account(
             organization_id=owner["org_id"], name="עו״ש", account_type=AccountType.BANK,
             raw_account_type="CHECKING", source="open_finance", external_id="chk-2",
-            balance=Decimal("-1000"), balance_as_of=datetime(2026, 10, 20), currency="ILS",
+            balance=Decimal("-1000"), balance_as_of=datetime(2026, 10, 31), currency="ILS",
         ))
         db.commit()
         section = liquidity.build_liquidity(
@@ -118,8 +133,8 @@ def test_a_live_discounting_loan_is_an_advance(fresh_org):
 def test_intercompany_aliases_ignore_order_and_punctuation(debtor, creditor, description):
     chef = _txn(organization_id=2, account_id=35, debtor=debtor, creditor=creditor, description=description, amount=500)
     food = _txn(organization_id=6, account_id=9, debtor=debtor, creditor=creditor, description=description, amount=-500)
-    assert filing.classify_builtin(chef)[0] == "intercompany"
-    assert filing.classify_builtin(food)[0] == "intercompany"
+    assert filing.classify_builtin(chef, scope=_ELIAV_SCOPE)[0] == "intercompany"
+    assert filing.classify_builtin(food, scope=_ELIAV_SCOPE)[0] == "intercompany"
 
 
 @pytest.mark.parametrize("debtor,creditor,description,org,account", [
@@ -131,7 +146,7 @@ def test_intercompany_aliases_ignore_order_and_punctuation(debtor, creditor, des
 def test_unknown_or_out_of_scope_counterparty_is_not_intercompany(debtor, creditor, description, org, account):
     txn = _txn(organization_id=org, account_id=account, debtor=debtor, creditor=creditor,
                description=description or "תקבול", amount=500)
-    assert filing.classify_builtin(txn)[0] != "intercompany"
+    assert filing.classify_builtin(txn, scope=_ELIAV_SCOPE)[0] != "intercompany"
     assert filing.is_intercompany_counterparty("") is False
     assert filing.is_intercompany_counterparty("כהן") is False
 
@@ -258,7 +273,7 @@ def _shared_account(db, org_id, number, balance, external):
         organization_id=org_id, name="עו״ש משותף", account_type=AccountType.BANK,
         raw_account_type="CHECKING", source="open_finance", external_id=external,
         provider_account_number=number, balance=Decimal(str(balance)),
-        balance_as_of=datetime(2026, 10, 20), credit_limit=Decimal("5000"), currency="ILS",
+        balance_as_of=datetime(2026, 10, 28), credit_limit=Decimal("5000"), currency="ILS",
     )
     db.add(account)
     db.flush()

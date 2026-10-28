@@ -113,7 +113,7 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
         pnl_months=pnl.get("months"), reports=reports,
     )
     position = liquidity.build_liquidity(db, organization_id, start, end, plan=plan, entity_id=entity_id,
-                                         classified=filed)
+                                         classified=filed, today=date.today())
     balance = balance_sheet_report.build_balance_sheet(db, organization_id, end)
     outlook = forecast.build_forecast(
         pnl.get("months") or [], as_of=end, plan=plan, debt_service=position["debt_service"],
@@ -145,21 +145,50 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
             "published": False,
         },
     }
-    view["cash_forecast"] = cash_forecast.build_entity_forecast(
-        view, plan=plan, organization_id=organization_id, label=None, today=end,
+    as_of_today = date.today()
+    view["cash_forecast"] = cashflow_truth.published_forecast(
+        view, plan=plan, organization_id=organization_id, label=None, today=as_of_today,
         apply_budget_rules=with_budget,
     )
     view["cashflow_source"] = cashflow_truth.scaffold(
-        as_of=end, plan=plan, organization_id=organization_id,
+        as_of=as_of_today, plan=plan, organization_id=organization_id,
         opening=position["position"].get("balance"),
         opening_as_of=position["position"].get("as_of"),
         credit_limit=position["position"].get("limit"),
+        documents=_ap_documents(db, organization_id),
         bank_txns=_bank_rows(filed),
         checks=position.get("checks"),
     )
+    view["cashflow_source"]["forecast"] = view["cash_forecast"]
     view["freshness"]["cash_forecast"] = view["cash_forecast"]["status"]
     view["freshness"]["cashflow_source"] = "ready" if view["cashflow_source"]["publishable"] else "unknown"
     return redact_public_view(view)
+
+
+def _ap_documents(db, organization_id: int) -> list[dict]:
+    """Open supplier bills already in the database. No provider call."""
+    from ...models import Bill, BillStatus
+    rows = db.query(Bill).filter(
+        Bill.organization_id == organization_id,
+        Bill.status.notin_([BillStatus.DRAFT, BillStatus.VOID]),
+    ).all()
+    documents = []
+    for bill in rows:
+        gross = float(bill.total or 0)
+        if gross <= 0 or bill.issue_date is None:
+            continue
+        paid = float(bill.paid_amount or 0)
+        documents.append({
+            "id": bill.id,
+            "kind": "AP",
+            "supplier_id": bill.vendor_id or bill.bill_number or str(bill.id),
+            "supplier_name": bill.bill_number or "",
+            "doc_ref": bill.bill_number or str(bill.id),
+            "doc_date": bill.issue_date.isoformat(),
+            "gross": gross,
+            "paid_gross": paid,
+        })
+    return documents
 
 
 def _bank_rows(filed) -> list[dict]:

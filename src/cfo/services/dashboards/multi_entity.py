@@ -553,7 +553,11 @@ def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | N
         "balance_sheet": _uncombined_balance_sheet(),
         "provider_calls": 0,
     }
-    return _apply_shared_identity(db, combined, sections, groups, start, end)
+    result = _apply_shared_identity(db, combined, sections, groups, start, end)
+    result["cashflow_source"] = {
+        "forecast": result.get("cash_forecast"), "provider_calls": 0, "engine": "cashflow_source",
+    }
+    return result
 
 
 def _combine_sources(sections: list[dict]) -> dict:
@@ -783,6 +787,7 @@ def _candidates(db, org_ids: list[int], start: date, end: date, plan: dict | Non
     plan = plan if isinstance(plan, dict) else {}
     decisions = plan.get("statusDecisions") if isinstance(plan.get("statusDecisions"), dict) else None
     rules = plan.get("statusRules") if isinstance(plan.get("statusRules"), list) else None
+    scope = filing.scope_from_plan(plan)
     out = []
     for org_id in dict.fromkeys(org_ids):
         rows = cashflow_row_objects(db, org_id, start, end)
@@ -796,12 +801,12 @@ def _candidates(db, org_ids: list[int], start: date, end: date, plan: dict | Non
             if row.account_id in dropped_accounts:
                 continue
             txn = filing.txn_from_row(row)
-            category = filing.classify(txn, decisions=decisions, custom_rules=rules).category
+            category = filing.classify(txn, decisions=decisions, custom_rules=rules, scope=scope).category
             raw = row.raw_data if isinstance(row.raw_data, dict) else {}
             party = " ".join(part for part in (
                 row.description or "", str(raw.get("debtorName") or ""), str(raw.get("creditorName") or ""),
             ) if part)
-            if category in IC_CATEGORIES or _marked(row.description) or filing.is_intercompany_counterparty(party):
+            if category in IC_CATEGORIES or _marked(row.description) or filing.is_intercompany_counterparty(party, aliases=scope.get("aliases")):
                 out.append((row, Decimal(str(row.amount)), category))
     return out
 

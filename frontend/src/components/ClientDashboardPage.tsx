@@ -209,6 +209,7 @@ type DashboardView = {
   liquidity?: EntityLiquidity | null;
   forecast?: Forecast | null;
   cash_forecast?: CashForecast | null;
+  cashflow_source?: { forecast?: CashForecast | null } | null;
   sources?: Sources | null;
   cash_statement?: CashStatement | null;
   balance_sheet?: BalanceSheetView | null;
@@ -220,6 +221,7 @@ type DashboardView = {
     liquidity?: EntityLiquidity | null;
     forecast?: Forecast | null;
     cash_forecast?: CashForecast | null;
+    cashflow_source?: { forecast?: CashForecast | null } | null;
     books_pnl?: BooksPnl | null;
     intercompany_removed?: IntercompanyRemoved;
     sources?: Sources | null;
@@ -852,17 +854,20 @@ export default function ClientDashboardPage() {
     budget_vs_actual: view.combined?.budget_vs_actual,
     liquidity: view.combined?.liquidity,
     forecast: view.combined?.forecast,
-    cash_forecast: view.combined?.cash_forecast,
+    cash_forecast: view.combined?.cashflow_source?.forecast ?? view.combined?.cash_forecast,
+    cashflow_source: view.combined?.cashflow_source,
     books_pnl: view.combined?.books_pnl,
     sources: view.combined?.sources,
     cash_statement: view.combined?.cash_statement,
     balance_sheet: view.combined?.balance_sheet,
   } : entities[Number(scope)]?.view ?? view;
   // Past-due items are per entity; the combined scope lists every entity's, named.
-  const overdue: Overdue[] = !view ? [] : !multi ? (view.cash_forecast?.overdue ?? [])
+  const forecastOf = (entityView: DashboardView | null | undefined) =>
+    entityView?.cashflow_source?.forecast ?? entityView?.cash_forecast;
+  const overdue: Overdue[] = !view ? [] : !multi ? (forecastOf(view)?.overdue ?? [])
     : scope === 'combined'
-      ? entities.flatMap((entity) => (entity.view.cash_forecast?.overdue ?? []).map((item) => ({ ...item, entity: entity.label })))
-      : (entities[Number(scope)]?.view.cash_forecast?.overdue ?? []);
+      ? entities.flatMap((entity) => (forecastOf(entity.view)?.overdue ?? []).map((item) => ({ ...item, entity: entity.label })))
+      : (forecastOf(entities[Number(scope)]?.view)?.overdue ?? []);
   const parameters = parametersFromPayload(plan?.payload);
 
   return (
@@ -963,7 +968,7 @@ export default function ClientDashboardPage() {
                   onSave={(organizationId, item) => void savePayload(withOpeningBalance(plan.payload, organizationId, item), false)}
                 />
               ) : null}
-              {tab === 'cashforecast' ? <CashForecastPanel forecast={scoped.cash_forecast} overdue={overdue} /> : null}
+              {tab === 'cashforecast' ? <CashForecastPanel forecast={scoped.cashflow_source?.forecast ?? scoped.cash_forecast} overdue={overdue} /> : null}
               {tab === 'cashforecast' && editor?.role === 'owner' && plan && filing ? (
                 <CashForecastItemsCard
                   entities={filing.entities ?? []}
@@ -1026,12 +1031,16 @@ export type TabId = (typeof TABS)[number]['id'];
 function StatusKpis({ view, reviewCount }: { view: DashboardView; reviewCount: number | null }) {
   const liquidity = view.liquidity;
   const balance = liquidity ? (liquidity.position ? liquidity.position.balance : liquidity.balance) : null;
+  const stale = liquidity?.stale_balances ?? [];
+  const staleNote = balance == null && stale.length
+    ? `לא ידוע${stale.filter((row) => row.as_of).map((row) => ` (נכון ל־${row.as_of})`).join('')}`
+    : null;
   const partial = !liquidity?.position && (balance === null || balance === undefined)
     && liquidity?.balance_known !== null && liquidity?.balance_known !== undefined;
   const items = [
     { label: 'הכנסות בתקופה', value: money(view.pnl?.total_revenue) },
     { label: 'הוצאות בתקופה', value: money(view.pnl?.total_expenses) },
-    { label: 'יתרת עו״ש', value: partial ? `${money(liquidity?.balance_known)} (חלקי)` : money(balance ?? null) },
+    { label: 'יתרת עו״ש', value: staleNote ?? (partial ? `${money(liquidity?.balance_known)} (חלקי)` : money(balance ?? null)) },
     { label: 'התחייבויות ידועות', value: money(liquidity?.debts_known_total ?? null) },
     ...(reviewCount === null ? [] : [{ label: 'תנועות לבירור', value: String(reviewCount), tone: reviewCount > 0 ? 'warn' as const : null }]),
   ];

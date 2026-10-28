@@ -12,7 +12,6 @@ from . import filing
 _KEYWORD_KEY = {
     "sales_card": "card_issuers_in",
     "card_bills": "card_issuers_out",
-    "intercompany": "food_group",
 }
 
 
@@ -28,10 +27,11 @@ def build_filing_report(
     decisions = payload.get("statusDecisions") if isinstance(payload.get("statusDecisions"), dict) else {}
     rules = [rule for rule in (payload.get("statusRules") or []) if isinstance(rule, dict)]
     txns = [filing.txn_from_row(row) for row in rows]
+    scope = filing.scope_from_plan(payload)
     filed = filing.classify_all(
-        txns, invoices=invoices, decisions=decisions, custom_rules=rules,
+        txns, invoices=invoices, decisions=decisions, custom_rules=rules, scope=scope,
     )
-    paired = [(txn, filed[id(txn)], filing.classify(txn, custom_rules=rules)) for txn in txns]
+    paired = [(txn, filed[id(txn)], filing.classify(txn, custom_rules=rules, scope=scope)) for txn in txns]
     return {
         "rules": [*_custom_rules(rules, paired), *_builtin_rules(paired)],
         "review": _review(paired, page=page, page_size=page_size),

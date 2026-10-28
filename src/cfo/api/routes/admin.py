@@ -1385,7 +1385,7 @@ async def super_admin_sync_client(
             IntegrationConnection.status == "active",
         ).all()
     }
-    if org_id == 1 and settings.sumit_api_key:
+    if settings.env_sumit_allowed(org_id) and settings.sumit_api_key:
         targets.add("sumit")
 
     if not targets:
