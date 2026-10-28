@@ -21,7 +21,7 @@ GROUPS = (
     ("operating_in", "תפעולי — כניסות"),
     ("operating_out", "תפעולי — יציאות"),
     ("finance", "מימון שוטף (עמלות וריבית)"),
-    ("financing", "מימון (הלוואות, ניכיון, בעלים)"),
+    ("financing", "מימון (הלוואות ובעלים)"),
     ("internal", "פנימי ומסים"),
 )
 NETTING_LINES = (
@@ -143,6 +143,53 @@ def _forecast_columns(forecast: dict | None) -> dict | None:
         "line_items": False,
         "line_note": FORECAST_LINE_NOTE,
     }
+
+
+def subtract_filed(statement: dict, pairs) -> dict:
+    """Remove filed rows that belong to a duplicate copy of a bank account.
+
+    A month the statement does not know stays unknown. Netting lines are left
+    alone: the duplicate rows were not paired.
+    """
+    if not isinstance(statement, dict) or not pairs or not statement.get("months"):
+        return statement
+    months = statement["months"]
+    known = {month for month in months if ((statement.get("totals") or {}).get("net") or {}).get(month) is not None}
+    lines = [{**line, "values": dict(line.get("values") or {})} for line in statement.get("lines") or []]
+    index = {line["id"]: line for line in lines}
+    for txn, result in pairs:
+        month = str(getattr(txn, "date", ""))[:7]
+        if month not in known:
+            continue
+        line = index.get(getattr(result, "category", None))
+        if line is None or line["id"] in NETTING_IDS:
+            continue
+        current = line["values"].get(month)
+        if current is None:
+            continue
+        line["values"][month] = _r(current - float(txn.amount))
+    for line in lines:
+        line["total"] = _r(sum(line["values"].get(month) or 0.0 for month in months))
+        if line["id"] not in NETTING_IDS:
+            line["group"] = _group(line["id"], line["total"])
+    totals = {}
+    for name, _label in GROUPS:
+        rows = [line for line in lines if line["group"] == name]
+        totals[name] = {
+            month: None if month not in known else _r(sum(line["values"].get(month) or 0.0 for line in rows))
+            for month in months
+        }
+    for name, parts_of in (("operating", ("operating_in", "operating_out")),
+                           ("after_finance", ("operating_in", "operating_out", "finance")),
+                           ("net", tuple(group for group, _label in GROUPS))):
+        totals[name] = {
+            month: None if month not in known else _r(sum(totals[part][month] for part in parts_of))
+            for month in months
+        }
+    copied = dict(statement)
+    copied["lines"] = lines
+    copied["totals"] = totals
+    return copied
 
 
 def known_entities(sections: list[dict], months: list[str]) -> dict[str, list]:

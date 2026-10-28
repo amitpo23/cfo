@@ -173,8 +173,9 @@ def test_each_card_shows_its_limit_and_what_is_available():
     assert cards["Isracard"]["credit_limit"] is None
     assert cards["Isracard"]["available"] is None
     assert result["card_summary"] == {
-        "available": None, "available_known": 11950.0,
-        "credit_limit": None, "credit_limit_known": 16000.0,
+        "available": None, "available_known": 11950.0, "available_unknown": 1,
+        "credit_limit": None, "credit_limit_known": 16000.0, "credit_limit_unknown": 1,
+        "balance": 3700.0, "balance_known": 3700.0, "balance_unknown": 0,
     }
 
 

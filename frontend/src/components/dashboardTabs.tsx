@@ -15,10 +15,21 @@ export type EntityPosition = {
 };
 export type CardRow = {
   name: string; balance: number | null; credit_limit?: number | null; available?: number | null;
-  as_of: string | null; entity?: string | null;
+  as_of: string | null; entity?: string | null; last_data?: string | null;
+  date_mismatch?: boolean; date_note?: string | null;
 };
 export type CardSummary = {
-  available: number | null; available_known: number | null; credit_limit: number | null; credit_limit_known: number | null;
+  available: number | null; available_known: number | null; available_unknown?: number;
+  credit_limit: number | null; credit_limit_known: number | null; credit_limit_unknown?: number;
+  balance?: number | null; balance_known?: number | null; balance_unknown?: number;
+};
+export type CardActivity = {
+  key?: string; label?: string; definition?: string; amount: number | null; count: number | null;
+  defined: boolean;
+};
+export type Advance = {
+  label?: string; name?: string | null; balance: number | null; as_of?: string | null;
+  entity?: string | null; note?: string | null;
 };
 export type DebtService = { month: string; principal: number; interest: number; new_loans: number };
 
@@ -35,8 +46,17 @@ export type EntityLiquidity = {
   accounts?: { name: string; kind: string; balance: number | null; credit_limit: number | null; as_of: string | null; balance_source?: string | null }[];
   cards?: CardRow[];
   card_summary?: CardSummary;
+  card_activity?: CardActivity | null;
   loans?: { name: string; balance: number | null; as_of: string | null; maturity?: string | null }[];
-  months?: { month: string; days: number; min: number | null; negative_days: number; beyond_limit_days: number | null; last: number | null }[];
+  advances?: Advance[];
+  months?: {
+    month: string; days: number; min: number | null; negative_days: number;
+    beyond_limit_days: number | null; last: number | null; last_date?: string | null;
+    reconciliation_note?: string | null;
+  }[];
+  balance_vs_flow_note?: string | null;
+  daily_balance_note?: string | null;
+  shared_identity_note?: string | null;
   checks?: { check: string; date: string; amount: number; payee: string | null; state: string; cleared_on?: string }[];
   // combined only
   balance?: number | null;
@@ -82,6 +102,18 @@ export const DEFAULT_PARAMETERS: Parameters = {
 export function money(value: number | null | undefined): string {
   if (value === null || value === undefined) return 'לא ידוע';
   return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(value);
+}
+
+function cardTotal(summary: CardSummary, field: 'balance' | 'credit_limit' | 'available'): string {
+  const unknown = summary[`${field}_unknown` as 'balance_unknown'];
+  const known = summary[`${field}_known` as 'balance_known'];
+  const complete = summary[field];
+  const missing = typeof unknown === 'number' ? unknown : (complete == null ? 1 : 0);
+  if (missing > 0) {
+    if (known == null) return 'לא ידוע';
+    return `${money(known)} (חלקי — ${missing} לא ידועים)`;
+  }
+  return money(complete ?? null);
 }
 
 function Card({ title, children }: { title: string; children: ReactNode }) {
@@ -179,9 +211,10 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
           </table>
         ) : null}
         {section.balance_note ? <p className="mt-3 text-sm text-amber-800">{section.balance_note}</p> : null}
+        {section.shared_identity_note ? <p className="mt-3 text-sm text-amber-800">{section.shared_identity_note}</p> : null}
         {section.months && section.months.length > 0 ? (
           <table className="mt-4 d-table">
-            <thead><tr><Th>חודש</Th><Th>ימים</Th><Th>שפל</Th><Th>ימי מינוס</Th><Th>ימים מעבר למסגרת</Th><Th>סוף חודש</Th></tr></thead>
+            <thead><tr><Th>חודש</Th><Th>ימים</Th><Th>שפל (יתרה)</Th><Th>ימי מינוס</Th><Th>ימים מעבר למסגרת</Th><Th>סוף חודש (יתרה)</Th></tr></thead>
             <tbody>
               {section.months.map((month) => (
                 <tr key={month.month}>
@@ -190,11 +223,23 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
                   <td>{money(month.min)}</td>
                   <td>{month.negative_days}</td>
                   <td>{month.beyond_limit_days ?? 'לא ידוע'}</td>
-                  <td>{money(month.last)}</td>
+                  <td>
+                    {money(month.last)}
+                    {month.last_date ? <div className="text-xs text-stone-500">נצפה {month.last_date}</div> : null}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        ) : null}
+        {section.balance_vs_flow_note ? <p className="mt-2 text-xs text-stone-500">{section.balance_vs_flow_note}</p> : null}
+        {section.daily_balance_note ? <p className="mt-1 text-xs text-amber-800">{section.daily_balance_note}</p> : null}
+        {(section.months ?? []).some((month) => month.reconciliation_note) ? (
+          <ul className="mt-2 text-xs text-stone-600">
+            {(section.months ?? []).map((month) => month.reconciliation_note ? (
+              <li key={`${month.month}-recon`}>{month.month}: {month.reconciliation_note}</li>
+            ) : null)}
+          </ul>
         ) : null}
         {section.accounts && section.accounts.length > 0 ? (
           <ul className="mt-4 text-sm text-stone-600">
@@ -244,6 +289,25 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
             </tbody>
           </table>
         ) : null}
+        {(section.advances ?? []).length > 0 ? (
+          <>
+            <h3 className="mt-4 font-medium">מקדמות על תקבולי לקוחות</h3>
+            <p className="mt-1 text-sm text-stone-600">ניכיון שיקים הוא מקדמה על תקבולים מלקוחות, לא הלוואה, ואינו נכלל בסה״כ ההתחייבויות.</p>
+            <table className="mt-2 d-table">
+              <thead><tr><Th>מקדמה</Th>{combined ? <Th>ישות</Th> : null}<Th>סכום</Th><Th>נכון ל</Th></tr></thead>
+              <tbody>
+                {(section.advances ?? []).map((advance, index) => (
+                  <tr key={`${advance.label}-${index}`}>
+                    <td>{advance.label ?? advance.name}{advance.note ? <span className="mr-2 text-xs text-stone-500">{advance.note}</span> : null}</td>
+                    {combined ? <td>{advance.entity}</td> : null}
+                    <td>{money(advance.balance)}</td>
+                    <td>{advance.as_of ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        ) : null}
       </Card>
       {(section.cards ?? []).length > 0 ? (
         <Card title="כרטיסי אשראי">
@@ -258,24 +322,43 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
                   <td>{money(card.balance)}</td>
                   <td>{money(card.credit_limit ?? null)}</td>
                   <td>{money(card.available ?? null)}</td>
-                  <td>{card.as_of ?? '—'}</td>
+                  <td>
+                    {card.as_of ?? '—'}
+                    {card.date_note ? <div className="text-xs text-amber-800">{card.date_note}</div> : null}
+                  </td>
                 </tr>
               ))}
               {section.card_summary ? (
                 <tr className="font-medium">
-                  <td>{section.card_summary.available === null ? 'סה״כ ידוע' : 'סה״כ'}</td>
+                  <td>{(section.card_summary.balance_unknown || section.card_summary.credit_limit_unknown || section.card_summary.available_unknown) ? 'סה״כ ידוע' : 'סה״כ'}</td>
                   {combined ? <td /> : null}
-                  <td />
-                  <td>{money(section.card_summary.credit_limit ?? section.card_summary.credit_limit_known)}</td>
-                  <td>{money(section.card_summary.available ?? section.card_summary.available_known)}</td>
+                  <td>{cardTotal(section.card_summary, 'balance')}</td>
+                  <td>{cardTotal(section.card_summary, 'credit_limit')}</td>
+                  <td>{cardTotal(section.card_summary, 'available')}</td>
                   <td className="py-2 text-xs text-stone-500">
-                    {section.card_summary.available === null ? 'לחלק מהכרטיסים הבנק לא מסר כמה פנוי' : ''}
+                    {[
+                      section.card_summary.balance_unknown ? 'יתרה' : '',
+                      section.card_summary.credit_limit_unknown ? 'מסגרת' : '',
+                      section.card_summary.available_unknown ? 'פנוי' : '',
+                    ].filter(Boolean).join(', ')}
+                    {(section.card_summary.balance_unknown || section.card_summary.credit_limit_unknown || section.card_summary.available_unknown)
+                      ? ' — לא ידוע בכל הכרטיסים' : ''}
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
           </div>
+          {section.card_activity ? (
+            <div className="mt-3 text-sm text-stone-600">
+              <p>{section.card_activity.definition}</p>
+              <p className="mt-1">
+                {section.card_activity.defined
+                  ? `${section.card_activity.label ?? 'עסקאות'}: ${money(section.card_activity.amount)} · ${section.card_activity.count ?? 0} תנועות`
+                  : 'הסכום לא מוגדר'}
+              </p>
+            </div>
+          ) : null}
         </Card>
       ) : null}
       <Card title="מועדים קרובים">

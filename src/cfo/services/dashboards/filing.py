@@ -50,7 +50,11 @@ CATEGORIES: dict[str, dict] = {
     "interest": {"label": "ריבית", "group": "finance", "dir": "both"},
     "loans_in": {"label": "הלוואות שהתקבלו", "group": "financing", "dir": "in"},
     "loans_out": {"label": "החזרי הלוואות ומימון", "group": "financing", "dir": "out"},
-    "check_discounting": {"label": "ניכיון שיקים (מימון)", "group": "financing", "dir": "in"},
+    "check_discounting": {
+        "label": "ניכיון שיקים (מקדמה על תקבולי לקוחות)",
+        "group": "operating",
+        "dir": "in",
+    },
     "intercompany": {"label": "העברות בין השף לפוד גרופ", "group": "internal", "dir": "both"},
     "reversal": {"label": "חיובים שבוטלו והחזרם", "group": "internal", "dir": "both"},
     "bank_journal": {"label": "זיכויי יומן בנק — לבירור", "group": "operating", "dir": "in", "review": True, "unresolved": True},
@@ -84,7 +88,8 @@ _R = {
     "office": _re(r"בזק|טלפון|פרטנר|סלקום|הוט |אינטרנט רימון|גוגל|google", re.IGNORECASE),
     "cash_withdrawals": _re(r"משיכת מזומן|כספ\.|כספומט"),
     "transfers_out": _re(r"העברה|העב'"),
-    "food_group": _re(r"פוד.?גרו"),
+    # Shown on the filing report. Matching is ``is_intercompany_counterparty``.
+    "food_group": _re(r"פוד[\s.\-]*גרו|food[\s.\-]*group"),
 }
 
 # (category, test(description, amount)) — same order as the tool.
@@ -139,14 +144,18 @@ def builtin_rules_manifest() -> dict:
 
     rules = []
     for category in ["intercompany", *[name for name, _test in RULES]]:
-        pattern = _R.get(_PATTERN_KEY.get(category, category))
+        if category == "intercompany":
+            pattern_text = INTERCOMPANY_RULE_TEXT
+        else:
+            pattern = _R.get(_PATTERN_KEY.get(category, category))
+            pattern_text = pattern.pattern if pattern is not None else ""
         rules.append({
             "id": category,
             "category": category,
             "label": CATEGORIES[category]["label"],
             "field": "counterparty" if category == "intercompany" else "description",
             "direction": RULE_DIRECTIONS[category],
-            "pattern": pattern.pattern if pattern is not None else "",
+            "pattern": pattern_text,
             "fallback": category in FALLBACK_RULES,
         })
     digest = hashlib.sha256(
@@ -157,6 +166,54 @@ def builtin_rules_manifest() -> dict:
 
 # Intercompany shortcut of the tool: chef checking account 35 or Food Group org 6.
 CHEF_ORG, CHEF_ACCOUNT, FOOD_GROUP_ORG = 2, 35, 6
+# Counterparty aliases for that pair. Word order and punctuation do not matter.
+# "כהן" alone is not a match. An empty name is not a match.
+INTERCOMPANY_RULE_TEXT = (
+    "כינוי צד נגדי, בלי תלות בסדר המילים ובפיסוק: "
+    "פוד גרופ, food group, אליאב כהן, כהן אליאב, אליהב כהן, כהן אליהב"
+)
+_IGNORABLE_PARTY_TOKENS = frozenset({
+    "בעמ", "ltd", "limited", "inc", "llc", "חברה", "מר", "גב", "עוסק", "מורשה",
+})
+_PARTY_PUNCT = re.compile(r"[\s\"'`״׳.,;:/\\()\[\]{}+\-–—־_]+")
+_ALIAS_SETS = (
+    frozenset({"פוד", "גרופ"}),
+    frozenset({"food", "group"}),
+    frozenset({"אליאב", "כהן"}),
+    frozenset({"אליהב", "כהן"}),
+    frozenset({"eliav", "cohen"}),
+)
+_COMPACT_ALIASES = frozenset({
+    "פודגרופ", "foodgroup",
+    "אליאבכהן", "כהןאליאב", "אליהבכהן", "כהןאליהב", "eliavcohen", "coheneliav",
+})
+
+
+def _party_tokens(value: str) -> list[str]:
+    text = _PARTY_PUNCT.sub(" ", str(value or "").casefold())
+    return [tok for tok in text.split() if tok and tok not in _IGNORABLE_PARTY_TOKENS]
+
+
+def is_intercompany_counterparty(*values: str) -> bool:
+    """True when any text names Food Group or Eliav Cohen, in either word order.
+
+    Punctuation, extra legal suffixes and extra words do not block a match.
+    A single family name, or an empty string, does not match. Unknown stays
+    unmatched — this never returns a zero amount.
+    """
+    for value in values:
+        tokens = _party_tokens(value)
+        if not tokens:
+            continue
+        bag = frozenset(tokens)
+        if any(alias <= bag for alias in _ALIAS_SETS):
+            return True
+        if any(tok in _COMPACT_ALIASES for tok in tokens):
+            return True
+        compact = "".join(tokens)
+        if any(alias in compact for alias in _COMPACT_ALIASES):
+            return True
+    return False
 
 
 @dataclass
@@ -182,9 +239,12 @@ class Filed:
 
 def classify_builtin(t: Txn) -> tuple[str, str]:
     d = t.description or ""
-    if _R["food_group"].search(t.debtor or "") or _R["food_group"].search(t.creditor or ""):
-        if (t.organization_id == CHEF_ORG and t.account_id == CHEF_ACCOUNT) or t.organization_id == FOOD_GROUP_ORG:
-            return "intercompany", "rule:intercompany"
+    on_eliav_pair = (
+        (t.organization_id == CHEF_ORG and t.account_id == CHEF_ACCOUNT)
+        or t.organization_id == FOOD_GROUP_ORG
+    )
+    if on_eliav_pair and is_intercompany_counterparty(t.debtor, t.creditor, d):
+        return "intercompany", "rule:intercompany"
     for category, test in RULES:
         if test(d, t.amount):
             return category, f"rule:{category}"
@@ -253,7 +313,10 @@ def txn_from_row(row) -> Txn:
 
 # Comparison rows of the tool (budget-model.js COMPARISON_ROWS): which filing
 # categories feed each P&L line, and whether the bank amount carries VAT.
-REVENUE_CATS = ("sales_card", "sales_cash", "customer_receipts", "customer_checks", "other_income")
+REVENUE_CATS = (
+    "sales_card", "sales_cash", "customer_receipts", "customer_checks",
+    "check_discounting", "other_income",
+)
 PNL_ROWS: list[dict] = [
     {"id": "revenue", "label": "הכנסות (סליקה, מזומן, לקוחות)", "side": "revenue", "cats": REVENUE_CATS, "vat": True},
     {"id": "payroll", "label": "כוח אדם", "side": "cost", "cats": ("salaries", "national_insurance", "pension_insurance"), "vat": False},

@@ -12,7 +12,7 @@ export const CATEGORY_LABELS: Record<string, string> = {
   "card_bills": "חיובי כרטיסי אשראי (רכישות)",
   "cash": "מזומנים",
   "cash_withdrawals": "משיכות מזומן",
-  "check_discounting": "ניכיון שיקים (מימון)",
+  "check_discounting": "ניכיון שיקים (מקדמה על תקבולי לקוחות)",
   "cost_of_goods": "עלות המכר",
   "customer_checks": "הפקדות שיקים",
   "customer_receipts": "תקבולים מלקוחות לפי חשבונית",

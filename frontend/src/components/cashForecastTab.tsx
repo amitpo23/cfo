@@ -43,6 +43,7 @@ export type CashForecast = {
   first_breach: { week_start: string; week_end: string; headroom: number; reasons: string[] } | null;
   overdue?: Overdue[];
   missing: string[];
+  shared_identity_note?: string | null;
   run_rate?: Record<string, number>;
 };
 
@@ -248,6 +249,9 @@ export function CashForecastPanel({ forecast, overdue }: { forecast: CashForecas
   const missing = forecast.missing.filter((key) => MISSING[key]);
   return (
     <div className="grid gap-6">
+      {forecast.shared_identity_note ? (
+        <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">{forecast.shared_identity_note}</p>
+      ) : null}
       {missing.length ? (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">
           <p className="font-medium">חסר כדי לחשב עד הסוף</p>

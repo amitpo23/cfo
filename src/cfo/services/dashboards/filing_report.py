@@ -124,6 +124,8 @@ def _builtin_rules(paired: list[tuple]) -> list[dict]:
 
 
 def _keywords(category: str) -> str:
+    if category == "intercompany":
+        return filing.INTERCOMPANY_RULE_TEXT
     pattern = filing._R.get(_KEYWORD_KEY.get(category, category))
     return pattern.pattern if pattern is not None else ""
 
