@@ -579,6 +579,8 @@ def match_checks(checks: list[dict], bank_rows: list, *, last_covered: date | No
             item["state"] = "no_coverage"
         else:
             item["state"] = "not_found"
+        from .cashflow_truth import cheque_verification
+        item["verification"] = cheque_verification(when=when, today=today, state=item["state"])
         out.append(item)
     return out
 

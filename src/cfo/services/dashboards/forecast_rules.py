@@ -17,6 +17,7 @@ from calendar import monthrange
 from datetime import date, timedelta
 
 from .budget import REVENUE_KEYS
+from .cashflow_truth import payroll_date, resolve_settings, supplier_due
 from .plan_budget import PlanBudgetError, validate_budget_lines
 
 PAYROLL_DAY = 10
@@ -78,8 +79,7 @@ def _add_month(year: int, month: int, step: int = 1) -> tuple[int, int]:
 
 def shotef_30(year: int, month: int) -> date:
     """שוטף 30: 30 days after the last day of the supply month."""
-    last = date(year, month, monthrange(year, month)[1])
-    return last + timedelta(days=30)
+    return supplier_due(date(year, month, 1), {"type": "eom_plus_days", "days": 30})
 
 
 def previous_month(year: int, month: int, step: int = 1) -> tuple[int, int]:
@@ -304,8 +304,9 @@ def supplier_and_payroll(plan: dict | None, lines: list[dict] | None, first: dat
     unknown: list[tuple[date, str]] = []
     seen_payroll: set[str] = set()
     seen_supplier: set[str] = set()
+    settings = resolve_settings(plan)
     for day in _days(first, last):
-        if day.day == PAYROLL_DAY and _month_key(day) not in seen_payroll:
+        if day == payroll_date(day.year, day.month, settings.payroll_day) and _month_key(day) not in seen_payroll:
             seen_payroll.add(_month_key(day))
             amount, source = payroll_amount(plan, lines, _month_key(day))
             if amount is None:
@@ -318,7 +319,10 @@ def supplier_and_payroll(plan: dict | None, lines: list[dict] | None, first: dat
                 })
     lookback = first - timedelta(days=62)
     for year, month in _months_from(lookback, last):
-        due = shotef_30(year, month)
+        due = supplier_due(date(year, month, 1), settings.terms())
+        if due is None:
+            unknown.append((date(year, month, monthrange(year, month)[1]), "suppliers"))
+            continue
         if not first <= due <= last or due.isoformat() in seen_supplier:
             continue
         seen_supplier.add(due.isoformat())
@@ -348,25 +352,28 @@ def monthly_table(plan: dict | None, months: list[str]) -> dict | None:
     if not rules_active(plan):
         return None
     lines = load_lines(plan)
+    settings = resolve_settings(plan)
     out = {}
     for month in months:
         year, mon = int(month[:4]), int(month[5:])
         income = income_amount(lines, month)
         payroll, payroll_source = payroll_amount(plan, lines, month)
-        paid = supply_paid_in(year, mon)
-        if paid is None:
-            supply, due, suppliers = None, None, None
-        else:
-            supply_year, supply_month, due = paid
-            supply = f"{supply_year}-{supply_month:02d}"
-            suppliers = supplier_amount(lines, supply)
+        supply, due, suppliers = None, None, None
+        for step in (1, 2, 3):
+            supply_year, supply_month = previous_month(year, mon, step)
+            candidate = supplier_due(date(supply_year, supply_month, 1), settings.terms())
+            if candidate is not None and candidate.year == year and candidate.month == mon:
+                supply = f"{supply_year}-{supply_month:02d}"
+                due = candidate
+                suppliers = supplier_amount(lines, supply)
+                break
         out[month] = {
             "income": _cell(income, source="plan.budgetLines" if income is not None else None,
                             rule=RULES["income"], label=UNKNOWN_HE["income"]),
             "payroll": _cell(
                 None if payroll is None else -abs(payroll),
                 source=payroll_source, rule=RULES["payroll"], label=UNKNOWN_HE["payroll"],
-                pay_date=f"{year}-{mon:02d}-{PAYROLL_DAY:02d}",
+                pay_date=payroll_date(year, mon, settings.payroll_day).isoformat(),
             ),
             "suppliers": _cell(
                 None if suppliers is None else -abs(suppliers),

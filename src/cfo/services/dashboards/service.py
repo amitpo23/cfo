@@ -202,6 +202,14 @@ _RULE_FIELDS = {"description", "counterparty", "any"}
 _RULE_DIRECTIONS = {"in", "out", "both"}
 
 
+def _validate_cashflow_settings(value) -> None:
+    from .cashflow_truth import CashflowSettingsError, validate_settings
+    try:
+        validate_settings(value)
+    except CashflowSettingsError as exc:
+        raise _invalid_plan(exc.message_he)
+
+
 def _validate_shared_allocation(value) -> None:
     from .books_pnl import validate_shared_cost_allocation
     try:
@@ -262,6 +270,7 @@ def validate_filing_payload(payload: dict) -> None:
     _validate_intercompany(payload.get("intercompany"))
     _validate_z_reports(payload.get("zReports"))
     _validate_shared_allocation(payload.get("sharedCostAllocation"))
+    _validate_cashflow_settings(payload.get("cashflowSettings"))
     closed = payload.get("booksClosedMonths")
     if closed is not None:
         if not isinstance(closed, list) or not all(

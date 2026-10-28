@@ -99,23 +99,16 @@ def week_windows(today: date, weeks: int = WEEKS) -> list[tuple[date, date]]:
     """Sunday-to-Friday weeks, starting with the week of ``today``.
 
     Saturday is not a business day. Cash that falls on a Saturday is moved to
-    the next Sunday by ``business_day`` — the next business day in Israel —
-    so it is counted in exactly one week and not dropped.
+    the next Sunday by ``business_day``, so it is counted in exactly one week.
     """
-    start = today - timedelta(days=(today.weekday() + 1) % 7)
-    return [(start + timedelta(weeks=i), start + timedelta(weeks=i, days=5)) for i in range(weeks)]
+    from .cashflow_truth import week_windows as windows
+    return windows(today, weeks)
 
 
 def business_day(day: date) -> date:
-    """Saturday cash is taken on the following Sunday, once.
-
-    A forecast week is Sunday–Friday. Saturday has no week of its own. The
-    next business day after Saturday is Sunday, not Friday, so the amount
-    moves forward and is not counted twice.
-    """
-    if day.weekday() == 5:
-        return day + timedelta(days=1)
-    return day
+    """Saturday cash is taken on the following Sunday, once."""
+    from .cashflow_truth import roll_saturday
+    return roll_saturday(day)
 
 
 def _roll_to_business_days(items: list[dict], streams: dict[date, dict[str, float]],

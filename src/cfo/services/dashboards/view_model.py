@@ -16,7 +16,7 @@ from ..live_cash_flow_service import LiveCashFlowService
 from .. import bank_status
 from . import (
     activity_quality, balance_sheet as balance_sheet_report, books, books_pnl, budget,
-    cash_forecast, cash_statement, forecast, freshness, liquidity,
+    cash_forecast, cash_statement, cashflow_truth, forecast, freshness, liquidity,
 )
 
 MAX_RANGE_DAYS = 366
@@ -149,8 +149,39 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
         view, plan=plan, organization_id=organization_id, label=None, today=end,
         apply_budget_rules=with_budget,
     )
+    view["cashflow_source"] = cashflow_truth.scaffold(
+        as_of=end, plan=plan, organization_id=organization_id,
+        opening=position["position"].get("balance"),
+        opening_as_of=position["position"].get("as_of"),
+        credit_limit=position["position"].get("limit"),
+        bank_txns=_bank_rows(filed),
+        checks=position.get("checks"),
+    )
     view["freshness"]["cash_forecast"] = view["cash_forecast"]["status"]
+    view["freshness"]["cashflow_source"] = "ready" if view["cashflow_source"]["publishable"] else "unknown"
     return redact_public_view(view)
+
+
+def _bank_rows(filed) -> list[dict]:
+    """Bank rows already read for this view, shaped for the coverage check."""
+    from .filing import FALLBACK_RULES, UNRESOLVED
+    rows = []
+    for txn, filed_row in filed or []:
+        category = filed_row.category
+        rows.append({
+            "id": txn.id,
+            "booking_date": txn.date,
+            "amount": txn.amount,
+            "description": txn.description,
+            "counterparty": " ".join(part for part in (txn.debtor, txn.creditor) if part),
+            "category": None if category in UNRESOLVED or filed_row.filed_by == "default" and category in FALLBACK_RULES else category,
+            "unclassified": category in UNRESOLVED or (filed_row.filed_by == "default" and category in FALLBACK_RULES),
+            "is_internal_transfer": category == "intercompany",
+            "is_financing": category in {"loans_in", "loans_out", "check_discounting"},
+            "is_card_charge": category == "card_bills",
+            "status": "BOOKED",
+        })
+    return rows
 
 
 def redact_public_view(view: dict) -> dict:
@@ -165,6 +196,11 @@ def redact_public_view(view: dict) -> dict:
     if "liquidity" in view:
         view = dict(view)
         view["liquidity"] = liquidity.redact_public(view["liquidity"])
+    if isinstance(view.get("cashflow_source"), dict) and "organization_id" in view["cashflow_source"]:
+        view = dict(view)
+        source = dict(view["cashflow_source"])
+        source.pop("organization_id", None)
+        view["cashflow_source"] = source
     if "sources" in view:
         view = dict(view)
         view["sources"] = freshness.redact_public(view["sources"])
