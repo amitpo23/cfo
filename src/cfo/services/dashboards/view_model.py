@@ -91,6 +91,7 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
     }
     view["cash_forecast"] = cash_forecast.build_entity_forecast(
         view, plan=plan, organization_id=organization_id, label=None, today=end,
+        apply_budget_rules=with_budget,
     )
     view["freshness"]["cash_forecast"] = view["cash_forecast"]["status"]
     return redact_public_view(view)

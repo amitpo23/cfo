@@ -135,13 +135,36 @@ def _forecast_columns(forecast: dict | None) -> dict | None:
         rows["operating_out"][month] = None if costs is None else _r(-costs)
         rows["financing"][month] = None if principal is None else _r(-principal)
         rows["net"][month] = cell.get("cash_flow")
+    rule_lines = []
+    cash_rules = forecast.get("cash_rules") or {}
+    rule_months = (cash_rules.get("months") or {}) if isinstance(cash_rules, dict) else {}
+    for key, label in (
+        ("income", "הכנסה לפי התקציב"),
+        ("payroll", "שכר לפי הגדרת התקציב"),
+        ("suppliers", "ספקים — שוטף 30"),
+    ):
+        if not any(isinstance(rule_months.get(month), dict) and key in rule_months[month] for month in forecast["months"]):
+            continue
+        values = {}
+        unknown = None
+        for month in forecast["months"]:
+            cell = (rule_months.get(month) or {}).get(key) or {}
+            values[month] = cell.get("amount")
+            if cell.get("amount") is None and cell.get("label"):
+                unknown = cell["label"]
+        rule_lines.append({"id": key, "label": label, "values": values, "unknown": unknown})
     return {
         "status": forecast.get("status"),
         "months": list(forecast["months"]),
         "rows": rows,
+        "rule_lines": rule_lines,
         "note": FORECAST_NOTE,
-        "line_items": False,
-        "line_note": FORECAST_LINE_NOTE,
+        "line_items": bool(rule_lines),
+        "line_note": (
+            "שורות הכללים (הכנסה, שכר, ספקים בשוטף 30) מולאו מהתקציב. סעיף בנק בלי כלל נשאר ריק. "
+            "סכום חסר הוא לא ידוע, לא אפס."
+            if rule_lines else FORECAST_LINE_NOTE
+        ),
     }
 
 

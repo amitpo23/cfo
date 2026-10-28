@@ -216,9 +216,10 @@ def test_card_totals_name_unknowns_and_the_transaction_bucket_is_not_a_balance(f
         clean = liquidity.build_liquidity(
             db, owner["org_id"], date(2026, 10, 1), date(2026, 10, 31), classified=[], today=date(2026, 10, 31),
         )
-    assert odd["card_activity"]["defined"] is False
+    assert odd["card_activity"]["defined"] is True
     assert odd["card_activity"]["amount"] is None
-    assert "לא מוגדר" in odd["card_activity"]["definition"] or "אינו מוגדר" in odd["card_activity"]["definition"]
+    assert odd["card_activity"]["excluded_count"] == 1
+    assert "לא ידוע" in odd["card_activity"]["definition"]
     summary = clean["card_summary"]
     assert summary["available"] is None and summary["available_unknown"] == 1
     assert summary["credit_limit"] is None and summary["credit_limit_unknown"] == 1

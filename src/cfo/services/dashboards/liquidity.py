@@ -124,11 +124,7 @@ def merge_loan_evidence(live: list[dict], evidence: list[dict]) -> list[dict]:
     (production 27/10/2026: a repaid bridge loan was still counted). Unmatched
     evidence with a name the feed never reports stays: it may be a loan at a bank
     that is not connected."""
-    rows = [
-        {"name": item.get("label"), "balance": _num(item.get("balance")), "as_of": item.get("asOf"),
-         "maturity": item.get("maturity"), "source": "evidence"}
-        for item in evidence
-    ]
+    rows = [_evidence_loan(item) for item in evidence]
     if not live:
         return rows
     pairs = sorted(
@@ -147,12 +143,59 @@ def merge_loan_evidence(live: list[dict], evidence: list[dict]) -> list[dict]:
         used_live.add(j)
         if rows[i].get("maturity"):
             merged[j]["maturity"] = rows[i]["maturity"]
+        for key in ("kind", "payment_amount", "payment_date", "approximate", "owner_note"):
+            if rows[i].get(key) not in (None, False, ""):
+                merged[j][key] = rows[i][key]
+        merged[j]["payment_source"] = "plan.liquidityEvidence"
     live_names = {_name_key(loan["name"]) for loan in live}
     merged += [
         row for i, row in enumerate(rows)
         if i not in used_rows and _name_key(row["name"]) not in live_names
     ]
     return merged
+
+
+OWNER_EVIDENCE_SOURCE = "plan.liquidityEvidence"
+UNKNOWN_OWNER_AMOUNT = "לא ידוע, הבעלים יזין"
+CARD_AVAILABLE_DERIVED = "credit_limit_minus_unbilled"
+CARD_AVAILABLE_STORED = "accounts.available_limit"
+
+
+def _evidence_loan(item: dict) -> dict:
+    return {
+        "name": item.get("label"),
+        "balance": _num(item.get("balance")),
+        "as_of": item.get("asOf"),
+        "maturity": item.get("maturity"),
+        "source": item.get("source") or OWNER_EVIDENCE_SOURCE,
+        "owner_entered": True,
+        "provider_data": False,
+        "kind": item.get("kind"),
+        "payment_amount": _num(item.get("paymentAmount")),
+        "payment_date": item.get("paymentDate"),
+        "approximate": bool(item.get("approximate")),
+        "owner_note": item.get("note"),
+    }
+
+
+def annotate_loan(loan: dict) -> dict:
+    """Source and uncertainty on a loan row. Owner evidence is never labelled as the bank."""
+    row = dict(loan)
+    row["owner_entered"] = bool(row.get("owner_entered") or row.get("source") not in ("accounts", None))
+    row["provider_data"] = not row["owner_entered"]
+    if row["owner_entered"] and row.get("source") in ("accounts", "evidence", None):
+        row["source"] = OWNER_EVIDENCE_SOURCE
+    notes = []
+    if row.get("approximate"):
+        notes.append("יתרה שהבעלים מסר בקירוב, לא יתרת בנק")
+    elif row["owner_entered"]:
+        notes.append("ראיית בעלים. לא נתון שהבנק מסר.")
+    if row.get("payment_source") == OWNER_EVIDENCE_SOURCE and not row["owner_entered"]:
+        notes.append("ההחזר מתועד בראיית הבעלים; היתרה היא מהחשבון השמור")
+    if row.get("owner_note"):
+        notes.append(str(row["owner_note"]))
+    row["uncertainty"] = " ".join(notes) or None
+    return row
 
 
 def _balance(account: Account) -> float | None:
@@ -582,12 +625,13 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
     real_evidence = [
         item for item in evidence["loans"] if not is_check_discounting(item.get("label"), item.get("kind"))
     ]
-    loans = merge_loan_evidence(real_live, real_evidence)
+    loans = [annotate_loan(row) for row in merge_loan_evidence(real_live, real_evidence)]
     advances = merge_loan_evidence(discount_live, discount_evidence)
     for row in advances:
         row["counts_as_debt"] = False
         row["label"] = ADVANCE_LABEL if not row.get("name") else f"{ADVANCE_LABEL} — {row['name']}"
         row["note"] = ADVANCE_NOTE
+    advances = [annotate_loan(row) for row in advances]
     mirrors = [{"name": a.name, "balance": _balance(a)} for a in by_kind.get("credit_line_mirror", [])]
 
     bank_rows = (
@@ -647,7 +691,13 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
     if cards:
         debts.append({"label": "כרטיסי אשראי", "amount": _sum_or_none(c["balance"] for c in cards),
                       "as_of": cards[0]["as_of"]})
-    debts += [{"label": f"הלוואה — {loan['name']}", "amount": loan["balance"], "as_of": loan["as_of"]} for loan in loans]
+    debts += [{
+        "label": f"הלוואה — {loan['name']}", "amount": loan["balance"], "as_of": loan["as_of"],
+        "source": loan.get("source"), "uncertainty": loan.get("uncertainty"),
+        "owner_entered": loan.get("owner_entered"), "provider_data": loan.get("provider_data"),
+        "maturity": loan.get("maturity"), "payment_amount": loan.get("payment_amount"),
+        "payment_date": loan.get("payment_date"),
+    } for loan in loans]
     month_rows = _months(days, limit)
     reconciled = _reconcile_months(db, [a.id for a in checking], start, end)
     for row in month_rows:
@@ -688,6 +738,7 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         "cards": cards,
         "card_summary": card_summary(cards),
         "card_activity": card_activity(db, card_accounts, start, end),
+        "facilities": present_facilities(checking, evidence, observed_at=evidence.get("observedAt")),
         "loans": loans,
         "advances": advances,
         "credit_line_mirrors": mirrors,
@@ -762,6 +813,131 @@ def _month_keys(start: date, end: date):
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
 
 
+def _pending_unbilled(db, account_ids: list[int]) -> dict[int, float | None]:
+    """Charges not yet billed, as a positive number. PENDING rows only.
+
+    No pending rows is 0 (a known empty set). A pending row without an amount
+    makes that account unknown (None).
+    """
+    found: dict[int, float | None] = {account_id: 0.0 for account_id in account_ids}
+    if not account_ids:
+        return found
+    rows = (
+        db.query(BankTransaction)
+        .filter(BankTransaction.account_id.in_(account_ids), BankTransaction.superseded_by_id.is_(None))
+        .all()
+    )
+    for row in rows:
+        raw = row.raw_data if isinstance(row.raw_data, dict) else {}
+        if str(raw.get("status") or "").strip().upper() != "PENDING":
+            continue
+        if found.get(row.account_id) is None:
+            continue
+        if row.amount is None:
+            found[row.account_id] = None
+            continue
+        found[row.account_id] = float(found[row.account_id]) + (-float(row.amount))
+    return found
+
+
+def card_open_to_buy(account, balance: float | None, pending: float | None, as_of: str | None) -> dict:
+    """Open-to-buy from stored data. The bank's figure wins. Otherwise limit minus
+    the statement balance and pending charges. Never written back onto the account."""
+    stored = _num(getattr(account, "available_limit", None))
+    if stored is not None:
+        return {
+            "available": _r(stored), "available_source": CARD_AVAILABLE_STORED,
+            "available_as_of": as_of, "available_note": None,
+        }
+    limit = _num(getattr(account, "credit_limit", None))
+    missing = []
+    if limit is None:
+        missing.append("אין מסגרת")
+    if balance is None:
+        missing.append("אין יתרת חיוב")
+    if pending is None:
+        missing.append("יש עסקה ממתינה בלי סכום")
+    if missing:
+        return {
+            "available": None, "available_source": None, "available_as_of": as_of,
+            "available_note": "פנוי לא ידוע: " + ", ".join(missing) + ". לא הומצא סכום.",
+        }
+    return {
+        "available": _r(limit - balance - pending),
+        "available_source": CARD_AVAILABLE_DERIVED,
+        "available_as_of": as_of,
+        "available_note": (
+            "חושב מהנתונים השמורים: מסגרת פחות יתרת החיוב ופחות עסקאות PENDING. "
+            "זה אינו הסכום שהבנק מסר כפנוי."
+        ),
+    }
+
+
+def present_facilities(checking: list, evidence: dict, *, observed_at) -> list[dict]:
+    """Credit lines from stored accounts, plus the cheque-discounting facility.
+
+    The discounting limit is whatever the owner entered. It is not invented, and
+    it is not labelled as provider data.
+    """
+    observed = str(observed_at or "")[:10] or None
+    rows = []
+    if checking:
+        for account in checking:
+            limit = _num(account.credit_limit)
+            balance = _balance(account)
+            as_of = account.balance_as_of.date().isoformat() if account.balance_as_of else None
+            rows.append({
+                "label": account.name or "מסגרת אשראי",
+                "kind": "credit_line",
+                "limit": limit,
+                "available": None if limit is None or balance is None else _r(limit + balance),
+                "source": "accounts.credit_limit" if limit is not None else None,
+                "as_of": as_of,
+                "owner_entered": False,
+                "provider_data": getattr(account, "source", None) == "open_finance",
+                "uncertainty": None if limit is not None else "מסגרת האשראי לא ידועה בנתונים השמורים",
+            })
+    else:
+        rows.append({
+            "label": "מסגרת אשראי", "kind": "credit_line", "limit": None, "available": None,
+            "source": None, "as_of": None, "owner_entered": False, "provider_data": False,
+            "uncertainty": "אין חשבון עו״ש, ולכן המסגרת לא ידועה",
+        })
+    discount = None
+    for item in evidence.get("facilities") or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "")
+        if kind in ("cheque_discounting", "check_discounting") or is_check_discounting(item.get("label"), kind):
+            discount = item
+            continue
+        limit = _num(item.get("limit"))
+        rows.append({
+            "label": item.get("label") or "מסגרת",
+            "kind": kind or "credit_line",
+            "limit": limit,
+            "available": None,
+            "source": OWNER_EVIDENCE_SOURCE,
+            "as_of": item.get("asOf") or observed,
+            "owner_entered": True,
+            "provider_data": False,
+            "uncertainty": None if limit is not None else UNKNOWN_OWNER_AMOUNT,
+        })
+    limit = _num(discount.get("limit")) if isinstance(discount, dict) else None
+    rows.append({
+        "label": (discount.get("label") if isinstance(discount, dict) and discount.get("label") else "ניכיון שיקים"),
+        "kind": "cheque_discounting",
+        "limit": limit,
+        "available": None,
+        "source": OWNER_EVIDENCE_SOURCE if isinstance(discount, dict) else None,
+        "as_of": (discount.get("asOf") if isinstance(discount, dict) else None) or observed,
+        "owner_entered": isinstance(discount, dict),
+        "provider_data": False,
+        "uncertainty": None if limit is not None else UNKNOWN_OWNER_AMOUNT,
+    })
+    return rows
+
+
 def present_cards(db, accounts: list) -> list[dict]:
     """One row per card: statement balance, limit, available, and the last transaction date."""
     ids = [account.id for account in accounts if getattr(account, "id", None) is not None]
@@ -773,6 +949,7 @@ def present_cards(db, accounts: list) -> list[dict]:
             .group_by(BankTransaction.account_id)
         ):
             last[account_id] = day
+    pending = _pending_unbilled(db, ids)
     cards = []
     for account in accounts:
         as_of = account.balance_as_of.date().isoformat() if account.balance_as_of else None
@@ -785,12 +962,14 @@ def present_cards(db, accounts: list) -> list[dict]:
             note = f"יתרת הכרטיס נכונה ל־{as_of}. אין תנועת כרטיס שמורה להשוואה."
         else:
             note = None
+        balance = None if _balance(account) is None else _r(abs(_balance(account)))
+        open_to_buy = card_open_to_buy(account, balance, pending.get(account.id, 0.0), as_of)
         cards.append({
             "name": account.name,
             "bank_key": bank_key(account),
-            "balance": None if _balance(account) is None else _r(abs(_balance(account))),
+            "balance": balance,
             "credit_limit": _num(account.credit_limit),
-            "available": _num(account.available_limit),
+            **open_to_buy,
             "as_of": as_of,
             "last_data": last_iso,
             "date_mismatch": mismatch,
@@ -800,10 +979,11 @@ def present_cards(db, accounts: list) -> list[dict]:
 
 
 def card_activity(db, accounts: list, start: date, end: date) -> dict:
-    """The 'cards' transaction bucket. A plain number is not a balance and not a debt.
+    """The default card-transaction bucket: BOOKED rows, including a missing status.
 
-    Rows whose Open Finance status is neither BOOKED nor PENDING make the bucket
-    undefined: the amount stays null instead of a partial sum.
+    PENDING rows are unbilled charges and stay out of this bucket. Any other
+    status, or a row without an amount, leaves the amount unknown and says why.
+    The bucket itself stays defined, so the screen does not report that it is missing.
     """
     base = {
         "key": "cards",
@@ -811,10 +991,12 @@ def card_activity(db, accounts: list, start: date, end: date) -> dict:
         "counts_as_debt": False,
         "counts_as_balance": False,
         "definition": CARD_ACTIVITY_DEFINITION,
+        "defined": True,
+        "excluded_count": 0,
     }
     if not accounts:
-        return {**base, "amount": None, "count": None, "defined": False,
-                "definition": "אין חשבונות כרטיס — דלי העסקאות אינו מוגדר."}
+        return {**base, "amount": None, "count": None,
+                "definition": "אין חשבונות כרטיס, ולכן אין עסקאות. לא הומצא סכום."}
     ids = [account.id for account in accounts]
     rows = (
         db.query(BankTransaction)
@@ -827,23 +1009,35 @@ def card_activity(db, accounts: list, start: date, end: date) -> dict:
         .all()
     )
     booked = []
-    unclassified = False
+    excluded = []
+    missing_amount = False
     for row in rows:
-        status = str((row.raw_data or {}).get("status") or "").strip().upper() if isinstance(row.raw_data, dict) else ""
+        raw = row.raw_data if isinstance(row.raw_data, dict) else {}
+        status = str(raw.get("status") or "").strip().upper()
         if row.source == "open_finance":
+            if not status:
+                status = "BOOKED"
             if status == "PENDING":
                 continue
             if status != "BOOKED":
-                unclassified = True
+                excluded.append(status)
                 continue
         if row.amount is None:
-            unclassified = True
+            missing_amount = True
             continue
         booked.append(row)
-    if unclassified:
-        return {**base, "amount": None, "count": None, "defined": False,
-                "definition": "יש תנועות כרטיס במצב לא מסווג או בלי סכום. הדלי אינו מוגדר ולא מוצג כמספר."}
-    return {**base, "amount": _r(sum(float(row.amount or 0) for row in booked)), "count": len(booked), "defined": True}
+    if missing_amount or excluded:
+        parts = []
+        if excluded:
+            parts.append(f"{len(excluded)} תנועות במצב לא מוכר ({', '.join(sorted(set(excluded)))})")
+        if missing_amount:
+            parts.append("תנועה בלי סכום")
+        return {
+            **base, "amount": None, "count": None, "excluded_count": len(excluded),
+            "definition": "דלי העסקאות מוגדר (BOOKED, וסטטוס חסר נחשב BOOKED). הסכום לא ידוע: "
+            + "; ".join(parts) + ". לא הוצג סכום חלקי ולא 0.",
+        }
+    return {**base, "amount": _r(sum(float(row.amount or 0) for row in booked)), "count": len(booked)}
 
 
 def card_summary(cards: list[dict]) -> dict:
@@ -863,17 +1057,15 @@ def _combine_card_activity(parts) -> dict | None:
     acts = [part.get("card_activity") for _label, part in parts if isinstance(part.get("card_activity"), dict)]
     if not acts:
         return None
-    undefined = {
-        "key": "cards", "label": "עסקאות כרטיסי אשראי", "defined": False,
+    unknown = {
+        "key": "cards", "label": "עסקאות כרטיסי אשראי", "defined": True,
         "amount": None, "count": None, "counts_as_debt": False, "counts_as_balance": False,
-        "definition": "לחלק מהישויות דלי עסקאות הכרטיס אינו מוגדר, ולכן אין סכום מאוחד.",
+        "definition": "לחלק מהישויות סכום עסקאות הכרטיס לא ידוע, ולכן אין סכום מאוחד. לא הוצג 0.",
     }
-    if any(act.get("defined") is False for act in acts):
-        return undefined
     amounts = [act.get("amount") for act in acts]
     counts = [act.get("count") for act in acts]
-    if any(value is None for value in amounts) or any(value is None for value in counts):
-        return undefined
+    if any(act.get("defined") is False for act in acts) or any(value is None for value in amounts) or any(value is None for value in counts):
+        return unknown
     return {
         "key": "cards", "label": "עסקאות כרטיסי אשראי", "defined": True,
         "amount": _r(sum(amounts)), "count": int(sum(counts)),
@@ -948,6 +1140,11 @@ def combine(sections: list[dict]) -> dict:
             for key in ("principal", "interest", "new_loans"):
                 slot[key] = _r(slot[key] + (row.get(key) or 0.0))
     cards = [{**card, "entity": label} for label, part in parts for card in part.get("cards") or []]
+    facilities = [
+        {**item, "entity": label}
+        for label, part in parts for item in part.get("facilities") or []
+        if isinstance(item, dict)
+    ]
     advances = _collapse_advances(
         [{**item, "entity": label} for label, part in parts for item in part.get("advances") or [] if isinstance(item, dict)]
     )
@@ -971,6 +1168,7 @@ def combine(sections: list[dict]) -> dict:
         "debts_complete": all(d.get("amount") is not None for d in debts),
         "upcoming": upcoming,
         "cards": cards,
+        "facilities": facilities,
         "card_summary": card_summary(cards),
         "card_activity": _combine_card_activity(parts),
         "advances": advances,

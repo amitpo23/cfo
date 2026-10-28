@@ -269,6 +269,8 @@ _PARAMETER_KEYS = {
 }
 EVIDENCE_LIMIT = 200
 _EVIDENCE_KINDS = {"facilities", "loans", "checks", "events", "openingBalances"}
+_FACILITY_KINDS = {"cheque_discounting", "check_discounting", "credit_line", "overdraft"}
+_LOAN_KINDS = {"bridge", "cheque_discounting", "check_discounting", "term"}
 # Only the dashboard owner (an admin of the organization) may enter an opening balance.
 OPENING_BALANCE_ROLES = {"owner"}
 # Facilities, loans, checks and events too: the liquidity form is the owner's (G-11).
@@ -342,11 +344,19 @@ def _validate_evidence(evidence) -> None:
                 raise _invalid_plan("לפריט ראיה ארגון לא תקין")
             ok = _short_text(item.get("note"), limit=300) and _short_text(item.get("source"), limit=300)
             if kind == "facilities":
+                facility_kind = item.get("kind")
                 ok = ok and _short_text(item.get("label"), required=True) and _optional_amount(item.get("limit")) \
-                    and _optional_date(item.get("validFrom")) and _optional_date(item.get("validTo"))
+                    and _optional_date(item.get("validFrom")) and _optional_date(item.get("validTo")) \
+                    and _optional_date(item.get("asOf")) \
+                    and (facility_kind is None or facility_kind in _FACILITY_KINDS)
             elif kind == "loans":
+                loan_kind = item.get("kind")
+                approximate = item.get("approximate")
                 ok = ok and _short_text(item.get("label"), required=True) and _optional_amount(item.get("balance")) \
-                    and _optional_date(item.get("asOf")) and _optional_date(item.get("maturity"))
+                    and _optional_date(item.get("asOf")) and _optional_date(item.get("maturity")) \
+                    and _optional_amount(item.get("paymentAmount")) and _optional_date(item.get("paymentDate")) \
+                    and (loan_kind is None or loan_kind in _LOAN_KINDS) \
+                    and (approximate is None or isinstance(approximate, bool))
             elif kind == "openingBalances":
                 account = item.get("accountId")
                 ok = ok and isinstance(org, int) and not isinstance(org, bool) \

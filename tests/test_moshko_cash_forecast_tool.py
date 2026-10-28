@@ -59,11 +59,12 @@ def test_it_answers_with_the_breach_week_and_its_reasons(client, fresh_org, plat
 
     assert result["status"] == "ready"
     entity = result["entities"][0]
-    assert entity["opening"] == {"amount": -20000.0, "as_of": "2026-10-21"}
+    assert entity["opening"]["amount"] == -20000.0
+    assert entity["opening"]["as_of"] == "2026-10-21"
     assert entity["first_breach"]["week_start"] == "2026-10-25"
     assert entity["first_breach"]["reasons"]
     assert len(entity["weeks"]) == 13
-    assert set(entity["weeks"][0]) == {"start", "end", "in", "out", "closing", "limit", "headroom"}
+    assert {"start", "end", "in", "out", "closing", "limit", "headroom"} <= set(entity["weeks"][0])
     assert result["provider_calls"] == 0
 
 

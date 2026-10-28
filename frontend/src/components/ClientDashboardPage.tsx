@@ -112,7 +112,11 @@ type CashStatement = {
   groups?: { id: string; label: string }[];
   lines?: { id: string; label: string; group: string; review?: boolean; values: StatementCells; total: number }[];
   totals?: Record<string, StatementCells>;
-  forecast?: { status?: string; months: string[]; rows: Record<string, StatementCells>; note: string; line_items?: boolean; line_note?: string } | null;
+  forecast?: {
+    status?: string; months: string[]; rows: Record<string, StatementCells>; note: string;
+    line_items?: boolean; line_note?: string;
+    rule_lines?: { id: string; label: string; values: StatementCells; unknown?: string | null }[];
+  } | null;
   message?: string | null;
   netting_note?: string | null;
   scope?: Record<string, { label: string; entities: string[]; missing: string[] }>;
@@ -493,6 +497,17 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
                 </tr>,
               ];
             })}
+            {(forecast?.rule_lines ?? []).map((line) => (
+              <tr key={line.id}>
+                <td>{line.label}</td>
+                {months.map((month) => <td key={month} className="text-stone-400">—</td>)}
+                {forecastMonths.map((month) => (
+                  <td key={`f-${month}`} className="bg-stone-50 py-1" title={line.values[month] == null ? (line.unknown ?? 'לא ידוע') : ''}>
+                    {cell(line.values[month])}
+                  </td>
+                ))}
+              </tr>
+            ))}
             <tr className="font-semibold">
               <td>תזרים נטו</td>
               {months.map((month) => <td key={month}>{cell(totals.net?.[month])}</td>)}

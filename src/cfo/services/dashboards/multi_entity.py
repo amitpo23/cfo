@@ -358,9 +358,9 @@ def _apply_shared_liquidity(position: dict, sections: list[dict]) -> dict:
         # The summed activity counted each shared card once per entity. Do not show that number.
         if any(card.get("bank_key") in _shared_view_keys(sections) for card in cards):
             position["card_activity"] = {
-                "key": "cards", "label": "עסקאות כרטיסי אשראי", "defined": False,
+                "key": "cards", "label": "עסקאות כרטיסי אשראי", "defined": True,
                 "amount": None, "count": None, "counts_as_debt": False, "counts_as_balance": False,
-                "definition": "אותו כרטיס רשום ביותר מישות. הסכום המאוחד אינו מוצג, כדי לא לספור את העסקאות פעמיים.",
+                "definition": "אותו כרטיס רשום ביותר מישות. הסכום המאוחד לא ידוע, כדי לא לספור את העסקאות פעמיים.",
             }
     return position
 
@@ -536,7 +536,10 @@ def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | N
         "budget_vs_actual": _combine_budget(views),
         "liquidity": position,
         "forecast": outlook,
-        "cash_forecast": cash_forecast.combine([section["view"]["cash_forecast"] for section in sections]),
+        "cash_forecast": cash_forecast.overlay_budget_rules(
+            cash_forecast.combine([section["view"]["cash_forecast"] for section in sections]),
+            plan,
+        ),
         "cash_statement": cash_statement.combine(sections, outlook, removed["by_month"]),
         "intercompany_removed": removed["summary"],
         "sources": _combine_sources(sections),

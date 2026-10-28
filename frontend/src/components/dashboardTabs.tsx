@@ -4,7 +4,16 @@ import { EmptyState } from './dashboardUi';
 // The Eliav tool's tabs inside /d/: liquidity and obligations, forecast,
 // budget parameters and share links. Unknown amounts are shown as "לא ידוע".
 
-export type Debt = { label: string; amount: number | null; as_of?: string | null; entity?: string | null; note?: string | null };
+export type Debt = {
+  label: string; amount: number | null; as_of?: string | null; entity?: string | null; note?: string | null;
+  source?: string | null; uncertainty?: string | null; maturity?: string | null;
+  payment_amount?: number | null; payment_date?: string | null; owner_entered?: boolean;
+};
+export type FacilityRow = {
+  label: string; kind: string; limit: number | null; available: number | null;
+  source?: string | null; as_of?: string | null; uncertainty?: string | null;
+  owner_entered?: boolean; provider_data?: boolean; entity?: string | null;
+};
 export type Upcoming = {
   date: string; label: string | null; amount: number | null; kind: string; note?: string | null; entity?: string | null;
   amount_basis?: string | null; amount_as_of?: string | null; reference_amount?: number | null;
@@ -17,6 +26,7 @@ export type CardRow = {
   name: string; balance: number | null; credit_limit?: number | null; available?: number | null;
   as_of: string | null; entity?: string | null; last_data?: string | null;
   date_mismatch?: boolean; date_note?: string | null;
+  available_source?: string | null; available_as_of?: string | null; available_note?: string | null;
 };
 export type CardSummary = {
   available: number | null; available_known: number | null; available_unknown?: number;
@@ -48,6 +58,7 @@ export type EntityLiquidity = {
   card_summary?: CardSummary;
   card_activity?: CardActivity | null;
   loans?: { name: string; balance: number | null; as_of: string | null; maturity?: string | null }[];
+  facilities?: FacilityRow[];
   advances?: Advance[];
   months?: {
     month: string; days: number; min: number | null; negative_days: number;
@@ -85,6 +96,9 @@ export type Forecast = {
   }>;
   based_on: string[];
   message?: string | null;
+  cash_rules?: {
+    months: Record<string, Record<string, { amount: number | null; source: string | null; rule: string; label?: string; due?: string; pay_date?: string; supply_month?: string }>>;
+  } | null;
 };
 
 export type Parameters = {
@@ -252,6 +266,27 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
         ) : null}
         {section.message ? <p className="mt-3 text-sm text-stone-500">{section.message}</p> : null}
       </Card>
+      <Card title="מסגרות">
+        <p className="mt-1 text-sm text-stone-600">כל סכום עם המקור והתאריך שלו. ניכיון שיקים הוא ראיית בעלים; בלי סכום שמור הוא לא ידוע, והבעלים מזינים אותו.</p>
+        <table className="mt-4 d-table">
+          <thead><tr><Th>מסגרת</Th>{combined ? <Th>ישות</Th> : null}<Th>סכום</Th><Th>פנוי</Th><Th>מקור</Th><Th>נכון ל</Th></tr></thead>
+          <tbody>
+            {(section.facilities ?? []).map((facility, index) => (
+              <tr key={`${facility.kind}-${facility.label}-${index}`}>
+                <td>
+                  {facility.label}
+                  {facility.uncertainty ? <div className="text-xs text-amber-800">{facility.uncertainty}</div> : null}
+                </td>
+                {combined ? <td>{facility.entity}</td> : null}
+                <td>{money(facility.limit)}</td>
+                <td>{money(facility.available)}</td>
+                <td className="text-xs text-stone-600">{facility.source ? (SOURCE_LABELS[facility.source] ?? facility.source) : '—'}</td>
+                <td>{facility.as_of ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
       <Card title="התחייבויות והלוואות">
         {(section.debts ?? []).length === 0 ? <p className="mt-3 text-stone-600">אין התחייבויות ידועות.</p> : (
           <table className="mt-4 d-table">
@@ -261,8 +296,16 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
                 <tr key={`${debt.label}-${index}`}>
                   <td>{debt.label}{debt.note ? <span className="mr-2 text-xs text-stone-500">{debt.note}</span> : null}</td>
                   {combined ? <td>{debt.entity}</td> : null}
-                  <td>{money(debt.amount)}</td>
-                  <td>{debt.as_of ?? '—'}</td>
+                  <td>
+                    {money(debt.amount)}
+                    {debt.uncertainty ? <div className="text-xs text-amber-800">{debt.uncertainty}</div> : null}
+                    {debt.payment_amount != null ? <div className="text-xs text-stone-600">החזר {money(debt.payment_amount)} ב־{debt.payment_date}</div> : null}
+                  </td>
+                  <td>
+                    {debt.as_of ?? '—'}
+                    {debt.maturity ? <div className="text-xs text-stone-500">סיום {debt.maturity}</div> : null}
+                    {debt.source ? <div className="text-xs text-stone-500">{SOURCE_LABELS[debt.source] ?? debt.source}</div> : null}
+                  </td>
                 </tr>
               ))}
               <tr className="font-medium">
@@ -321,7 +364,11 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
                   {combined ? <td>{card.entity}</td> : null}
                   <td>{money(card.balance)}</td>
                   <td>{money(card.credit_limit ?? null)}</td>
-                  <td>{money(card.available ?? null)}</td>
+                  <td>
+                    {money(card.available ?? null)}
+                    {card.available_source ? <div className="text-xs text-stone-500">{SOURCE_LABELS[card.available_source] ?? card.available_source}{card.available_as_of ? ` · ${card.available_as_of}` : ''}</div> : null}
+                    {card.available_note ? <div className="text-xs text-stone-500">{card.available_note}</div> : null}
+                  </td>
                   <td>
                     {card.as_of ?? '—'}
                     {card.date_note ? <div className="text-xs text-amber-800">{card.date_note}</div> : null}
@@ -353,9 +400,9 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
             <div className="mt-3 text-sm text-stone-600">
               <p>{section.card_activity.definition}</p>
               <p className="mt-1">
-                {section.card_activity.defined
+                {section.card_activity.defined && section.card_activity.amount !== null && section.card_activity.amount !== undefined
                   ? `${section.card_activity.label ?? 'עסקאות'}: ${money(section.card_activity.amount)} · ${section.card_activity.count ?? 0} תנועות`
-                  : 'הסכום לא מוגדר'}
+                  : 'הסכום לא ידוע'}
               </p>
             </div>
           ) : null}
@@ -401,7 +448,16 @@ export function LiquidityPanel({ section }: { section: EntityLiquidity | null | 
   );
 }
 
-const SOURCE_LABELS: Record<string, string> = { budget: 'תקציב', trend: 'מגמה' };
+const SOURCE_LABELS: Record<string, string> = {
+  budget: 'תקציב', trend: 'מגמה', 'plan.budgetLines': 'תקציב', 'plan.payroll': 'הגדרת שכר',
+  'plan.liquidityEvidence': 'ראיית בעלים', 'accounts.credit_limit': 'מסגרת שמורה',
+  'accounts.available_limit': 'פנוי לפי הבנק', credit_limit_minus_unbilled: 'מסגרת פחות חיובים שטרם נסלקו',
+};
+const RULE_ROWS: { key: string; label: string }[] = [
+  { key: 'income', label: 'הכנסה לפי התקציב' },
+  { key: 'payroll', label: 'שכר לפי הגדרת התקציב' },
+  { key: 'suppliers', label: 'ספקים — שוטף 30' },
+];
 
 export function ForecastPanel({ forecast }: { forecast: Forecast | null | undefined }) {
   if (!forecast || forecast.months.length === 0) {
@@ -442,6 +498,31 @@ export function ForecastPanel({ forecast }: { forecast: Forecast | null | undefi
           </tbody>
         </table>
       </div>
+      {forecast.cash_rules ? (
+        <div className="mt-6 overflow-x-auto">
+          <h3 className="font-medium">תזרים לפי הכללים</h3>
+          <p className="mt-1 text-sm text-stone-600">הכנסה ושכר מהתקציב. ספקים בשוטף 30, בתאריך הפירעון של חודש האספקה. חסר נשאר לא ידוע.</p>
+          <table className="mt-3 d-table">
+            <thead><tr><Th>סעיף</Th>{forecast.months.map((month) => <Th key={month}>{month}</Th>)}</tr></thead>
+            <tbody>
+              {RULE_ROWS.map((row) => (
+                <tr key={row.key}>
+                  <td>{row.label}</td>
+                  {forecast.months.map((month) => {
+                    const cell = forecast.cash_rules?.months[month]?.[row.key];
+                    return (
+                      <td key={month} title={cell?.label || cell?.rule || ''}>
+                        {money(cell?.amount)}
+                        {cell?.source ? <div className="text-xs text-stone-500">{SOURCE_LABELS[cell.source] ?? cell.source}</div> : null}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
       {forecast.message ? <p className="mt-3 text-sm text-stone-500">{forecast.message}</p> : null}
     </Card>
   );
@@ -619,15 +700,20 @@ const COMMON_FIELDS: EvidenceField[] = [
 export const EVIDENCE_KINDS: { kind: EvidenceKind; label: string; title: string; fields: EvidenceField[] }[] = [
   { kind: 'facilities', label: 'מסגרות', title: 'label', fields: [
     { key: 'label', label: 'שם', type: 'text', required: true },
+    { key: 'kind', label: 'סוג (credit_line / cheque_discounting)', type: 'text' },
     { key: 'limit', label: 'מסגרת (₪)', type: 'amount' },
     { key: 'validFrom', label: 'בתוקף מ-', type: 'date' },
     { key: 'validTo', label: 'בתוקף עד', type: 'date' },
+    { key: 'asOf', label: 'נכון ל-', type: 'date' },
   ] },
   { kind: 'loans', label: 'הלוואות', title: 'label', fields: [
     { key: 'label', label: 'שם', type: 'text', required: true },
+    { key: 'kind', label: 'סוג (bridge / term / cheque_discounting)', type: 'text' },
     { key: 'balance', label: 'יתרה (₪)', type: 'amount' },
     { key: 'asOf', label: 'נכון ל-', type: 'date' },
     { key: 'maturity', label: 'סיום', type: 'date' },
+    { key: 'paymentAmount', label: 'החזר (₪)', type: 'amount' },
+    { key: 'paymentDate', label: 'תאריך החזר', type: 'date' },
   ] },
   { kind: 'checks', label: 'צ׳קים דחויים', title: 'check', fields: [
     { key: 'check', label: 'מספר צ׳ק', type: 'text', required: true },

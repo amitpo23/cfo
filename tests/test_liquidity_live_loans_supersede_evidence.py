@@ -107,7 +107,8 @@ def test_without_a_live_connection_the_evidence_still_stands():
 
         result = _build(db, org_id, _plan(org_id, EVIDENCE[1:2]))
 
-        assert [(loan["balance"], loan["source"]) for loan in result["loans"]] == [(61351.38, "evidence")]
+        assert [(loan["balance"], loan["source"]) for loan in result["loans"]] == [(61351.38, "plan.liquidityEvidence")]
+        assert result["loans"][0]["provider_data"] is False
 
 
 def test_evidence_for_a_loan_the_feed_never_reports_stays():

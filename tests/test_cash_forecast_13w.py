@@ -83,7 +83,8 @@ def test_a_facility_stops_counting_after_its_valid_to_date():
     december_last = next(w for w in weeks if w["start"] <= "2026-12-31" <= w["end"])
     after = next(w for w in weeks if w["start"] > "2026-12-31")
     assert december_last["limit"] == 80000.0
-    assert after["limit"] == 0.0
+    assert after["limit"] is None
+    assert after["headroom"] is None
 
 
 def test_an_unknown_opening_balance_keeps_closing_and_headroom_unknown():
