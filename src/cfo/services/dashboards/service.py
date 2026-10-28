@@ -12,7 +12,7 @@ from ...models import (
     DashboardPlanRevision, DashboardShareLink, Organization, User,
     UserRole,
 )
-from ..membership_service import role_in
+from ..membership_service import active_organization_ids, grant, role_in
 from ..office_access import office_manages
 from ..secret_compare import constant_time_equal
 
@@ -755,6 +755,124 @@ def set_entity_accounts(db, user: User, dashboard_id: int, entity_id: int, accou
     ))
     db.commit()
     return _entity_out(db, entity)
+
+
+MAX_WORKSPACE_ENTITIES = 12
+
+
+def can_create_workspace(db, user: User) -> bool:
+    """Platform SUPER_ADMIN, or an active ADMIN membership. User.role is not enough."""
+    if user.role == UserRole.SUPER_ADMIN:
+        return True
+    return any(
+        role_in(db, user.id, org_id) == UserRole.ADMIN
+        for org_id in active_organization_ids(db, user.id)
+    )
+
+
+def create_workspace(
+    db, user: User, *, name: str, slug: str, title: str | None = None,
+    template: str = "generic", access_mode: str = "members",
+    entities: list[dict] | None = None,
+) -> dict:
+    """A new organization and a draft dashboard. Closed unless the caller asks for link.
+
+    Public is refused. No provider credentials are copied and no provider is called.
+    """
+    from ...models import IntegrationType
+    from .multi_entity import assert_same_office
+
+    cleaned = (name or "").strip()
+    if not cleaned or len(cleaned) > 255:
+        raise DashboardError(422, "invalid_name", "שם העסק חסר או ארוך מדי")
+    if not can_create_workspace(db, user):
+        raise DashboardError(403, "forbidden", "יצירת ארגון ודשבורד שמורה למנהל")
+    if not SLUG_RE.fullmatch(slug or ""):
+        raise DashboardError(422, "invalid_slug", "הכתובת חייבת להיות באנגלית, 3 עד 48 תווים")
+    if template not in {"generic", "restaurant", "services"}:
+        raise DashboardError(422, "invalid_template", "תבנית הדשבורד אינה מוכרת")
+    if access_mode == "public":
+        raise DashboardError(422, "invalid_access", "דשבורד חדש אינו נוצר כציבורי")
+    if access_mode not in {"members", "link"}:
+        raise DashboardError(422, "invalid_access", "מצב הגישה אינו מוכר")
+    related = list(entities or [])
+    if len(related) > MAX_WORKSPACE_ENTITIES:
+        raise DashboardError(422, "too_many_entities", f"אפשר לחבר עד {MAX_WORKSPACE_ENTITIES} ישויות")
+    if db.query(ClientDashboard).filter_by(slug=slug).first():
+        raise DashboardError(409, "slug_taken", "הכתובת כבר בשימוש")
+    heading = (title or cleaned).strip()[:255] or cleaned
+    try:
+        org = Organization(
+            name=cleaned, integration_type=IntegrationType.MANUAL, is_active=True,
+            api_credentials=None,
+        )
+        db.add(org)
+        db.flush()
+        grant(
+            db, organization_id=org.id, user_id=user.id, role=UserRole.ADMIN,
+            granted_by_user_id=user.id, status="active",
+        )
+        row = ClientDashboard(
+            slug=slug, title=heading, primary_organization_id=org.id,
+            office_organization_id=None, template=template,
+            access_mode=access_mode, status="draft", created_by=user.id,
+        )
+        db.add(row)
+        db.flush()
+        primary = DashboardEntity(
+            dashboard_id=row.id, organization_id=org.id, label=cleaned, role="primary",
+        )
+        db.add(primary)
+        db.flush()
+        attached = [primary]
+        seen = {org.id}
+        for item in related:
+            organization_id = int(item["organization_id"])
+            if organization_id in seen:
+                raise DashboardError(409, "entity_exists", "הישות כבר מחוברת לדשבורד")
+            other = db.get(Organization, organization_id)
+            if other is None or not other.is_active or not _can_access_org(
+                db, user, organization_id, None,
+            ):
+                raise not_found()
+            label = str(item.get("label") or other.name).strip()[:255] or other.name
+            entity = DashboardEntity(
+                dashboard_id=row.id, organization_id=organization_id, label=label, role="related",
+            )
+            db.add(entity)
+            db.flush()
+            attached.append(entity)
+            seen.add(organization_id)
+            assert_same_office(db, row, attached)
+        db.add(DashboardMember(
+            dashboard_id=row.id, user_id=user.id, role="owner", status="active",
+        ))
+        db.add(AuditLog(
+            user_id=user.id, organization_id=org.id, action="CREATE",
+            entity_type="Organization", entity_id=org.id,
+            details={"name": cleaned, "source": "dashboard_workspace", "provider_calls": 0},
+        ))
+        db.add(AuditLog(
+            user_id=user.id, organization_id=org.id, action="CREATE_DASHBOARD",
+            entity_type="ClientDashboard", entity_id=row.id,
+            details={"slug": slug, "access_mode": access_mode, "provider_calls": 0},
+        ))
+        db.commit()
+        db.refresh(row)
+        db.refresh(org)
+    except DashboardError:
+        db.rollback()
+        raise
+    return {
+        "organization": {"id": org.id, "name": org.name},
+        "dashboard": {
+            "id": row.id, "slug": row.slug, "title": row.title, "status": row.status,
+            "access_mode": row.access_mode, "template": row.template,
+            "primary_organization_id": row.primary_organization_id,
+        },
+        "entities": [_entity_out(db, entity) for entity in attached],
+        "provider_calls": 0,
+    }
 
 
 def manageable_organizations(db, user: User) -> list[dict]:
