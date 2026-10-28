@@ -27,6 +27,7 @@ import {
   Workflow,
   type LucideIcon,
 } from 'lucide-react';
+import { safeDashboardReturn } from './dashboardReturn';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
@@ -427,8 +428,10 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
   // Open directly in login mode when arriving at /login (or any *login* path/hash).
   useEffect(() => {
     const loc = window.location;
+    const params = new URLSearchParams(loc.search);
     if (
       loc.pathname.toLowerCase().includes('login') ||
+      params.get('login') === '1' ||
       loc.hash.toLowerCase().includes('login')
     ) {
       goToLogin();
@@ -443,6 +446,11 @@ const RezefLanding: React.FC<Props> = ({ darkMode: _darkMode, onSuccess }) => {
   const completeLogin = useCallback((data: TokenResponse) => {
     localStorage.setItem('auth_token', data.access_token);
     localStorage.setItem('rezef_selected_plan', selectedPlan);
+    const next = safeDashboardReturn(new URLSearchParams(window.location.search).get('next'));
+    if (next) {
+      window.location.assign(next);
+      return;
+    }
     onSuccess();
   }, [onSuccess, selectedPlan]);
 

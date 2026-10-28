@@ -89,7 +89,9 @@ def test_share_token_is_returned_once_and_revocation_closes_the_link(client, fre
     )
     assert revoked.status_code == 204
     closed = client.get("/api/public/d/shared-dash")
-    assert closed.status_code == 404
+    assert closed.status_code == 401
+    assert closed.json()["error"]["code"] == "login_required"
+    assert "pnl" not in closed.json()
 
 
 def test_viewer_cannot_mint_a_link_and_plan_requires_if_match(client, fresh_org):
@@ -431,7 +433,8 @@ def test_vercel_sets_a_secure_share_cookie_and_the_cookie_secret_is_optional(cli
     from cfo.config import settings
     monkeypatch.setattr(settings, "dashboard_cookie_secret", "dedicated-dashboard-secret")
     hidden = client.get("/api/public/d/cookie-dash")
-    assert hidden.status_code == 404
+    assert hidden.status_code == 401
+    assert hidden.json()["error"]["code"] == "login_required"
     again = client.post("/api/public/d/cookie-dash/session", json={"token": token})
     assert again.status_code == 200, again.text
     visible = client.get("/api/public/d/cookie-dash")

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ExternalLink, LayoutGrid, Loader2, Plus, RefreshCw } from 'lucide-react';
 import api from '../services/api';
+import { ProviderAccessCard, ProviderStatus } from './dashboardProviders';
 import { ShareLinksCard } from './dashboardTabs';
 
 /**
@@ -60,7 +61,11 @@ export default function DashboardsManager({ darkMode }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [form, setForm] = useState({ organization: '', slug: '', title: '', template: 'generic', access: 'members' });
+  const [workspace, setWorkspace] = useState({ name: '', slug: '', title: '', access: 'members' });
+  const [related, setRelated] = useState<{ organization_id: number; label: string }[]>([]);
+  const [relatedPick, setRelatedPick] = useState('');
   const [creating, setCreating] = useState(false);
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
 
   const card = `rounded-xl border shadow-sm ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`;
   const textMain = darkMode ? 'text-white' : 'text-gray-900';
@@ -88,6 +93,37 @@ export default function DashboardsManager({ darkMode }: Props) {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  async function createWorkspace(event: React.FormEvent) {
+    event.preventDefault();
+    setCreatingWorkspace(true);
+    setError(null);
+    try {
+      const created = await api.post<{ dashboard: { id: number } }>('/dashboards/workspaces', {
+        name: workspace.name.trim(),
+        slug: workspace.slug.trim(),
+        title: workspace.title.trim() || workspace.name.trim(),
+        access_mode: workspace.access,
+        entities: related,
+      });
+      setWorkspace({ name: '', slug: '', title: '', access: 'members' });
+      setRelated([]);
+      await load();
+      setOpenId(created.dashboard.id);
+    } catch (err) {
+      setError(errorText(err, 'יצירת העסק והדשבורד נכשלה'));
+    } finally {
+      setCreatingWorkspace(false);
+    }
+  }
+
+  function addRelated() {
+    const organizationId = Number(relatedPick);
+    if (!organizationId || related.some((item) => item.organization_id === organizationId)) return;
+    const org = orgs.find((item) => item.id === organizationId);
+    setRelated((current) => [...current, { organization_id: organizationId, label: org?.name ?? '' }]);
+    setRelatedPick('');
+  }
 
   async function create(event: React.FormEvent) {
     event.preventDefault();
@@ -146,7 +182,68 @@ export default function DashboardsManager({ darkMode }: Props) {
       {error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
 
       <div className={`${card} p-5`}>
-        <h2 className={`text-lg font-semibold mb-3 ${textMain}`}>דשבורד חדש</h2>
+        <h2 className={`text-lg font-semibold mb-1 ${textMain}`}>עסק ודשבורד חדשים</h2>
+        <p className={`mb-3 text-sm ${textSub}`}>
+          ברירת המחדל סגורה לחברי הארגון. דשבורד חדש לא נוצר כציבורי, והשמירה לא פונה לספק.
+        </p>
+        <form onSubmit={(event) => { void createWorkspace(event); }} className="flex flex-wrap items-end gap-3">
+          <label className={`flex flex-col gap-1 text-xs ${textSub}`}>
+            שם העסק
+            <input className={input} required maxLength={255} value={workspace.name}
+              onChange={(event) => setWorkspace({ ...workspace, name: event.target.value })} />
+          </label>
+          <label className={`flex flex-col gap-1 text-xs ${textSub}`}>
+            כתובת (אנגלית)
+            <input className={input} dir="ltr" required minLength={3} maxLength={48} pattern={'[a-z0-9][a-z0-9\\-]{2,47}'}
+              placeholder="my-business" value={workspace.slug}
+              onChange={(event) => setWorkspace({ ...workspace, slug: event.target.value.toLowerCase() })} />
+          </label>
+          <label className={`flex flex-col gap-1 text-xs ${textSub}`}>
+            כותרת הדשבורד
+            <input className={input} maxLength={255} value={workspace.title}
+              onChange={(event) => setWorkspace({ ...workspace, title: event.target.value })} />
+          </label>
+          <label className={`flex flex-col gap-1 text-xs ${textSub}`}>
+            גישה
+            <select className={input} value={workspace.access}
+              onChange={(event) => setWorkspace({ ...workspace, access: event.target.value })}>
+              <option value="members">{ACCESS_LABELS.members}</option>
+              <option value="link">{ACCESS_LABELS.link}</option>
+            </select>
+          </label>
+          <label className={`flex flex-col gap-1 text-xs ${textSub}`}>
+            ישות קשורה
+            <select className={input} value={relatedPick} onChange={(event) => setRelatedPick(event.target.value)}>
+              <option value="">בלי ישות נוספת</option>
+              {orgs.filter((org) => !related.some((item) => item.organization_id === org.id)).map((org) => (
+                <option key={org.id} value={org.id}>{org.name}</option>
+              ))}
+            </select>
+          </label>
+          <button type="button" className={button} disabled={!relatedPick} onClick={addRelated}>הוסף ישות</button>
+          <button type="submit" disabled={creatingWorkspace}
+            className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white disabled:opacity-50">
+            {creatingWorkspace ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+            צור עסק ודשבורד
+          </button>
+        </form>
+        {related.length ? (
+          <ul className={`mt-3 text-sm ${textSub}`}>
+            {related.map((item) => (
+              <li key={item.organization_id}>
+                {item.label || `ארגון ${item.organization_id}`}
+                <button type="button" className="ms-2 underline"
+                  onClick={() => setRelated((current) => current.filter((row) => row.organization_id !== item.organization_id))}>
+                  הסר
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+
+      <div className={`${card} p-5`}>
+        <h2 className={`text-lg font-semibold mb-3 ${textMain}`}>דשבורד לעסק קיים</h2>
         {orgs.length === 0 && !loading ? (
           <p className={`text-sm ${textSub}`}>אין ארגון שאתה מנהל בו. יצירת דשבורד דורשת הרשאת מנהל בארגון.</p>
         ) : (
@@ -239,6 +336,11 @@ function DashboardWiring({ dashboard, orgs, darkMode, onError }: {
   dashboard: Dashboard; orgs: Org[]; darkMode: boolean; onError: (message: string | null) => void;
 }) {
   const [entities, setEntities] = useState<Entity[]>([]);
+  const [providers, setProviders] = useState<ProviderStatus | null>(null);
+  const [sumitArmed, setSumitArmed] = useState(false);
+  const [financeArmed, setFinanceArmed] = useState(false);
+  const [pending, setPending] = useState<'sumit' | 'finance' | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [newOrg, setNewOrg] = useState('');
   const [newLabel, setNewLabel] = useState('');
   const textSub = darkMode ? 'text-gray-400' : 'text-gray-500';
@@ -246,8 +348,12 @@ function DashboardWiring({ dashboard, orgs, darkMode, onError }: {
 
   const load = useCallback(async () => {
     try {
-      const body = await api.get<{ entities: Entity[] }>(`/dashboards/${dashboard.id}/entities`);
+      const [body, providerBody] = await Promise.all([
+        api.get<{ entities: Entity[] }>(`/dashboards/${dashboard.id}/entities`),
+        api.get<ProviderStatus>(`/dashboards/${dashboard.id}/providers`),
+      ]);
       setEntities(body.entities);
+      setProviders(providerBody);
     } catch (err) {
       onError(errorText(err, 'טעינת הישויות נכשלה'));
     }
@@ -269,8 +375,43 @@ function DashboardWiring({ dashboard, orgs, darkMode, onError }: {
     }
   }
 
+  async function confirmProvider(kind: 'sumit' | 'finance') {
+    if (!providers) return;
+    setPending(kind);
+    setNotice(null);
+    onError(null);
+    try {
+      const path = kind === 'sumit'
+        ? `/dashboards/${dashboard.id}/providers/sumit`
+        : `/dashboards/${dashboard.id}/providers/open-finance/refresh`;
+      const confirmation = kind === 'sumit' ? providers.confirmations.sumit : providers.confirmations.open_finance;
+      const body = await api.post<{ message_he?: string; provider_calls?: number }>(path, { confirmation });
+      setNotice(body.message_he || 'האישור נקלט');
+      if (kind === 'sumit') setSumitArmed(false);
+      else setFinanceArmed(false);
+      await load();
+    } catch (err) {
+      onError(errorText(err, 'האישור נדחה'));
+    } finally {
+      setPending(null);
+    }
+  }
+
   return (
     <div className={`mt-4 space-y-4 border-t pt-4 ${darkMode ? 'border-gray-700' : 'border-gray-100'}`}>
+      {providers ? (
+        <ProviderAccessCard
+          status={providers}
+          sumitArmed={sumitArmed}
+          financeArmed={financeArmed}
+          pending={pending}
+          notice={notice}
+          onSumitArmed={setSumitArmed}
+          onFinanceArmed={setFinanceArmed}
+          onSumit={() => { void confirmProvider('sumit'); }}
+          onFinance={() => { void confirmProvider('finance'); }}
+        />
+      ) : null}
       {entities.map((entity) => (
         <EntityAccounts key={entity.id} dashboardId={dashboard.id} entity={entity} darkMode={darkMode}
           onSaved={load} onError={onError} />
