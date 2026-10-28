@@ -5,6 +5,7 @@ export type SheetLine = {
   name: string;
   amount: number | null;
   mapped?: boolean;
+  mark?: string | null;
   reason?: string | null;
   source: string | null;
   source_label: string | null;
@@ -53,8 +54,26 @@ export type PortalCards = {
   unmapped_count?: number;
 };
 
+export type UnclassifiedBucket = {
+  label?: string;
+  amount: number | null;
+  row_count: number | null;
+  lines?: SheetLine[];
+  source?: string | null;
+  source_label?: string | null;
+  synced_at?: string | null;
+};
+
+export type SectionGap = {
+  portal: number | null;
+  books: number | null;
+  gap: number | null;
+  flagged: boolean;
+};
+
 export type BalanceSheetView = {
   status: string;
+  presentation?: 'single' | 'compared';
   basis: string | null;
   basis_label: string | null;
   as_of: string | null;
@@ -68,7 +87,17 @@ export type BalanceSheetView = {
     opening_equity: number | null;
     retained_earnings: number | null;
   };
-  unclassified?: SheetLine[];
+  unclassified?: UnclassifiedBucket | SheetLine[];
+  file_total?: number | null;
+  presented_total?: number | null;
+  portal?: BalanceSheetView | null;
+  books?: BalanceSheetView | null;
+  difference?: {
+    assets: SectionGap;
+    liabilities: SectionGap;
+    equity: SectionGap;
+    unclassified: SectionGap;
+  } | null;
   imports?: {
     profit_loss?: PortalProfit | null;
     ledger_cards?: PortalCards | null;
@@ -126,7 +155,7 @@ function SectionTable({ title, section }: { title: string; section: SheetSection
                   <div>{line.name}</div>
                   {line.code ? <div className="text-xs text-stone-500" dir="ltr">{line.code}</div> : null}
                   {line.mapped === false ? (
-                    <div className="text-xs text-amber-800">{line.reason || 'לא מופה לחשבון ברצף'}</div>
+                    <div className="text-xs text-amber-800">{line.mark || 'לא ממופה'}</div>
                   ) : null}
                 </td>
                 <td>
@@ -143,6 +172,93 @@ function SectionTable({ title, section }: { title: string; section: SheetSection
   );
 }
 
+function unclassifiedOf(bucket: BalanceSheetView['unclassified']): UnclassifiedBucket | null {
+  if (!bucket) return null;
+  if (Array.isArray(bucket)) {
+    if (bucket.length === 0) return null;
+    const amount = bucket.some((line) => line.amount == null) ? null : bucket.reduce((sum, line) => sum + (line.amount || 0), 0);
+    return { label: 'ללא סיווג', amount, row_count: bucket.length, lines: bucket };
+  }
+  return bucket;
+}
+
+function UnclassifiedBlock({ bucket }: { bucket: BalanceSheetView['unclassified'] }) {
+  const row = unclassifiedOf(bucket);
+  if (!row || (row.row_count == null && row.amount == null)) return null;
+  const count = row.row_count == null ? 'מספר שורות לא ידוע' : `${row.row_count} שורות`;
+  return (
+    <section className="d-card">
+      <h3>ללא סיווג</h3>
+      <div className="mt-3">
+        <Figure label={count} amount={row.amount} source={row.source_label} syncedAt={row.synced_at} strong />
+      </div>
+      {(row.lines || []).map((line) => (
+        <p key={`${line.code || ''}-${line.name}`} className="mt-2 text-sm">
+          {line.name}: {money(line.amount)}
+        </p>
+      ))}
+    </section>
+  );
+}
+
+const GAP_ROWS = [
+  ['assets', 'נכסים'],
+  ['liabilities', 'התחייבויות'],
+  ['equity', 'הון'],
+  ['unclassified', 'ללא סיווג'],
+] as const;
+
+function ComparedSheets({ sheet }: { sheet: BalanceSheetView }) {
+  const portal = sheet.portal;
+  const books = sheet.books;
+  const difference = sheet.difference;
+  if (!portal || !books || !difference) return null;
+  return (
+    <section className="d-card">
+      <h2>מאזן — שני מקורות</h2>
+      <p className="mt-2 text-sm text-stone-600">{sheet.message}</p>
+      <div className="mt-4 overflow-x-auto">
+        <table className="d-table">
+          <thead>
+            <tr>
+              <th>סעיף</th>
+              <th>
+                {portal.basis_label || 'מקור לא ידוע'}
+                <div className="text-xs font-normal text-stone-500">
+                  {portal.as_of ? `נכון ל-${portal.as_of}` : 'תאריך הדוח לא ידוע'} · {whenSynced(portal.synced_at)}
+                </div>
+              </th>
+              <th>
+                {books.basis_label || 'מקור לא ידוע'}
+                <div className="text-xs font-normal text-stone-500">
+                  {books.as_of ? `נכון ל-${books.as_of}` : 'תאריך הדוח לא ידוע'} · {whenSynced(books.synced_at)}
+                </div>
+              </th>
+              <th>הפרש</th>
+            </tr>
+          </thead>
+          <tbody>
+            {GAP_ROWS.map(([key, label]) => {
+              const gap = difference[key];
+              return (
+                <tr key={key}>
+                  <td>{label}</td>
+                  <td>{money(gap.portal)}</td>
+                  <td>{money(gap.books)}</td>
+                  <td className={gap.flagged ? 'font-medium text-red-700' : undefined}>
+                    {money(gap.gap)}
+                    {gap.flagged ? ' · פער מעל ₪1' : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export function BalanceSheetCard({ sheet }: { sheet: BalanceSheetView | null | undefined }) {
   if (!sheet) {
     return (
@@ -154,6 +270,24 @@ export function BalanceSheetCard({ sheet }: { sheet: BalanceSheetView | null | u
   }
   const profit = sheet.imports?.profit_loss;
   const cards = sheet.imports?.ledger_cards;
+  if (sheet.presentation === 'compared') {
+    return (
+      <>
+        <ComparedSheets sheet={sheet} />
+        {sheet.portal ? <SingleSheet sheet={sheet.portal} profit={null} cards={null} /> : null}
+        {sheet.books ? <SingleSheet sheet={sheet.books} profit={null} cards={null} /> : null}
+        <ImportReports profit={profit} cards={cards} />
+      </>
+    );
+  }
+  return <SingleSheet sheet={sheet} profit={profit} cards={cards} />;
+}
+
+function SingleSheet({ sheet, profit, cards }: {
+  sheet: BalanceSheetView;
+  profit: PortalProfit | null | undefined;
+  cards: PortalCards | null | undefined;
+}) {
   const equitySide = sheet.liabilities.total != null && sheet.equity.total != null
     ? sheet.liabilities.total + sheet.equity.total
     : null;
@@ -217,7 +351,7 @@ export function BalanceSheetCard({ sheet }: { sheet: BalanceSheetView | null | u
                   <tr key={`${line.code || ''}-${line.name}`}>
                     <td>
                       {line.name}
-                      {line.mapped === false ? <div className="text-xs text-amber-800">{line.reason || 'לא מופה לחשבון ברצף'}</div> : null}
+                      {line.mapped === false ? <div className="text-xs text-amber-800">{line.mark || 'לא ממופה'}</div> : null}
                     </td>
                     <td><Figure amount={line.amount} source={line.source_label} syncedAt={line.synced_at} /></td>
                   </tr>
@@ -227,18 +361,15 @@ export function BalanceSheetCard({ sheet }: { sheet: BalanceSheetView | null | u
           ) : null}
         </section>
       </div>
-      {(sheet.unclassified || []).length > 0 ? (
-        <section className="d-card">
-          <h3>לא סווג למאזן</h3>
-          <ul className="mt-3 text-sm">
-            {sheet.unclassified?.map((line) => (
-              <li key={`${line.code || ''}-${line.name}`} className="mt-2">
-                {line.name}: <Figure amount={line.amount} source={line.source_label} syncedAt={line.synced_at} />
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+      <UnclassifiedBlock bucket={sheet.unclassified} />
+      <ImportReports profit={profit} cards={cards} />
+    </>
+  );
+}
+
+function ImportReports({ profit, cards }: { profit: PortalProfit | null | undefined; cards: PortalCards | null | undefined }) {
+  return (
+    <>
       {profit && profit.status !== 'unknown' ? (
         <section className="d-card">
           <h3>רווח והפסד מיובא</h3>
@@ -275,7 +406,7 @@ export function BalanceSheetCard({ sheet }: { sheet: BalanceSheetView | null | u
                   <td>
                     {card.name}
                     {card.code ? <div className="text-xs text-stone-500" dir="ltr">{card.code}</div> : null}
-                    {card.mapped === false ? <div className="text-xs text-amber-800">{card.reason || 'לא מופה לחשבון ברצף'}</div> : null}
+                    {card.mapped === false ? <div className="text-xs text-amber-800">לא ממופה</div> : null}
                   </td>
                   <td><Figure amount={card.amount} source={card.source_label} syncedAt={card.synced_at} /></td>
                 </tr>

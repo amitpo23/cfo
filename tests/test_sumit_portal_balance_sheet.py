@@ -166,7 +166,14 @@ def test_portal_balance_sheet_csv_maps_accounts_and_is_idempotent(client, fresh_
     assert assets["1000"]["source"] == "sumit_portal_export"
     assert assets["1000"]["synced_at"] == stamp
     assert assets["9999"]["mapped"] is False
+    assert assets["9999"]["mark"] == "לא ממופה"
     assert assets["9999"]["amount"] == 10
+    assert sheet["assets"]["total"] == 1510.5
+    assert sheet["unclassified"]["label"] == "ללא סיווג"
+    assert sheet["unclassified"]["amount"] == 0
+    assert sheet["unclassified"]["row_count"] == 0
+    assert sheet["file_total"] == 3011
+    assert sheet["presented_total"] == sheet["file_total"]
     assert sheet["liabilities"]["total"] == 400
     assert sheet["equity"]["total"] == 1100.5
     assert sheet["equity"]["opening_equity"] is None
@@ -225,9 +232,66 @@ def test_portal_balance_sheet_is_not_added_to_the_derived_ledger(client, fresh_o
     assert _upload(client, org["headers"], content, "balance_sheet.csv", kind="balance_sheet").status_code == 200
     with SessionLocal() as db:
         sheet = build_view(db, org["org_id"], date(2026, 9, 1), date(2026, 9, 30))["balance_sheet"]
-    assert sheet["basis"] == "sumit_portal_export"
-    assert sheet["liabilities"]["total"] == 400
-    assert sheet["assets"]["lines"][0]["source"] == "sumit_portal_export"
+    assert sheet["presentation"] == "compared"
+    assert sheet["basis"] is None
+    portal = sheet["portal"]
+    books = sheet["books"]
+    assert portal["basis_label"] and books["basis_label"]
+    assert portal["basis_label"] != books["basis_label"]
+    assert portal["synced_at"] and books["synced_at"]
+    assert portal["liabilities"]["total"] == 400
+    assert books["liabilities"]["total"] == 18
+    assert portal["assets"]["lines"][0]["source"] == "sumit_portal_export"
+    assert books["assets"]["lines"][0]["source"] == "rezef_books"
+    assert sheet["difference"]["liabilities"]["gap"] == 382
+    assert sheet["difference"]["liabilities"]["flagged"] is True
+    assert sheet["difference"]["assets"]["flagged"] is True
+    assert sheet["difference"]["equity"]["gap"] is None
+    assert sheet["difference"]["equity"]["flagged"] is False
+
+
+def test_section_gap_is_flagged_only_above_one_shekel():
+    from cfo.services.dashboards.balance_sheet import section_gap
+
+    assert section_gap(101, 100)["flagged"] is False
+    assert section_gap(100, 101)["gap"] == -1
+    assert section_gap(101.01, 100)["flagged"] is True
+    assert section_gap(None, 100)["gap"] is None
+    assert section_gap(None, 100)["flagged"] is False
+
+
+def test_unsectioned_import_lines_stay_in_the_file_total(client, fresh_org):
+    from cfo.services.dashboards.view_model import build_view
+
+    org = fresh_org()
+    with SessionLocal() as db:
+        _chart(db, org["org_id"])
+    content = (
+        "מפתח,שם חשבון,סעיף,יתרה\n"
+        "1000,קופה,נכסים,1500.50\n"
+        "2000,ספקים,התחייבויות,400\n"
+        "3000,הון מניות,הון,1100.50\n"
+        "9999,כרטיס לא מוכר,נכסים,10\n"
+        "7777,בלי סעיף,,25\n"
+        "4000,הכנסה שנכנסה למאזן,הכנסות,7\n"
+    ).encode()
+    assert _upload(client, org["headers"], content, "balance_sheet.csv", kind="balance_sheet").status_code == 200
+    with SessionLocal() as db:
+        sheet = build_view(db, org["org_id"], date(2026, 9, 1), date(2026, 9, 30))["balance_sheet"]
+    assets = {line["code"]: line for line in sheet["assets"]["lines"]}
+    assert assets["9999"]["mark"] == "לא ממופה"
+    assert assets["9999"]["amount"] == 10
+    assert sheet["assets"]["total"] == 1510.5
+    loose = {line["code"]: line for line in sheet["unclassified"]["lines"]}
+    assert sheet["unclassified"]["label"] == "ללא סיווג"
+    assert set(loose) == {"7777", "4000"}
+    assert sheet["unclassified"]["amount"] == 32
+    assert sheet["unclassified"]["row_count"] == 2
+    assert sheet["file_total"] == 3043
+    assert sheet["presented_total"] == (
+        sheet["assets"]["total"] + sheet["liabilities"]["total"] + sheet["equity"]["total"] + sheet["unclassified"]["amount"]
+    )
+    assert sheet["presented_total"] == sheet["file_total"]
 
 
 def test_blank_amount_stays_unknown_and_an_explicit_zero_stays_zero(client, fresh_org):
