@@ -293,8 +293,9 @@ app.include_router(
     sumit_webhooks.router, prefix="/api/sumit", tags=["SUMIT Webhooks"],
 )
 
-from .routes import local_clients, open_finance_bind, client_dashboards
+from .routes import local_clients, open_finance_bind, client_dashboards, sumit_portal_import
 app.include_router(local_clients.router, prefix="/api", tags=["Local office imports"])
+app.include_router(sumit_portal_import.router, prefix="/api/admin", tags=["SUMIT portal import"])
 app.include_router(open_finance_bind.router, prefix="/api/admin", tags=["Open Finance bind"])
 app.include_router(client_dashboards.router, prefix="/api", tags=["Client dashboards"])
 app.include_router(client_dashboards.public_router, prefix="/api/public", tags=["Client dashboards"])

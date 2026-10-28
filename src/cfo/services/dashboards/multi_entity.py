@@ -513,6 +513,12 @@ def _mask_shared_forecast(result: dict, groups: list[dict]) -> dict:
     return result
 
 
+def _uncombined_balance_sheet() -> dict:
+    """Balance sheets are stocks. Adding them across entities double-counts shared accounts."""
+    from .balance_sheet import unknown_balance_sheet
+    return unknown_balance_sheet("המאזן מוצג לכל ישות בנפרד. החיבור המאוחד אינו מחבר מאזנים.")
+
+
 def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | None = None) -> dict:
     views = [section["view"] for section in sections]
     org_ids = [section["organization_id"] for section in sections]
@@ -543,6 +549,7 @@ def _combine(db, sections: list[dict], start: date, end: date, *, plan: dict | N
         "cash_statement": cash_statement.combine(sections, outlook, removed["by_month"]),
         "intercompany_removed": removed["summary"],
         "sources": _combine_sources(sections),
+        "balance_sheet": _uncombined_balance_sheet(),
         "provider_calls": 0,
     }
     return _apply_shared_identity(db, combined, sections, groups, start, end)

@@ -14,7 +14,10 @@ from ..bank_coverage import redact_public_coverage
 from ..financial_reports_service import FinancialReportsService
 from ..live_cash_flow_service import LiveCashFlowService
 from .. import bank_status
-from . import activity_quality, books, budget, cash_forecast, cash_statement, forecast, freshness, liquidity
+from . import (
+    activity_quality, balance_sheet as balance_sheet_report, books, budget, cash_forecast,
+    cash_statement, forecast, freshness, liquidity,
+)
 
 MAX_RANGE_DAYS = 366
 
@@ -63,6 +66,7 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
     )
     position = liquidity.build_liquidity(db, organization_id, start, end, plan=plan, entity_id=entity_id,
                                          classified=filed)
+    balance = balance_sheet_report.build_balance_sheet(db, organization_id, end)
     outlook = forecast.build_forecast(
         pnl.get("months") or [], as_of=end, plan=plan, debt_service=position["debt_service"],
         budget_sums=plan_budget_sums(plan) if with_budget else None,
@@ -78,6 +82,7 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
         "forecast": outlook,
         "sources": freshness.build_freshness(db, organization_id),
         "cash_statement": cash_statement.build_cash_statement(filed, start, end, outlook),
+        "balance_sheet": balance,
         "provider_calls": 0,
         "freshness": {
             "cashflow": "books" if cashflow.get("months") else "unknown",
@@ -86,6 +91,7 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
             "budget_vs_actual": budget_vs_actual["status"],
             "liquidity": position["status"],
             "forecast": outlook["status"],
+            "balance_sheet": balance["status"],
             "published": False,
         },
     }
