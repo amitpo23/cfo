@@ -436,7 +436,7 @@ def test_budget_entry_saves_a_negative_opening_balance(client, fresh_org):
     rows = plan.json()["payload"]["liquidityEvidence"]["openingBalances"]
     assert rows == [{
         "date": "2026-10-28", "amount": -12000.0, "source": "assumption by owner",
-        "organizationId": owner["org_id"],
+        "override": False, "organizationId": owner["org_id"],
     }]
 
 
