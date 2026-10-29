@@ -1,7 +1,8 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import api from './services/api';
+import { readActiveOrgId, rememberOrgSession } from './activeOrg';
 import OrgSwitcher, { CurrentUser } from './components/OrgSwitcher';
 import PendingInvitations from './components/PendingInvitations';
 import ActiveOrgRequired from './components/ActiveOrgRequired';
@@ -213,6 +214,11 @@ function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [authed, setAuthed] = useState(() => AUTH_BYPASS || Boolean(localStorage.getItem('auth_token')));
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [identityReady, setIdentityReady] = useState(false);
+  // A stored id is already on the header. An empty store waits until the
+  // switcher writes one, so the first dashboard calls are not a 409.
+  const [orgReady, setOrgReady] = useState(() => readActiveOrgId() !== null);
+  const markOrgReady = useCallback(() => setOrgReady(true), []);
 
   // Resolve the real signed-in identity (drives the header label + the
   // super-admin org switcher). Previously the header showed a hardcoded
@@ -220,8 +226,16 @@ function App() {
   useEffect(() => {
     if (!authed) return;
     api.get<CurrentUser>('/admin/auth/me')
-      .then(setCurrentUser)
-      .catch(() => setCurrentUser(null));
+      .then((user) => {
+        rememberOrgSession(user);
+        setCurrentUser(user);
+        setIdentityReady(true);
+      })
+      .catch(() => {
+        setCurrentUser(null);
+        setIdentityReady(true);
+        setOrgReady(true);
+      });
   }, [authed]);
 
   // Public, pre-auth route. Meta requires a reachable privacy-policy URL to
@@ -348,10 +362,12 @@ function App() {
 
               {/* Right Side Actions */}
               <div className="flex items-center gap-1 md:gap-4 min-w-0">
-                {/* Super-admin: act-as-client organization switcher */}
-                {currentUser && <OrgSwitcher currentUser={currentUser} darkMode={darkMode} />}
+                {/* Active organization — persisted before tenant requests */}
+                {currentUser && (
+                  <OrgSwitcher currentUser={currentUser} darkMode={darkMode} onReady={markOrgReady} />
+                )}
                 {/* חוסם כשהשרת מחזיר 409 active_organization_required */}
-                <ActiveOrgRequired darkMode={darkMode} />
+                <ActiveOrgRequired darkMode={darkMode} currentUser={currentUser} identityReady={identityReady} />
 
                 {/* Dark Mode Toggle */}
                 <button
@@ -413,6 +429,7 @@ function App() {
             {/* Main Content */}
             <main className={`flex-1 overflow-y-auto ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
               {currentUser ? <PendingInvitations darkMode={darkMode} /> : null}
+              {orgReady ? (
               <Suspense fallback={<div role="status" className="p-6">Loading…</div>}>
               <Routes>
                 {/* CFO Command Center */}
@@ -479,12 +496,15 @@ function App() {
                 <Route path="/expenses" element={<ExpenseFiling darkMode={darkMode} />} />
               </Routes>
               </Suspense>
+              ) : (
+                <div role="status" className="p-6">טוען…</div>
+              )}
             </main>
 
             {/* מושקו כצ'אט מערכת — מחוץ ל-<Routes> בכוונה, כדי שיהיה
                 נגיש מכל מסך והשיחה תשרוד ניווט בין עמודים. קודם לכן
                 הוא היה route בלבד (/ai-chat) בלי קישור בניווט. */}
-            <MoshkoSystemChat darkMode={darkMode} />
+            {orgReady ? <MoshkoSystemChat darkMode={darkMode} /> : null}
           </div>
         </div>
       </Router>

@@ -1,10 +1,13 @@
 /**
  * מסך חוסם — "בחר ארגון פעיל".
  *
- * השרת מחזיר 409 `active_organization_required` לכל סופר-אדמין שאין לו
- * ארגון משלו ולא שלח `X-Active-Org-Id`. עד 11/08/2026 השרת החזיר במקום
- * זאת את ארגון 1 בשקט, ולכן דפדפן חדש, מצב פרטי או ניקוי אחסון היו
- * מפנים את כל האפליקציה לתיק של לקוח אמיתי בלי שאיש בחר בו.
+ * השרת מחזיר 409 `active_organization_required` כשאין `X-Active-Org-Id`
+ * ויש יותר מארגון אחד לבחירה: סופר-אדמין מול קטלוג הלקוחות, או משתמש עם
+ * כמה חברויות. עד 11/08/2026 סופר-אדמין בלי כותרת נפל בשקט לארגון 1.
+ *
+ * אם הבית או רשימת החברויות כבר מספיקים כדי לבחור, הרכיב כותב את המזהה
+ * וטוען מחדש במקום להציג את החלון. הבורר נשאר כשאין בחירה בטוחה
+ * (קטלוג סופר-אדמין בלי בית שמור).
  *
  * `api.ts` משדר `rezef:active-org-required` עם רשימת הארגונים שהשרת צירף
  * לשגיאה. הרשימה מגיעה מהשרת ולא נשמרת בלקוח: הלקוח אינו מקור אמת לשאלה
@@ -12,7 +15,8 @@
  */
 import { useEffect, useState } from 'react';
 import { Building2, AlertTriangle } from 'lucide-react';
-import { writeActiveOrgId } from '../activeOrg';
+import { readActiveOrgId, readOrgSession, resolveFromRequiredDetail, writeActiveOrgId } from '../activeOrg';
+import type { CurrentUser } from './OrgSwitcher';
 
 interface Org {
   id: number;
@@ -21,7 +25,15 @@ interface Org {
 
 export const ACTIVE_ORG_REQUIRED_EVENT = 'rezef:active-org-required';
 
-export default function ActiveOrgRequired({ darkMode = false }: { darkMode?: boolean }) {
+export default function ActiveOrgRequired({
+  darkMode = false,
+  currentUser = null,
+  identityReady = false,
+}: {
+  darkMode?: boolean;
+  currentUser?: CurrentUser | null;
+  identityReady?: boolean;
+}) {
   const [orgs, setOrgs] = useState<Org[] | null>(null);
 
   useEffect(() => {
@@ -33,7 +45,23 @@ export default function ActiveOrgRequired({ darkMode = false }: { darkMode?: boo
     return () => window.removeEventListener(ACTIVE_ORG_REQUIRED_EVENT, onRequired);
   }, []);
 
-  if (orgs === null) return null;
+  const session = !identityReady
+    ? null
+    : currentUser
+      ? {
+          preferredId: currentUser.organization_id,
+          scope: currentUser.role === 'super_admin' ? 'catalog' as const : 'membership' as const,
+        }
+      : readOrgSession();
+  const resolved = orgs ? resolveFromRequiredDetail(readActiveOrgId(), orgs, session) : null;
+
+  useEffect(() => {
+    if (!resolved || readActiveOrgId() === resolved) return;
+    writeActiveOrgId(resolved);
+    window.location.reload();
+  }, [resolved]);
+
+  if (orgs === null || resolved || !identityReady) return null;
 
   const select = (id: number) => {
     writeActiveOrgId(id);

@@ -1,8 +1,14 @@
 /** Organization selection is explicit and persists across all tenant requests. */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Building2, ChevronDown, Check } from 'lucide-react';
 import api from '../services/api';
-import { ACTIVE_ORG_KEY, readActiveOrgId, resolveActiveOrgId, writeActiveOrgId } from '../activeOrg';
+import {
+  ACTIVE_ORG_KEY,
+  commitActiveOrgId,
+  readActiveOrgId,
+  rememberOrgSession,
+  writeActiveOrgId,
+} from '../activeOrg';
 
 export interface CurrentUser {
   id: number;
@@ -22,35 +28,51 @@ export { ACTIVE_ORG_KEY };
 export default function OrgSwitcher({
   currentUser,
   darkMode,
+  onReady,
 }: {
   currentUser: CurrentUser;
   darkMode: boolean;
+  /** Fired after `active_org_id` is written, before tenant requests should start. */
+  onReady?: () => void;
 }) {
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [open, setOpen] = useState(false);
   const [activeId, setActiveId] = useState<number | null>(() => {
     const raw = readActiveOrgId();
-    return raw ? Number(raw) : currentUser.organization_id;
+    return raw ? Number(raw) : null;
   });
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
   useEffect(() => {
+    let cancelled = false;
+    let reloading = false;
+    rememberOrgSession(currentUser);
     (async () => {
       try {
         const listed = await api.get<Org[]>('/admin/auth/organizations');
+        if (cancelled) return;
         setOrgs(listed);
-        const resolved = resolveActiveOrgId(readActiveOrgId(), listed);
-        if (!resolved) return;
-        if (resolved !== readActiveOrgId()) {
-          writeActiveOrgId(resolved);
+        const scope = currentUser.role === 'super_admin' ? 'catalog' : 'membership';
+        const stored = readActiveOrgId();
+        // Synchronous write: tenant routes stay unmounted until onReady, so this
+        // key is in localStorage before the first X-Active-Org-Id request.
+        const resolved = commitActiveOrgId(stored, listed, currentUser.organization_id, scope);
+        setActiveId(resolved ? Number(resolved) : null);
+        if (resolved && stored && resolved !== stored) {
+          reloading = true;
           window.location.reload();
-          return;
         }
-        setActiveId(Number(resolved));
       } catch {
         /* non-fatal: switcher just stays empty */
+      } finally {
+        if (!cancelled && !reloading) onReadyRef.current?.();
       }
     })();
-  }, [currentUser.id]);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
 
   if (orgs.length === 0) return null;
 

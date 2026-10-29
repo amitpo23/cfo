@@ -3,7 +3,13 @@
  * שירות API מלא למערכת CFO עם אינטגרציה ל-SUMIT
  */
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
-import { readActiveOrgId, resolveActiveOrgId, writeActiveOrgId } from '../activeOrg';
+import {
+  ACTIVE_ORG_HEADER,
+  readActiveOrgId,
+  readOrgSession,
+  resolveFromRequiredDetail,
+  writeActiveOrgId,
+} from '../activeOrg';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -25,17 +31,13 @@ class ApiService {
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
         }
-        // Super-admin "act as organization" override. When an active org is
-        // selected it rides on every request; the backend honors the header
-        // ONLY for SUPER_ADMIN (silently ignored for everyone else), so it is
-        // always safe to send. This drives the whole app — dashboards, AR/AP,
-        // sync — to the chosen client org.
-        // אין נפילה ל-'1' תחת AUTH_BYPASS: זו הייתה ברירת מחדל שקטה לתיק
-        // של לקוח אמיתי בצד הלקוח, מקבילה לזו שהוסרה מהשרת ב-11/08/2026.
-        // בלי בחירה מפורשת השרת מחזיר 409 והמסך החוסם נפתח.
+        // Members with more than one membership, and a super-admin with a
+        // client catalog, are refused with 409 until this header is present.
+        // The value is `active_org_id` from localStorage (switcher, 409 retry,
+        // or the chooser). A full reload reads the same key. No fallback to org 1.
         const activeOrg = readActiveOrgId();
         if (activeOrg) {
-          config.headers['X-Active-Org-Id'] = activeOrg;
+          config.headers[ACTIVE_ORG_HEADER] = activeOrg;
         }
         // נרמול נתיב: בקומפוננטות יש שתי קונבנציות ('/api/financial/..' ו-'/ar/..')
         // ועם baseURL שמסתיים ב-/api נוצרת כפילות '/api/api/..' (404),
@@ -80,14 +82,14 @@ class ApiService {
         ) {
           const organizations = detail.organizations ?? [];
           const config = error.config;
-          const resolved = resolveActiveOrgId(readActiveOrgId(), organizations);
-          // A stored choice, or the only membership, is retried with the header.
-          // The chooser opens only when several memberships and none is stored.
+          const resolved = resolveFromRequiredDetail(readActiveOrgId(), organizations, readOrgSession());
+          // Stored, sole, home, or the lowest membership id is retried with the header.
+          // The chooser opens only when resolution still has no org (super-admin catalog).
           if (resolved && config && !config._orgRetry) {
             writeActiveOrgId(resolved);
             config._orgRetry = true;
             config.headers = config.headers ?? {};
-            config.headers['X-Active-Org-Id'] = resolved;
+            config.headers[ACTIVE_ORG_HEADER] = resolved;
             return this.client.request(config);
           }
           if (!resolved) {
