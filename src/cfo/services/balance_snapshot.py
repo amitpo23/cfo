@@ -27,13 +27,15 @@ def compute_balance_snapshot(db: Session, organization_id: int) -> Dict:
             Invoice.balance > 0,
         ).scalar() or 0
     )
-    payables = float(
-        db.query(func.coalesce(func.sum(Bill.balance), 0))
-        .filter(
+    from .open_payables import confirmed_cover, remaining_of
+    cover = confirmed_cover(db, organization_id)
+    payables = float(sum(
+        (remaining_of(bill, cover) or 0)
+        for bill in db.query(Bill).filter(
             Bill.organization_id == organization_id,
             Bill.balance > 0,
-        ).scalar() or 0
-    )
+        ).all()
+    ))
     inventory = float(
         db.query(
             func.coalesce(func.sum(InventoryItem.quantity * InventoryItem.unit_cost), 0)

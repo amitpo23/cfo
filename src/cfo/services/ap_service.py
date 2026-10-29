@@ -540,6 +540,8 @@ class AccountsPayableService:
     
     def _get_pending_invoices(self) -> List[Dict]:
         """שליפת חשבוניות ספק פתוחות מהדאטאבייס (יתרה > 0)."""
+        from .open_payables import confirmed_cover, remaining_of
+        cover = confirmed_cover(self.db, self.organization_id)
         rows = (
             self.db.query(Bill, Contact)
             .outerjoin(Contact, Bill.vendor_id == Contact.id)
@@ -551,6 +553,9 @@ class AccountsPayableService:
         )
         invoices: List[Dict] = []
         for bill, vendor in rows:
+            remaining = remaining_of(bill, cover)
+            if remaining is None:
+                continue
             ref_date = bill.issue_date or bill.due_date or date.today()
             due_date = bill.due_date or ref_date
             invoices.append({
@@ -559,7 +564,7 @@ class AccountsPayableService:
                 'vendor_name': (vendor.name if vendor else None) or 'ספק לא ידוע',
                 'date': ref_date.isoformat(),
                 'due_date': due_date.isoformat(),
-                'amount': float(bill.balance or 0),
+                'amount': float(remaining),
                 'terms': 'שוטף+30',
                 'discount_percent': 0,
                 'discount_deadline': None,

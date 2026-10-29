@@ -97,6 +97,8 @@ class ARAPAgingService:
         """Accounts Payable (AP) aging — outstanding bills."""
         as_of_date = as_of_date or date.today()
 
+        from .open_payables import confirmed_cover, remaining_of
+        cover = confirmed_cover(self.db, self.organization_id)
         bills = (
             self.db.query(Bill)
             .filter(
@@ -119,7 +121,8 @@ class ARAPAgingService:
             if not bill.due_date:
                 continue
 
-            balance = float(bill.balance or 0)
+            remaining = remaining_of(bill, cover)
+            balance = float(remaining) if remaining is not None else 0.0
             if balance <= 0:
                 continue
 

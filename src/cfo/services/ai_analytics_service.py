@@ -609,9 +609,15 @@ class AdvancedAIService:
         inventory = float(self.db.query(
             func.coalesce(func.sum(InventoryItem.quantity * InventoryItem.unit_cost), 0))
             .filter(InventoryItem.organization_id == self.organization_id).scalar() or 0)
-        payables = float(self.db.query(func.coalesce(func.sum(Bill.balance), 0))
-                         .filter(Bill.organization_id == self.organization_id,
-                                 Bill.balance > 0).scalar() or 0)
+        from .open_payables import confirmed_cover, remaining_of
+        cover = confirmed_cover(self.db, self.organization_id)
+        payables = float(sum(
+            (remaining_of(bill, cover) or 0)
+            for bill in self.db.query(Bill).filter(
+                Bill.organization_id == self.organization_id,
+                Bill.balance > 0,
+            ).all()
+        ))
 
         current_assets = cash + receivables + inventory
         current_ratio = (current_assets / payables) if payables else (2.0 if current_assets else 0)

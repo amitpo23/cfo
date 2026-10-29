@@ -81,11 +81,19 @@ def _gather(db: Session, org_id: int, bill_ids: Optional[List[int]]):
     else:
         query = query.filter(Bill.balance != 0)
 
+    from ...services.open_payables import confirmed_cover, remaining_of
+    cover = confirmed_cover(db, org_id) if not bill_ids else {}
     payments: List[MasavPayment] = []
     skipped: List[dict] = []
     for bill, vendor in query.all():
         name = bill.bill_number or bill.external_id or f"BILL-{bill.id}"
-        balance = bill.balance or 0
+        if not bill_ids:
+            remaining = remaining_of(bill, cover)
+            if remaining is None:
+                continue
+            balance = remaining
+        else:
+            balance = bill.balance or 0
         if balance <= 0:
             skipped.append({
                 "bill": name,

@@ -35,8 +35,15 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
   });
 
   const syncMutation = useMutation({
-    mutationFn: (entityTypes?: string) =>
-      apiService.post(`/sync/run${entityTypes ? `?entity_types=${entityTypes}` : ''}`),
+    mutationFn: (request?: string | { entityTypes?: string; source?: string }) => {
+      const entityTypes = typeof request === 'string' || request == null ? request : request.entityTypes;
+      const source = typeof request === 'string' || request == null ? undefined : request.source;
+      const params = new URLSearchParams();
+      if (entityTypes) params.set('entity_types', entityTypes);
+      if (source) params.set('source', source);
+      const query = params.toString();
+      return apiService.post(`/sync/run${query ? `?${query}` : ''}`);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['sync-runs'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-overview'] });
@@ -251,6 +258,20 @@ const CFOSyncDashboard: React.FC<Props> = ({ darkMode }) => {
                 {st.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => syncMutation.mutate({
+                source: 'open_finance',
+                entityTypes: 'accounts,bank_transactions',
+              })}
+              disabled={syncMutation.isPending}
+              className="col-span-2 rounded-xl bg-emerald-700 px-3 py-3 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+            >
+              חשבונות / יתרות
+              <span className="mt-1 block text-xs font-normal text-emerald-50">
+                רענון יתרת עו״ש מ-Open Finance, בלי סנכרון מלא. כולל גם תנועות בנק כדי שהתאריך יישאר צמוד ליתרה.
+              </span>
+            </button>
           </div>
           {syncMutation.isPending && (
             <div className="mt-3 flex items-center gap-2 text-blue-500">

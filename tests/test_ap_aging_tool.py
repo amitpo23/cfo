@@ -61,9 +61,8 @@ def test_buckets_mirror_the_ar_shape(fresh_org):
     assert result["count"] == 1
 
 
-def test_a_bill_with_a_matched_bank_transaction_is_flagged(fresh_org):
-    """**הלב.** תנועת בנק תואמת קיימת — הכסף כנראה כבר יצא, זה עיכוב
-    סנכרון ולא סיכון תשלום. הבעלים לא צריך לפעול על זה."""
+def test_a_bill_with_a_matched_bank_transaction_leaves_the_open_list(fresh_org):
+    """A reconciled bank payment closes the tax invoice. It is not still unpaid."""
     db = SessionLocal()
     org_id = fresh_org()["org_id"]
     vendor = _mk_vendor(db, org_id)
@@ -82,9 +81,10 @@ def test_a_bill_with_a_matched_bank_transaction_is_flagged(fresh_org):
     db.commit()
 
     result = asyncio.run(TOOLS["get_ap_aging"].fn(db, org_id))
-    flagged = next(b for b in result["bills"] if b["id"] == bill.id)
 
-    assert flagged["bank_movement_seen"] is True
+    assert result["count"] == 0
+    assert result["total"] == 0.0
+    assert all(row["id"] != bill.id for row in result["bills"])
 
 
 def test_a_bill_without_any_bank_transaction_is_a_real_risk(fresh_org):

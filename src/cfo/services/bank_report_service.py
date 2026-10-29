@@ -52,13 +52,15 @@ class BankReportService:
             self.db, organization_id=self.organization_id
         ).get_aging_report(today)
 
-        payables_total = float(
-            self.db.query(func.coalesce(func.sum(Bill.balance), 0))
-            .filter(
+        from .open_payables import confirmed_cover, remaining_of
+        cover = confirmed_cover(self.db, self.organization_id)
+        payables_total = float(sum(
+            (remaining_of(bill, cover) or 0)
+            for bill in self.db.query(Bill).filter(
                 Bill.organization_id == self.organization_id,
                 Bill.balance > 0,
-            ).scalar() or 0
-        )
+            ).all()
+        ))
 
         return {
             "company_name": company_name,

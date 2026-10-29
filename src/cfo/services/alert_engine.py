@@ -115,6 +115,8 @@ class AlertEngine:
         today = date.today()
         cutoff = today + timedelta(days=days_ahead)
 
+        from .open_payables import confirmed_cover, remaining_of
+        cover = confirmed_cover(self.db, self.org_id)
         upcoming = self.db.query(Bill).filter(
             Bill.organization_id == self.org_id,
             Bill.status.in_([BillStatus.RECEIVED, BillStatus.APPROVED]),
@@ -125,6 +127,8 @@ class AlertEngine:
 
         alerts = []
         for bill in upcoming:
+            if remaining_of(bill, cover) is None:
+                continue
             existing = self.db.query(Alert).filter(
                 Alert.organization_id == self.org_id,
                 Alert.alert_type == "bill_due_soon",

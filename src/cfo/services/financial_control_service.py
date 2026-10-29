@@ -404,13 +404,20 @@ class FinancialControlService:
         return Decimal(total or 0)
 
     def _upcoming_bill_total(self, today: date) -> Decimal:
-        total = self.db.query(func.sum(Bill.balance)).filter(
+        from .open_payables import confirmed_cover, remaining_of
+        cover = confirmed_cover(self.db, self.organization_id)
+        total = Decimal("0")
+        rows = self.db.query(Bill).filter(
             Bill.organization_id == self.organization_id,
             Bill.due_date >= today,
             Bill.due_date <= today + timedelta(days=14),
             Bill.balance > 0,
-        ).scalar()
-        return Decimal(total or 0)
+        ).all()
+        for bill in rows:
+            remaining = remaining_of(bill, cover)
+            if remaining is not None:
+                total += remaining
+        return total
 
     def _unreconciled_bank_count(self, start_date: date, end_date: date) -> int:
         from .bank_reconciliation import unreconciled_bank_count

@@ -1252,23 +1252,31 @@ async def super_admin_clients_overview(
             Invoice.organization_id == org.id,
             Invoice.balance > 0,
         ).scalar())
-        ap_open = _to_float(db.query(func.coalesce(func.sum(Bill.balance), 0)).filter(
-            Bill.organization_id == org.id,
-            Bill.balance > 0,
-        ).scalar())
+        from ...services.open_payables import confirmed_cover, remaining_of
+        _cover = confirmed_cover(db, org.id)
+        ap_open = _to_float(sum(
+            (remaining_of(bill, _cover) or 0)
+            for bill in db.query(Bill).filter(
+                Bill.organization_id == org.id,
+                Bill.balance > 0,
+            ).all()
+        ))
         overdue_ar = int(db.query(func.count(Invoice.id)).filter(
             Invoice.organization_id == org.id,
             Invoice.balance > 0,
             Invoice.due_date.isnot(None),
             Invoice.due_date < today,
         ).scalar() or 0)
-        due_ap_14d = int(db.query(func.count(Bill.id)).filter(
-            Bill.organization_id == org.id,
-            Bill.balance > 0,
-            Bill.due_date.isnot(None),
-            Bill.due_date >= today,
-            Bill.due_date <= soon,
-        ).scalar() or 0)
+        due_ap_14d = sum(
+            1 for bill in db.query(Bill).filter(
+                Bill.organization_id == org.id,
+                Bill.balance > 0,
+                Bill.due_date.isnot(None),
+                Bill.due_date >= today,
+                Bill.due_date <= soon,
+            ).all()
+            if remaining_of(bill, _cover) is not None
+        )
         unreconciled_count = int(bank.unreconciled_count or 0) if bank else 0
         open_alerts = int(alerts.open_count or 0) if alerts else 0
         open_tasks = int(tasks.open_count or 0) if tasks else 0

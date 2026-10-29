@@ -215,6 +215,7 @@ type DashboardView = {
     message?: string | null;
   } | null;
   liquidity?: EntityLiquidity | null;
+  liquidity_today?: LiquidityToday | null;
   forecast?: Forecast | null;
   cash_forecast?: CashForecast | null;
   cashflow_source?: { forecast?: CashForecast | null } | null;
@@ -242,7 +243,13 @@ type DashboardView = {
 // /d/<slug>?tab=bva opens a tab directly (the legacy /budget page links here).
 function tabFromLocation(): TabId {
   const wanted = new URLSearchParams(window.location.search).get('tab');
-  return TABS.find((item) => item.id === wanted)?.id ?? 'status';
+  const fromQuery = TABS.find((item) => item.id === wanted)?.id;
+  if (fromQuery) return fromQuery;
+  const hash = window.location.hash.replace(/^#/, '');
+  if (hash && !hash.includes('=')) {
+    return TABS.find((item) => item.id === hash)?.id ?? 'status';
+  }
+  return 'status';
 }
 
 function slugFromLocation(): string {
@@ -883,6 +890,10 @@ export default function ClientDashboardPage() {
 
   const entities = view?.entities ?? [];
   const multi = entities.length > 1;
+  const liquidityToday = !view ? null
+    : !multi || scope === 'combined'
+      ? view.liquidity_today
+      : entities[Number(scope)]?.view?.liquidity_today;
   const scoped: DashboardView | null = !view ? null : !multi ? view : scope === 'combined' ? {
     pnl: view.combined?.pnl,
     cashflow: view.combined?.cashflow,
@@ -938,6 +949,7 @@ export default function ClientDashboardPage() {
               {tab === 'balance' ? <BalanceSheetCard sheet={scoped.balance_sheet} /> : null}
               {tab === 'status' ? (
                 <>
+                  <LiquidityTodayCard block={liquidityToday} />
                   <StatusKpis view={scoped} reviewCount={filing?.review.total ?? null} />
                   <SourcesCard sources={scoped.sources} />
                   <PnlCard
@@ -986,6 +998,7 @@ export default function ClientDashboardPage() {
               {tab === 'bva' ? (
                 scoped.budget_vs_actual ? <BudgetVsActual section={scoped.budget_vs_actual} /> : <EmptyState title="אין נתוני תקציב">אפשר להזין תקציב בלשונית "תקציב ופרמטרים".</EmptyState>
               ) : null}
+              {tab === 'liquidity' ? <LiquidityTodayCard block={liquidityToday} /> : null}
               {tab === 'liquidity' ? <LiquidityPanel section={scoped.liquidity} /> : null}
               {tab === 'liquidity' && editor?.role === 'owner' && plan && filing ? (
                 <LiquidityEvidenceCard
@@ -1054,16 +1067,92 @@ export default function ClientDashboardPage() {
 
 const TABS = [
   { id: 'status', label: 'תמונת מצב' },
-  { id: 'balance', label: 'מאזן' },
-  { id: 'cashforecast', label: 'תזרים חזוי' },
-  { id: 'bva', label: 'תקציב מול ביצוע' },
   { id: 'liquidity', label: 'נזילות והתחייבויות' },
+  { id: 'cashforecast', label: 'תזרים חזוי' },
+  { id: 'balance', label: 'מאזן' },
+  { id: 'bva', label: 'תקציב מול ביצוע' },
   { id: 'forecast', label: 'תחזית' },
   { id: 'classify', label: 'סיווג העברות' },
   { id: 'budget', label: 'תקציב ופרמטרים' },
 ] as const;
 
 export type TabId = (typeof TABS)[number]['id'];
+
+type LiquidityToday = {
+  checking?: {
+    balance?: number | null;
+    as_of?: string | null;
+    status?: string;
+    label_he?: string;
+    last_booked?: number | null;
+    last_booked_as_of?: string | null;
+  };
+  facility?: {
+    limit?: number | null;
+    used?: number | null;
+    headroom?: number | null;
+    breach?: boolean | null;
+    available_limit?: number | null;
+    note_he?: string;
+  };
+  upcoming?: { date?: string | null; label?: string | null; kind?: string | null; amount?: number | null }[];
+  weeks?: { start?: string; end?: string; in?: number | null; out?: number | null; net?: number | null; closing?: number | null; headroom?: number | null }[];
+};
+
+function knownMoney(value: number | null | undefined): string {
+  return value == null ? 'לא ידוע' : money(value);
+}
+
+function LiquidityTodayCard({ block }: { block: LiquidityToday | null | undefined }) {
+  if (!block) return null;
+  const checking = block.checking;
+  const facility = block.facility;
+  return (
+    <section className="d-card" aria-label="מצב בנק היום">
+      <h2>מצב בנק היום</h2>
+      <p className="text-sm text-stone-600">{checking?.label_he || 'לא ידוע'}</p>
+      <p className="mt-2 text-lg font-semibold tabular-nums">יתרת עו״ש לשימוש: {knownMoney(checking?.balance)}</p>
+      {checking?.status !== 'ready' && checking?.last_booked != null ? (
+        <p className="text-sm text-stone-600">
+          יתרה שמורה אחרונה: {money(checking.last_booked)}
+          {checking.last_booked_as_of ? ` · ${checking.last_booked_as_of}` : ''}
+        </p>
+      ) : null}
+      <p className="mt-3 text-sm">
+        מסגרת {knownMoney(facility?.limit)} · ניצול {knownMoney(facility?.used)} · פנוי {knownMoney(facility?.headroom)}
+        {facility?.breach == null ? '' : facility.breach ? ' · חריגה' : ' · בתוך המסגרת'}
+      </p>
+      {facility?.available_limit != null ? (
+        <p className="text-sm text-stone-600">יתרה זמינה מהבנק (לא יתרת העו״ש): {money(facility.available_limit)}</p>
+      ) : null}
+      {facility?.note_he ? <p className="mt-1 text-xs text-stone-500">{facility.note_he}</p> : null}
+      {(block.upcoming || []).length > 0 ? (
+        <ul className="mt-3 text-sm">
+          {(block.upcoming || []).map((item) => (
+            <li key={`${item.date}-${item.label}`}>{item.date} · {item.label} · {knownMoney(item.amount)}</li>
+          ))}
+        </ul>
+      ) : null}
+      {(block.weeks || []).length > 0 ? (
+        <table className="d-table mt-3 text-sm">
+          <thead><tr><th>שבוע</th><th>נכנס</th><th>יוצא</th><th>נטו</th><th>סגירה</th><th>פנוי</th></tr></thead>
+          <tbody>
+            {(block.weeks || []).map((week) => (
+              <tr key={week.start}>
+                <td>{week.start}–{week.end}</td>
+                <td>{knownMoney(week.in)}</td>
+                <td>{knownMoney(week.out)}</td>
+                <td>{knownMoney(week.net)}</td>
+                <td>{knownMoney(week.closing)}</td>
+                <td>{knownMoney(week.headroom)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </section>
+  );
+}
 
 function StatusKpis({ view, reviewCount }: { view: DashboardView; reviewCount: number | null }) {
   const liquidity = view.liquidity;

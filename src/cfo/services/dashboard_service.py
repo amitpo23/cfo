@@ -292,22 +292,34 @@ class DashboardService:
         avg_burn = -avg_net
         return round(cash_balance / avg_burn, 1)
 
-    def _get_ap_open_summary(self, today: date) -> tuple:
-        """AP פתוח בלבד (balance>0, אחרי הנרמול) — לעולם לא שלילי."""
-        open_statuses = [
-            BillStatus.RECEIVED, BillStatus.APPROVED,
-            BillStatus.OVERDUE, BillStatus.PARTIALLY_PAID,
-        ]
-        base = self.db.query(func.sum(Bill.balance)).filter(
+    def _open_ap_rows(self):
+        """Unpaid supplier bills after a bank match or a journal settlement."""
+        from .open_payables import confirmed_cover, remaining_of
+        cover = confirmed_cover(self.db, self.org_id)
+        rows = self.db.query(Bill).filter(
             Bill.organization_id == self.org_id,
-            Bill.status.in_(open_statuses),
+            Bill.status.in_([
+                BillStatus.RECEIVED, BillStatus.APPROVED,
+                BillStatus.OVERDUE, BillStatus.PARTIALLY_PAID,
+            ]),
             Bill.balance > 0,
-        )
-        total = base.scalar() or Decimal("0")
+        ).all()
+        open_rows = []
+        for bill in rows:
+            remaining = remaining_of(bill, cover)
+            if remaining is not None:
+                open_rows.append((bill, remaining))
+        return open_rows
 
-        due_7 = base.filter(Bill.due_date.isnot(None), Bill.due_date <= today + timedelta(days=7)).scalar() or Decimal("0")
-        due_30 = base.filter(Bill.due_date.isnot(None), Bill.due_date <= today + timedelta(days=30)).scalar() or Decimal("0")
-
+    def _get_ap_open_summary(self, today: date) -> tuple:
+        """AP פתוח בלבד (אחרי התאמה) — לעולם לא שלילי."""
+        total = due_7 = due_30 = Decimal("0")
+        for bill, remaining in self._open_ap_rows():
+            total += remaining
+            if bill.due_date is not None and bill.due_date <= today + timedelta(days=7):
+                due_7 += remaining
+            if bill.due_date is not None and bill.due_date <= today + timedelta(days=30):
+                due_30 += remaining
         return total, due_7, due_30
 
     def _get_undocumented_expenses(self, today: date) -> dict:
@@ -621,16 +633,9 @@ class DashboardService:
         """
         today = date.today()
 
-        open_bills = self.db.query(Bill).filter(
-            Bill.organization_id == self.org_id,
-            Bill.status.in_([
-                BillStatus.RECEIVED, BillStatus.APPROVED,
-                BillStatus.OVERDUE, BillStatus.PARTIALLY_PAID,
-            ]),
-            Bill.balance > 0,
-        ).all()
+        open_bills = self._open_ap_rows()
 
-        bill_ids = [b.id for b in open_bills]
+        bill_ids = [bill.id for bill, _remaining in open_bills]
         matched_bill_ids = set()
         if bill_ids:
             matched_bill_ids = {
@@ -648,7 +653,7 @@ class DashboardService:
         bucket_counts = {"0_30": 0, "31_60": 0, "61_90": 0, "90_plus": 0}
         bill_list = []
 
-        for bill in open_bills:
+        for bill, remaining in open_bills:
             days_overdue = 0
             if bill.due_date:
                 days_overdue = max(0, (today - bill.due_date).days)
@@ -662,14 +667,14 @@ class DashboardService:
             key = ("0_30" if days_overdue <= 30 else
                   "31_60" if days_overdue <= 60 else
                   "61_90" if days_overdue <= 90 else "90_plus")
-            buckets[key] += bill.balance
+            buckets[key] += remaining
             bucket_counts[key] += 1
 
             bill_list.append({
                 "id": bill.id,
                 "bill_number": bill.bill_number,
                 "vendor": vendor_name,
-                "balance": float(bill.balance),
+                "balance": float(remaining),
                 "days_overdue": days_overdue,
                 "bank_movement_seen": bill.id in matched_bill_ids,
             })
@@ -690,50 +695,22 @@ class DashboardService:
     def _get_ap_summary(self) -> tuple:
         """Returns (total_outstanding, due_in_7_days, due_in_30_days)."""
         today = date.today()
-
-        total = self.db.query(func.sum(Bill.balance)).filter(
-            Bill.organization_id == self.org_id,
-            Bill.status.in_([
-                BillStatus.RECEIVED, BillStatus.APPROVED,
-                BillStatus.OVERDUE, BillStatus.PARTIALLY_PAID,
-            ]),
-        ).scalar() or Decimal("0")
-
-        due_7 = self.db.query(func.sum(Bill.balance)).filter(
-            Bill.organization_id == self.org_id,
-            Bill.status.in_([
-                BillStatus.RECEIVED, BillStatus.APPROVED,
-                BillStatus.OVERDUE, BillStatus.PARTIALLY_PAID,
-            ]),
-            Bill.due_date <= today + timedelta(days=7),
-        ).scalar() or Decimal("0")
-
-        due_30 = self.db.query(func.sum(Bill.balance)).filter(
-            Bill.organization_id == self.org_id,
-            Bill.status.in_([
-                BillStatus.RECEIVED, BillStatus.APPROVED,
-                BillStatus.OVERDUE, BillStatus.PARTIALLY_PAID,
-            ]),
-            Bill.due_date <= today + timedelta(days=30),
-        ).scalar() or Decimal("0")
-
+        total = due_7 = due_30 = Decimal("0")
+        for bill, remaining in self._open_ap_rows():
+            total += remaining
+            if bill.due_date is not None and bill.due_date <= today + timedelta(days=7):
+                due_7 += remaining
+            if bill.due_date is not None and bill.due_date <= today + timedelta(days=30):
+                due_30 += remaining
         return total, due_7, due_30
 
     def get_ap_bills(self, days_ahead: int = 30) -> list:
         """List of unpaid bills, sorted by due date."""
         today = date.today()
-
-        bills = self.db.query(Bill).filter(
-            Bill.organization_id == self.org_id,
-            Bill.status.in_([
-                BillStatus.RECEIVED, BillStatus.APPROVED,
-                BillStatus.OVERDUE, BillStatus.PARTIALLY_PAID,
-            ]),
-            Bill.balance > 0,
-        ).order_by(Bill.due_date.asc()).all()
+        bills = sorted(self._open_ap_rows(), key=lambda item: (item[0].due_date is None, item[0].due_date))
 
         result = []
-        for bill in bills:
+        for bill, remaining in bills:
             vendor_name = None
             if bill.vendor_id:
                 vendor = self.db.get(Contact, bill.vendor_id)
@@ -749,7 +726,7 @@ class DashboardService:
                 "bill_number": bill.bill_number,
                 "vendor": vendor_name,
                 "amount": float(bill.total),
-                "balance": float(bill.balance),
+                "balance": float(remaining),
                 "due_date": bill.due_date.isoformat() if bill.due_date else None,
                 "days_until_due": days_until_due,
                 "is_critical": bill.is_critical,
@@ -885,15 +862,8 @@ class DashboardService:
             Invoice.balance > 0,
         ).all()
 
-        # Load open bills
-        open_bills = self.db.query(Bill).filter(
-            Bill.organization_id == self.org_id,
-            Bill.status.in_([
-                BillStatus.RECEIVED, BillStatus.APPROVED,
-                BillStatus.OVERDUE, BillStatus.PARTIALLY_PAID,
-            ]),
-            Bill.balance > 0,
-        ).all()
+        # Load open bills. A matched bank payment or journal settlement is not still due.
+        open_bills = self._open_ap_rows()
 
         result = []
         for w in range(weeks):
@@ -911,9 +881,9 @@ class DashboardService:
 
             # Expected outflows from bills due this week
             outflows = 0.0
-            for bill in open_bills:
+            for bill, remaining in open_bills:
                 if bill.due_date and week_start <= bill.due_date <= week_end:
-                    outflows += float(bill.balance)
+                    outflows += float(remaining)
 
             net = inflows - outflows
             cumulative += net
