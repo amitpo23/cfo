@@ -25,6 +25,7 @@
 בכל שאלת יכולת/ארכיטקטורה — `docs/REZEF_OPERATING_SYSTEM.md` הוא החוזה היציב,
 `docs/rezef_capabilities.json` הוא מפת המימוש והראיות, ו-
 `docs/MASTER_EXECUTION_PLAN.md` הוא לוח הסטטוס היחיד.
+צילום מצב עדכני (מיזוגים, פרוד, הכרעות, פריטים פתוחים): `docs/STATUS.md`.
 
 KesefSkills ([kesefskills.co.il](https://kesefskills.co.il/)) הוא מקור סקילים
 אופציונלי למושקו. לא משוכפל לריפו. התקנה: `npx kesef install <pack> --agent cursor`.
