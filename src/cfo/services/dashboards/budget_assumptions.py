@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from .money_screens import BANK_PACK_GATE_HE
+
 KINDS = (
     "income",
     "payroll",
@@ -449,5 +451,6 @@ def bank_pack(view: dict, assumptions: list[dict], *, as_of: date) -> dict:
         "budget_vs_actual": budget,
         "liquidity_today": (view or {}).get("liquidity_today"),
         "assumptions": assumptions,
+        "product_gate_he": BANK_PACK_GATE_HE,
         "provider_calls": 0,
     }

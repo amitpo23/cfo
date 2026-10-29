@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import api from '../services/api';
 import { PeriodCompareTable, PeriodControls, presetRange, type Grain, type PeriodCompare } from './PeriodCompare';
+import { PartialDataBanner } from './dashboardUi';
 
 const initial = presetRange('month');
 
@@ -41,6 +42,12 @@ export default function PnlPage() {
           onEnd={setEnd}
         />
       </div>
+      <PartialDataBanner
+        text={report.data?.partial_banner?.text_he}
+        extra={report.data?.unclassified_outflows?.label_he
+          ? `${report.data.unclassified_outflows.label_he} (${report.data.unclassified_outflows.count})`
+          : null}
+      />
       {report.isError ? <p className="text-gray-600">אין רווח והפסד להצגה עד שנבחר ארגון פעיל.</p> : (
         <PeriodCompareTable report={report.data ?? null} booksFirst />
       )}

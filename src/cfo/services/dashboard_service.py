@@ -89,6 +89,10 @@ class DashboardService:
             "last_sync": last_sync,
             # ---- new fields (section ד of the plan) ----
             "cash_as_of": cash["cash_as_of"],
+            "credit_overrun": cash.get("credit_overrun"),
+            "balance_mismatch": cash.get("balance_mismatch"),
+            "partial_banner": cash.get("partial_banner"),
+            "available": cash.get("available"),
             "savings_balance": cash["savings_balance"],
             "loans_total": cash["loans_total"],
             "card_outstanding": cash["card_outstanding"],
@@ -131,6 +135,8 @@ class DashboardService:
         snap = checking_snapshot(self.db, self.org_id)
         cash_balance = snap["balance"]
         cash_as_of = snap["as_of"]
+        overrun = snap.get("credit_overrun") or {}
+        banner = snap.get("partial_banner")
         cash_by_account = [
             {"id": a.id, "name": a.name, "balance": None if a.balance is None else float(a.balance), "currency": a.currency,
              "credit_limit": float(a.credit_limit) if a.credit_limit is not None else None}
@@ -140,6 +146,10 @@ class DashboardService:
         return {
             "cash_balance": cash_balance,
             "cash_as_of": cash_as_of,
+            "credit_overrun": overrun,
+            "balance_mismatch": snap.get("balance_mismatch"),
+            "partial_banner": banner,
+            "available": snap.get("available"),
             "transactions_missing_after": snap["transactions_missing_after"],
             "transactions_through": snap["transactions_through"],
             "cash_by_account": cash_by_account,
@@ -361,43 +371,20 @@ class DashboardService:
     # ===== Cash Balance =====
 
     def _get_cash_balance(self) -> tuple:
-        """Total cash from bank accounts + aggregate by account."""
-        bank_accounts = self.db.query(Account).filter(
-            Account.organization_id == self.org_id,
-            Account.account_type.in_([AccountType.BANK, AccountType.ASSET]),
-        ).all()
-
-        total = Decimal("0")
-        by_account = []
-        for acct in bank_accounts:
-            balance = acct.balance or Decimal("0")
-            total += balance
-            by_account.append({
-                "id": acct.id,
-                "name": acct.name,
-                "balance": float(balance),
-                "currency": acct.currency,
-            })
-
-        # Also compute from transactions if no bank accounts
-        if not bank_accounts:
-            total = self._compute_balance_from_transactions()
-            by_account = [{"id": 0, "name": "Computed Balance", "balance": float(total), "currency": "ILS"}]
-
-        return total, by_account
-
-    def _compute_balance_from_transactions(self) -> Decimal:
-        income = self.db.query(func.sum(Transaction.amount)).filter(
-            Transaction.organization_id == self.org_id,
-            Transaction.transaction_type == TransactionType.INCOME,
-        ).scalar() or Decimal("0")
-
-        expenses = self.db.query(func.sum(Transaction.amount)).filter(
-            Transaction.organization_id == self.org_id,
-            Transaction.transaction_type == TransactionType.EXPENSE,
-        ).scalar() or Decimal("0")
-
-        return income - expenses
+        """The same checking_snapshot the liquidity screens use. Missing stays None."""
+        from .dashboards.liquidity import checking_snapshot
+        snap = checking_snapshot(self.db, self.org_id)
+        balance = snap.get("balance")
+        if balance is None:
+            return None, []
+        return Decimal(str(balance)), [{
+            "id": 0,
+            "name": "עו״ש",
+            "balance": float(balance),
+            "currency": "ILS",
+            "as_of": snap.get("as_of"),
+            "source": "checking_snapshot",
+        }]
 
     # ===== Revenue & Expenses =====
 
@@ -782,6 +769,9 @@ class DashboardService:
                     "month": month_start.strftime("%Y-%m"),
                     "basis": "no_books",
                     "basis_label": "אין נתוני ספרים",
+                    "missing_label": "חסר",
+                    "as_of": None,
+                    "source": "books.local_documents",
                     "revenue": None,
                     "cogs": None,
                     "cogs_available": False,
@@ -806,7 +796,10 @@ class DashboardService:
             result.append({
                 "month": month_start.strftime("%Y-%m"),
                 "basis": "books",
-                "basis_label": "ספרים — מסמכי SUMIT שכבר במערכת",
+                "basis_label": "ספרים — מסמכים שכבר ברצף, בלי משיכת SUMIT",
+                "missing_label": None,
+                "as_of": month_end.isoformat(),
+                "source": "books.local_documents",
                 "revenue": revenue,
                 "cogs": cogs,
                 "cogs_available": cogs_available,
@@ -847,7 +840,7 @@ class DashboardService:
         if budget_flows is not None:
             return self._weeks_from_budget(today, weeks, budget_flows, cash_balance)
 
-        cumulative = float(cash_balance)
+        cumulative = None if cash_balance is None else float(cash_balance)
 
         # Scenario multipliers
         scenarios = {
@@ -902,14 +895,18 @@ class DashboardService:
                     outflows += float(remaining)
 
             net = inflows - outflows
-            cumulative += net
+            if cumulative is None:
+                cumulative_out = None
+            else:
+                cumulative += net
+                cumulative_out = round(cumulative, 2)
 
             result.append({
                 "week": week_start.isoformat(),
                 "expected_inflows": round(inflows, 2),
                 "expected_outflows": round(outflows, 2),
                 "net_flow": round(net, 2),
-                "cumulative_balance": round(cumulative, 2),
+                "cumulative_balance": cumulative_out,
             })
 
         return result

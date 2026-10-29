@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import apiService from '../services/api';
 import { AgentPanel, FinanceCard, FinancePageShell, MetricCard, NoDataYet, formatILS } from './finance-ui';
+import { PartialDataBanner } from './dashboardUi';
 
 interface CFOOverviewProps {
   darkMode: boolean;
@@ -28,6 +29,9 @@ interface DashboardOverview {
   // Cash (Open Finance)
   cash_balance?: number | null;
   cash_as_of?: string | null;
+  partial_banner?: { text_he?: string | null };
+  credit_overrun?: { label_he?: string | null; status?: string | null; overrun?: number | null };
+  balance_mismatch?: { label_he?: string | null; amount?: number | null; counts_as_funding_need?: boolean };
   savings_balance?: number | null;
   loans_total?: number | null;
   card_outstanding?: number | null;
@@ -330,6 +334,13 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
         </div>
       }
     >
+      <PartialDataBanner
+        text={ov.partial_banner?.text_he}
+        extra={[
+          ov.credit_overrun?.status === 'overrun' ? ov.credit_overrun.label_he : null,
+          ov.balance_mismatch?.label_he ? `${ov.balance_mismatch.label_he}${ov.balance_mismatch.amount != null ? ` (${ov.balance_mismatch.amount})` : ''}` : null,
+        ].filter(Boolean).join(' ')}
+      />
       <div className={`rounded-2xl border p-4 ${darkMode ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-200 bg-white text-slate-600'}`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-sm">

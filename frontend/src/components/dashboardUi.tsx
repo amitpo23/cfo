@@ -3,6 +3,16 @@
 // the loading skeleton and the empty state. Sections use .d-card / .d-table (index.css).
 import type { ReactNode } from 'react';
 
+export function PartialDataBanner({ text, extra }: { text?: string | null; extra?: string | null }) {
+  if (!text && !extra) return null;
+  return (
+    <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950" role="status">
+      {text}
+      {extra ? <span className="mt-1 block">{extra}</span> : null}
+    </p>
+  );
+}
+
 export function missingAsOf(asOf?: string | null): string {
   if (typeof asOf === 'string') {
     const day = asOf.match(/^(\d{4}-\d{2}-\d{2})/)?.[1]

@@ -45,6 +45,8 @@ export type PeriodCompare = {
   totals?: PeriodTotals;
   profit?: { label: string; books: Figure; bank: Figure; budget: Figure }[];
   dashboard_slug?: string | null;
+  partial_banner?: { text_he?: string | null; bank_as_of?: string | null; books_as_of?: string | null };
+  unclassified_outflows?: { count?: number; amount?: number | null; label_he?: string | null };
 };
 
 export function isoDate(value: Date): string {

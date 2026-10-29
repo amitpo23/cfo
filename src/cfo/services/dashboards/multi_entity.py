@@ -87,7 +87,7 @@ def _build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date
         is_primary = entity.organization_id == dashboard.primary_organization_id
         section_view = view_model.build_view(
             db, entity.organization_id, start, end,
-            plan=_plan_for(plan, is_primary),
+            plan=_plan_for(plan, is_primary, entity.organization_id),
             entity_id=getattr(entity, "id", None) or None,
             with_budget=single and is_primary,
         )
@@ -112,10 +112,17 @@ def _build_dashboard_view(db, dashboard: ClientDashboard, start: date, end: date
     return view
 
 
-def _plan_for(plan: dict | None, primary: bool) -> dict | None:
-    if primary or not isinstance(plan, dict):
+def _plan_for(plan: dict | None, primary: bool, organization_id: int | None = None) -> dict | None:
+    """Each entity reads its own budget lines. Unnamed lines stay on the primary."""
+    if not isinstance(plan, dict):
         return plan
-    return {key: value for key, value in plan.items() if key != "booksClosedMonths"}
+    copied = dict(plan)
+    if not primary:
+        copied.pop("booksClosedMonths", None)
+    if "budgetLines" in copied:
+        from .budget_fill import budget_lines_for_org
+        copied["budgetLines"] = budget_lines_for_org(copied, organization_id, primary=primary)
+    return copied
 
 
 class _Primary:

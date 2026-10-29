@@ -64,6 +64,24 @@ def cumulative_pl(db, organization_id: int, year: int, month: int) -> dict[str, 
         if d and start <= d <= end:
             exp_by_day[d.day] = exp_by_day.get(d.day, 0.0) + _f(exp.amount)
 
+    from .dashboards.money_screens import org_partial_banner
+    books_as_of = None
+    if rev_by_day or exp_by_day:
+        last_day_with_docs = max([*rev_by_day.keys(), *exp_by_day.keys()])
+        books_as_of = date(year, month, last_day_with_docs)
+    if not rev_by_day and not exp_by_day:
+        return {
+            "period": f"{year}-{month:02d}",
+            "days": [],
+            "totals": {"revenue": None, "expense": None, "profit": None},
+            "basis": "no_books",
+            "missing_label": "חסר",
+            "as_of": None,
+            "partial_banner": org_partial_banner(db, organization_id),
+            "derived": True,
+            "source": "books.local_documents",
+            "disclaimer": DISCLAIMER,
+        }
     days = []
     rev_cum = exp_cum = 0.0
     last_day = end.day
@@ -81,7 +99,11 @@ def cumulative_pl(db, organization_id: int, year: int, month: int) -> dict[str, 
         "days": days,
         "totals": {"revenue": round(rev_cum, 2), "expense": round(exp_cum, 2),
                    "profit": round(rev_cum - exp_cum, 2)},
+        "basis": "books",
+        "as_of": books_as_of.isoformat() if books_as_of else None,
+        "partial_banner": org_partial_banner(db, organization_id),
         "derived": True,
+        "source": "books.local_documents",
         "disclaimer": DISCLAIMER,
     }
 

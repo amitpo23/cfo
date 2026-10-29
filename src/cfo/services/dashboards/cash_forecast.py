@@ -29,7 +29,7 @@ RUN_RATE_MONTHS = 3
 # ``internal`` stays in each entity's run-rate: a transfer from Food Group is cash
 # in Eliav's account. The other side sits in Food Group's ``transfers_out``, so the
 # combined sum nets the pair. Financing (new loans) is not a run-rate.
-# Cheque discounting is an advance on customer receipts, so it stays in operating inflows.
+# Cheque discounting is financing (advance, repayment, fee). It is not operating income.
 RUN_RATE_GROUPS = {
     "operating_in": "כניסות תפעוליות (הערכה לפי קצב)",
     "operating_out": "יציאות תפעוליות (הערכה לפי קצב)",
@@ -270,6 +270,12 @@ def run_rate(view: dict, today: date) -> dict[str, float]:
 
 
 def _principal(view: dict, today: date) -> float | None:
+    """Median real loan principal. Discount repayments are not in ``principal``.
+
+    A one-off cheque-discount repayment (the ~62k inside October's 66,424)
+    must not be forecast as next month's loan instalment. The repayment
+    schedule of discounted cheques is ``discounted_cheque_items``.
+    """
     current = _month(today)
     rows = [
         _num(row.get("principal")) for row in (view.get("liquidity") or {}).get("debt_service") or []
@@ -456,12 +462,24 @@ def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int
     if any(week.get("unknown") for week in out_weeks):
         missing.append("forecast_rules")
     from .cashflow_truth import funding_need
+    from .money_screens import reject_gap_as_funding
     need = funding_need(
         [week.get("closing") for week in out_weeks],
         opening,
         out_weeks[0]["limit"] if out_weeks else None,
         [week.get("net") for week in out_weeks],
     )
+    mismatch = liquidity.get("balance_mismatch") if isinstance(liquidity.get("balance_mismatch"), dict) else None
+    gap = None if mismatch is None else mismatch.get("amount")
+    cleaned = reject_gap_as_funding(need.get("amount"), gap)
+    if cleaned is None and need.get("amount") is not None:
+        need = {
+            **need,
+            "amount": None,
+            "after_credit": None,
+            "status": "mismatch",
+            "label": (mismatch or {}).get("label") or "הפער בין יתרת Open Finance לסכום התנועות אינו צורך מימון.",
+        }
     return {
         "label": label,
         "status": "ready" if opening is not None else ("partial" if rates or items else "unknown"),
@@ -477,6 +495,7 @@ def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int
         "discounted_cheque_balances": forecast_rules.discounted_cheque_balances(plan, organization_id, today),
         "missing": missing,
         "funding_need": need,
+        "balance_mismatch": mismatch,
         "engine": "cashflow_source",
         "provider_calls": 0,
     }

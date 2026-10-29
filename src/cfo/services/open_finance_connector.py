@@ -171,6 +171,7 @@ class OpenFinanceConnector(AccountingConnector):
             raw_account_type=raw_account_type,
             credit_limit=_credit_limit(item),
             available_limit=_available_limit(item),
+            forward_available=_forward_available(item),
             owner_national_id=_owner_national_id(item),
             owner_name=_owner_name(item),
             open_finance_connection_id=_first_str(item, "connectionId"),
@@ -213,29 +214,34 @@ def _items_and_next(payload: Any) -> tuple[list[dict], Optional[str]]:
     return [], None
 
 
-# עדיפות בין balanceType כשיש כמה רשומות יתרה לאותו חשבון (מספר קטן = עדיף).
-# closingBooked (יתרה סגורה/מאושרת) > expected (צפויה) > interimAvailable > אחר.
-_BALANCE_TYPE_PRIORITY = {"closingBooked": 0, "expected": 1, "interimAvailable": 2}
+# Booked balance only. interimAvailable and forwardAvailable are how much is
+# free, not the checking balance. Using either as the balance hides an overrun
+# (Food Group showed −71,947 instead of closingBooked −134,845.05).
+_BOOKED_BALANCE_PRIORITY = {"closingBooked": 0, "expected": 1, "interimBooked": 2, "openingBooked": 3}
+_AVAILABLE_BALANCE_TYPES = frozenset({"interimAvailable", "forwardAvailable"})
 
 
 def _select_balance_entry(item: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """בוחר רשומת balance אחת מתוך balances[] של Open Finance.
+    """בוחר רשומת יתרה סגורה מתוך balances[] של Open Finance.
 
     הצורה האמיתית (אומתה חי): balances[] = [{balanceType, balanceAmount:
     {amount: "<string>", currency}, referenceDate}, ...] — לעיתים כמה רשומות
-    לאותו חשבון (למשל הלוואה עם closingBooked היסטורי וגם עדכני). בוחרים קודם
-    לפי עדיפות balanceType, ותוך קבוצת העדיפות הגבוהה ביותר — לפי referenceDate
-    המאוחר ביותר (כדי לא ליפול על יתרה ישנה בטעות).
+    לאותו חשבון. בוחרים קודם לפי עדיפות balanceType של יתרה סגורה/צפויה, ותוך
+    הקבוצה — לפי referenceDate המאוחר. interimAvailable ו-forwardAvailable
+    אינן מועמדות ליתרה הסגורה; הן נשמרות בנפרד.
     """
     balances = item.get("balances")
     if not isinstance(balances, list) or not balances:
         return None
-    entries = [b for b in balances if isinstance(b, dict)]
+    entries = [
+        b for b in balances
+        if isinstance(b, dict) and b.get("balanceType") not in _AVAILABLE_BALANCE_TYPES
+    ]
     if not entries:
         return None
 
     def _priority(entry: dict[str, Any]) -> int:
-        return _BALANCE_TYPE_PRIORITY.get(entry.get("balanceType"), 99)
+        return _BOOKED_BALANCE_PRIORITY.get(entry.get("balanceType"), 99)
 
     best_priority = min(_priority(e) for e in entries)
     candidates = [e for e in entries if _priority(e) == best_priority]
@@ -246,14 +252,39 @@ def _select_balance_entry(item: dict[str, Any]) -> Optional[dict[str, Any]]:
     return max(candidates, key=_ref_date)
 
 
-def _account_balance(item: dict[str, Any]) -> Decimal:
+def _entry_amount(entry: dict[str, Any]) -> Optional[Decimal]:
+    amount_obj = entry.get("balanceAmount")
+    value = amount_obj.get("amount") if isinstance(amount_obj, dict) else entry.get("amount")
+    if value is None or value == "":
+        return None
+    try:
+        return _transaction_decimal(value)
+    except ValueError:
+        return None
+
+
+def _account_balance(item: dict[str, Any]) -> Optional[Decimal]:
+    """closingBooked (or expected / interimBooked). Never an available figure.
+
+    An empty balances list stays ``0`` for the legacy shape. A payload that
+    only carries interimAvailable or forwardAvailable has no booked balance:
+    that is unknown, not zero and not the available amount.
+    """
     entry = _select_balance_entry(item)
     if entry is None:
+        balances = item.get("balances")
+        if isinstance(balances, list) and any(
+            isinstance(row, dict) and row.get("balanceType") in _AVAILABLE_BALANCE_TYPES
+            for row in balances
+        ):
+            return None
         return _decimal(0)
+    amount = _entry_amount(entry)
+    if amount is not None:
+        return amount
     amount_obj = entry.get("balanceAmount")
     if isinstance(amount_obj, dict):
         return _decimal(amount_obj.get("amount"))
-    # תאימות עם צורה שטוחה ישנה (amount ישירות על הרשומה, לא מקונן)
     return _decimal(entry.get("amount"))
 
 
@@ -445,29 +476,33 @@ def _credit_limit(item: dict[str, Any]) -> Optional[Decimal]:
         return None
 
 
-def _available_limit(item: dict[str, Any]) -> Optional[Decimal]:
-    """כמה פנוי לפי הבנק: balanceAmount.amount של רשומת interimAvailable האחרונה.
-
-    בכרטיס זה ה-open to buy (docs/open_finance_api_reference/guide_account-balance-types.md).
-    הרשומה נבחרת לפי referenceDate המאוחר. סכום חסר/ריק/לא-מספרי -> None, לעולם
-    לא 0, ולעולם לא creditLimit פחות היתרה. מחרוזת מעוצבת ("12,345.60") נקראת
-    כמו בסכום תנועה.
-    """
+def _available_of_type(item: dict[str, Any], balance_type: str) -> Optional[Decimal]:
+    """Latest readable amount of one available balanceType. Missing stays None, never 0."""
     balances = item.get("balances")
     if not isinstance(balances, list):
         return None
-    entries = [b for b in balances if isinstance(b, dict) and b.get("balanceType") == "interimAvailable"]
+    entries = [b for b in balances if isinstance(b, dict) and b.get("balanceType") == balance_type]
     if not entries:
         return None
     entry = max(entries, key=lambda e: _parse_date(e.get("referenceDate")) or date.min)
-    amount_obj = entry.get("balanceAmount")
-    value = amount_obj.get("amount") if isinstance(amount_obj, dict) else entry.get("amount")
-    if value is None or value == "":
-        return None
-    try:
-        return _transaction_decimal(value)
-    except ValueError:
-        return None
+    return _entry_amount(entry)
+
+
+def _available_limit(item: dict[str, Any]) -> Optional[Decimal]:
+    """כמה פנוי לפי הבנק. interimAvailable, או forwardAvailable כשאין interim.
+
+    בכרטיס interimAvailable הוא ה-open to buy. הסכום אינו יתרת העו״ש: חסר/ריק
+    נשאר None, לעולם לא 0 ולא creditLimit פחות היתרה.
+    """
+    interim = _available_of_type(item, "interimAvailable")
+    if interim is not None:
+        return interim
+    return _available_of_type(item, "forwardAvailable")
+
+
+def _forward_available(item: dict[str, Any]) -> Optional[Decimal]:
+    """forwardAvailable, shown beside the booked balance. Never a substitute for it."""
+    return _available_of_type(item, "forwardAvailable")
 
 
 # בעלות מדויקת (חבילה H) — Account.ownerInfo: {nationalId, fullName}

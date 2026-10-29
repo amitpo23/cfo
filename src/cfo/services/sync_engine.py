@@ -615,7 +615,10 @@ class SyncEngine:
         if existing:
             existing.name = item.name
             existing.account_type = acct_type
-            existing.balance = item.balance
+            # An available-only payload has no booked balance. Do not replace
+            # closingBooked with None, and do not write the available figure here.
+            if item.balance is not None:
+                existing.balance = item.balance
             existing.currency = item.currency
             existing.balance_as_of = item.balance_as_of
             existing.raw_account_type = item.raw_account_type

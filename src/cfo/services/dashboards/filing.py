@@ -356,6 +356,35 @@ def _days(a: str, b: str) -> float:
     return abs((date.fromisoformat(a) - date.fromisoformat(b)).days)
 
 
+# A cheque face above the advance/repayment by a small fee (483, 898) is
+# financing cost. A larger gap is a different principal, not a fee.
+_DISCOUNT_FEE_MAX = 1500.0
+
+
+def _attach_discount_fees(txns: list[Txn], out: dict[int, Filed], locked) -> None:
+    """Record the discount fee on the collection. It is not operating income."""
+    repayments = [
+        txn for txn in txns
+        if not locked(txn) and (out[id(txn)].extra or {}).get("financing") == "repayment"
+    ]
+    for txn in txns:
+        filed = out[id(txn)]
+        if locked(txn) or txn.amount <= 0 or filed.extra.get("financing") != "collection":
+            continue
+        nearest: tuple[float, Txn] | None = None
+        for repayment in repayments:
+            gap = round(txn.amount - abs(repayment.amount), 2)
+            if gap <= 0:
+                continue
+            if gap <= _DISCOUNT_FEE_MAX or gap <= 0.02 * txn.amount:
+                if nearest is None or gap < nearest[0]:
+                    nearest = (gap, repayment)
+        if nearest is None:
+            continue
+        filed.extra["financing_cost"] = nearest[0]
+        filed.extra["financing_cost_kind"] = "discount_fee"
+
+
 def classify_all(
     txns: list[Txn],
     *,
@@ -377,11 +406,15 @@ def classify_all(
     def locked(t: Txn) -> bool:
         return out[id(t)].filed_by == "decision"
 
-    # A discounted-cheque line is never operating income.
-    # Advance (money in, no invoice) is financing. Repayment is financing out.
-    # A collection that equals an invoice is that invoice's customer receipt.
-    # Collected on another entity's bank, it is intercompany here and the
-    # receipt belongs to the invoice's organization — counted once.
+    # Discounting is financing, never operating income.
+    # Advance (money in, no invoice) is a financing inflow. Repayment is
+    # financing out and is not a recurring loan instalment.
+    # A collection that equals an invoice of another entity (Chef's invoice
+    # in the Food Group bank) is intercompany here and the receipt belongs to
+    # the invoice's organization — counted once, not as Food Group revenue.
+    # The same-entity collection closes the advance; it is not a second sale.
+    # The gap between the face and the repayment (483, 898, …) is financing
+    # cost (discount fee), not operating revenue.
     for t in txns:
         f = out[id(t)]
         if locked(t) or f.category != "check_discounting":
@@ -390,6 +423,7 @@ def classify_all(
             f.category = "loans_out"
             f.filed_by = "rule:discount_repayment"
             f.extra["financing"] = "repayment"
+            f.extra["recurring_loan"] = False
             continue
         match = _invoice_for_amount(invoices, t.amount)
         if match is None:
@@ -400,12 +434,14 @@ def classify_all(
         owner = match.get("organization_id")
         f.extra["invoice"] = match.get("number")
         f.extra["customer_receipt_for"] = owner
+        f.extra["financing"] = "collection"
         if owner not in (None, t.organization_id):
             f.category = "intercompany"
             f.filed_by = "rule:cheque_collected_for_other_entity"
         else:
-            f.category = "customer_receipts"
+            f.category = "loans_in"
             f.filed_by = "rule:cheque_collection"
+    _attach_discount_fees(txns, out, locked)
 
     # Invoice matching: inflows filed as other_in / bank_journal that equal an
     # invoice of the same organization (the tool does this for the chef only).
