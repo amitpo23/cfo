@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { sumPeriodBankTotals } from './periodBankTotals.ts';
+import { missingFigure, sumPeriodBankTotals } from './periodBankTotals.ts';
 import type { PeriodCompare, PeriodRow } from './PeriodCompare.tsx';
 
 function row(bank: { in: number | null; out: number | null; net: number | null }): PeriodRow {
@@ -28,15 +28,17 @@ test('selected days sum bank inflows, outflows and net', () => {
     row({ in: 100, out: 40, net: 60 }),
     row({ in: 0, out: 15.5, net: -15.5 }),
   ]));
-  assert.deepEqual(totals, { inflows: 100, outflows: 55.5, net: 44.5 });
+  assert.equal(totals?.inflows, 100);
+  assert.equal(totals?.outflows, 55.5);
+  assert.equal(totals?.net, 44.5);
 });
 
 test('a day with no booked movement stays a real zero', () => {
-  assert.deepEqual(sumPeriodBankTotals(report([row({ in: 0, out: 0, net: 0 })])), {
-    inflows: 0,
-    outflows: 0,
-    net: 0,
-  });
+  const totals = sumPeriodBankTotals(report([row({ in: 0, out: 0, net: 0 })]));
+  assert.equal(totals?.inflows, 0);
+  assert.equal(totals?.outflows, 0);
+  assert.equal(totals?.net, 0);
+  assert.equal(missingFigure(0, '2026-10-29'), null);
 });
 
 test('a missing figure stays missing and is not added as zero', () => {
@@ -53,4 +55,15 @@ test('loading and an empty period payload are not a total', () => {
   assert.equal(sumPeriodBankTotals(null), null);
   assert.equal(sumPeriodBankTotals(undefined), null);
   assert.equal(sumPeriodBankTotals(report([])), null);
+});
+
+test('a missing amount stays חסר and keeps its as-of', () => {
+  assert.equal(missingFigure(null, null), 'חסר');
+  assert.equal(missingFigure(undefined, '2026-10-26'), 'חסר · נכון ל-2026-10-26');
+  const dated = row({ in: null, out: 0, net: null });
+  dated.bank.in.as_of = '2026-10-26';
+  const totals = sumPeriodBankTotals(report([dated]));
+  assert.equal(totals?.inflows, null);
+  assert.equal(totals?.inflowsAsOf, '2026-10-26');
+  assert.equal(totals?.outflows, 0);
 });

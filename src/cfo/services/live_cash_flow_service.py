@@ -190,9 +190,15 @@ class LiveCashFlowService:
         live_balance, balance_reason = self._live_cash_balance()
         current_balance = float(live_balance) if live_balance is not None else None
 
-        monthly_burn = round(total_outflow / months, 2) if months > 0 else 0.0
-        monthly_income = round(total_inflow / months, 2) if months > 0 else 0.0
-        net_burn = round(monthly_burn - monthly_income, 2)
+        if not has_bank_data or months <= 0:
+            # No booked rows in the window is not a measured burn of 0.
+            monthly_burn = None
+            monthly_income = None
+            net_burn = None
+        else:
+            monthly_burn = round(total_outflow / months, 2)
+            monthly_income = round(total_inflow / months, 2)
+            net_burn = round(monthly_burn - monthly_income, 2)
 
         # honest-null (תיקון-ביקורת 23/08/2026, P0-B): אין יותר סנטינל
         # 999.0 — הוא הוצג ב-frontend/API כמספר-אמת בכל שלושת המצבים למטה,
@@ -206,6 +212,12 @@ class LiveCashFlowService:
             runway_reason: Optional[str] = balance_reason or (
                 "אין יתרת מזומנים חיה זמינה — לא ניתן לחשב כמה זמן הכסף יספיק."
             )
+        elif not has_bank_data:
+            runway_status = "unavailable"
+            runway_months = None
+            runway_reason = (
+                "אין תנועות בנק בחלון, ולכן אין קצב שריפה. לא הוזן 0."
+            )
         elif current_balance <= 0:
             # סדר ה-state machine מכוון: יתרה לא-חיובית גוברת על קצב
             # השריפה. גם אם net_burn<=0 בתקופה, מינוס/אפס אינם runway
@@ -213,6 +225,10 @@ class LiveCashFlowService:
             runway_status = "not_positive"
             runway_months = None
             runway_reason = "יתרת המזומנים הידועה אינה חיובית — אין runway לחשב."
+        elif net_burn is None:
+            runway_status = "unavailable"
+            runway_months = None
+            runway_reason = "אין קצב שריפה מדוד בחלון. לא הוזן 0."
         elif net_burn <= 0:
             # לא בשריפה נטו (הכנסות מכסות/עולות על ההוצאות) עם יתרה ידועה
             # וחיובית — runway "אינסופי" הוא עובדה אמיתית כאן, לא סנטינל.

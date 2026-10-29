@@ -724,6 +724,9 @@ def test_cashflow_burn_rate_route_carries_runway_fields_over_http(client, fresh_
     assert body["runway_reason"]
     assert body["current_balance"] is None
     assert body["current_balance_reason"]
+    assert body["monthly_burn_rate"] is None
+    assert body["monthly_income"] is None
+    assert body["net_monthly_burn"] is None
 
 
 def test_cashflow_by_category_route_honest_null_empty_org(client, fresh_org):

@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { PeriodCompare, PeriodCompareTable, PeriodControls, isoDate, presetRange, type Grain } from './PeriodCompare';
-import { sumPeriodBankTotals } from './periodBankTotals';
+import { missingFigure, sumPeriodBankTotals } from './periodBankTotals';
 import { AgentPanel, FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
 import ExportButtons, { ExportSheet } from './ExportButtons';
 
@@ -88,9 +88,9 @@ interface LiveDailyResponse {
 interface BurnRate {
   as_of?: string;
   data_sources?: string[];
-  monthly_burn_rate: number;
-  monthly_income: number;
-  net_monthly_burn: number;
+  monthly_burn_rate: number | null;
+  monthly_income: number | null;
+  net_monthly_burn: number | null;
   current_balance: number | null;
   current_balance_available?: boolean;
   current_balance_reason?: string | null;
@@ -158,7 +158,12 @@ const CashFlowDashboard: React.FC = () => {
   });
   const monthlyCashFlow = monthlyResp?.months || [];
   const { data: weekly } = useQuery<{
-    snapshot: { balance: number | null; as_of: string | null; transactions_through: string | null };
+    snapshot: {
+      balance: number | null;
+      as_of: string | null;
+      transactions_through: string | null;
+      stale_balances?: { as_of?: string | null }[];
+    };
     forecast?: { weeks?: { start: string; end: string; out: number | null; net: number | null }[]; funding_need?: { amount: number | null; label?: string } };
   }>({
     queryKey: ['weekly-forecast'],
@@ -210,12 +215,14 @@ const CashFlowDashboard: React.FC = () => {
   // ידוע" מגיעה עכשיו כקוד-מכונה מפורש מה-API (runway_status), לא ניחוש
   // frontend-י ממספר-קסם. runway_months עצמו null בכל מצב שאינו "computed".
   const formatRunway = (br: BurnRate | undefined | null) => {
-    if (!br) return '—';
+    if (!br) return 'טוען…';
     if (br.runway_status === 'computed' && br.runway_months != null) {
       return `${br.runway_months.toFixed(1)} חודשים`;
     }
     if (br.runway_status === 'infinite') return '∞';
-    return '—';
+    if (br.runway_status === 'not_positive') return 'אין runway';
+    const observed = liquidityRatios?.checking?.last_booked_as_of || liquidityRatios?.checking?.as_of;
+    return missingFigure(null, observed) || 'חסר';
   };
 
   // אותה סיווג בדיוק כמו formatRunway, כדי שהצבע (tone) לא יסתור את הערך.
@@ -240,15 +247,25 @@ const CashFlowDashboard: React.FC = () => {
   const rollingOutflows = monthlyCashFlow.reduce((sum, m) => sum + m.outflows, 0);
   const rollingNet = rollingInflows - rollingOutflows;
 
-  const formatAmount = (value: number | null | undefined) => {
-    if (value == null || Number.isNaN(value)) return 'חסר';
-    return formatCurrency(value);
+  const formatAmount = (value: number | null | undefined, asOf?: string | null) => {
+    const missing = missingFigure(value, asOf);
+    if (missing) return missing;
+    return formatCurrency(value as number);
   };
 
-  const periodAmount = (value: number | null | undefined) => {
+  const tooltipMoney = (value: unknown): string => {
+    if (Array.isArray(value)) return tooltipMoney(value[0]);
+    if (typeof value === 'number') return formatAmount(value);
+    if (typeof value === 'string' && value !== '') {
+      const parsed = Number(value);
+      if (!Number.isNaN(parsed)) return formatAmount(parsed);
+    }
+    return 'חסר';
+  };
+
+  const periodAmount = (value: number | null | undefined, asOf?: string | null) => {
     if (periodLoading) return 'טוען…';
-    if (value == null || Number.isNaN(value)) return '—';
-    return formatCurrency(value);
+    return formatAmount(value, asOf);
   };
 
   const periodTone = (value: number | null | undefined): 'emerald' | 'rose' | 'slate' => {
@@ -284,9 +301,9 @@ const CashFlowDashboard: React.FC = () => {
         cumulative: m.cumulative,
       })),
       summary: [
-        { label: 'כניסות', value: formatCurrency(rollingInflows) },
-        { label: 'יציאות', value: formatCurrency(rollingOutflows) },
-        { label: 'תזרים נקי', value: formatCurrency(rollingNet) },
+        { label: 'כניסות', value: monthlyCashFlow.length > 0 ? formatCurrency(rollingInflows) : 'חסר' },
+        { label: 'יציאות', value: monthlyCashFlow.length > 0 ? formatCurrency(rollingOutflows) : 'חסר' },
+        { label: 'תזרים נקי', value: monthlyCashFlow.length > 0 ? formatCurrency(rollingNet) : 'חסר' },
       ],
     },
     {
@@ -310,6 +327,13 @@ const CashFlowDashboard: React.FC = () => {
 
   // מקורות הנתונים המוצגים בתגית העליונה — איחוד המקורות מכל הרכיבים
   // שכבר נטענו, כדי לתת תמונה כנה אחת של "על מה זה מבוסס".
+  const ratioAsOf = liquidityRatios?.checking?.last_booked_as_of || liquidityRatios?.checking?.as_of || null;
+  const observedBalanceAsOf = weekly?.snapshot?.balance == null
+    ? (weekly?.snapshot?.stale_balances?.find((row) => row.as_of)?.as_of || weekly?.snapshot?.as_of || null)
+    : weekly?.snapshot?.as_of;
+  const checkingHeadline = weekly?.snapshot?.balance == null
+    ? (missingFigure(null, observedBalanceAsOf) || 'חסר')
+    : `${formatCurrency(weekly.snapshot.balance)}${weekly.snapshot.as_of ? ` נכון ל-${weekly.snapshot.as_of}` : ''}`;
   const asOf = monthlyResp?.as_of || dailyResp?.as_of || burnRate?.as_of;
   const dataSources = Array.from(
     new Set([...(monthlyResp?.data_sources || []), ...(dailyResp?.data_sources || [])])
@@ -319,12 +343,12 @@ const CashFlowDashboard: React.FC = () => {
     <FinancePageShell
       eyebrow="Cash Flow"
       title="ניהול תזרים מזומנים"
-      description={`יתרת עו״ש ${weekly?.snapshot?.balance ?? 'חסר'}${weekly?.snapshot?.as_of ? ` נכון ל-${weekly.snapshot.as_of}` : ''}. תנועה אחרונה ${weekly?.snapshot?.transactions_through ?? '—'}. התזרים השבועי מתחיל מהיום. הנטו למטה הוא סכום תנועות בתקופה, לא היתרה.`}
+      description={`יתרת עו״ש ${checkingHeadline}. תנועה אחרונה ${weekly?.snapshot?.transactions_through ?? 'חסר'}. התזרים השבועי מתחיל מהיום. הנטו למטה הוא סכום תנועות בתקופה, לא היתרה.`}
       icon={Wallet}
       metrics={[
-        { label: 'כניסות', value: periodAmount(periodTotals?.inflows), tone: 'emerald' },
-        { label: 'יציאות', value: periodAmount(periodTotals?.outflows), tone: 'rose' },
-        { label: 'נטו תנועות בתקופה', value: periodAmount(periodTotals?.net), tone: periodTone(periodTotals?.net) },
+        { label: 'כניסות', value: periodAmount(periodTotals?.inflows, periodTotals?.inflowsAsOf), tone: 'emerald' },
+        { label: 'יציאות', value: periodAmount(periodTotals?.outflows, periodTotals?.outflowsAsOf), tone: 'rose' },
+        { label: 'נטו תנועות בתקופה', value: periodAmount(periodTotals?.net, periodTotals?.netAsOf), tone: periodTone(periodTotals?.net) },
         { label: 'Runway', value: formatRunway(burnRate), tone: runwayTone(burnRate) },
       ]}
       actions={
@@ -389,14 +413,14 @@ const CashFlowDashboard: React.FC = () => {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <MetricCard icon={ArrowUpRight} label="כניסות" value={periodAmount(periodTotals?.inflows)} detail={`${rangeStart} – ${rangeEnd}`} tone="emerald" />
-        <MetricCard icon={ArrowDownRight} label="יציאות" value={periodAmount(periodTotals?.outflows)} detail={`${rangeStart} – ${rangeEnd}`} tone="rose" />
-        <MetricCard icon={DollarSign} label="נטו תנועות בתקופה" value={periodAmount(periodTotals?.net)} detail={`${rangeStart} – ${rangeEnd}`} tone={periodTone(periodTotals?.net)} />
+        <MetricCard icon={ArrowUpRight} label="כניסות" value={periodAmount(periodTotals?.inflows, periodTotals?.inflowsAsOf)} detail={`${rangeStart} – ${rangeEnd}`} tone="emerald" />
+        <MetricCard icon={ArrowDownRight} label="יציאות" value={periodAmount(periodTotals?.outflows, periodTotals?.outflowsAsOf)} detail={`${rangeStart} – ${rangeEnd}`} tone="rose" />
+        <MetricCard icon={DollarSign} label="נטו תנועות בתקופה" value={periodAmount(periodTotals?.net, periodTotals?.netAsOf)} detail={`${rangeStart} – ${rangeEnd}`} tone={periodTone(periodTotals?.net)} />
         <MetricCard
           icon={Calendar}
           label="Runway"
           value={formatRunway(burnRate)}
-          detail={burnRate?.runway_reason || (burnRate?.net_monthly_burn && burnRate.net_monthly_burn > 0 ? `שריפה: ${formatCurrency(burnRate.net_monthly_burn)}/חודש` : 'ללא שריפת מזומנים')}
+          detail={burnRate?.runway_reason || (burnRate?.net_monthly_burn != null && burnRate.net_monthly_burn > 0 ? `שריפה: ${formatCurrency(burnRate.net_monthly_burn)}/חודש` : burnRate?.net_monthly_burn != null ? 'ללא שריפת מזומנים' : 'חסר')}
           tone={runwayTone(burnRate)}
         />
       </div>
@@ -418,7 +442,7 @@ const CashFlowDashboard: React.FC = () => {
                 <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                 <YAxis tickFormatter={(v) => `₪${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 12 }} />
                 <Tooltip
-                  formatter={(value: number) => formatCurrency(value)}
+                  formatter={(value) => tooltipMoney(value)}
                   labelFormatter={(label) => `חודש: ${label}`}
                 />
                 <Legend />
@@ -443,7 +467,7 @@ const CashFlowDashboard: React.FC = () => {
                 <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                 <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                 <YAxis tickFormatter={(v) => `₪${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 12 }} />
-                <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                <Tooltip formatter={(value) => tooltipMoney(value)} />
                 <Area
                   type="monotone"
                   dataKey="cumulative"
@@ -483,7 +507,7 @@ const CashFlowDashboard: React.FC = () => {
                   <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
                   <XAxis dataKey="date" tick={{ fontSize: 10 }} />
                   <YAxis tickFormatter={(v) => `₪${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 12 }} />
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                  <Tooltip formatter={(value) => tooltipMoney(value)} />
                   <Legend />
                   <Line
                     type="monotone"
@@ -492,7 +516,6 @@ const CashFlowDashboard: React.FC = () => {
                     stroke="#3B82F6"
                     strokeWidth={2}
                     dot={false}
-                    connectNulls
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -535,7 +558,7 @@ const CashFlowDashboard: React.FC = () => {
                       />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                  <Tooltip formatter={(value) => tooltipMoney(value)} />
                 </PieChart>
               </ResponsiveContainer>
               {/* כיסוי חלקי (רוב התנועות "לא מסווג") — הנתון אמיתי, לא
@@ -556,17 +579,17 @@ const CashFlowDashboard: React.FC = () => {
           </div>
         ) : (
           <>
-            <CheckingFacility checking={liquidityRatios?.checking} facility={liquidityRatios?.facility} reason={liquidityRatios?.credit_line_reason} formatAmount={formatAmount} />
+            <CheckingFacility checking={liquidityRatios?.checking} facility={liquidityRatios?.facility} reason={liquidityRatios?.credit_line_reason} formatAmount={formatAmount} asOf={ratioAsOf} />
             {liquidityRatios?.missing_label ? (
               <p className="mb-4 text-sm text-amber-700">{liquidityRatios.missing_label}</p>
             ) : null}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              <RatioCard title="יחס שוטף" value={liquidityRatios?.current_ratio ?? null} isGood={ratioGood(liquidityRatios?.current_ratio, 1.5)} format="ratio" />
-              <RatioCard title="יחס מהיר" value={liquidityRatios?.quick_ratio ?? null} isGood={ratioGood(liquidityRatios?.quick_ratio, 1)} format="ratio" />
-              <RatioCard title="יחס מזומנים" value={liquidityRatios?.cash_ratio ?? null} isGood={ratioGood(liquidityRatios?.cash_ratio, 0.5)} format="ratio" />
-              <RatioCard title="הון חוזר" value={liquidityRatios?.working_capital ?? null} isGood={liquidityRatios?.working_capital == null ? null : liquidityRatios.working_capital > 0} format="currency" />
-              <RatioCard title="נכסים שוטפים" value={liquidityRatios?.current_assets ?? null} isGood={liquidityRatios?.current_assets == null ? null : true} format="currency" />
-              <RatioCard title="התחייבויות שוטפות" value={liquidityRatios?.current_liabilities ?? null} isGood={liquidityRatios?.current_liabilities == null ? null : true} format="currency" />
+              <RatioCard title="יחס שוטף" value={liquidityRatios?.current_ratio ?? null} asOf={ratioAsOf} isGood={ratioGood(liquidityRatios?.current_ratio, 1.5)} format="ratio" />
+              <RatioCard title="יחס מהיר" value={liquidityRatios?.quick_ratio ?? null} asOf={ratioAsOf} isGood={ratioGood(liquidityRatios?.quick_ratio, 1)} format="ratio" />
+              <RatioCard title="יחס מזומנים" value={liquidityRatios?.cash_ratio ?? null} asOf={ratioAsOf} isGood={ratioGood(liquidityRatios?.cash_ratio, 0.5)} format="ratio" />
+              <RatioCard title="הון חוזר" value={liquidityRatios?.working_capital ?? null} asOf={ratioAsOf} isGood={liquidityRatios?.working_capital == null ? null : liquidityRatios.working_capital > 0} format="currency" />
+              <RatioCard title="נכסים שוטפים" value={liquidityRatios?.current_assets ?? null} asOf={ratioAsOf} isGood={liquidityRatios?.current_assets == null ? null : true} format="currency" />
+              <RatioCard title="התחייבויות שוטפות" value={liquidityRatios?.current_liabilities ?? null} asOf={ratioAsOf} isGood={liquidityRatios?.current_liabilities == null ? null : true} format="currency" />
             </div>
           </>
         )}
@@ -578,16 +601,16 @@ const CashFlowDashboard: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="text-center p-4 bg-gray-50 rounded-lg">
               <p className="text-sm text-gray-600 mb-2">הוצאות חודשיות ממוצעות</p>
-              <p className="text-xl font-bold text-red-600">{formatCurrency(burnRate.monthly_burn_rate)}</p>
+              <p className="text-xl font-bold text-red-600">{formatAmount(burnRate.monthly_burn_rate, burnRate.as_of)}</p>
             </div>
             <div className="text-center p-4 bg-gray-50 rounded-lg">
               <p className="text-sm text-gray-600 mb-2">הכנסות חודשיות ממוצעות</p>
-              <p className="text-xl font-bold text-green-600">{formatCurrency(burnRate.monthly_income)}</p>
+              <p className="text-xl font-bold text-green-600">{formatAmount(burnRate.monthly_income, burnRate.as_of)}</p>
             </div>
             <div className="text-center p-4 bg-gray-50 rounded-lg">
               <p className="text-sm text-gray-600 mb-2">יתרה נוכחית</p>
               <p className="text-xl font-bold text-blue-600">
-                {burnRate.current_balance != null ? formatCurrency(burnRate.current_balance) : '—'}
+                {formatAmount(burnRate.current_balance, ratioAsOf)}
               </p>
               {/* P0-B: reason מגיע מה-API ומפרט מדוע היתרה הארגונית נפסלה,
                   כולל שמות/מזהי חשבונות שלא עברו את שער הטריות. */}
@@ -598,24 +621,24 @@ const CashFlowDashboard: React.FC = () => {
           </div>
 
           {/* תוספת AR/AP: צפי גבייה/תשלום 30 יום — לא מוזרם לתוך הריצה בפועל למעלה */}
-          {((burnRate.expected_receivables_30d_count || 0) > 0 || (burnRate.expected_payables_30d_count || 0) > 0) && (
+          {((burnRate.expected_receivables_30d_count ?? 0) > 0 || (burnRate.expected_payables_30d_count ?? 0) > 0) && (
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-sm">
                 <span className="text-green-700 font-medium">צפי גבייה (30 יום): </span>
                 <span className="text-green-800">
-                  {formatCurrency(burnRate.expected_receivables_30d || 0)} ({burnRate.expected_receivables_30d_count || 0} חשבוניות פתוחות)
+                  {formatAmount(burnRate.expected_receivables_30d, burnRate.as_of)} ({burnRate.expected_receivables_30d_count ?? 'חסר'} חשבוניות פתוחות)
                 </span>
               </div>
               <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm">
                 <span className="text-red-700 font-medium">צפי תשלום (30 יום): </span>
                 <span className="text-red-800">
-                  {formatCurrency(burnRate.expected_payables_30d || 0)} ({burnRate.expected_payables_30d_count || 0} חשבונות ספק פתוחים)
+                  {formatAmount(burnRate.expected_payables_30d, burnRate.as_of)} ({burnRate.expected_payables_30d_count ?? 'חסר'} חשבונות ספק פתוחים)
                 </span>
               </div>
             </div>
           )}
 
-          {burnRate.net_monthly_burn > 0 && (
+          {burnRate.net_monthly_burn != null && burnRate.net_monthly_burn > 0 && (
             <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-3">
               <AlertTriangle className="text-yellow-600 flex-shrink-0 mt-0.5" size={20} />
               <div>
@@ -630,7 +653,10 @@ const CashFlowDashboard: React.FC = () => {
             </div>
           )}
 
-          {burnRate.net_monthly_burn <= 0 && (
+          {(
+            (burnRate.net_monthly_burn != null && burnRate.net_monthly_burn <= 0)
+            || (burnRate.runway_status === 'unavailable' && !(burnRate.net_monthly_burn != null && burnRate.net_monthly_burn > 0))
+          ) && (
             <div className={`mt-6 p-4 rounded-lg flex items-start gap-3 ${burnRate.runway_status === 'infinite' ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`}>
               {burnRate.runway_status === 'infinite' ? (
                 <CheckCircle className="text-green-600 flex-shrink-0 mt-0.5" size={20} />
@@ -687,17 +713,20 @@ function CheckingFacility({
   facility,
   reason,
   formatAmount,
+  asOf,
 }: {
   checking?: LiquidityRatios['checking'];
   facility?: LiquidityRatios['facility'];
   reason?: string | null;
-  formatAmount: (value: number | null | undefined) => string;
+  formatAmount: (value: number | null | undefined, asOf?: string | null) => string;
+  asOf?: string | null;
 }) {
   const breach = facility?.breach;
+  const dated = (value: number | null | undefined) => formatAmount(value, value == null ? asOf : null);
   return (
     <div className="mb-4 text-sm text-slate-700">
-      <p>{checking?.label_he || 'יתרת העו״ש לא ידועה'}</p>
-      <p className="mt-1 text-base font-semibold">יתרת עו״ש לשימוש: {formatAmount(checking?.balance)}</p>
+      <p>{checking?.label_he || (asOf ? `יתרת העו״ש לא ידועה · נכון ל-${asOf}` : 'יתרת העו״ש לא ידועה')}</p>
+      <p className="mt-1 text-base font-semibold">יתרת עו״ש לשימוש: {dated(checking?.balance)}</p>
       {checking?.status !== 'ready' && checking?.last_booked != null ? (
         <p className="mt-1 text-slate-500">
           יתרה שמורה אחרונה: {formatAmount(checking.last_booked)}
@@ -705,7 +734,7 @@ function CheckingFacility({
         </p>
       ) : null}
       <p className="mt-2">
-        מסגרת {formatAmount(facility?.limit)} · ניצול {formatAmount(facility?.used)} · פנוי {formatAmount(facility?.headroom)}
+        מסגרת {dated(facility?.limit)} · ניצול {dated(facility?.used)} · פנוי {dated(facility?.headroom)}
         {breach == null ? '' : breach ? ' · חריגה' : ' · בתוך המסגרת'}
       </p>
       {facility?.available_limit != null ? (
@@ -724,14 +753,15 @@ function CheckingFacility({
 interface RatioCardProps {
   title: string;
   value: number | null;
+  asOf?: string | null;
   isGood: boolean | null;
   format: 'ratio' | 'currency' | 'percent';
 }
 
-const RatioCard: React.FC<RatioCardProps> = ({ title, value, isGood, format }) => {
+const RatioCard: React.FC<RatioCardProps> = ({ title, value, asOf, isGood, format }) => {
   const known = value != null && Number.isFinite(value);
   const formatValue = () => {
-    if (!known || value == null) return 'חסר';
+    if (!known || value == null) return missingFigure(null, asOf) || 'חסר';
     if (format === 'currency') {
       return new Intl.NumberFormat('he-IL', {
         style: 'currency',

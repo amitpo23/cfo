@@ -69,6 +69,9 @@ def test_stale_open_finance_balance_keeps_ratios_and_runway_unknown(fresh_org):
     assert burn["current_balance"] is None
     assert burn["runway_months"] is None
     assert burn["runway_status"] == "unavailable"
+    assert burn["monthly_burn_rate"] is None
+    assert burn["monthly_income"] is None
+    assert burn["net_monthly_burn"] is None
 
 
 def test_fresh_checking_reports_credit_used_headroom_and_breach(fresh_org):
