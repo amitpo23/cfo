@@ -62,6 +62,7 @@ const PayableWorkbench = lazy(() => import('./components/PayableWorkbench'));
 const OfficeDashboard = lazy(() => import('./components/OfficeDashboard'));
 const AdminClientsDashboard = lazy(() => import('./components/AdminClientsDashboard'));
 const MoshkoObservabilityDashboard = lazy(() => import('./components/MoshkoObservabilityDashboard'));
+const BalanceDiagnosticPage = lazy(() => import('./components/BalanceDiagnosticPage'));
 const MoshkoKnowledgeDashboard = lazy(() => import('./components/MoshkoKnowledgeDashboard'));
 const CalculatorsDashboard = lazy(() => import('./components/CalculatorsDashboard'));
 const PayrollDashboard = lazy(() => import('./components/PayrollDashboard'));
@@ -172,6 +173,7 @@ const navigationConfig = [
       { to: '/office', icon: Building2, label: 'ניהול משרד', description: 'תיקי לקוחות, סנכרון רוחבי והתאמות נדרשות' },
       { to: '/admin-clients', icon: Database, label: 'אדמין — כל הלקוחות', description: 'תצוגת על של כל תיקי הלקוחות' },
       { to: '/admin-moshko', icon: Activity, label: 'ניטור מושקו', description: 'שיחות, כלים ועלויות LLM', superAdminOnly: true },
+      { to: '/admin-balance-diagnostic', icon: Landmark, label: 'אבחון יתרות', description: 'יתרת עו״ש שמורה, בלי קריאה לספק', superAdminOnly: true },
       { to: '/admin-moshko-knowledge', icon: BookOpen, label: 'הידע של מושקו', description: 'זיכרון לומד וידע מקצועי', adminOnly: true },
       { to: '/calculators', icon: Calculator, label: 'מחשבונים', description: 'חישובי שכר/מס/ב"ל דטרמיניסטיים, בלי צ\'אט' },
       { to: '/payroll', icon: Users, label: 'שכר', description: 'עובדים, תלושים ודוח 102/126' },
@@ -439,6 +441,7 @@ function App() {
                 <Route path="/office" element={<OfficeDashboard />} />
                 <Route path="/admin-clients" element={<AdminClientsDashboard />} />
                 <Route path="/admin-moshko" element={<MoshkoObservabilityDashboard currentUser={currentUser} />} />
+                <Route path="/admin-balance-diagnostic" element={<BalanceDiagnosticPage currentUser={currentUser} />} />
                 <Route path="/admin-moshko-knowledge" element={<MoshkoKnowledgeDashboard currentUser={currentUser} />} />
                 <Route path="/calculators" element={<CalculatorsDashboard />} />
                 <Route path="/payroll" element={<PayrollDashboard />} />
