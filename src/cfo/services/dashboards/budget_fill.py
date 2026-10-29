@@ -210,6 +210,8 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
                 "status": status,
                 "status_he": STATUS_HE[status],
                 "amount": None if amount is None else _q(amount),
+                "quantity": None if not isinstance(cell, dict) else cell.get("quantity"),
+                "rate": None if not isinstance(cell, dict) else cell.get("rate"),
                 **({"source": source_name} if source_name else {}),
                 **({"placeholder_warning": warning} if warning else {}),
             }
@@ -219,13 +221,17 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
                 by_month[key]["status_he"] = "חסר"
             elif status == "assumption" and raw.get("custom") and source_name != "history":
                 by_month[key]["status_he"] = "הנחה"
-        if line_missing:
-            missing.append({"id": line_id, "label": raw.get("label") or line_id, "months": line_missing})
-        else:
-            filled += 1
-        if all(cell["status"] == "none" for cell in by_month.values()):
+        has_amount = any(
+            cell.get("amount") is not None and cell.get("status") in {"filled", "assumption", "confirmed"}
+            for cell in by_month.values()
+        )
+        all_none = bool(by_month) and all(cell["status"] == "none" for cell in by_month.values())
+        if all_none:
             none += 1
-            filled -= 1
+        elif has_amount:
+            filled += 1
+        elif line_missing:
+            missing.append({"id": line_id, "label": raw.get("label") or line_id, "months": line_missing})
         line_warning = next((
             cell["placeholder_warning"] for cell in by_month.values() if cell.get("placeholder_warning")
         ), None)

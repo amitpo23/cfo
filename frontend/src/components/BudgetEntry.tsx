@@ -11,6 +11,8 @@ type LineMonth = {
   status: 'filled' | 'none' | 'missing' | 'assumption' | 'confirmed';
   status_he: string;
   amount: string | null;
+  quantity?: number | null;
+  rate?: number | null;
   placeholder_warning?: string;
 };
 type BudgetLine = {
@@ -57,6 +59,8 @@ type LineUpdate = {
   custom?: boolean;
   division?: string;
   source?: string;
+  qty?: number;
+  unit_price?: number;
 };
 type LinesPayload = {
   lines: BudgetLine[];
@@ -96,7 +100,7 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   const [openingNote, setOpeningNote] = useState('');
   const [openingOverride, setOpeningOverride] = useState(false);
   const [newLine, setNewLine] = useState({
-    lineKey: '', label: '', amount: '', status: 'assumption', source: '', division: '', kind: 'income',
+    lineKey: '', label: '', amount: '', qty: '', rate: '', status: 'assumption', source: '', division: '', kind: 'income',
   });
   const [person, setPerson] = useState({ name: '', role: '', cost: '' });
   const queryClient = useQueryClient();
@@ -156,7 +160,7 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   });
 
   function save() {
-    const updates = Object.entries(drafts).map(([id, raw]): LineUpdate => {
+    const updates = Object.entries(drafts).filter(([id]) => !id.startsWith('qty:') && !id.startsWith('rate:')).map(([id, raw]): LineUpdate => {
       const text = raw.trim();
       const assumption = monthAssumptions.find((row) => row.id === id);
       if (assumption?.kind === 'opening_balance') {
@@ -179,6 +183,16 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
           id: custom.id, label: custom.label, category: custom.category, kind: custom.kind,
           custom: true, division: custom.division || undefined, source: custom.line_source || undefined,
         };
+        const qtyText = drafts[`qty:${custom.id}`];
+        const rateText = drafts[`rate:${custom.id}`];
+        const qty = qtyText !== undefined ? Number(qtyText) : custom.months[key]?.quantity;
+        const rate = rateText !== undefined ? Number(rateText) : custom.months[key]?.rate;
+        if (qtyText !== undefined || rateText !== undefined) {
+          if (qtyText === '' || rateText === '') return { ...target, month: key, status: 'missing' };
+          if (Number.isFinite(qty) && Number.isFinite(rate)) {
+            return { ...target, month: key, status: kept, qty: Number(qty), unit_price: Number(rate) };
+          }
+        }
         if (text === '' || text === 'none') return { ...target, month: key, status: 'missing' };
         return { ...target, month: key, status: kept, amount: Number(text) };
       }
@@ -191,7 +205,21 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
       } : { id };
       if (text === '' || text === 'none') return { ...target, month: key, status: 'missing' };
       return { ...target, month: key, status: 'filled', amount: Number(text) };
-    }).filter((update) => update.status === 'missing' || update.status === 'none' || Number.isFinite(update.amount));
+    }).filter((update) => update.status === 'missing' || update.status === 'none' || Number.isFinite(update.amount) || (Number.isFinite(update.qty) && Number.isFinite(update.unit_price)));
+    const seen = new Set(updates.map((update) => update.id));
+    for (const line of data?.lines ?? []) {
+      if (!line.custom || seen.has(line.id)) continue;
+      if (drafts[`qty:${line.id}`] === undefined && drafts[`rate:${line.id}`] === undefined) continue;
+      const qty = Number(drafts[`qty:${line.id}`] ?? line.months[key]?.quantity);
+      const rate = Number(drafts[`rate:${line.id}`] ?? line.months[key]?.rate);
+      const kept = line.months[key]?.status === 'confirmed' ? 'confirmed' : 'assumption';
+      if (!Number.isFinite(qty) || !Number.isFinite(rate)) continue;
+      updates.push({
+        id: line.id, label: line.label, category: line.category, kind: line.kind, custom: true,
+        division: line.division || undefined, source: line.line_source || undefined,
+        month: key, status: kept, qty, unit_price: rate,
+      });
+    }
     if (updates.length === 0) {
       setMessage('אין שינוי לשמירה');
       return;
@@ -206,9 +234,16 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
       return;
     }
     const income = newLine.kind === 'income';
-    const blank = newLine.status === 'missing' || newLine.amount.trim() === '';
+    const qty = Number(newLine.qty);
+    const rate = Number(newLine.rate);
+    const hasDriver = newLine.qty.trim() !== '' && newLine.rate.trim() !== '';
+    const blank = newLine.status === 'missing' || (!hasDriver && newLine.amount.trim() === '');
     const amount = Number(newLine.amount);
-    if (!blank && !Number.isFinite(amount)) {
+    if (hasDriver && (!Number.isFinite(qty) || !Number.isFinite(rate))) {
+      setMessage('כמות או תעריף אינם מספר');
+      return;
+    }
+    if (!blank && !hasDriver && !Number.isFinite(amount)) {
       setMessage('הסכום אינו מספר');
       return;
     }
@@ -222,9 +257,9 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
       source: newLine.source.trim() || 'owner',
       month: key,
       status: blank ? 'missing' : newLine.status,
-      ...(blank ? {} : { amount }),
+      ...(hasDriver ? { qty, unit_price: rate } : blank ? {} : { amount }),
     }]);
-    setNewLine({ lineKey: '', label: '', amount: '', status: 'assumption', source: '', division: '', kind: 'income' });
+    setNewLine({ lineKey: '', label: '', amount: '', qty: '', rate: '', status: 'assumption', source: '', division: '', kind: 'income' });
   }
 
   const customLines = (data?.lines ?? []).filter((line) => line.custom);
@@ -410,7 +445,9 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
             <option value="confirmed">מאושר</option>
             <option value="missing">חסר</option>
           </select>
-          <input className={input} placeholder="סכום, או ריק אם חסר" value={newLine.amount} onChange={(event) => setNewLine({ ...newLine, amount: event.target.value })} />
+          <input className={input} placeholder="כמות" value={newLine.qty} onChange={(event) => setNewLine({ ...newLine, qty: event.target.value })} />
+          <input className={input} placeholder="תעריף" value={newLine.rate} onChange={(event) => setNewLine({ ...newLine, rate: event.target.value })} />
+          <input className={input} placeholder="סכום (אם אין כמות×תעריף)" value={newLine.amount} onChange={(event) => setNewLine({ ...newLine, amount: event.target.value })} />
           <input className={input} placeholder="מקור" value={newLine.source} onChange={(event) => setNewLine({ ...newLine, source: event.target.value })} />
           <button type="button" onClick={addCustomLine} className="px-4 py-2 bg-blue-600 text-white rounded-lg">הוספת שורה</button>
         </div>
@@ -450,8 +487,14 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
                       </td>
                       <td className={cell?.status === 'missing' ? 'text-amber-700' : ''}>{cell?.status === 'missing' ? 'חסר' : (cell?.status_he ?? 'חסר')}</td>
                       <td>
-                        <input className={input + ' w-36'} value={shown} placeholder="חסר"
-                          onChange={(event) => setDrafts({ ...drafts, [line.id]: event.target.value })} />
+                        <input className={input + ' w-24'} placeholder="כמות"
+                          value={drafts[`qty:${line.id}`] !== undefined ? drafts[`qty:${line.id}`] : (cell?.quantity ?? '')}
+                          onChange={(event) => setDrafts({ ...drafts, [`qty:${line.id}`]: event.target.value })} />
+                        <span className="mx-1">×</span>
+                        <input className={input + ' w-24'} placeholder="תעריף"
+                          value={drafts[`rate:${line.id}`] !== undefined ? drafts[`rate:${line.id}`] : (cell?.rate ?? '')}
+                          onChange={(event) => setDrafts({ ...drafts, [`rate:${line.id}`]: event.target.value })} />
+                        <span className="mx-2 text-xs text-gray-500">= {shown === '' ? 'חסר' : shown}</span>
                       </td>
                       <td>
                         <button type="button" className="text-red-700 underline" onClick={() => {

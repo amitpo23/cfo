@@ -296,13 +296,12 @@ function BudgetRow({ label, row: given, strong, detail, onClick }: {
         <td>{money(row.actual)}</td>
         <td>{varianceCell(row)}</td>
       </tr>
-      {detail?.driver ? (
+      {detail ? (
         <tr className="border-b border-stone-100 text-xs text-stone-500">
           <td colSpan={4}>
-            {detail.driver_formula || 'אין נוסחה'}
-            {detail.quantity != null && detail.rate != null ? ` · ${detail.quantity} × ${detail.rate}` : ''}
-            {detail.line_source ? ` · מקור: ${detail.line_source}` : ''}
-            {detail.line_status === 'missing' ? ' · חסר, לא 0' : detail.line_status === 'assumption' ? ' · הנחה' : detail.line_status === 'confirmed' ? ' · מאושר' : ''}
+            {detail.driver
+              ? `${detail.driver_formula || 'אין נוסחה'}${detail.quantity != null && detail.rate != null ? ` · ${detail.quantity} × ${detail.rate}` : ''}${detail.line_source ? ` · מקור: ${detail.line_source}` : ''}${detail.division ? ` · ${detail.division}` : ''}${detail.line_status === 'missing' ? ' · חסר, לא 0' : detail.line_status === 'assumption' ? ' · הנחה' : detail.line_status === 'confirmed' ? ' · מאושר' : ''}`
+              : `שורת סיכום · ${detail.category_he || detail.category}. הביצוע הוא מהספרים אחרי תיוק, לא קריאה חדשה לספק.`}
           </td>
         </tr>
       ) : null}
@@ -607,7 +606,7 @@ export function BudgetVsActual({ section }: { section: NonNullable<DashboardView
                     label={`${title}${line.blocked ? ' (סטייה מוסתרת)' : ''}${line.line_status === 'missing' ? ' · חסר' : ''}`}
                     row={line}
                     detail={open === id ? line : null}
-                    onClick={line.driver ? () => setOpen(open === id ? null : id) : undefined}
+                    onClick={() => setOpen(open === id ? null : id)}
                   />
                 );
               })}
