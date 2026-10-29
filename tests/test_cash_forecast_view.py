@@ -61,11 +61,11 @@ def test_the_view_carries_a_13_week_cash_forecast_per_entity_and_combined(client
 
     chef_forecast = body["entities"][0]["view"]["cash_forecast"]
     assert len(chef_forecast["weeks"]) == 13
-    assert chef_forecast["weeks"][0]["start"] == "2026-10-25"
+    assert chef_forecast["weeks"][0]["start"] == "2026-10-28"
     assert chef_forecast["opening"]["amount"] == -35000.0
     assert chef_forecast["opening"]["as_of"] == date.today().isoformat()
     assert chef_forecast["opening"]["rule"] == "today_position"
-    assert chef_forecast["first_breach"]["week_start"] == "2026-10-25"
+    assert chef_forecast["first_breach"]["week_start"] == date.today().isoformat()
     assert "opening_balance" in body["entities"][1]["view"]["cash_forecast"]["missing"]
     combined = body["combined"]["cash_forecast"]
     assert len(combined["weeks"]) == 13

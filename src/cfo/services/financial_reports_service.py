@@ -586,7 +586,7 @@ class FinancialReportsService:
         current = opening_balance
         balances = [current] if current is not None else []
         for row in forward["months"]:
-            closing = round(current + row["net_flow"], 2) if current is not None else None
+            closing = round(current + row["net_flow"], 2) if current is not None and row["net_flow"] is not None else None
             projections.append(CashFlowProjectionItem(
                 month=row["month"], opening_balance=current, inflows=row["inflow_total"],
                 outflows=row["outflow_total"], net_flow=row["net_flow"], closing_balance=closing,
@@ -596,19 +596,24 @@ class FinancialReportsService:
             current = closing
             if closing is not None:
                 balances.append(closing)
-        total_in = round(sum(p.inflows for p in projections), 2)
-        total_out = round(sum(p.outflows for p in projections), 2)
-        burn = round(total_out / months, 2) if projections else None
-        net_burn = (total_out - total_in) / months
+        def _total(values):
+            if not values or any(value is None for value in values):
+                return None
+            return round(sum(values), 2)
+        total_in = _total([p.inflows for p in projections])
+        total_out = _total([p.outflows for p in projections])
+        burn = round(total_out / months, 2) if projections and total_out is not None else None
+        net_burn = (total_out - total_in) / months if total_out is not None and total_in is not None else None
         runway = (round(max(opening_balance, 0) / net_burn, 1)
-                  if opening_balance is not None and net_burn > 0 else None)
+                  if opening_balance is not None and net_burn is not None and net_burn > 0 else None)
         org = self.db.get(Organization, organization_id)
         return CashFlowProjectionReport(
             generated_date=as_of.isoformat(), projection_months=months,
             company_name=org.name if org else "Unknown organization", prepared_by="Rezef",
             historical_average_inflows=avg_in, historical_average_outflows=avg_out,
             projections=projections, total_projected_inflows=total_in,
-            total_projected_outflows=total_out, total_net_flow=round(total_in-total_out, 2),
+            total_projected_outflows=total_out,
+            total_net_flow=None if total_in is None or total_out is None else round(total_in - total_out, 2),
             ending_balance=current if projections else None,
             minimum_balance=min(balances) if balances and projections else None,
             maximum_balance=max(balances) if balances and projections else None,
@@ -957,7 +962,7 @@ class FinancialReportsService:
             
             net_cell = ws.cell(row=row, column=5, value=proj.net_flow)
             net_cell.number_format = currency_format
-            if proj.net_flow < 0:
+            if proj.net_flow is not None and proj.net_flow < 0:
                 net_cell.fill = negative_fill
             else:
                 net_cell.fill = positive_fill

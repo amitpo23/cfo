@@ -188,9 +188,21 @@ def roll_saturday(day: date) -> date:
 
 
 def week_windows(today: date, weeks: int = WEEKS) -> list[tuple[date, date]]:
-    """Sunday-to-Friday windows, the first being the week that contains ``today``."""
-    start = today - timedelta(days=(today.weekday() + 1) % 7)
-    return [(start + timedelta(weeks=i), start + timedelta(weeks=i, days=5)) for i in range(weeks)]
+    """Sunday-to-Friday windows. The first one starts on ``today``, not on a past Sunday.
+
+    Saturday has no bucket: that day rolls to the next Sunday, which is then
+    the first window. Later windows are full Sunday–Friday weeks.
+    """
+    if today.weekday() == 5:
+        today = today + timedelta(days=1)
+    sunday = today - timedelta(days=(today.weekday() + 1) % 7)
+    friday = sunday + timedelta(days=5)
+    windows = [(today, friday)]
+    nxt = sunday + timedelta(weeks=1)
+    for i in range(1, weeks):
+        start = nxt + timedelta(weeks=i - 1)
+        windows.append((start, start + timedelta(days=5)))
+    return windows
 
 
 def payroll_date(year: int, month: int, payroll_day: int = 10) -> date:

@@ -43,6 +43,7 @@ export type CashForecast = {
   overdue?: Overdue[];
   discounted_cheque_balances?: { check?: string | null; amount: number; closes_on: string; outstanding: boolean }[];
   missing: string[];
+  funding_need?: { amount: number | null; label?: string; sum_of_negative_weeks?: number | null };
   shared_identity_note?: string | null;
   run_rate?: Record<string, number>;
 };
@@ -250,6 +251,16 @@ export function CashForecastPanel({ forecast, overdue }: { forecast: CashForecas
   const missing = forecast.missing.filter((key) => MISSING[key]);
   return (
     <div className="grid gap-6">
+      {forecast.funding_need ? (
+        <p className="text-sm text-stone-700">
+          צורך מימון: {forecast.funding_need.amount == null
+            ? (forecast.funding_need.label || 'חסר')
+            : money(forecast.funding_need.amount)}
+          {forecast.funding_need.sum_of_negative_weeks != null
+            ? ` · סכום שבועות שליליים ${money(forecast.funding_need.sum_of_negative_weeks)}`
+            : ''}
+        </p>
+      ) : null}
       {forecast.shared_identity_note ? (
         <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">{forecast.shared_identity_note}</p>
       ) : null}

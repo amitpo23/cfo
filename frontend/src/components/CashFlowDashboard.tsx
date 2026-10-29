@@ -129,6 +129,13 @@ const CashFlowDashboard: React.FC = () => {
     queryFn: () => api.get<LiveMonthlyResponse>(`/cashflow/monthly?months=${timeRange}`),
   });
   const monthlyCashFlow = monthlyResp?.months || [];
+  const { data: weekly } = useQuery<{
+    snapshot: { balance: number | null; as_of: string | null; transactions_through: string | null };
+    forecast?: { weeks?: { start: string; end: string; out: number | null; net: number | null }[]; funding_need?: { amount: number | null; label?: string } };
+  }>({
+    queryKey: ['weekly-forecast'],
+    queryFn: () => api.get('/cashflow/weekly'),
+  });
 
   // Fetch daily cash position
   const { data: dailyResp, isLoading: loadingDaily } = useQuery<LiveDailyResponse>({
@@ -266,12 +273,12 @@ const CashFlowDashboard: React.FC = () => {
     <FinancePageShell
       eyebrow="Cash Flow"
       title="ניהול תזרים מזומנים"
-      description="מבט עבודה על הכסף שנכנס, הכסף שיוצא, runway, יחסי נזילות ותחזית יומית. המטרה היא לדעת מראש איפה יהיה לחץ ומה עושים."
+      description={`יתרת עו״ש ${weekly?.snapshot?.balance ?? 'חסר'}${weekly?.snapshot?.as_of ? ` נכון ל-${weekly.snapshot.as_of}` : ''}. תנועה אחרונה ${weekly?.snapshot?.transactions_through ?? '—'}. התזרים השבועי מתחיל מהיום. הנטו למטה הוא סכום תנועות בתקופה, לא היתרה.`}
       icon={Wallet}
       metrics={[
         { label: 'כניסות', value: formatCurrency(totalInflows), tone: 'emerald' },
         { label: 'יציאות', value: formatCurrency(totalOutflows), tone: 'rose' },
-        { label: 'תזרים נקי', value: formatCurrency(netCashFlow), tone: netCashFlow >= 0 ? 'emerald' : 'rose' },
+        { label: 'נטו תנועות בתקופה', value: formatCurrency(netCashFlow), tone: netCashFlow >= 0 ? 'emerald' : 'rose' },
         { label: 'Runway', value: formatRunway(burnRate), tone: runwayTone(burnRate) },
       ]}
       actions={

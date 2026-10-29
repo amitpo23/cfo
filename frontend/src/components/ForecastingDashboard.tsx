@@ -24,8 +24,8 @@ interface ForecastComponent {
 
 interface ForecastMonth {
   month: string;
-  inflow_total: number;
-  outflow_total: number;
+  inflow_total: number | null;
+  outflow_total: number | null;
   net_flow: number;
   components: ForecastComponent[];
 }
@@ -77,7 +77,8 @@ const ForecastingDashboard: React.FC = () => {
     queryFn: () => api.get<LiveForecastResponse>(`/cashflow/forecast/live-monthly?periods=${forecastPeriods}`),
   });
 
-  const formatCurrency = (value: number) => {
+  const formatCurrency = (value: number | null | undefined) => {
+    if (value == null || Number.isNaN(value)) return 'חסר';
     return new Intl.NumberFormat('he-IL', {
       style: 'currency',
       currency: 'ILS',
@@ -87,8 +88,10 @@ const ForecastingDashboard: React.FC = () => {
   };
 
   const months = forecast?.months || [];
-  const totalInflow = months.reduce((s, m) => s + m.inflow_total, 0);
-  const totalOutflow = months.reduce((s, m) => s + m.outflow_total, 0);
+  const totalInflow = months.every((m) => m.inflow_total != null)
+    ? months.reduce((s, m) => s + (m.inflow_total ?? 0), 0) : null;
+  const totalOutflow = months.every((m) => m.outflow_total != null)
+    ? months.reduce((s, m) => s + (m.outflow_total ?? 0), 0) : null;
 
   return (
     <div className="container mx-auto px-4 py-8" dir="rtl">
@@ -222,8 +225,8 @@ const ForecastingDashboard: React.FC = () => {
             </div>
             <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
               <p className="text-sm text-gray-500 mb-2">תזרים נקי צפוי</p>
-              <p className={`text-2xl font-bold ${totalInflow - totalOutflow >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {formatCurrency(totalInflow - totalOutflow)}
+              <p className={`text-2xl font-bold ${(totalInflow ?? 0) - (totalOutflow ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {formatCurrency(totalInflow == null || totalOutflow == null ? null : totalInflow - totalOutflow)}
               </p>
               <p className="text-xs text-gray-400 mt-1">{months.length} חודשים</p>
             </div>
@@ -273,7 +276,8 @@ const ForecastingDashboard: React.FC = () => {
                     const bySource = Object.fromEntries(row.components.map((c) => [c.source, c]));
                     const arAmount = (bySource.invoices_open_ar?.amount || 0) + (bySource.invoices_overdue_ar?.amount || 0);
                     const arCount = (bySource.invoices_open_ar?.count || 0) + (bySource.invoices_overdue_ar?.count || 0);
-                    const apAmount = (bySource.bills_open_ap?.amount || 0) + (bySource.bills_overdue_ap?.amount || 0);
+                    const apParts = [bySource.bills_open_ap?.amount, bySource.bills_overdue_ap?.amount];
+                    const apAmount = apParts.every((amount) => amount == null) ? null : apParts.reduce((sum, amount) => (sum ?? 0) + (amount ?? 0), 0);
                     const apCount = (bySource.bills_open_ap?.count || 0) + (bySource.bills_overdue_ap?.count || 0);
                     const overdueNote = (bySource.invoices_overdue_ar?.count || 0) + (bySource.bills_overdue_ap?.count || 0) > 0
                       ? ' (כולל באיחור)'

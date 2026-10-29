@@ -146,8 +146,10 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
         },
     }
     as_of_today = date.today()
+    from .budget_fill import with_history_assumptions
+    forecast_plan = with_history_assumptions(db, organization_id, plan, as_of_today)
     view["cash_forecast"] = cashflow_truth.published_forecast(
-        view, plan=plan, organization_id=organization_id, label=None, today=as_of_today,
+        view, plan=forecast_plan, organization_id=organization_id, label=None, today=as_of_today,
         apply_budget_rules=with_budget,
     )
     view["cashflow_source"] = cashflow_truth.scaffold(

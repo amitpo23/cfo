@@ -233,23 +233,35 @@ def _months(start: date, end: date):
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
 
 
-def _budget_index(db, organization_id: int, start: date, end: date) -> dict:
-    """{(year, month): {(kind, key): float}} with the newest row per category."""
+def _budget_index(db, organization_id: int, start: date, end: date) -> tuple[dict, dict]:
+    """Newest budget per category. A stored 0 is missing. A round million is flagged, not summed."""
+    from .budget_fill import looks_like_placeholder
     rows = db.query(Budget).filter(
         Budget.organization_id == organization_id,
         Budget.year >= start.year,
         Budget.year <= end.year,
     ).all()
     index: dict = {}
+    placeholders: dict = {}
     for row in _latest_first(rows):
         if not (start.year, start.month) <= (row.year, row.month) <= (end.year, end.month):
             continue
         slot = index.setdefault((row.year, row.month), {})
         ident = (_kind(row), category_key(row.category_name or ""))
         if ident not in slot:
-            # An explicit "none" is not a budget of zero.
-            slot[ident] = None if row.notes == "budget-line:none" else float(row.budgeted_amount or 0)
-    return index
+            if row.notes == "budget-line:none" or row.budgeted_amount is None:
+                slot[ident] = None
+            else:
+                amount = float(row.budgeted_amount)
+                warning = looks_like_placeholder(amount)
+                if amount == 0:
+                    slot[ident] = None
+                elif warning:
+                    slot[ident] = None
+                    placeholders[(row.year, row.month, ident)] = {"amount": amount, "warning": warning}
+                else:
+                    slot[ident] = amount
+    return index, placeholders
 
 
 def _compare(budget: float | None, actual: float | None) -> dict:
@@ -288,7 +300,7 @@ def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_
     A month never mixes sources. Without ``pnl_months`` every month uses the
     ledger, as before. Actual is None when nothing is known for the month.
     """
-    budgets = _budget_index(db, organization_id, start, end)
+    budgets, placeholders = _budget_index(db, organization_id, start, end)
     reports = reports or FinancialReportsService(db, memoize=True)
     by_month = {m.get("month"): m for m in pnl_months or [] if isinstance(m, dict)}
     months = []
@@ -311,23 +323,38 @@ def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_
         elif source == "cash_basis":
             actuals = _cash_actuals(info)
         any_known = any_known or source is not None
-        planned = {
-            ident: amount for ident, amount in budgets.get((year, month), {}).items() if amount is not None
-        }
+        raw_month = budgets.get((year, month), {})
+        planned = {ident: amount for ident, amount in raw_month.items() if amount is not None}
+        explicit_missing = [ident for ident, amount in raw_month.items() if amount is None]
         if source == "cash_basis":
             planned = _fold_for_cash(planned)
+            explicit_missing = list(_fold_for_cash({ident: 0 for ident in explicit_missing}))
         lines = []
         totals = {}
         for kind, total_name in (("revenue", "revenue"), ("cost", "costs")):
             found = actuals[kind]
             keys = set(found or {}) | {key for (k, key) in planned if k == kind}
+            keys |= {key for (k, key) in explicit_missing if k == kind}
+            keys |= {
+                ident[1] for (y, m, ident) in placeholders
+                if (y, m) == (year, month) and ident[0] == kind
+            }
             kind_lines = []
             for key in keys:
                 actual = None if found is None else float(found.get(key, 0.0))
                 if source == "cash_basis" and key == "depreciation":
                     actual = None  # not a cash movement; no actual from the bank
+                raw_budget = planned.get((kind, key))
+                flagged = placeholders.get((year, month, (kind, key)))
                 line = {"kind": kind, "category": key, "category_he": _cash_label(key)}
-                line.update(_compare(planned.get((kind, key)), actual))
+                line.update(_compare(raw_budget, actual))
+                if flagged is not None:
+                    line["budget"] = None
+                    line["variance"] = None
+                    line["variance_pct"] = None
+                    line["placeholder"] = True
+                    line["placeholder_amount"] = flagged["amount"]
+                    line["placeholder_warning"] = flagged["warning"]
                 if source == "cash_basis" and blocked and key in BLOCKABLE:
                     line["variance"] = None
                     line["variance_pct"] = None
@@ -489,6 +516,14 @@ def dashboard_summary(db, user: User | None, dashboard, year: int, month: int | 
         section = {"status": "unknown", "months": [], "message": None}
     elif chosen == "combined":
         section = view["combined"]["budget_vs_actual"]
+        if section.get("status") != "ready":
+            primary_view = next(
+                (entity.get("view") or {} for entity in entities if entity.get("role") == "primary"),
+                {},
+            )
+            primary_section = primary_view.get("budget_vs_actual") or {}
+            if primary_section.get("months"):
+                section = primary_section
     else:
         section = view["budget_vs_actual"]
     org_ids = (
@@ -528,7 +563,8 @@ def _period_summary(db, org_ids: list[int], section: dict, start: date, end: dat
     # actual yet), or a consolidated section that is unknown. Their budget counts.
     budget_only: dict = {}
     for org_id in org_ids:
-        for (year, mon), planned in _budget_index(db, org_id, start, end).items():
+        indexed, _ignored_placeholders = _budget_index(db, org_id, start, end)
+        for (year, mon), planned in indexed.items():
             key = f"{year}-{mon:02d}"
             if key in seen:
                 continue
@@ -553,6 +589,9 @@ def _period_summary(db, org_ids: list[int], section: dict, start: date, end: dat
             target = slot(line["kind"], line["category"])
             if line.get("budget") is not None:
                 target["budget"] = round((target["budget"] or 0.0) + line["budget"], 2)
+            if line.get("placeholder"):
+                target["placeholder_warning"] = line.get("placeholder_warning")
+                target["placeholder_amount"] = line.get("placeholder_amount")
             if line.get("actual") is None:
                 target["actual_known"] = False
             else:
@@ -570,9 +609,7 @@ def _period_summary(db, org_ids: list[int], section: dict, start: date, end: dat
     for (kind, key), value in sorted(rows.items(), key=lambda item: (item[0][0] != "revenue", item[0][1])):
         budget = value["budget"]
         actual = value["actual"] if value["actual_known"] else None
-        if actual is None and value["actual_known"]:
-            actual = 0.0
-        if budget is None and not actual:
+        if budget is None and actual is None and not value.get("placeholder_warning"):
             continue
         variance = None if budget is None or actual is None else round(budget - actual, 2)
         categories.append({
@@ -585,7 +622,9 @@ def _period_summary(db, org_ids: list[int], section: dict, start: date, end: dat
             "variance": variance,
             "variance_percentage": round(variance / budget * 100, 1) if variance is not None and budget else None,
             "percentage_used": round(actual / budget * 100, 1) if actual is not None and budget else None,
-            "status": _legacy_status(kind, budget, actual),
+            "status": "placeholder" if value.get("placeholder_warning") else _legacy_status(kind, budget, actual),
+            "placeholder_warning": value.get("placeholder_warning"),
+            "placeholder_amount": value.get("placeholder_amount"),
         })
         total = totals[kind]
         total[0] += budget or 0.0
