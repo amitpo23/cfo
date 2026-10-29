@@ -842,7 +842,11 @@ class DashboardService:
         - Historical average for recurring items
         """
         today = date.today()
+        budget_flows = self._budget_week_flows(today, weeks)
         cash_balance, _ = self._get_cash_balance()
+        if budget_flows is not None:
+            return self._weeks_from_budget(today, weeks, budget_flows, cash_balance)
+
         cumulative = float(cash_balance)
 
         # Scenario multipliers
@@ -864,6 +868,18 @@ class DashboardService:
 
         # Load open bills. A matched bank payment or journal settlement is not still due.
         open_bills = self._open_ap_rows()
+        if not open_invoices and not open_bills:
+            return [
+                {
+                    "week": (today + timedelta(weeks=w)).isoformat(),
+                    "expected_inflows": None,
+                    "expected_outflows": None,
+                    "net_flow": None,
+                    "cumulative_balance": None,
+                    "source": None,
+                }
+                for w in range(weeks)
+            ]
 
         result = []
         for w in range(weeks):
@@ -896,6 +912,58 @@ class DashboardService:
                 "cumulative_balance": round(cumulative, 2),
             })
 
+        return result
+
+    def _budget_week_flows(self, today: date, weeks: int) -> list[tuple] | None:
+        """Weekly expected in/out from the same ``plan.budgetLines`` store as /budget.
+
+        None when the org has no budget lines. A week with no amount stays
+        ``(None, None)`` rather than zero.
+        """
+        from .dashboards import forecast_rules
+        from .dashboards.budget_fill import dashboard_for_org
+        from .dashboards.view_model import plan_payload
+
+        dashboard = dashboard_for_org(self.db, self.org_id)
+        plan = plan_payload(self.db, dashboard.id) if dashboard is not None else None
+        if not isinstance(plan, dict) or "budgetLines" not in plan:
+            return None
+        lines = forecast_rules.load_lines(plan) or []
+        flows = []
+        for index in range(weeks):
+            start = today + timedelta(weeks=index)
+            end = start + timedelta(days=6)
+            income_days, _unknown = forecast_rules.income_for_window(lines, start, end)
+            income = round(sum(income_days.values()), 2) if income_days else None
+            pieces = []
+            pieces.extend(forecast_rules.custom_operating_items(lines, start, end))
+            ruled, _ruled_unknown = forecast_rules.supplier_and_payroll(plan, lines, start, end)
+            pieces.extend(ruled)
+            pieces.extend(forecast_rules.budget_outflow_items(plan, lines, start, end))
+            outs = [abs(float(item["amount"])) for item in pieces if item.get("amount")]
+            outflow = round(sum(outs), 2) if outs else None
+            flows.append((income, outflow))
+        return flows
+
+    def _weeks_from_budget(self, today: date, weeks: int, flows: list[tuple], cash_balance) -> list:
+        cumulative = float(cash_balance) if cash_balance is not None else None
+        result = []
+        for index in range(weeks):
+            inflow, outflow = flows[index]
+            if inflow is None or outflow is None:
+                net = None
+                cumulative = None
+            else:
+                net = round(inflow - outflow, 2)
+                cumulative = None if cumulative is None else round(cumulative + net, 2)
+            result.append({
+                "week": (today + timedelta(weeks=index)).isoformat(),
+                "expected_inflows": inflow,
+                "expected_outflows": outflow,
+                "net_flow": net,
+                "cumulative_balance": cumulative,
+                "source": "plan.budgetLines",
+            })
         return result
 
     # ===== Budget vs Actuals =====

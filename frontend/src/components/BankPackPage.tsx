@@ -49,7 +49,7 @@ export default function BankPackPage() {
           }
         }
       }
-      const response = await fetch(`/api/public/d/${slug}/bank-pack`, { credentials: 'include' });
+      const response = await fetch(`/api/public/d/${slug}/bank-pack`, { credentials: 'include', headers });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
         setError(body.error?.message_he || 'החבילה לא נמצאה');

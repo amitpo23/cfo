@@ -544,24 +544,16 @@ async def get_sumit_integration(
         HTTPException 400: if no SUMIT credentials are configured for this org.
     """
     from ..integrations.sumit_integration import SumitIntegration
-    from ..models import IntegrationConnection
-    from ..services.credentials_vault import decrypt_credentials
+    from ..services.sumit_credentials import MISSING_HE, resolve_sumit_credentials
 
-    conn = db.query(IntegrationConnection).filter(
-        IntegrationConnection.organization_id == org_id,
-        IntegrationConnection.source == "sumit",
-        IntegrationConnection.status == "active",
-    ).order_by(IntegrationConnection.id).first()
-    creds = decrypt_credentials(conn.credentials_encrypted) if conn else {}
-
-    env_allowed = settings.env_sumit_allowed(org_id)
-    api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
-    company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
+    resolved = resolve_sumit_credentials(db, org_id)
+    api_key = resolved.get("api_key") if resolved else None
+    company_id = resolved.get("company_id") if resolved else None
 
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="SUMIT API key not configured for this organization",
+            detail=MISSING_HE,
         )
 
     from ..services.sumit_request_budget import SumitRequestLimiter
@@ -575,19 +567,11 @@ async def get_sumit_integration(
 def sumit_for_org(db: Session, org_id: int):
     """בונה SumitIntegration לארגון נתון מחוץ ל-request (ל-cron). None אם אין מפתח."""
     from ..integrations.sumit_integration import SumitIntegration
-    from ..models import IntegrationConnection
-    from ..services.credentials_vault import decrypt_credentials
+    from ..services.sumit_credentials import resolve_sumit_credentials
 
-    conn = db.query(IntegrationConnection).filter(
-        IntegrationConnection.organization_id == org_id,
-        IntegrationConnection.source == "sumit",
-        IntegrationConnection.status == "active",
-    ).order_by(IntegrationConnection.id).first()
-    creds = decrypt_credentials(conn.credentials_encrypted) if conn else {}
-
-    env_allowed = settings.env_sumit_allowed(org_id)
-    api_key = creds.get("api_key") or (settings.sumit_api_key if env_allowed else None)
-    company_id = creds.get("company_id") or (settings.sumit_company_id if env_allowed else None)
+    resolved = resolve_sumit_credentials(db, org_id)
+    api_key = resolved.get("api_key") if resolved else None
+    company_id = resolved.get("company_id") if resolved else None
     if not api_key:
         return None
     from ..services.sumit_request_budget import SumitRequestLimiter

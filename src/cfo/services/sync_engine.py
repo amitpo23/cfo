@@ -1206,6 +1206,30 @@ def ensure_open_finance_accounts(source: str, entity_types: list[str] | None) ->
     return types
 
 
+def _sumit_connector(db: Session, organization_id: int):
+    """This org's SUMIT client. Env credentials only when the org is allowlisted."""
+    from ..models import IntegrationConnection
+    from .data_sync_service import SumitNotConfiguredError
+    from .sumit_connector import SumitConnector
+    from .sumit_credentials import MISSING_HE, resolve_sumit_credentials
+
+    resolved = resolve_sumit_credentials(db, organization_id)
+    if resolved is None or not resolved.get("api_key"):
+        raise SumitNotConfiguredError(MISSING_HE)
+    conn = (
+        db.query(IntegrationConnection)
+        .filter_by(organization_id=organization_id, source="sumit")
+        .order_by(IntegrationConnection.id)
+        .first()
+    )
+    connector = SumitConnector(
+        api_key=resolved["api_key"],
+        company_id=resolved.get("company_id"),
+        organization_id=organization_id,
+    )
+    return connector, conn.id if conn else None, "sumit"
+
+
 def get_connector_for_org(
     db: Session,
     organization_id: int,
@@ -1214,27 +1238,16 @@ def get_connector_for_org(
     """
     Factory: returns (connector, connection_id, source) for the org's active integration.
     """
+    if preferred_source == "sumit":
+        return _sumit_connector(db, organization_id)
     conn, source, creds = get_connection_configuration(db, organization_id, preferred_source)
 
-    from ..config import settings
-    # SUMIT env credentials follow SUMIT_ENV_CREDENTIAL_ORG_IDS.
     # Open Finance user_id still falls back to env only for organization 1.
-    sumit_env = settings.env_sumit_allowed(organization_id)
+    # SUMIT env credentials are resolved in _sumit_connector (allowlist only).
     of_user_env = organization_id == 1
 
     if source == "sumit":
-        from .sumit_connector import SumitConnector
-        api_key = creds.get("api_key") or (settings.sumit_api_key if sumit_env else None)
-        company_id = creds.get("company_id") or (settings.sumit_company_id if sumit_env else None)
-        if not api_key:
-            from .data_sync_service import SumitNotConfiguredError
-            raise SumitNotConfiguredError("SUMIT API key not configured")
-        connector = SumitConnector(
-            api_key=api_key,
-            company_id=company_id,
-            organization_id=organization_id,
-        )
-        return connector, conn.id if conn else None, source
+        return _sumit_connector(db, organization_id)
 
     if source == "open_finance":
         from .open_finance_connector import OpenFinanceConnector

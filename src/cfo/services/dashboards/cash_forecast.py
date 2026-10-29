@@ -401,7 +401,6 @@ def _apply_unknown(week: dict, unknown: list[tuple[date, str]], start: date, end
     week["in"] = inflow
     week["out"] = outflow
     week["net"] = None
-    week["in"] = week["out"] = week["net"] = None
 
 
 def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int, label: str | None,
@@ -556,9 +555,9 @@ def overlay_budget_rules(combined: dict, plan: dict | None) -> dict:
             nxt["in"], nxt["out"], nxt["net"] = inflow, outflow, None
             nxt["unknown"] = [forecast_rules.UNKNOWN_HE[key] for key in dict.fromkeys(keys)]
         else:
-            nxt["in"] = inflow if inflow is not None else 0.0
-            nxt["out"] = outflow if outflow is not None else 0.0
-            nxt["net"] = _r((nxt["in"] or 0) + (nxt["out"] or 0))
+            nxt["in"] = inflow
+            nxt["out"] = outflow
+            nxt["net"] = None if inflow is None or outflow is None else _r(inflow + outflow)
             nxt["unknown"] = []
         new_weeks.append(nxt)
     opening = combined.get("opening")

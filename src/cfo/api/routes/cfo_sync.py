@@ -90,11 +90,12 @@ async def integration_status(
         ).all()
     }
 
-    # SUMIT env credentials follow SUMIT_ENV_CREDENTIAL_ORG_IDS. Open Finance
-    # user-id fallback stays on organization 1.
-    sumit_env = settings.env_sumit_allowed(org_id)
+    # SUMIT env credentials follow SUMIT_ENV_CREDENTIAL_ORG_IDS. A per-org
+    # IntegrationConnection is enough on its own. Open Finance user-id
+    # fallback stays on organization 1.
+    from ...services.sumit_credentials import resolve_sumit_credentials
     of_env = org_id == 1
-    sumit_configured = connections.get("sumit") == "active" or (sumit_env and bool(settings.sumit_api_key))
+    sumit_configured = resolve_sumit_credentials(db, org_id) is not None
     open_finance_configured = connections.get("open_finance") == "active" or (of_env and all([
         settings.open_finance_client_id,
         settings.open_finance_client_secret,
