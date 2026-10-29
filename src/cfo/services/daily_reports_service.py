@@ -142,12 +142,33 @@ def _aging_buckets(rows, balance_attr: str, as_of: date) -> dict[str, Any]:
 
 
 def ar_aging(db, organization_id: int, as_of: Optional[date] = None) -> dict[str, Any]:
-    """גיול חובות לקוחות — unpaid invoice balances by overdue bucket."""
+    """גיול חובות לקוחות — unpaid invoice balances by overdue bucket.
+
+    The displayed total is not above what was invoiced, and an empty book
+    is חסר rather than 0.
+    """
     from ..models import Invoice, InvoiceStatus
+    from .dashboards.money_screens import ar_display
     as_of = as_of or date.today()
-    rows = [r for r in db.query(Invoice).filter(Invoice.organization_id == organization_id).all()
-            if r.status not in {InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED, InvoiceStatus.PAID}]
-    return _aging_buckets(rows, "balance", as_of)
+    skip = {InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED}
+    invoices = db.query(Invoice).filter(Invoice.organization_id == organization_id).all()
+    countable = [row for row in invoices if row.status not in skip]
+    rows = [row for row in countable if row.status != InvoiceStatus.PAID]
+    report = _aging_buckets(rows, "balance", as_of)
+    ever = sum(float(row.total or 0) for row in countable if (row.total or 0) > 0)
+    gate = ar_display(
+        report["total"] if countable else None,
+        None,
+        ever if countable else None,
+        saw_invoices=bool(countable),
+    )
+    report["ar_status"] = gate["status"]
+    report["reason_he"] = gate["reason_he"]
+    report["ever_invoiced"] = gate["ever_invoiced"]
+    if gate["status"] != "ok":
+        report["total"] = None
+        report["buckets"] = {key: None for key in report["buckets"]}
+    return report
 
 
 def ap_aging(db, organization_id: int, as_of: Optional[date] = None) -> dict[str, Any]:

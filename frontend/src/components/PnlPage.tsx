@@ -44,9 +44,12 @@ export default function PnlPage() {
       </div>
       <PartialDataBanner
         text={report.data?.partial_banner?.text_he}
-        extra={report.data?.unclassified_outflows?.label_he
-          ? `${report.data.unclassified_outflows.label_he} (${report.data.unclassified_outflows.count})`
-          : null}
+        extra={[
+          report.data?.unclassified_outflows?.label_he
+            ? `${report.data.unclassified_outflows.label_he} (${report.data.unclassified_outflows.count})`
+            : null,
+          report.data?.profit_claim?.allowed === false ? report.data.profit_claim.reason_he : null,
+        ].filter(Boolean).join(' ')}
       />
       {report.isError ? <p className="text-gray-600">אין רווח והפסד להצגה עד שנבחר ארגון פעיל.</p> : (
         <PeriodCompareTable report={report.data ?? null} booksFirst />

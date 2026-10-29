@@ -9,6 +9,7 @@ import api from '../services/api';
 import ExportButtons, { ExportSheet } from './ExportButtons';
 import { PartialDataBanner } from './dashboardUi';
 import MorningBriefPanel from './MorningBriefPanel';
+import { formatReportMoney, moneySign, profitBarHeightPercent, profitBarScale } from './dailyReportsMoney';
 
 interface PLDay { date: string; revenue_cum: number | null; expense_cum: number | null; profit_cum: number | null; }
 interface PLReport {
@@ -18,7 +19,7 @@ interface PLReport {
   partial_banner?: { text_he?: string | null };
   missing_label?: string | null;
 }
-interface Aging { buckets: Record<string, number>; total: number; as_of: string; }
+interface Aging { buckets: Record<string, number | null>; total: number | null; as_of: string; }
 interface Suppliers { suppliers: { supplier: string; total: number }[]; total: number; }
 interface VatReport {
   period: string; due_date: string; output_vat: number; input_vat: number;
@@ -27,7 +28,7 @@ interface VatReport {
 }
 
 const now = new Date();
-const fmt = (n: number | null | undefined) => (n == null ? 'חסר' : `₪${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
+const fmt = formatReportMoney;
 const BUCKET_LABELS: Record<string, string> = {
   current: 'שוטף', '1_30': '1–30 יום', '31_60': '31–60', '61_90': '61–90', '90_plus': '90+ יום',
 };
@@ -86,7 +87,8 @@ export default function DailyReportsDashboard() {
     }
   }, [location.hash]);
 
-  const maxProfit = pl ? Math.max(1, ...pl.days.map((d) => Math.abs(d.profit_cum))) : 1;
+  const maxProfit = pl ? profitBarScale(pl.days.map((d) => d.profit_cum)) : null;
+  const profitSign = moneySign(pl?.totals.profit);
 
   const exportSheets: ExportSheet[] = (() => {
     const sheets: ExportSheet[] = [];
@@ -186,17 +188,30 @@ export default function DailyReportsDashboard() {
                 <div className="text-sm flex gap-4">
                   <span className="text-emerald-700">הכנסות {fmt(pl.totals.revenue)}</span>
                   <span className="text-rose-600">הוצאות {fmt(pl.totals.expense)}</span>
-                  <span className={`font-bold ${pl.totals.profit >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>רווח {fmt(pl.totals.profit)}</span>
+                  <span className={`font-bold ${profitSign === 'loss' ? 'text-rose-600' : profitSign === 'missing' ? 'text-slate-500' : 'text-emerald-700'}`}>רווח {fmt(pl.totals.profit)}</span>
                 </div>
               </div>
-              {/* lightweight cumulative bars */}
-              <div className="flex items-end gap-0.5 h-28">
-                {pl.days.map((d) => (
-                  <div key={d.date} title={`${d.date}: ${fmt(d.profit_cum)}`}
-                    className={`flex-1 rounded-t ${d.profit_cum >= 0 ? 'bg-emerald-400' : 'bg-rose-400'}`}
-                    style={{ height: `${Math.max(2, (Math.abs(d.profit_cum) / maxProfit) * 100)}%` }} />
-                ))}
-              </div>
+              {maxProfit == null ? (
+                <p className="text-sm text-slate-500">חסר</p>
+              ) : (
+                <div className="flex items-end gap-0.5 h-28">
+                  {pl.days.map((d) => {
+                    const height = profitBarHeightPercent(d.profit_cum, maxProfit);
+                    const sign = moneySign(d.profit_cum);
+                    if (height == null || sign === 'missing') {
+                      return (
+                        <div key={d.date} title={`${d.date}: חסר`} aria-label={`${d.date}: חסר`}
+                          className="flex-1 self-end" />
+                      );
+                    }
+                    return (
+                      <div key={d.date} title={`${d.date}: ${fmt(d.profit_cum)}`}
+                        className={`flex-1 rounded-t ${sign === 'loss' ? 'bg-rose-400' : 'bg-emerald-400'}`}
+                        style={{ height: `${height}%` }} />
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
