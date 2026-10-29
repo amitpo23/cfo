@@ -162,14 +162,18 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
         checks=position.get("checks"),
     )
     view["cashflow_source"]["forecast"] = view["cash_forecast"]
+    from .liquidity_today import build_liquidity_today
+    view["liquidity_today"] = build_liquidity_today(position, view["cash_forecast"], today=as_of_today)
     view["freshness"]["cash_forecast"] = view["cash_forecast"]["status"]
     view["freshness"]["cashflow_source"] = "ready" if view["cashflow_source"]["publishable"] else "unknown"
     return redact_public_view(view)
 
 
 def _ap_documents(db, organization_id: int) -> list[dict]:
-    """Open supplier bills already in the database. No provider call."""
+    """Supplier bills already in the database. A matched payment is not still open."""
     from ...models import Bill, BillStatus
+    from ..open_payables import confirmed_cover
+    cover = confirmed_cover(db, organization_id)
     rows = db.query(Bill).filter(
         Bill.organization_id == organization_id,
         Bill.status.notin_([BillStatus.DRAFT, BillStatus.VOID]),
@@ -179,7 +183,7 @@ def _ap_documents(db, organization_id: int) -> list[dict]:
         gross = float(bill.total or 0)
         if gross <= 0 or bill.issue_date is None:
             continue
-        paid = float(bill.paid_amount or 0)
+        paid = max(float(bill.paid_amount or 0), float(cover.get(bill.id, 0)))
         documents.append({
             "id": bill.id,
             "kind": "AP",

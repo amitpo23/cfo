@@ -147,27 +147,20 @@ def test_ar_aging_and_ledger_card_agree_on_the_customer_balance(reconciled_org):
     assert round(aging["total"] - card["closing_balance"], 2) == 5500.0
 
 
-def test_ap_aging_flags_the_bank_settled_bill_that_ledger_card_also_sees(reconciled_org):
-    """אותה עקביות בכיוון ההוצאות: `get_ap_aging` מסמן bank_movement_seen,
-    ו-`get_ledger_card` (בכיוון הפוך, ספק) מוריד את אותו סכום מהיתרה.
-    שני מנועים נפרדים (DashboardService, ledger_service) חייבים להסכים
-    על אילו מסמכים כבר יש להם תנועת בנק."""
+def test_ap_aging_drops_the_bank_settled_bill_that_ledger_card_also_sees(reconciled_org):
+    """A reconciled supplier bill leaves open AP. The supplier card still
+    records the bank settlement, so both surfaces agree it was paid."""
     org_id = reconciled_org["org_id"]
     db = SessionLocal()
 
     ap = DashboardService(db, org_id).get_ap_aging()
     card = contact_card(db, org_id, reconciled_org["vendor_id"])
 
-    settled_in_ap = next(
-        b for b in ap["bills"] if b["bill_number"] == "BILL-BANK"
-    )
-    assert settled_in_ap["bank_movement_seen"] is True
+    assert all(row["bill_number"] != "BILL-BANK" for row in ap["bills"])
+    assert ap["total"] == 3000.0
 
     bank_lines_in_card = [m for m in card["movements"] if m["type"] == "bank_settlement"]
-    assert len(bank_lines_in_card) == 1, (
-        "get_ap_aging ראה תנועת בנק על BILL-BANK אך get_ledger_card לא — "
-        "שני מנועים חלוקים על אותה עובדה"
-    )
+    assert len(bank_lines_in_card) == 1
 
 
 # ==================================================================== #

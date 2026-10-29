@@ -844,6 +844,7 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
             {"account_id": a.id, "name": a.name, "kind": _account_kind(a), "bank_key": bank_key(a),
              "balance": known[a.id]["balance"] if a.id in known else (None if a.id in stale_ids else _balance(a)),
              "credit_limit": _num(a.credit_limit),
+             "available_limit": _num(getattr(a, "available_limit", None)),
              "as_of": (
                  known[a.id]["as_of"].isoformat() if a.id in known and hasattr(known[a.id].get("as_of"), "isoformat")
                  else known[a.id]["as_of"] if a.id in known

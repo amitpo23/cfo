@@ -456,5 +456,11 @@ class LiveCashFlowService:
             )
             .all()
         )
+        if model is Bill:
+            from .open_payables import confirmed_cover, remaining_of
+            cover = confirmed_cover(self.db, self.organization_id)
+            amounts = [remaining_of(row, cover) for row in rows]
+            open_amounts = [amount for amount in amounts if amount is not None]
+            return round(float(sum(open_amounts, Decimal("0"))), 2), len(open_amounts)
         amount = round(float(sum((r.balance for r in rows), Decimal("0"))), 2)
         return amount, len(rows)

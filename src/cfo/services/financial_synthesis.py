@@ -450,7 +450,7 @@ def compute_vat_position(
 
 
 def synthesize_organization(db, organization_id: int) -> dict[str, Any]:
-    from ..models import BankTransaction, Invoice, Bill, Expense, InvoiceStatus, BillStatus
+    from ..models import BankTransaction, Invoice, Bill, Expense, InvoiceStatus
 
     bank_rows = db.query(BankTransaction).filter(
         BankTransaction.organization_id == organization_id).all()
@@ -475,10 +475,11 @@ def synthesize_organization(db, organization_id: int) -> dict[str, Any]:
                         date=getattr(r, "expense_date", None),
                         name=getattr(r, "supplier_name", "") or "") for r in expense_rows]
 
+    from .open_payables import confirmed_cover, remaining_of
     paid_invoice = getattr(InvoiceStatus, "PAID", None)
-    paid_bill = getattr(BillStatus, "PAID", None)
+    cover = confirmed_cover(db, organization_id)
     unpaid_invoice_ids = {r.id for r in invoice_rows if r.status != paid_invoice}
-    unpaid_bill_ids = {r.id for r in bill_rows if r.status != paid_bill}
+    unpaid_bill_ids = {r.id for r in bill_rows if remaining_of(r, cover) is not None}
 
     # VAT position from the books — single canonical source (document-actual tax).
     vat = compute_vat_position(db, organization_id)

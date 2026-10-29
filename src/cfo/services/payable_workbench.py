@@ -6,8 +6,14 @@ from .payable_settlement import OPERATION, PayableSettlementService
 def payable_workbench(db, organization_id, *, limit=100, offset=0):
     if not 1 <= limit <= 200 or offset < 0:
         raise ValueError('Use limit 1–200 and a nonnegative offset')
+    from .open_payables import confirmed_cover, remaining_of
+    cover = confirmed_cover(db, organization_id)
+    open_bill_ids = [
+        bill.id for bill in db.query(Bill).filter_by(organization_id=organization_id, source='sumit').all()
+        if remaining_of(bill, cover) is not None
+    ]
     queries = {
-        'bills': db.query(Bill).filter_by(organization_id=organization_id, source='sumit'),
+        'bills': db.query(Bill).filter(Bill.id.in_(open_bill_ids or [-1])),
         'requests': db.query(IrreversibleActionRequest).filter(
             IrreversibleActionRequest.organization_id == organization_id,
             IrreversibleActionRequest.payload['operation'].as_string() == OPERATION),
@@ -25,7 +31,7 @@ def payable_workbench(db, organization_id, *, limit=100, offset=0):
             'has_more': any(n > offset + limit for n in counts.values())},
         'bills': [{'id': b.id, 'external_id': b.external_id, 'number': b.bill_number,
             'vendor_id': b.vendor_id, 'vendor_name': vendors[b.vendor_id].name if b.vendor_id in vendors else None,
-            'amount': str(b.total), 'balance': str(b.balance), 'currency': b.currency, 'status': b.status.value}
+            'amount': str(b.total), 'balance': str(remaining_of(b, cover)), 'currency': b.currency, 'status': b.status.value}
             for b in rows['bills']],
         'requests': [service.status(r.id) for r in rows['requests']],
         'bank_movements': [{'id': b.id, 'external_id': b.external_id, 'account_id': b.account_id,

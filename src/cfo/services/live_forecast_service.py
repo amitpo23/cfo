@@ -56,6 +56,12 @@ from sqlalchemy.orm import Session
 from ..models import BankTransaction, Bill, BillStatus, Expense, Invoice, InvoiceStatus
 
 
+class _OpenAmount:
+    def __init__(self, due_date, balance):
+        self.due_date = due_date
+        self.balance = balance or Decimal("0")
+
+
 def _age_slots(rows, as_of: date, periods: int) -> tuple[list[dict], dict]:
     """Place overdue balances by age. Older than 90 days is not cash this horizon."""
     slots = [{"amount": 0.0, "count": 0} for _ in range(periods)]
@@ -116,16 +122,21 @@ class LiveForecastService:
             )
             .all()
         )
-        open_bills = (
-            self.db.query(Bill)
-            .filter(
-                Bill.organization_id == self.organization_id,
-                Bill.status.notin_([BillStatus.DRAFT, BillStatus.VOID]),
-                Bill.balance > 0,
-                Bill.due_date.isnot(None),
+        from .open_payables import confirmed_cover, remaining_of
+        cover = confirmed_cover(self.db, self.organization_id)
+        open_bills = [
+            bill for bill in (
+                self.db.query(Bill)
+                .filter(
+                    Bill.organization_id == self.organization_id,
+                    Bill.status.notin_([BillStatus.DRAFT, BillStatus.VOID, BillStatus.PAID]),
+                    Bill.balance > 0,
+                    Bill.due_date.isnot(None),
+                )
+                .all()
             )
-            .all()
-        )
+            if remaining_of(bill, cover) is not None
+        ]
 
         # חשבוניות/חשבונות פתוחים (אותם קריטריוני סטטוס/יתרה) שה-due_date
         # שלהם NULL: לא ניתן לשבץ אותם לאף חודש בתחזית (אין לפי-מה), ועד
@@ -144,15 +155,18 @@ class LiveForecastService:
             )
             .count()
         )
-        excluded_bills_no_due_date = (
-            self.db.query(Bill)
-            .filter(
-                Bill.organization_id == self.organization_id,
-                Bill.status.notin_([BillStatus.DRAFT, BillStatus.VOID]),
-                Bill.balance > 0,
-                Bill.due_date.is_(None),
+        excluded_bills_no_due_date = sum(
+            1 for bill in (
+                self.db.query(Bill)
+                .filter(
+                    Bill.organization_id == self.organization_id,
+                    Bill.status.notin_([BillStatus.DRAFT, BillStatus.VOID, BillStatus.PAID]),
+                    Bill.balance > 0,
+                    Bill.due_date.is_(None),
+                )
+                .all()
             )
-            .count()
+            if remaining_of(bill, cover) is not None
         )
         excluded_no_due_date = {
             "invoices": excluded_invoices_no_due_date,
@@ -165,7 +179,10 @@ class LiveForecastService:
         overdue_invoices = [inv for inv in open_invoices if inv.due_date < month_anchor]
         overdue_bills = [b for b in open_bills if b.due_date < month_anchor]
         overdue_ar_by_slot, unscheduled_ar = _age_slots(overdue_invoices, as_of_date, periods)
-        overdue_ap_by_slot, unscheduled_ap = _age_slots(overdue_bills, as_of_date, periods)
+        overdue_ap_by_slot, unscheduled_ap = _age_slots(
+            [_OpenAmount(bill.due_date, remaining_of(bill, cover)) for bill in overdue_bills],
+            as_of_date, periods,
+        )
 
         recurring_rows, recurring_months_count = self._recurring_expense_rows(as_of_date)
         recurring_sum = sum((r[0] for r in recurring_rows), Decimal("0"))
@@ -227,7 +244,7 @@ class LiveForecastService:
             ar_amount = float(sum((inv.balance for inv in ar_matches), Decimal("0")))
 
             ap_matches = [b for b in open_bills if m_start <= b.due_date <= m_end]
-            ap_amount = float(sum((b.balance for b in ap_matches), Decimal("0")))
+            ap_amount = float(sum((remaining_of(b, cover) or Decimal("0") for b in ap_matches), Decimal("0")))
 
             month_overdue_ar = overdue_ar_by_slot[i]["amount"]
             month_overdue_ar_count = overdue_ar_by_slot[i]["count"]

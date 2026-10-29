@@ -223,6 +223,7 @@ class SyncEngine:
                 "vendors", "accounts",
                 "bank_transactions", "journal_entries",
             ]
+            entity_types = ensure_open_finance_accounts(self.source, entity_types)
             types_to_sync = entity_types or all_types
 
             # Create SyncRun record
@@ -1186,6 +1187,23 @@ def get_connection_configuration(db: Session, organization_id: int, preferred_so
         creds = org.api_credentials or {}
 
     return conn, source, creds
+
+
+def ensure_open_finance_accounts(source: str, entity_types: list[str] | None) -> list[str] | None:
+    """A cash-position refresh must write balances, not only transactions.
+
+    ``checking_snapshot`` reads ``Account.balance`` and ``balance_as_of``, which
+    ``_upsert_account`` sets from ``fetch_accounts``. A run that asks only for
+    ``bank_transactions`` leaves the stored balance unchanged. For Open Finance,
+    ``accounts`` is inserted before ``bank_transactions``. SUMIT is unchanged.
+    ``None`` still means a full sync.
+    """
+    if source != "open_finance" or not entity_types:
+        return entity_types
+    types = [item.strip() for item in entity_types if item and item.strip()]
+    if "bank_transactions" in types and "accounts" not in types:
+        types.insert(types.index("bank_transactions"), "accounts")
+    return types
 
 
 def get_connector_for_org(

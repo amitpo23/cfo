@@ -5,10 +5,15 @@ type Week = {
   start?: string; end?: string; in?: number | null; out?: number | null; net?: number | null;
   closing?: number | null; in_missing?: string; out_missing?: string; net_missing?: string; closing_missing?: string;
 };
+type Today = {
+  checking?: { balance?: number | null; label_he?: string; last_booked?: number | null; last_booked_as_of?: string | null; status?: string };
+  facility?: { limit?: number | null; used?: number | null; headroom?: number | null; breach?: boolean | null; available_limit?: number | null };
+};
 type Pack = {
   title?: string;
   title_he: string;
   as_of: string;
+  liquidity_today?: Today | null;
   pnl: { revenue: Figure; expenses: Figure };
   forecast: { opening: Figure; weeks: Week[]; supplier_terms?: string };
   assumptions: { label_he: string; month: string | null; amount: number | null; source: string | null; missing_label: string | null; as_of?: string }[];
@@ -71,6 +76,23 @@ export default function BankPackPage() {
         <>
           <h1 className="text-2xl font-semibold">{pack.title_he}{pack.title ? ` — ${pack.title}` : ''}</h1>
           <p className="mt-1 text-sm text-stone-600">נכון ל-{pack.as_of}. ספקים: {pack.forecast.supplier_terms === 'end_of_next_month' ? 'סוף החודש העוקב' : pack.forecast.supplier_terms}. חסר נשאר חסר.</p>
+          {pack.liquidity_today ? (
+            <section className="mt-4">
+              <h2 className="text-lg font-medium">מצב בנק היום</h2>
+              <p>{pack.liquidity_today.checking?.label_he || 'לא ידוע'}</p>
+              <p>יתרת עו״ש לשימוש: {pack.liquidity_today.checking?.balance == null ? 'לא ידוע' : cell(pack.liquidity_today.checking.balance)}</p>
+              {pack.liquidity_today.checking?.status !== 'ready' && pack.liquidity_today.checking?.last_booked != null ? (
+                <p>יתרה שמורה אחרונה: {cell(pack.liquidity_today.checking.last_booked)} · {pack.liquidity_today.checking.last_booked_as_of || ''}</p>
+              ) : null}
+              <p>
+                מסגרת {cell(pack.liquidity_today.facility?.limit)} · ניצול {cell(pack.liquidity_today.facility?.used)} · פנוי {cell(pack.liquidity_today.facility?.headroom)}
+                {pack.liquidity_today.facility?.breach == null ? '' : pack.liquidity_today.facility.breach ? ' · חריגה' : ' · בתוך המסגרת'}
+              </p>
+              {pack.liquidity_today.facility?.available_limit != null ? (
+                <p>יתרה זמינה מהבנק, בנפרד מיתרת העו״ש: {cell(pack.liquidity_today.facility.available_limit)}</p>
+              ) : null}
+            </section>
+          ) : null}
           <h2 className="mt-6 text-lg font-medium">רווח והפסד</h2>
           <p>הכנסות: {figure(pack.pnl.revenue)} · מקור {pack.pnl.revenue.source} · {pack.pnl.revenue.as_of}</p>
           <p>הוצאות: {figure(pack.pnl.expenses)} · מקור {pack.pnl.expenses.source} · {pack.pnl.expenses.as_of}</p>

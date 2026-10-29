@@ -130,10 +130,19 @@ def ar_aging(db, organization_id: int, as_of: Optional[date] = None) -> dict[str
 
 def ap_aging(db, organization_id: int, as_of: Optional[date] = None) -> dict[str, Any]:
     """גיול התחייבויות לספקים — unpaid bill balances by overdue bucket."""
+    from types import SimpleNamespace
     from ..models import Bill, BillStatus
+    from .open_payables import confirmed_cover, remaining_of
     as_of = as_of or date.today()
-    rows = [r for r in db.query(Bill).filter(Bill.organization_id == organization_id).all()
-            if r.status not in {BillStatus.DRAFT, BillStatus.VOID, BillStatus.PAID}]
+    cover = confirmed_cover(db, organization_id)
+    rows = []
+    for bill in db.query(Bill).filter(Bill.organization_id == organization_id).all():
+        if bill.status in {BillStatus.DRAFT, BillStatus.VOID, BillStatus.PAID}:
+            continue
+        remaining = remaining_of(bill, cover)
+        if remaining is None:
+            continue
+        rows.append(SimpleNamespace(due_date=bill.due_date, issue_date=bill.issue_date, balance=remaining))
     return _aging_buckets(rows, "balance", as_of)
 
 
