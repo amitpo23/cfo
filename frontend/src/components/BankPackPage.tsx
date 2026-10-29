@@ -12,7 +12,7 @@ type Pack = {
   pnl: { revenue: Figure; expenses: Figure };
   forecast: { opening: Figure; weeks: Week[]; supplier_terms?: string };
   assumptions: { label_he: string; month: string | null; amount: number | null; source: string | null; missing_label: string | null; as_of?: string }[];
-  budget_vs_actual?: { status?: string; months?: { month: string; budget?: number | null; actual?: number | null; source_label?: string }[] };
+  budget_vs_actual?: { status?: string; months?: { month: string; budget?: number | null; actual?: number | null; revenue_budget?: number | null; cost_budget?: number | null; source_label?: string }[] };
 };
 
 function figure(value: Figure): string {
@@ -93,9 +93,16 @@ export default function BankPackPage() {
           <h2 className="mt-6 text-lg font-medium">תקציב מול ביצוע</h2>
           {(pack.budget_vs_actual?.months || []).length ? (
             <ul>
-              {(pack.budget_vs_actual?.months || []).map((month) => (
-                <li key={month.month}>{month.month}: תקציב {month.budget ?? 'חסר'} · ביצוע {month.actual ?? 'חסר'}{month.source_label ? ` · ${month.source_label}` : ''}</li>
-              ))}
+              {(pack.budget_vs_actual?.months || []).map((month) => {
+                const income = month.revenue_budget ?? null;
+                const costs = month.cost_budget ?? null;
+                const budgetText = income == null && costs == null
+                  ? (month.budget == null ? 'חסר' : String(month.budget))
+                  : `הכנסות ${income == null ? 'חסר' : income.toLocaleString('he-IL')} · הוצאות ${costs == null ? 'חסר' : costs.toLocaleString('he-IL')}`;
+                return (
+                  <li key={month.month}>{month.month}: תקציב {budgetText} · ביצוע {month.actual == null ? 'חסר' : month.actual}{month.source_label ? ` · ${month.source_label}` : ''}</li>
+                );
+              })}
             </ul>
           ) : <p>אין שורות תקציב מול ביצוע בחלון. חסר, לא 0.</p>}
           <h2 className="mt-6 text-lg font-medium">הנחות</h2>

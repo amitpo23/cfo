@@ -181,3 +181,56 @@ def test_driver_csv_imports_the_same_month():
     culinary = next(line for line in plan["budgetLines"] if line["id"] == "cul_all")
     assert culinary["months"] == {}
     assert culinary["covers"] == "income_and_expense"
+
+
+def test_assumption_amount_counts_as_with_amount_across_a_partial_year(client, fresh_org):
+    owner = fresh_org()
+    created = client.post("/api/dashboards", headers=owner["headers"], json={
+        "primary_organization_id": owner["org_id"], "slug": "count-assumption", "title": "ספירה", "access_mode": "link",
+    })
+    assert created.status_code == 201, created.text
+    saved = client.put("/api/financial/budget/lines", headers=owner["headers"], json={"updates": [{
+        "id": "del_revenue", "label": "הכנסות משלוחים", "kind": "income", "custom": True,
+        "division": "משלוחים", "month": MONTH, "status": "assumption", "qty": 14400, "unit_price": 10.5,
+    }]})
+    assert saved.status_code == 200, saved.text
+    listed = client.get("/api/financial/budget/lines", headers=owner["headers"], params={
+        "year": 2026, "from_month": 1, "to_month": 11,
+    })
+    data = listed.json()["data"]
+    assert "del_revenue" not in {row["id"] for row in data["missing"]}
+    assert data["counts"]["filled"] >= 1
+    cell = next(row for row in data["lines"] if row["id"] == "del_revenue")["months"]["2026-11"]
+    assert cell["status"] == "assumption"
+    assert cell["amount"] == "151200.00"
+    assert cell["quantity"] == 14400
+    assert cell["rate"] == 10.5
+
+
+def test_bank_pack_reads_custom_budget_lines():
+    from cfo.services.dashboards.budget_assumptions import bank_pack, list_assumptions
+    assumptions = list_assumptions(_plan(), [MONTH], as_of=date(2026, 11, 1))
+    income = next(row for row in assumptions if row["kind"] == "income" and row["month"] == MONTH)
+    assert income["amount"] == 283200
+    assert income["missing_label"] is None
+    pack = bank_pack(
+        {"cash_forecast": {"weeks": []}, "pnl": {}, "budget_vs_actual": {"months": []}},
+        assumptions, as_of=date(2026, 11, 1),
+    )
+    month = next(row for row in pack["budget_vs_actual"]["months"] if row["month"] == MONTH)
+    assert month["revenue_budget"] == 283200
+    assert month["cost_budget"] == 226000
+    assert month["budget"] == 283200
+
+
+def test_of_books_gaps_reads_stored_rows_only(client, fresh_org):
+    from cfo.services.dashboards.of_books_gaps import summarize
+    from cfo.database import SessionLocal
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        report = summarize(db, org_id, date(2026, 11, 1), date(2026, 11, 30))
+    finally:
+        db.close()
+    assert report["provider_calls"] == 0
+    assert report["rows"] == []

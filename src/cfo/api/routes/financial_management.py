@@ -158,6 +158,24 @@ async def import_driver_budget_csv(
     return {"status": "success", "data": {**saved, "rows": len(updates)}}
 
 
+@router.get("/of-books-gaps")
+async def of_books_gaps(
+    year: int = Query(..., ge=2000, le=2100),
+    from_month: int = Query(1, ge=1, le=12),
+    to_month: int = Query(12, ge=1, le=12),
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+):
+    """Stored bank cash versus books P&L. No Open Finance or SUMIT call."""
+    from calendar import monthrange
+    from ...services.dashboards.of_books_gaps import summarize
+    if from_month > to_month:
+        raise HTTPException(status_code=422, detail="טווח החודשים הפוך")
+    start = date(year, from_month, 1)
+    end = date(year, to_month, monthrange(year, to_month)[1])
+    return {"status": "success", "data": summarize(db, org_id, start, end)}
+
+
 @router.post("/budget/bulk")
 async def create_budgets_bulk(
     request: BudgetBulkRequest,

@@ -82,6 +82,33 @@ def _find_line(plan: dict, kind: str) -> dict | None:
     return None
 
 
+def _line_amount(line: dict, month: str):
+    amount = _cell_amount(line, month)
+    if amount is None:
+        return None
+    if line.get("kind") == "revenue" or line.get("category") in {"revenue", "sales", "services", "other_income"}:
+        from .budget_fill import looks_like_placeholder
+        if looks_like_placeholder(amount):
+            return None
+    if line.get("category") == "headcount":
+        return None
+    return amount
+
+
+def _sum_category(plan: dict, kind: str, month: str):
+    """Every line of this assumption, not only the first. A placeholder income line is skipped."""
+    category = CATEGORY.get(kind)
+    total = None
+    for line in _lines(plan):
+        if line.get("category") != category and line.get("id") != f"assumption:{kind}":
+            continue
+        amount = _line_amount(line, month)
+        if amount is None:
+            continue
+        total = round((0 if total is None else total) + amount, 2)
+    return total
+
+
 def _opening(plan: dict | None) -> dict | None:
     evidence = (plan or {}).get("liquidityEvidence") if isinstance(plan, dict) else None
     rows = (evidence or {}).get("openingBalances") if isinstance(evidence, dict) else None
@@ -102,7 +129,7 @@ def list_assumptions(plan: dict | None, months: list[str], *, as_of: date, bank_
             if kind == "opening_balance":
                 continue
             line = _find_line(plan, kind)
-            amount = _cell_amount(line, month) if line else None
+            amount = _sum_category(plan, kind, month)
             source = None
             status = "missing"
             if amount is not None:
@@ -186,6 +213,28 @@ def list_assumptions(plan: dict | None, months: list[str], *, as_of: date, bank_
             "differs": False,
             "used": "missing",
         })
+    for month in months:
+        for line in _lines(plan):
+            if not line.get("custom"):
+                continue
+            amount = _line_amount(line, month)
+            side = "revenue" if line.get("kind") == "revenue" else "cost"
+            rows.append({
+                "id": f"{line.get('id')}:{month}",
+                "kind": "driver",
+                "side": side,
+                "label_he": line.get("label") or line.get("id"),
+                "division": line.get("division"),
+                "month": month,
+                "amount": amount,
+                "quantity": _quantity(line, month),
+                "rate": ((line.get("months") or {}).get(month) or {}).get("rate") if isinstance((line.get("months") or {}).get(month), dict) else None,
+                "source": line.get("source") or "owner",
+                "status": "missing" if amount is None else ((line.get("months") or {}).get(month) or {}).get("status") or "assumption",
+                "missing_label": None if amount is not None else missing_label(as_of),
+                "as_of": as_of.isoformat(),
+                "driver_formula": line.get("driver_formula"),
+            })
     return rows
 
 
@@ -339,6 +388,51 @@ def bank_pack(view: dict, assumptions: list[dict], *, as_of: date) -> dict:
             if copied.get(key) is None:
                 copied[f"{key}_missing"] = missing_label(as_of)
         weeks.append(copied)
+    from_lines: dict[str, dict] = {}
+    for row in assumptions or []:
+        month_key = row.get("month")
+        if not isinstance(month_key, str) or len(month_key) != 7 or row.get("amount") is None:
+            continue
+        slot = from_lines.setdefault(month_key, {"revenue": None, "costs": None})
+        if row.get("kind") == "income":
+            slot["revenue"] = row["amount"]
+        elif row.get("kind") == "driver" and row.get("side") == "cost":
+            slot["costs"] = round((slot["costs"] or 0) + float(row["amount"]), 2)
+    months_out = []
+    seen = set()
+    for month in budget.get("months") or []:
+        if not isinstance(month, dict):
+            continue
+        totals = month.get("totals") if isinstance(month.get("totals"), dict) else {}
+        revenue_budget = (totals.get("revenue") or {}).get("budget") if isinstance(totals.get("revenue"), dict) else None
+        cost_budget = (totals.get("costs") or {}).get("budget") if isinstance(totals.get("costs"), dict) else None
+        lined = from_lines.get(month.get("month")) or {}
+        if revenue_budget is None:
+            revenue_budget = lined.get("revenue")
+        if cost_budget is None:
+            cost_budget = lined.get("costs")
+        seen.add(month.get("month"))
+        months_out.append({
+            "month": month.get("month"),
+            "revenue_budget": revenue_budget,
+            "cost_budget": cost_budget,
+            "budget": revenue_budget if revenue_budget is not None else cost_budget,
+            "actual": (totals.get("revenue") or {}).get("actual") if isinstance(totals.get("revenue"), dict) else None,
+            "source_label": month.get("source_label") or ("plan.budgetLines" if lined else None),
+        })
+    for month_key, slot in sorted(from_lines.items()):
+        if month_key in seen or (slot["revenue"] is None and slot["costs"] is None):
+            continue
+        months_out.append({
+            "month": month_key,
+            "revenue_budget": slot["revenue"],
+            "cost_budget": slot["costs"],
+            "budget": slot["revenue"] if slot["revenue"] is not None else slot["costs"],
+            "actual": None,
+            "source_label": "plan.budgetLines",
+        })
+    budget = dict(budget)
+    budget["months"] = months_out or budget.get("months")
     return {
         "as_of": as_of.isoformat(),
         "title_he": "חבילה לבנק",

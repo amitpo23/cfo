@@ -298,9 +298,12 @@ def budget_vs_actual(db, organization_id: int, start: date, end: date, *, books_
     """Per month and category: budget, actual, variance.
 
     Each month takes its actual from the source the P&L chose for it
-    (``pnl_months[*].source``): the ledger, or classified bank cash ex-VAT.
-    A month never mixes sources. Without ``pnl_months`` every month uses the
-    ledger, as before. Actual is None when nothing is known for the month.
+    (``pnl_months[*].source``). After documents are filed, that source is the
+    ledger: the books / SUMIT P&L already stored, not a fresh SUMIT call and
+    not Open Finance. Classified bank cash (ex-VAT) is used only for a month
+    the P&L itself marked as having no books. A month never mixes the two.
+    Without ``pnl_months`` every month uses the ledger, as before. Actual is
+    None when nothing is known for the month. It is never coerced to 0.
     """
     budgets, placeholders = _budget_index(db, organization_id, start, end)
     reports = reports or FinancialReportsService(db, memoize=True)
@@ -425,22 +428,19 @@ def with_driver_rows(section: dict, plan: dict | None) -> dict:
             months.append(month)
             continue
         changed = True
-        explained: dict[str, float] = {}
         public = []
+        cover_keys = set()
         for row in drivers:
             rolled = row.get("rolled_category")
-            folded = CASH_ROW_FOR_CATEGORY.get(rolled, rolled)
-            if row.get("budget") is not None:
-                for key in {rolled, folded}:
-                    if key:
-                        explained[key] = round(explained.get(key, 0.0) + row["budget"], 2)
+            if rolled:
+                cover_keys.add(rolled)
+                cover_keys.add(CASH_ROW_FOR_CATEGORY.get(rolled, rolled))
             public.append({key: value for key, value in row.items() if key != "rolled_category"})
         kept = []
         for line in month.get("categories") or []:
             if not isinstance(line, dict):
                 continue
-            cover = explained.get(line.get("category"))
-            if cover is not None and line.get("budget") is not None and abs(float(line["budget"]) - cover) < 0.05:
+            if line.get("category") in cover_keys:
                 continue
             kept.append(line)
         categories = kept + public
