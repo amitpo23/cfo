@@ -97,7 +97,7 @@ class BudgetRequest(BaseModel):
 
 @router.get("/period")
 async def get_period_compare(
-    grain: str = Query("month", pattern="^(day|week|month)$"),
+    grain: str = Query("month", pattern="^(day|week|month|quarter|year)$"),
     start: date = Query(...),
     end: date = Query(...),
     db=Depends(get_db),
@@ -120,7 +120,9 @@ async def get_period_compare(
         .first()
     )
     plan = plan_payload(db, dashboard.id) if dashboard is not None else None
-    return compare_period(db, org_id, plan, grain=grain, start=start, end=end)
+    payload = compare_period(db, org_id, plan, grain=grain, start=start, end=end)
+    payload["dashboard_slug"] = dashboard.slug if dashboard is not None else None
+    return payload
 
 
 @router.get("/monthly")

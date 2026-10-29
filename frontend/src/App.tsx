@@ -80,6 +80,7 @@ const BusinessMenuDashboard = lazy(() => import('./components/BusinessMenuDashbo
 const SumitCoverageDashboard = lazy(() => import('./components/SumitCoverageDashboard'));
 const ReportsDashboard = lazy(() => import('./components/ReportsDashboard'));
 const BudgetDashboard = lazy(() => import('./components/BudgetDashboard'));
+const PnlPage = lazy(() => import('./components/PnlPage'));
 const KPIDashboard = lazy(() => import('./components/KPIDashboard'));
 const AIAnalyticsDashboard = lazy(() => import('./components/AIAnalyticsDashboard'));
 const ChatAssistant = lazy(() => import('./components/ChatAssistant'));
@@ -141,7 +142,8 @@ const navigationConfig = [
       { to: '/ap', icon: CreditCard, label: 'AP / Payables', description: 'Bills & payments' },
       { to: '/suppliers-missing-invoices', icon: FileX, label: 'ספקים חסרי חשבונית', description: 'ספקים ששולם להם בבנק/אשראי בלי מסמך תואם — מע"מ תשומות שלא נקלט' },
       { to: '/vat-report', icon: Landmark, label: 'דיווח מע"מ', description: 'דוח תקופתי לפי בסיס מסמך/קליטה, קובץ PCN874 ומבנה אחיד' },
-      { to: '/budget', icon: Target, label: 'Budget', description: 'Budget vs actual' },
+      { to: '/budget', icon: Target, label: 'תקציב מול ביצוע', description: 'ספרים, בנק ותקציב לפי טווח' },
+      { to: '/pnl', icon: TrendingUp, label: 'רווח והפסד', description: 'יום, שבוע, חודש, רבעון, שנה' },
       { to: '/budget-entry', icon: Target, label: 'הזנת תקציב', description: 'הזנה ידנית / ייבוא Excel' },
       { to: '/year-comparison', icon: BarChart3, label: 'השוואה שנתית', description: 'מול שנה קודמת' },
     ]
@@ -449,6 +451,7 @@ function App() {
                 <Route path="/documents" element={<DocumentManager />} />
                 <Route path="/payments" element={<PaymentInterface />} />
                 <Route path="/budget" element={<BudgetDashboard />} />
+                <Route path="/pnl" element={<PnlPage />} />
                 <Route path="/kpis" element={<KPIDashboard />} />
                 <Route path="/forecasting" element={<ForecastingDashboard />} />
                 <Route path="/ai-analytics" element={<AIAnalyticsDashboard />} />

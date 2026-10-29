@@ -377,7 +377,9 @@
         "src/cfo/services/financial_reports_service.py",
         "src/cfo/services/report_builder_service.py",
         "src/cfo/services/report_storage.py",
-        "frontend/src/components/SavedReportsPanel.tsx"
+        "src/cfo/services/dashboards/period_compare.py",
+        "frontend/src/components/SavedReportsPanel.tsx",
+        "frontend/src/components/PnlPage.tsx"
       ],
       "tests": [
         "tests/test_daily_reports.py",
@@ -387,7 +389,8 @@
         "tests/test_projection_boundary.py",
         "tests/test_report_persistence.py",
         "tests/test_report_builder_real.py",
-        "tests/browser_offline/saved_reports.py"
+        "tests/browser_offline/saved_reports.py",
+        "tests/test_period_compare.py"
       ],
       "gates": [
         "organization_scope",
@@ -396,7 +399,7 @@
         "derived_label",
         "reconciliation_status"
       ],
-      "honest_boundary": "Several reports are real and derived; legacy transaction-backed screens and forecasts cannot be promoted as current until their data plane is unified. September 7 local extension: saved-report definitions, schedule versions, occurrence claims, execution history and file/hash evidence are organization-scoped database records. Explicit local runs and authorized downloads are connected to the reports screen; Moshko reads metadata only. Unsupported delivery, format and source failures remain explicit. No external delivery or background scheduler activation is proved. This does not complete period close, official parity or report-wide data-source unification.",
+      "honest_boundary": "Several reports are real and derived; legacy transaction-backed screens and forecasts cannot be promoted as current until their data plane is unified. /pnl compares stored filed documents, BOOKED bank rows and plan.budgetLines for a chosen day, week, month, quarter, year or custom range. A missing figure stays null. This is not official SUMIT parity and it does not call the provider. September 7 local extension: saved-report definitions, schedule versions, occurrence claims, execution history and file/hash evidence are organization-scoped database records. Explicit local runs and authorized downloads are connected to the reports screen; Moshko reads metadata only. Unsupported delivery, format and source failures remain explicit. No external delivery or background scheduler activation is proved. This does not complete period close, official parity or report-wide data-source unification.",
       "next_gate": "Make one canonical trial-balance-backed P&L, balance sheet and cash-flow package with freshness and reconciliation evidence."
     },
     {
@@ -412,14 +415,18 @@
       "runtime": [
         "src/cfo/services/financial_control_service.py",
         "src/cfo/services/financial_synthesis.py",
-        "src/cfo/services/morning_brief_service.py"
+        "src/cfo/services/morning_brief_service.py",
+        "src/cfo/services/dashboards/period_compare.py",
+        "frontend/src/components/BudgetDashboard.tsx"
       ],
       "tests": [
         "tests/test_financial_control_overdue_status.py",
         "tests/test_financial_synthesis.py",
         "tests/test_morning_brief.py",
         "tests/test_readiness_boundary.py",
-        "tests/test_organization_picker.py"
+        "tests/test_organization_picker.py",
+        "tests/test_budget_period_window.py",
+        "tests/test_period_compare.py"
       ],
       "gates": [
         "organization_scope",
@@ -428,7 +435,7 @@
         "scenario_label",
         "decision_owner"
       ],
-      "honest_boundary": "Decision support exists, but stale transaction-backed forecasts and illustrative AI output are not management truth.",
+      "honest_boundary": "Decision support exists, but stale transaction-backed forecasts and illustrative AI output are not management truth. /budget reads the same plan.budgetLines, BOOKED bank and stored books as the dashboard BvA tab. A quarter total is the months that were filled and have started; it is not a monthly line times three, and a missing amount stays null.",
       "next_gate": "Complete the pilot management pack: 13-week cash forecast, budget variance, debt plan and evidence-linked action list."
     },
     {

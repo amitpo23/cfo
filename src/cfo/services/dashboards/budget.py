@@ -591,7 +591,9 @@ def dashboard_summary(db, user: User | None, dashboard, year: int, month: int | 
         else [dashboard.primary_organization_id]
     )
     primary_label = next((s.get("label") for s in entities if s.get("role") == "primary"), None) or dashboard.title
-    summary = _period_summary(db, org_ids, section, start, end, name, today)
+    summary = _period_summary(
+        db, org_ids, section, start, end, name, today, clip_future=period == "quarter",
+    )
     summary.update({
         "scope": chosen,
         "scope_label": (
@@ -613,7 +615,7 @@ def dashboard_summary(db, user: User | None, dashboard, year: int, month: int | 
 
 
 def _period_summary(db, org_ids: list[int], section: dict, start: date, end: date, name: str,
-                    today: date) -> dict:
+                    today: date, *, clip_future: bool = False) -> dict:
     in_period = [
         m for m in section.get("months") or []
         if start.isoformat()[:7] <= str(m.get("month")) <= end.isoformat()[:7]
@@ -627,6 +629,9 @@ def _period_summary(db, org_ids: list[int], section: dict, start: date, end: dat
         for (year, mon), planned in indexed.items():
             key = f"{year}-{mon:02d}"
             if key in seen:
+                continue
+            # A quarter must not add November and December onto October's actual.
+            if clip_future and key > today.isoformat()[:7]:
                 continue
             slot = budget_only.setdefault(key, {})
             for ident, amount in planned.items():

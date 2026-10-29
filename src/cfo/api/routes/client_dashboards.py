@@ -310,7 +310,7 @@ def dashboard_revision(dashboard_id: int, response: Response, db: Session = Depe
 def _period_or_error(grain: str, start: date | None, end: date | None):
     from ...services.dashboards.period_compare import GRAINS
     if grain not in GRAINS:
-        raise DashboardError(422, "invalid_grain", "התצוגה חייבת להיות יום, שבוע או חודש")
+        raise DashboardError(422, "invalid_grain", "התצוגה חייבת להיות יום, שבוע, חודש, רבעון או שנה")
     if start is None or end is None:
         raise DashboardError(422, "invalid_range", "חסרים תאריכי התחלה וסיום")
     _check_window(start, end)
