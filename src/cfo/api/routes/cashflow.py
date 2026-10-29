@@ -27,14 +27,41 @@ router = APIRouter()
 # payload עשיר-honest-null (as_of/data_sources/message) בלי response_model
 # קשיח — אותה מוסכמה כמו /forecast/live-monthly ו-/by-category.
 
+class CheckingLiquidity(BaseModel):
+    """יתרת עו״ש לשימוש. חסר נשאר null."""
+    balance: Optional[float] = None
+    as_of: Optional[str] = None
+    status: Optional[str] = None
+    label_he: Optional[str] = None
+    last_booked: Optional[float] = None
+    last_booked_as_of: Optional[str] = None
+
+
+class CreditFacilityLiquidity(BaseModel):
+    """מסגרת, ניצול, פנוי וחריגה. null אינו 0."""
+    limit: Optional[float] = None
+    used: Optional[float] = None
+    headroom: Optional[float] = None
+    breach: Optional[bool] = None
+    available_limit: Optional[float] = None
+    available_as_of: Optional[str] = None
+    note_he: Optional[str] = None
+
+
 class LiquidityRatiosResponse(BaseModel):
-    """יחסי נזילות"""
-    current_ratio: float
-    quick_ratio: float
-    cash_ratio: float
-    working_capital: float
-    current_assets: float
-    current_liabilities: float
+    """יחסי נזילות מיתרת העו״ש החיה. חסר אינו 0."""
+    current_ratio: Optional[float] = None
+    quick_ratio: Optional[float] = None
+    cash_ratio: Optional[float] = None
+    working_capital: Optional[float] = None
+    current_assets: Optional[float] = None
+    current_liabilities: Optional[float] = None
+    missing_label: Optional[str] = None
+    checking: CheckingLiquidity
+    facility: CreditFacilityLiquidity
+    credit_line_status: Optional[str] = None
+    credit_line_reason: Optional[str] = None
+    provider_calls: int = 0
 
 
 # ForecastResultResponse / CashFlowForecastResponse / ScenarioAnalysisResponse
@@ -160,14 +187,28 @@ async def get_liquidity_ratios(
     org_id: int = Depends(get_current_org_id),
 ):
     """
-    יחסי נזילות
-    Get liquidity ratios
-    """
-    service = CashFlowService(db)
-    organization_id = org_id
-    data = service.get_liquidity_ratios(organization_id)
+    יתרת עו״ש, מסגרת אשראי ויחסים.
 
-    return LiquidityRatiosResponse(**data)
+    המקור הוא checking_snapshot אחרי סנכרון החשבונות שכבר שמור. אין קריאת
+    Open Finance מכאן. יתרה לא ידועה או ישנה אינה יחס 0 ואינה runway 0.
+    """
+    from ...services.dashboards.cashflow_liquidity import cashflow_liquidity_surface
+    surface = cashflow_liquidity_surface(db, org_id)
+    ratios = surface["ratios"]
+    return LiquidityRatiosResponse(
+        current_ratio=ratios["current_ratio"],
+        quick_ratio=ratios["quick_ratio"],
+        cash_ratio=ratios["cash_ratio"],
+        working_capital=ratios["working_capital"],
+        current_assets=ratios["current_assets"],
+        current_liabilities=ratios["current_liabilities"],
+        missing_label=ratios["missing_label"],
+        checking=surface["checking"],
+        facility=surface["facility"],
+        credit_line_status=surface["credit_line_status"],
+        credit_line_reason=surface["credit_line_reason"],
+        provider_calls=0,
+    )
 
 
 @router.get("/receivables-aging")

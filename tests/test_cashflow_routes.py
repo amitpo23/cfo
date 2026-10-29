@@ -44,8 +44,12 @@ def test_burn_rate_no_nan(client, acc):
 def test_liquidity_no_nan(client, acc):
     r = client.get("/api/cashflow/liquidity-ratios", headers=acc["headers"])
     assert r.status_code == 200, r.text
-    # יחסים סופיים תקינים ל-JSON (היו inf)
-    assert isinstance(r.json().get("current_ratio"), (int, float))
+    body = r.json()
+    # ארגון בלי יתרת עו״ש חיה: חסר, לא 0 ולא inf.
+    assert body["current_ratio"] is None
+    assert body["current_assets"] is None
+    assert body["facility"]["used"] is None
+    assert body["provider_calls"] == 0
 
 
 def test_cashflow_requires_auth(client):
