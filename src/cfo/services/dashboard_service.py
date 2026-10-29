@@ -58,8 +58,7 @@ class DashboardService:
 
         runway_months = self._get_runway_months_v2(cash["cash_balance"], today)
 
-        # AR (unchanged formula — already correct after the invoice normalization fix)
-        ar_total, ar_overdue = self._get_ar_summary()
+        ar = self._get_ar_summary()
 
         # AP — פתוח בלבד, לעולם לא שלילי
         ap_total, ap_due_7, ap_due_30 = self._get_ap_open_summary(today)
@@ -80,8 +79,11 @@ class DashboardService:
             "month_gross_profit": month_gross_profit,
             "month_net_profit": month_net_profit,
             "runway_months": runway_months,
-            "ar_total": float(ar_total),
-            "ar_overdue": float(ar_overdue),
+            "ar_total": ar["amount"],
+            "ar_overdue": ar["overdue"],
+            "ar_status": ar["status"],
+            "ar_reason": ar["reason_he"],
+            "ever_invoiced": ar["ever_invoiced"],
             "ap_total": float(ap_total),
             "ap_due_7_days": float(ap_due_7),
             "ap_due_30_days": float(ap_due_30),
@@ -472,26 +474,28 @@ class DashboardService:
 
     # ===== AR =====
 
-    def _get_ar_summary(self) -> tuple:
-        """Returns (total_outstanding, overdue_amount)."""
+    def _get_ar_summary(self) -> dict:
+        """Open AR, never above what was invoiced, and never an unmeasured 0."""
+        from .dashboards.money_screens import ar_display
+
         today = date.today()
-
-        total = self.db.query(func.sum(Invoice.balance)).filter(
-            Invoice.organization_id == self.org_id,
-            Invoice.status.in_([
-                InvoiceStatus.SENT, InvoiceStatus.OVERDUE, InvoiceStatus.PARTIALLY_PAID,
-            ]),
-        ).scalar() or Decimal("0")
-
-        overdue = self.db.query(func.sum(Invoice.balance)).filter(
-            Invoice.organization_id == self.org_id,
-            Invoice.status.in_([
-                InvoiceStatus.SENT, InvoiceStatus.OVERDUE, InvoiceStatus.PARTIALLY_PAID,
-            ]),
-            Invoice.due_date < today,
-        ).scalar() or Decimal("0")
-
-        return total, overdue
+        skip = {InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED}
+        open_statuses = {InvoiceStatus.SENT, InvoiceStatus.OVERDUE, InvoiceStatus.PARTIALLY_PAID}
+        invoices = self.db.query(Invoice).filter(Invoice.organization_id == self.org_id).all()
+        countable = [row for row in invoices if row.status not in skip]
+        ever = sum((row.total or Decimal("0")) for row in countable if (row.total or 0) > 0)
+        open_rows = [row for row in countable if row.status in open_statuses and (row.balance or 0) > 0]
+        opened = sum((row.balance or Decimal("0")) for row in open_rows)
+        late = sum(
+            (row.balance or Decimal("0")) for row in open_rows
+            if row.due_date is not None and row.due_date < today
+        )
+        return ar_display(
+            opened if countable else None,
+            late if countable else None,
+            ever if countable else None,
+            saw_invoices=bool(countable),
+        )
 
     def get_ar_aging(self) -> dict:
         """AR aging buckets: 0-30, 31-60, 61-90, 90+.
@@ -579,6 +583,10 @@ class DashboardService:
         ))
 
         total = sum(buckets.values())
+        gate = self._get_ar_summary()
+        if gate["status"] != "ok":
+            buckets = {key: None for key in buckets}
+            total = None
 
         # זיכויים לא-משויכים (Invoice עם total שלילי, balance=0 במכוון —
         # לא נספרים כחוב בפני עצמם). אין בנתונים קישור בין זיכוי לחשבונית
@@ -594,16 +602,22 @@ class DashboardService:
         ).scalar() or Decimal("0")
         unapplied_credits_total = float(-unapplied_credits)  # לחיובי, לנוחות תצוגה
 
+        def _money(value):
+            return None if value is None else float(value)
+
         return {
-            "bucket_0_30": float(buckets["0_30"]),
-            "bucket_31_60": float(buckets["31_60"]),
-            "bucket_61_90": float(buckets["61_90"]),
-            "bucket_90_plus": float(buckets["90_plus"]),
-            "total": float(total),
+            "bucket_0_30": _money(buckets["0_30"]),
+            "bucket_31_60": _money(buckets["31_60"]),
+            "bucket_61_90": _money(buckets["61_90"]),
+            "bucket_90_plus": _money(buckets["90_plus"]),
+            "total": _money(total),
             "unapplied_credits_total": unapplied_credits_total,
-            "net_of_credits_total": float(total) - unapplied_credits_total,
+            "net_of_credits_total": None if total is None else float(total) - unapplied_credits_total,
             "bank_movement_seen_total": bank_movement_seen_total,
             "count": len(invoice_list),
+            "ar_status": gate["status"],
+            "ar_reason": gate["reason_he"],
+            "ever_invoiced": gate["ever_invoiced"],
             "invoices": sorted(invoice_list, key=lambda x: x["days_overdue"], reverse=True),
         }
 
