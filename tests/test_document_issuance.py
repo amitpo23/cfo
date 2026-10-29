@@ -11,6 +11,153 @@ from cfo.services import document_issuance_service
 from cfo.services.document_issuance_service import DocumentIssuanceService
 
 
+def _approved_document(org, body, key):
+    from cfo.api.routes.financial_operations import CreateDocumentRequest
+    from cfo.models import User, UserRole
+    from cfo.services import membership_service
+    from cfo.services.irreversible_action_service import IrreversibleActionService
+    with SessionLocal() as approvals:
+        owner = approvals.query(User).filter_by(organization_id=org['org_id']).one()
+        proposer = User(organization_id=org['org_id'], email=f'{key}@example.com',
+                        password_hash='unused', full_name='Proposer', role=UserRole.ADMIN)
+        approvals.add(proposer)
+        approvals.flush()
+        membership_service.grant(approvals, organization_id=org['org_id'], user_id=proposer.id,
+                                 role=UserRole.ADMIN, granted_by_user_id=owner.id)
+        approvals.commit()
+        service = IrreversibleActionService(approvals, org['org_id'])
+        action = service.propose(
+            proposed_by=proposer, action_type='document_issue',
+            payload={
+                'operation': 'financial_operations.create_document',
+                'arguments': {'request': CreateDocumentRequest.model_validate(body).model_dump(mode='json')},
+            },
+            idempotency_key=key,
+        )
+        service.approve(action.id, approved_by=owner)
+        return action.id
+
+
+def test_document_types_include_the_issuable_set(client, fresh_org):
+    org = fresh_org()
+    response = client.get('/api/financial/documents/types', headers=org['headers'])
+    assert response.status_code == 200, response.text
+    values = {row['value']: row['label'] for row in response.json()['data']}
+    assert values['invoice'] == 'חשבונית מס'
+    assert values['receipt'] == 'קבלה'
+    assert values['credit_note'] == 'חשבונית זיכוי'
+    assert values['quote'] == 'הצעת מחיר'
+    assert 'invoice_receipt' in values
+    assert 'payment_request' in values
+
+
+def test_sumit_issue_without_approval_is_refused(client, fresh_org):
+    org = fresh_org()
+    response = client.post('/api/financial/documents', headers=org['headers'], json={
+        'document_type': 'invoice',
+        'customer_id': 'לקוח',
+        'customer_name': 'לקוח',
+        'send_to_sumit': True,
+        'items': [{'description': 'שירות', 'quantity': 1, 'unit_price': 100, 'vat_rate': 18}],
+    })
+    assert response.status_code == 409, response.text
+
+
+def test_approved_issue_returns_sumit_ids(client, monkeypatch, fresh_org):
+    org = fresh_org()
+    body = {
+        'document_type': 'receipt',
+        'customer_id': 'cust-9',
+        'customer_name': 'לקוח קבלה',
+        'send_to_sumit': True,
+        'send_email': False,
+        'items': [{'description': 'שירות', 'quantity': 1, 'unit_price': 50, 'vat_rate': 18, 'discount': 0}],
+    }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def create_document(self, request):
+            assert request.document_type == 'receipt'
+            return DocumentResponse(
+                document_id='SUMIT-R-1',
+                document_number='440',
+                document_type='receipt',
+                customer_id=request.customer_id,
+                total_amount=Decimal('59'),
+                vat_amount=Decimal('9'),
+                status='open',
+                issue_date=date.today(),
+                pdf_url='https://example.test/receipt.pdf',
+            )
+
+    class FakeConnector:
+        async def _get_client(self):
+            return FakeClient()
+
+    monkeypatch.setattr(
+        document_issuance_service, 'get_connector_for_org',
+        lambda _db, _org, preferred_source=None: (FakeConnector(), 1, 'sumit'),
+    )
+    approval_id = _approved_document(org, body, 'document-receipt-ok')
+    response = client.post(
+        '/api/financial/documents', json=body,
+        headers={**org['headers'], 'X-Rezef-Approval-Id': str(approval_id)},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()['data']
+    assert data['external_id'] == 'SUMIT-R-1'
+    assert data['document_number'] == '440'
+    assert data['sumit']['pdf_url'] == 'https://example.test/receipt.pdf'
+
+
+def test_sumit_budget_refusal_is_visible(client, monkeypatch, fresh_org):
+    from cfo.services.sumit_request_budget import SumitRequestBudgetExceeded
+    org = fresh_org()
+    body = {
+        'document_type': 'invoice',
+        'customer_id': 'לקוח',
+        'customer_name': 'לקוח',
+        'send_to_sumit': True,
+        'items': [{'description': 'שירות', 'quantity': 1, 'unit_price': 10, 'vat_rate': 18}],
+    }
+
+    class FailingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def create_document(self, request):
+            raise SumitRequestBudgetExceeded('monthly cap')
+
+    class FakeConnector:
+        async def _get_client(self):
+            return FailingClient()
+
+    monkeypatch.setattr(
+        document_issuance_service, 'get_connector_for_org',
+        lambda _db, _org, preferred_source=None: (FakeConnector(), 1, 'sumit'),
+    )
+    approval_id = _approved_document(org, body, 'document-budget')
+    response = client.post(
+        '/api/financial/documents', json=body,
+        headers={**org['headers'], 'X-Rezef-Approval-Id': str(approval_id)},
+    )
+    assert response.status_code == 429, response.text
+    assert response.json()['code'] == 'request_budget_exceeded'
+    db = SessionLocal()
+    try:
+        assert db.query(Invoice).filter(Invoice.organization_id == org['org_id']).all() == []
+    finally:
+        db.close()
+
+
 def test_financial_document_create_persists_to_db(client, fresh_org):
     org = fresh_org()
     resp = client.post("/api/financial/documents", headers=org["headers"], json={
