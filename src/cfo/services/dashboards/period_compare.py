@@ -101,7 +101,33 @@ def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, s
             "books": books,
             "variance": _variance(budget, books, bank),
         })
-    from .money_screens import org_partial_banner
+    from .money_screens import org_partial_banner, profit_claim, withhold_profit
+    unclassified = _unclassified_outflows(db, organization_id, bank_rows, plan)
+    claim = profit_claim(unclassified)
+    if not claim["allowed"]:
+        reason = claim["reason_he"]
+        for period in periods:
+            period["books"]["net"] = withhold_profit(period["books"]["net"], reason)
+            period["bank"]["net"] = withhold_profit(period["bank"]["net"], reason)
+            period["variance"] = _variance(period["budget"], period["books"], period["bank"])
+        totals = _totals(periods)
+        totals["books"]["net"] = withhold_profit(totals["books"]["net"], reason)
+        totals["bank"]["net"] = withhold_profit(totals["bank"]["net"], reason)
+        profit = [
+            {
+                "label": period["label"],
+                "books": withhold_profit(period["books"]["net"], reason),
+                "bank": withhold_profit(period["bank"]["net"], reason),
+                "budget": period["budget"]["net"],
+            }
+            for period in periods
+        ]
+    else:
+        totals = _totals(periods)
+        profit = [
+            {"label": period["label"], "books": period["books"]["net"], "bank": period["bank"]["net"], "budget": period["budget"]["net"]}
+            for period in periods
+        ]
     return {
         "grain": grain,
         "start": start.isoformat(),
@@ -109,13 +135,11 @@ def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, s
         "as_of": as_of.isoformat(),
         "provider_calls": 0,
         "periods": periods,
-        "totals": _totals(periods),
+        "totals": totals,
         "partial_banner": org_partial_banner(db, organization_id),
-        "unclassified_outflows": _unclassified_outflows(db, organization_id, bank_rows, plan),
-        "profit": [
-            {"label": period["label"], "books": period["books"]["net"], "bank": period["bank"]["net"], "budget": period["budget"]["net"]}
-            for period in periods
-        ],
+        "unclassified_outflows": unclassified,
+        "profit_claim": claim,
+        "profit": profit,
         "note_he": (
             "תקציב מתוך שורות התקציב השמורות, רק לחודשים שמולאו ושכבר התחילו. "
             "חודש אחד לא מוכפל במספר החודשים ברבעון. בנק הוא תנועות BOOKED בלבד. "
@@ -464,7 +488,8 @@ def _unclassified_outflows(db, organization_id: int, rows: list, plan: dict) -> 
     return {
         "count": count,
         "amount": round(amount, 2),
-        "label_he": "חסר/לסיווג — יציאות בנק שלא תויקו. אינן נספרות כהוצאה ולא כ־0.",
+        "blocks_profit": True,
+        "label_he": "חסר/לסיווג — יציאות בנק שלא תויקו. אי אפשר לטעון רווח.",
     }
 
 

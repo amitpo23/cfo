@@ -137,6 +137,100 @@ def unexplained_gap(of_balance, txn_implied, *, parts: list[dict] | None = None)
     }
 
 
+PROFIT_BLOCKED_HE = "חסר/לסיווג — אי אפשר לטעון רווח כשיש יציאות בנק שלא תויקו."
+AR_MISSING_HE = "חסר — אין חשבוניות שמורות. לא הוזן 0."
+AR_INVALID_HE = "יתרת הלקוחות גבוהה מכל מה שחויב אי פעם. לא מוצג מספר מנופח."
+
+
+def verified_amount(amount, *, measured: bool):
+    """A zero that was not measured is not a money figure."""
+    if not measured or amount is None:
+        return None
+    return amount
+
+
+def ar_display(open_balance, overdue, ever_invoiced, *, saw_invoices: bool) -> dict:
+    """Displayed AR is at most what was invoiced. An empty book is חסר, not 0."""
+    if not saw_invoices:
+        return {
+            "amount": None,
+            "overdue": None,
+            "ever_invoiced": None,
+            "status": "missing",
+            "reason_he": AR_MISSING_HE,
+        }
+    opened = None if open_balance is None else round(float(open_balance), 2)
+    invoiced = None if ever_invoiced is None else round(float(ever_invoiced), 2)
+    late = None if overdue is None else round(float(overdue), 2)
+    if opened is None or invoiced is None:
+        return {
+            "amount": None,
+            "overdue": None,
+            "ever_invoiced": invoiced,
+            "status": "missing",
+            "reason_he": "חסר — יתרת הלקוחות או סכום החיוב אינם ידועים. לא הוזן 0.",
+        }
+    if opened > invoiced + 0.01:
+        return {
+            "amount": None,
+            "overdue": None,
+            "ever_invoiced": invoiced,
+            "open_balance": opened,
+            "status": "invalid",
+            "reason_he": AR_INVALID_HE,
+        }
+    return {
+        "amount": opened,
+        "overdue": late,
+        "ever_invoiced": invoiced,
+        "status": "ok",
+        "reason_he": None,
+    }
+
+
+def operating_income_hits(invoices, filed_pairs) -> list[float]:
+    """Books invoice once. A bank row counts only as operating revenue.
+
+    A discounted-cheque advance and an intercompany collection of another
+    entity's invoice are not extra income. The same cheque is not invoice
+    plus bank plus discount.
+    """
+    from .filing import REVENUE_CATS
+
+    hits = []
+    for invoice in invoices or []:
+        total = float(invoice.get("total") or 0)
+        if total > 0:
+            hits.append(round(total, 2))
+    for txn, filed in filed_pairs or []:
+        amount = getattr(txn, "amount", None)
+        category = getattr(filed, "category", None)
+        if amount is not None and amount > 0 and category in REVENUE_CATS:
+            hits.append(round(float(amount), 2))
+    return hits
+
+
+def profit_claim(unclassified: dict | None) -> dict:
+    """Unclassified outflows block a profit claim. The amount is not replaced with 0."""
+    count = 0 if not unclassified else int(unclassified.get("count") or 0)
+    if count <= 0:
+        return {"allowed": True, "reason_he": None, "unclassified_amount": None}
+    return {
+        "allowed": False,
+        "reason_he": PROFIT_BLOCKED_HE,
+        "unclassified_amount": unclassified.get("amount"),
+    }
+
+
+def withhold_profit(figure: dict | None, reason: str) -> dict | None:
+    if not isinstance(figure, dict):
+        return figure
+    copied = dict(figure)
+    copied["amount"] = None
+    copied["missing_label"] = reason
+    return copied
+
+
 def reject_gap_as_funding(need_amount, gap_amount):
     """A funding figure that is only the unexplained gap is not a funding need."""
     if need_amount is None or gap_amount is None:
