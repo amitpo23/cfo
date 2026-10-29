@@ -108,10 +108,10 @@ def build_view(db, organization_id: int, start: date, end: date, *, plan: dict |
     division_pnl = books_pnl.books_pnl(
         db, organization_id, start=start, end=end, plan=plan,
     )
-    budget_vs_actual = budget.budget_vs_actual(
+    budget_vs_actual = budget.with_driver_rows(budget.budget_vs_actual(
         db, organization_id, start, end, books_known=pnl["status"] != "unknown",
         pnl_months=pnl.get("months"), reports=reports,
-    )
+    ), plan)
     position = liquidity.build_liquidity(db, organization_id, start, end, plan=plan, entity_id=entity_id,
                                          classified=filed, today=date.today())
     balance = balance_sheet_report.build_balance_sheet(db, organization_id, end)

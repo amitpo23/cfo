@@ -86,6 +86,13 @@ class BudgetLineUpdate(BaseModel):
     note: Optional[str] = None
     override: Optional[bool] = None
     remove: bool = False
+    custom: bool = False
+    division: Optional[str] = None
+    source: Optional[str] = None
+    driver_formula: Optional[str] = None
+    qty: Optional[float] = None
+    unit_price: Optional[float] = None
+    covers: Optional[str] = None
 
 
 class BudgetLinesWrite(BaseModel):
@@ -124,6 +131,31 @@ async def save_budget_entry_lines(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"status": "success", "data": saved}
+
+
+class DriverCsvImport(BaseModel):
+    csv_text: str
+    month: str
+
+
+@router.post("/budget/lines/csv")
+async def import_driver_budget_csv(
+    body: DriverCsvImport,
+    db: Session = Depends(get_db),
+    org_id: int = Depends(get_current_org_id),
+    user=Depends(get_current_user),
+):
+    """Import one month of driver lines. A blank amount stays missing, not zero."""
+    from ...services.dashboards.budget_fill import driver_csv_updates, save_entry
+    from ...services.dashboards.service import DashboardError
+    try:
+        updates = driver_csv_updates(body.csv_text, body.month)
+        saved = save_entry(db, user, org_id, updates)
+    except DashboardError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message_he)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"status": "success", "data": {**saved, "rows": len(updates)}}
 
 
 @router.post("/budget/bulk")

@@ -697,6 +697,13 @@ def _combine_budget(views: list[dict]) -> dict:
                     "kind": line.get("kind"),
                     "category": line.get("category"),
                     "category_he": line.get("category_he"),
+                    "driver": line.get("driver"),
+                    "division": line.get("division"),
+                    "driver_formula": line.get("driver_formula"),
+                    "quantity": line.get("quantity"),
+                    "rate": line.get("rate"),
+                    "line_source": line.get("line_source"),
+                    "line_status": line.get("line_status"),
                     "budgets": [],
                     "actuals": [],
                 })
@@ -723,6 +730,13 @@ def _combine_budget(views: list[dict]) -> dict:
                 "actual": actual,
                 "variance": variance,
                 "variance_pct": variance_pct,
+                "driver": slot.get("driver"),
+                "division": slot.get("division"),
+                "driver_formula": slot.get("driver_formula"),
+                "quantity": slot.get("quantity"),
+                "rate": slot.get("rate"),
+                "line_source": slot.get("line_source"),
+                "line_status": slot.get("line_status"),
             })
         sources = meta[month]["sources"]
         months.append({

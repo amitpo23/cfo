@@ -22,12 +22,19 @@ import { missingAsOf } from './dashboardUi';
 interface BudgetComparison {
   category: string;
   kind?: string;
-  planned: number;
+  planned: number | null;
   // null: the actual of the period is not known (not 0)
   actual: number | null;
   variance: number | null;
   variance_pct: number | null;
   status: string;
+  driver?: boolean;
+  division?: string | null;
+  driverFormula?: string | null;
+  quantity?: number | null;
+  rate?: number | null;
+  lineSource?: string | null;
+  lineStatus?: string | null;
 }
 
 type BudgetSummaryMeta = {
@@ -57,6 +64,8 @@ const STATUS_LABELS: Record<string, string> = {
   under_budget: 'מתחת לתקציב',
   critical: 'חריגה חמורה',
   unknown: 'ביצוע לא ידוע',
+  missing: 'חסר',
+  placeholder: 'סכום עגול — לא בסיכום',
 };
 
 // The period selector as query parameters of /financial/budget/vs-actual.
@@ -114,13 +123,20 @@ export const BudgetDashboard: React.FC = () => {
       const categories: any[] = data.categories ?? [];
       const known = (value: unknown) => (typeof value === 'number' ? value : null);
       const rows = categories.map((c: any): BudgetComparison => ({
-        category: categoryLabel(c.category_id || c.category_name, c.category_hebrew),
+        category: c.driver ? (c.category_hebrew || c.category_name) : categoryLabel(c.category_id || c.category_name, c.category_hebrew),
         kind: c.kind,
-        planned: c.budget_amount ?? 0,
+        planned: c.budget_amount == null ? null : c.budget_amount,
         actual: data.source === 'dashboard' ? known(c.actual_amount) : (c.actual_amount ?? 0),
         variance: data.source === 'dashboard' ? known(c.variance) : (c.variance ?? 0),
         variance_pct: data.source === 'dashboard' ? known(c.variance_percentage) : (c.variance_percentage ?? 0),
-        status: c.status,
+        status: c.line_status === 'missing' ? 'missing' : c.status,
+        driver: Boolean(c.driver),
+        division: c.division ?? null,
+        driverFormula: c.driver_formula ?? null,
+        quantity: c.quantity ?? null,
+        rate: c.rate ?? null,
+        lineSource: c.line_source ?? null,
+        lineStatus: c.line_status ?? null,
       }));
       return { rows, meta: summary };
     },
@@ -165,9 +181,10 @@ export const BudgetDashboard: React.FC = () => {
   };
 
   // Calculate totals
+  const [openRow, setOpenRow] = useState<string | null>(null);
   const totals = budgetData?.reduce(
     (acc, item) => ({
-      planned: acc.planned + item.planned,
+      planned: acc.planned + (item.planned ?? 0),
       actual: acc.actual + (item.actual ?? 0),
     }),
     { planned: 0, actual: 0 }
@@ -180,7 +197,7 @@ export const BudgetDashboard: React.FC = () => {
   const formatCurrency = (value: number | null) => (value === null ? missingAsOf() : `₪${value.toLocaleString()}`);
   const byKind = meta.totals ?? null;
   // The pie splits the cost budget (all rows on a page without kinds).
-  const slices = pieSlices((budgetData ?? []).filter((row) => !row.kind || row.kind === 'cost'));
+  const slices = pieSlices((budgetData ?? []).filter((row) => (!row.kind || row.kind === 'cost') && row.planned != null) as { category: string; planned: number }[]);
   const sourceLabels = [...new Set((meta.months ?? []).map((m) => m.source_label).filter(Boolean))];
 
   const getSeverityColor = (severity: string) => {
@@ -458,9 +475,18 @@ export const BudgetDashboard: React.FC = () => {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {budgetData?.map((item, index) => (
-                <tr key={index} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                <tr key={`${item.category}-${index}`} className="hover:bg-gray-50 cursor-pointer" onClick={() => setOpenRow(openRow === item.category ? null : item.category)}>
+                  <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                    {item.division ? <span className="text-gray-500">{item.division} · </span> : null}
                     {item.category}
+                    {openRow === item.category && item.driver ? (
+                      <p className="mt-1 text-xs font-normal text-gray-500">
+                        {item.driverFormula || 'אין נוסחה'}
+                        {item.quantity != null && item.rate != null ? ` · ${item.quantity} × ${item.rate}` : ''}
+                        {item.lineSource ? ` · מקור: ${item.lineSource}` : ''}
+                        {item.lineStatus === 'missing' ? ' · חסר' : item.lineStatus === 'assumption' ? ' · הנחה' : item.lineStatus === 'confirmed' ? ' · מאושר' : ''}
+                      </p>
+                    ) : null}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {formatCurrency(item.planned)}

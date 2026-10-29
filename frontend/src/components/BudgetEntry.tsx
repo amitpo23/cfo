@@ -7,12 +7,22 @@ interface Props {
   darkMode?: boolean;
 }
 
-type LineMonth = { status: 'filled' | 'none' | 'missing'; status_he: string; amount: string | null; placeholder_warning?: string };
+type LineMonth = {
+  status: 'filled' | 'none' | 'missing' | 'assumption' | 'confirmed';
+  status_he: string;
+  amount: string | null;
+  placeholder_warning?: string;
+};
 type BudgetLine = {
   id: string;
   label: string;
   kind: string;
   category: string;
+  custom?: boolean;
+  division?: string | null;
+  line_source?: string | null;
+  driver_formula?: string | null;
+  covers?: string | null;
   months: Record<string, LineMonth>;
   placeholder_warning?: string;
 };
@@ -44,6 +54,9 @@ type LineUpdate = {
   note?: string;
   override?: boolean;
   remove?: boolean;
+  custom?: boolean;
+  division?: string;
+  source?: string;
 };
 type LinesPayload = {
   lines: BudgetLine[];
@@ -82,6 +95,10 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
   const [openingDate, setOpeningDate] = useState('');
   const [openingNote, setOpeningNote] = useState('');
   const [openingOverride, setOpeningOverride] = useState(false);
+  const [newLine, setNewLine] = useState({
+    lineKey: '', label: '', amount: '', status: 'assumption', source: '', division: '', kind: 'income',
+  });
+  const [person, setPerson] = useState({ name: '', role: '', cost: '' });
   const queryClient = useQueryClient();
   const fromMonth = 1;
   const toMonth = year === now.getFullYear() ? Math.max(month, now.getMonth() + 1) : 12;
@@ -155,6 +172,16 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
         if (text === '' || text === 'none') return { ...target, month: when, status: 'missing' };
         return { ...target, month: when, status: 'filled', amount: Number(text) };
       }
+      const custom = data?.lines.find((row) => row.custom && row.id === id);
+      if (custom) {
+        const kept = custom.months[key]?.status === 'confirmed' ? 'confirmed' : 'assumption';
+        const target = {
+          id: custom.id, label: custom.label, category: custom.category, kind: custom.kind,
+          custom: true, division: custom.division || undefined, source: custom.line_source || undefined,
+        };
+        if (text === '' || text === 'none') return { ...target, month: key, status: 'missing' };
+        return { ...target, month: key, status: kept, amount: Number(text) };
+      }
       const line = assumption ? ASSUMPTION_LINE[assumption.kind] : null;
       const target = line ? {
         id: `assumption:${assumption!.kind}`,
@@ -171,6 +198,81 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
     }
     saveMutation.mutate(updates);
   }
+
+  function addCustomLine() {
+    const label = newLine.label.trim();
+    if (!label) {
+      setMessage('לשורה חדשה חסרה כותרת');
+      return;
+    }
+    const income = newLine.kind === 'income';
+    const blank = newLine.status === 'missing' || newLine.amount.trim() === '';
+    const amount = Number(newLine.amount);
+    if (!blank && !Number.isFinite(amount)) {
+      setMessage('הסכום אינו מספר');
+      return;
+    }
+    saveMutation.mutate([{
+      id: newLine.lineKey.trim() || `custom_${Date.now()}`,
+      label,
+      custom: true,
+      kind: income ? 'revenue' : 'cost',
+      category: income ? 'revenue' : 'other',
+      division: newLine.division.trim(),
+      source: newLine.source.trim() || 'owner',
+      month: key,
+      status: blank ? 'missing' : newLine.status,
+      ...(blank ? {} : { amount }),
+    }]);
+    setNewLine({ lineKey: '', label: '', amount: '', status: 'assumption', source: '', division: '', kind: 'income' });
+  }
+
+  const customLines = (data?.lines ?? []).filter((line) => line.custom);
+  const people = customLines.filter((line) => line.line_source === 'headcount');
+  const driverLines = customLines.filter((line) => line.line_source !== 'headcount');
+  const divisions = [...new Set(driverLines.map((line) => line.division || 'ללא חטיבה'))];
+
+  function addPerson() {
+    const name = person.name.trim();
+    if (!name) {
+      setMessage('חסר שם עובד');
+      return;
+    }
+    const blank = person.cost.trim() === '';
+    const amount = Number(person.cost);
+    if (!blank && !Number.isFinite(amount)) {
+      setMessage('עלות העובד אינה מספר');
+      return;
+    }
+    saveMutation.mutate([{
+      id: `person_${name.replace(/\s+/g, '_').slice(0, 40)}`,
+      label: name,
+      custom: true,
+      kind: 'cost',
+      category: 'payroll',
+      division: person.role.trim() || 'מצבת',
+      source: 'headcount',
+      month: key,
+      status: blank ? 'missing' : 'assumption',
+      ...(blank ? {} : { amount }),
+    }]);
+    setPerson({ name: '', role: '', cost: '' });
+  }
+
+  function monthSum(kind: string): number | null {
+    let total = 0;
+    let any = false;
+    for (const line of customLines) {
+      if (line.kind !== kind || line.placeholder_warning) continue;
+      const cell = line.months[key];
+      if (!cell || cell.amount == null || cell.status === 'missing' || cell.placeholder_warning) continue;
+      any = true;
+      total += Number(cell.amount);
+    }
+    return any ? total : null;
+  }
+  const incomeMonth = monthSum('revenue');
+  const costMonth = monthSum('cost');
 
   return (
     <div dir="rtl" className="p-6 space-y-6">
@@ -220,6 +322,22 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
           <Upload className="w-4 h-4" /> ייבוא Excel
           <input type="file" accept=".xlsx" className="hidden"
             onChange={(e) => e.target.files?.[0] && importMutation.mutate(e.target.files[0])} />
+        </label>
+        <label className="px-4 py-2 border border-stone-500 rounded-lg flex items-center gap-2 cursor-pointer">
+          <Upload className="w-4 h-4" /> ייבוא CSV לדרייברים
+          <input type="file" accept=".csv,text/csv" className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              file.text().then((csv_text) => apiService.post('/financial/budget/lines/csv', { csv_text, month: key }))
+                .then(async () => {
+                  setMessage('שורות הדרייבר יובאו לחודש שנבחר. סכום ריק נשאר חסר.');
+                  await queryClient.invalidateQueries({ queryKey: ['budget-lines'] });
+                })
+                .catch((error: { response?: { data?: { detail?: string } } }) => {
+                  setMessage(error?.response?.data?.detail || 'שגיאה בייבוא CSV');
+                });
+            }} />
         </label>
       </div>
 
@@ -277,6 +395,85 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
       </div>
 
       <div className={`rounded-xl border p-5 ${card}`}>
+        <h2 className="text-lg font-semibold mb-1">שורות דרייבר</h2>
+        <p className="text-sm text-gray-500 mb-3">כל שורה נשמרת בנפרד, לפי חטיבה. חסר אינו 0. סכום עגול של מיליון בהכנסות לא נכנס לסיכום.</p>
+        <div className="grid gap-3 md:grid-cols-3 mb-4">
+          <input className={input} placeholder="מזהה (line_key)" value={newLine.lineKey} onChange={(event) => setNewLine({ ...newLine, lineKey: event.target.value })} />
+          <input className={input} placeholder="כותרת" value={newLine.label} onChange={(event) => setNewLine({ ...newLine, label: event.target.value })} />
+          <input className={input} placeholder="חטיבה" value={newLine.division} onChange={(event) => setNewLine({ ...newLine, division: event.target.value })} />
+          <select className={input} value={newLine.kind} onChange={(event) => setNewLine({ ...newLine, kind: event.target.value })}>
+            <option value="income">הכנסה</option>
+            <option value="expense">הוצאה</option>
+          </select>
+          <select className={input} value={newLine.status} onChange={(event) => setNewLine({ ...newLine, status: event.target.value })}>
+            <option value="assumption">הנחה</option>
+            <option value="confirmed">מאושר</option>
+            <option value="missing">חסר</option>
+          </select>
+          <input className={input} placeholder="סכום, או ריק אם חסר" value={newLine.amount} onChange={(event) => setNewLine({ ...newLine, amount: event.target.value })} />
+          <input className={input} placeholder="מקור" value={newLine.source} onChange={(event) => setNewLine({ ...newLine, source: event.target.value })} />
+          <button type="button" onClick={addCustomLine} className="px-4 py-2 bg-blue-600 text-white rounded-lg">הוספת שורה</button>
+        </div>
+        <div className="mb-4">
+          <h3 className="font-medium mb-1">מצבת לפי שם</h3>
+          <div className="flex flex-wrap gap-2 mb-2">
+            <input className={input} placeholder="שם" value={person.name} onChange={(event) => setPerson({ ...person, name: event.target.value })} />
+            <input className={input} placeholder="תפקיד" value={person.role} onChange={(event) => setPerson({ ...person, role: event.target.value })} />
+            <input className={input} placeholder="עלות חודשית, או ריק אם חסר" value={person.cost} onChange={(event) => setPerson({ ...person, cost: event.target.value })} />
+            <button type="button" onClick={addPerson} className="px-4 py-2 border rounded-lg">הוספת עובד</button>
+          </div>
+          {people.map((line) => {
+            const cell = line.months[key];
+            return (
+              <p key={line.id} className="text-sm">
+                {line.label} · {line.division || 'ללא תפקיד'} · {cell?.amount == null || cell.status === 'missing' ? 'חסר' : `₪${Number(cell.amount).toLocaleString('he-IL')}`}
+                <button type="button" className="mr-2 text-red-700 underline" onClick={() => saveMutation.mutate([{ id: line.id, remove: true }])}>מחק</button>
+              </p>
+            );
+          })}
+        </div>
+        {divisions.map((division) => (
+          <div key={division} className="mb-4">
+            <h3 className="font-medium mb-1">{division}</h3>
+            <table className="w-full text-sm">
+              <tbody>
+                {driverLines.filter((line) => (line.division || 'ללא חטיבה') === division).map((line) => {
+                  const cell = line.months[key];
+                  const shown = drafts[line.id] !== undefined ? drafts[line.id] : (cell?.amount ?? '');
+                  return (
+                    <tr key={line.id} className="border-b">
+                      <td className="py-2">
+                        {line.label}
+                        <span className="mr-2 text-xs text-gray-500">{line.kind === 'revenue' ? 'הכנסה' : 'הוצאה'} · {line.id}</span>
+                        {line.covers === 'income_and_expense' ? <span className="mr-2 text-xs">הכנסה והוצאה</span> : null}
+                        {line.driver_formula ? <p className="text-xs text-gray-500">{line.driver_formula}</p> : null}
+                      </td>
+                      <td className={cell?.status === 'missing' ? 'text-amber-700' : ''}>{cell?.status === 'missing' ? 'חסר' : (cell?.status_he ?? 'חסר')}</td>
+                      <td>
+                        <input className={input + ' w-36'} value={shown} placeholder="חסר"
+                          onChange={(event) => setDrafts({ ...drafts, [line.id]: event.target.value })} />
+                      </td>
+                      <td>
+                        <button type="button" className="text-red-700 underline" onClick={() => {
+                          if (!window.confirm(`למחוק את «${line.label}»?`)) return;
+                          saveMutation.mutate([{ id: line.id, remove: true }]);
+                        }}>מחק</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ))}
+        <p className="text-sm">
+          הכנסות בחודש: {incomeMonth == null ? 'חסר' : `₪${incomeMonth.toLocaleString('he-IL')}`}
+          {' · '}
+          הוצאות: {costMonth == null ? 'חסר' : `₪${costMonth.toLocaleString('he-IL')}`}
+        </p>
+      </div>
+
+      <div className={`rounded-xl border p-5 ${card}`}>
         {linesQuery.isLoading ? <p>טוען שורות…</p> : null}
         {linesQuery.isError ? <p>לא ניתן לטעון את שורות התקציב לפני בחירת ארגון.</p> : null}
         {data ? (
@@ -294,7 +491,7 @@ const BudgetEntry: React.FC<Props> = ({ darkMode }) => {
                 </tr>
               </thead>
               <tbody>
-                {data.lines.map((line) => {
+                {data.lines.filter((line) => !line.custom).map((line) => {
                   const cell = line.months[key];
                   const draft = drafts[line.id];
                   const shown = draft !== undefined ? draft : (cell?.amount ?? '');

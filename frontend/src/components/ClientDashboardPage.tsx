@@ -39,6 +39,13 @@ type BudgetLine = BudgetCompare & {
   category: string;
   category_he: string;
   blocked?: boolean;
+  driver?: boolean;
+  division?: string | null;
+  driver_formula?: string | null;
+  quantity?: number | null;
+  rate?: number | null;
+  line_source?: string | null;
+  line_status?: string | null;
 };
 
 type BudgetMonth = {
@@ -272,15 +279,34 @@ function varianceCell(row: BudgetCompare): string {
 
 const NO_COMPARE: BudgetCompare = { budget: null, actual: null, variance: null, variance_pct: null };
 
-function BudgetRow({ label, row: given, strong }: { label: string; row: BudgetCompare | null | undefined; strong?: boolean }) {
+function BudgetRow({ label, row: given, strong, detail, onClick }: {
+  label: string;
+  row: BudgetCompare | null | undefined;
+  strong?: boolean;
+  detail?: BudgetLine | null;
+  onClick?: () => void;
+}) {
   const row = given ?? NO_COMPARE;
+  const missing = (given as BudgetLine | null | undefined)?.line_status === 'missing';
   return (
-    <tr className={`border-b border-stone-100 ${strong ? 'font-medium' : ''}`}>
-      <td>{label}</td>
-      <td className={`py-2 ${row.budget === null ? 'text-stone-400' : ''}`}>{budgetCell(row.budget)}</td>
-      <td>{money(row.actual)}</td>
-      <td>{varianceCell(row)}</td>
-    </tr>
+    <>
+      <tr className={`border-b border-stone-100 ${strong ? 'font-medium' : ''} ${onClick ? 'cursor-pointer' : ''}`} onClick={onClick}>
+        <td>{label}</td>
+        <td className={`py-2 ${row.budget === null ? 'text-stone-400' : ''}`}>{missing ? 'חסר' : budgetCell(row.budget)}</td>
+        <td>{money(row.actual)}</td>
+        <td>{varianceCell(row)}</td>
+      </tr>
+      {detail?.driver ? (
+        <tr className="border-b border-stone-100 text-xs text-stone-500">
+          <td colSpan={4}>
+            {detail.driver_formula || 'אין נוסחה'}
+            {detail.quantity != null && detail.rate != null ? ` · ${detail.quantity} × ${detail.rate}` : ''}
+            {detail.line_source ? ` · מקור: ${detail.line_source}` : ''}
+            {detail.line_status === 'missing' ? ' · חסר, לא 0' : detail.line_status === 'assumption' ? ' · הנחה' : detail.line_status === 'confirmed' ? ' · מאושר' : ''}
+          </td>
+        </tr>
+      ) : null}
+    </>
   );
 }
 
@@ -544,6 +570,7 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
 }
 
 export function BudgetVsActual({ section }: { section: NonNullable<DashboardView['budget_vs_actual']> }) {
+  const [open, setOpen] = useState<string | null>(null);
   const months = section.months ?? [];
   const visible = months.filter((month) => (month.categories ?? []).length > 0);
   return (
@@ -569,13 +596,21 @@ export function BudgetVsActual({ section }: { section: NonNullable<DashboardView
                   {month.blocked ? <span className="ms-2 text-xs text-amber-700">· סטייה בשכר ובספקים מוסתרת: יותר מ־5,000 ₪ לבירור</span> : null}
                 </td>
               </tr>
-              {(month.categories ?? []).map((line) => (
-                <BudgetRow
-                  key={`${line.kind}-${line.category}`}
-                  label={`${line.kind === 'revenue' ? 'הכנסה' : 'הוצאה'} · ${line.category_he || line.category}${line.blocked ? ' (סטייה מוסתרת)' : ''}`}
-                  row={line}
-                />
-              ))}
+              {(month.categories ?? []).map((line) => {
+                const id = `${month.month}-${line.category}`;
+                const title = line.driver
+                  ? `${line.division ? `${line.division} · ` : ''}${line.category_he || line.category}`
+                  : `${line.kind === 'revenue' ? 'הכנסה' : 'הוצאה'} · ${line.category_he || line.category}`;
+                return (
+                  <BudgetRow
+                    key={id}
+                    label={`${title}${line.blocked ? ' (סטייה מוסתרת)' : ''}${line.line_status === 'missing' ? ' · חסר' : ''}`}
+                    row={line}
+                    detail={open === id ? line : null}
+                    onClick={line.driver ? () => setOpen(open === id ? null : id) : undefined}
+                  />
+                );
+              })}
               <BudgetRow label='סה"כ הכנסות' row={month.totals?.revenue} strong />
               <BudgetRow label='סה"כ הוצאות' row={month.totals?.costs} strong />
             </tbody>
