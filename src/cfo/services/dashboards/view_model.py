@@ -199,7 +199,7 @@ def _ap_documents(db, organization_id: int) -> list[dict]:
 
 def _bank_rows(filed) -> list[dict]:
     """Bank rows already read for this view, shaped for the coverage check."""
-    from .filing import FALLBACK_RULES, UNRESOLVED
+    from .filing import FALLBACK_RULES, UNRESOLVED, displayed_counterparty
     rows = []
     for txn, filed_row in filed or []:
         category = filed_row.category
@@ -208,7 +208,7 @@ def _bank_rows(filed) -> list[dict]:
             "booking_date": txn.date,
             "amount": txn.amount,
             "description": txn.description,
-            "counterparty": " ".join(part for part in (txn.debtor, txn.creditor) if part),
+            "counterparty": displayed_counterparty(txn),
             "category": None if category in UNRESOLVED or filed_row.filed_by == "default" and category in FALLBACK_RULES else category,
             "unclassified": category in UNRESOLVED or (filed_row.filed_by == "default" and category in FALLBACK_RULES),
             "is_internal_transfer": category == "intercompany",

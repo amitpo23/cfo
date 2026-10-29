@@ -403,8 +403,9 @@ def dashboard_bank_pack(dashboard_id: int, db: Session = Depends(get_db_session)
 
 
 class ClassificationAccept(BaseModel):
-    counterparty: str = Field(min_length=1, max_length=120)
     category: str
+    counterparty: str | None = Field(default=None, max_length=120)
+    transaction_id: int | None = Field(default=None, ge=1)
 
 
 class ClassificationWrite(BaseModel):
@@ -434,12 +435,14 @@ def accept_classification(dashboard_id: int, body: ClassificationWrite,
                           db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
     """The owner accepts a suggestion or chooses a category. That becomes a rule."""
     from ...models import DashboardPlan
-    from ...services.dashboards.transfer_queue import apply_accepts
+    from ...services.dashboards.transfer_queue import apply_accepts, bind_accepts
     try:
         row = service.get_dashboard(db, user, dashboard_id, allowed=service.PLAN_ROLES)
         current = db.get(DashboardPlan, row.id)
         payload = dict(current.payload) if current is not None and isinstance(current.payload, dict) else {}
-        updated = apply_accepts(payload, [item.model_dump() for item in body.accepts])
+        updated = apply_accepts(
+            payload, bind_accepts(db, row.primary_organization_id, [item.model_dump() for item in body.accepts]),
+        )
         version = current.version if current is not None else "null"
         saved = service.save_plan(db, user, row.id, updated, version)
     except DashboardError as exc:

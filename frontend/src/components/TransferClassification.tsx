@@ -84,10 +84,13 @@ export default function TransferClassification({ dashboardId, slug }: { dashboar
   }, [dashboardId, token, listUrl]);
 
   async function accept(rows: TransferRow[]) {
-    const accepts = rows.map((row) => ({
-      counterparty: row.counterparty,
-      category: chosen[row.id] || row.suggestion?.category || '',
-    })).filter((item) => item.counterparty && item.category);
+    const accepts = rows.flatMap((row) => {
+      const category = chosen[row.id] || row.suggestion?.category || '';
+      if (!category) return [];
+      const counterparty = (row.counterparty || '').trim();
+      if (counterparty) return [{ counterparty, category, transaction_id: row.id }];
+      return [{ category, transaction_id: row.id }];
+    });
     if (!accepts.length) {
       setNotice('בחרו קטגוריה. אין סיווג בלי בחירה.');
       return;
@@ -105,7 +108,13 @@ export default function TransferClassification({ dashboardId, slug }: { dashboar
       setNotice(body.error?.message_he || 'השמירה נכשלה');
       return;
     }
-    setNotice('הכלל נשמר. העברות חדשות של אותו צד נגדי יסווגו כך.');
+    const named = accepts.some((item) => 'counterparty' in item);
+    const unnamed = accepts.some((item) => !('counterparty' in item));
+    setNotice(named && unnamed
+      ? 'הסיווג נשמר. תנועות עם צד נגדי נשמרו ככלל, והשאר לפי תאריך וסכום. שם חסר נשאר חסר.'
+      : named
+        ? 'הכלל נשמר. העברות חדשות של אותו צד נגדי יסווגו כך.'
+        : 'הסיווג נשמר לתנועה לפי תאריך וסכום. הצד הנגדי נשאר חסר.');
     setPicked({});
     await load();
   }
@@ -114,7 +123,7 @@ export default function TransferClassification({ dashboardId, slug }: { dashboar
   return (
     <section className="d-card" dir="rtl">
       <h2>העברות לא מסווגות</h2>
-      <p className="mt-1 text-sm text-stone-600">הצעה אינה סיווג. הקטגוריה נשמרת רק כשהבעלים מאשר, ואז ככלל לצד הנגדי.</p>
+      <p className="mt-1 text-sm text-stone-600">הצעה אינה סיווג. הקטגוריה נשמרת רק כשהבעלים מאשר. כשיש צד נגדי זה כלל להעברות הבאות שלו; בלי צד נגדי הסיווג חל על התנועה לפי תאריך וסכום, והשם נשאר חסר.</p>
       {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
       {notice ? <p className="mt-2 text-sm text-amber-800">{notice}</p> : null}
       {coverage ? (
