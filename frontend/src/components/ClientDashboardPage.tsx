@@ -275,24 +275,25 @@ function ActivityNotes({ quality }: { quality: ActivityQuality | null | undefine
   );
 }
 
-function budgetCell(value: number | null | undefined): string {
-  return value === null || value === undefined ? 'אין תקציב' : money(value);
+function budgetCell(value: number | null | undefined, asOf?: string | null): string {
+  return value === null || value === undefined ? missingAsOf(asOf) : money(value);
 }
 
-function varianceCell(row: BudgetCompare): string {
-  if (row.variance === null || row.variance === undefined) return '—';
+function varianceCell(row: BudgetCompare, asOf?: string | null): string {
+  if (row.variance === null || row.variance === undefined) return missingAsOf(asOf);
   const pct = row.variance_pct === null || row.variance_pct === undefined ? '' : ` (${row.variance_pct}%)`;
   return `${money(row.variance)}${pct}`;
 }
 
 const NO_COMPARE: BudgetCompare = { budget: null, actual: null, variance: null, variance_pct: null };
 
-function BudgetRow({ label, row: given, strong, detail, onClick }: {
+function BudgetRow({ label, row: given, strong, detail, onClick, asOf }: {
   label: string;
   row: BudgetCompare | null | undefined;
   strong?: boolean;
   detail?: BudgetLine | null;
   onClick?: () => void;
+  asOf?: string | null;
 }) {
   const row = given ?? NO_COMPARE;
   const missing = (given as BudgetLine | null | undefined)?.line_status === 'missing';
@@ -300,9 +301,9 @@ function BudgetRow({ label, row: given, strong, detail, onClick }: {
     <>
       <tr className={`border-b border-stone-100 ${strong ? 'font-medium' : ''} ${onClick ? 'cursor-pointer' : ''}`} onClick={onClick}>
         <td>{label}</td>
-        <td className={`py-2 ${row.budget === null ? 'text-stone-400' : ''}`}>{missing ? 'חסר' : budgetCell(row.budget)}</td>
-        <td>{money(row.actual)}</td>
-        <td>{varianceCell(row)}</td>
+        <td className={`py-2 ${row.budget === null ? 'text-stone-400' : ''}`}>{missing ? missingAsOf(asOf) : budgetCell(row.budget, asOf)}</td>
+        <td>{money(row.actual, asOf)}</td>
+        <td>{varianceCell(row, asOf)}</td>
       </tr>
       {detail ? (
         <tr className="border-b border-stone-100 text-xs text-stone-500">
@@ -576,9 +577,20 @@ export function CashStatementCard({ statement }: { statement: CashStatement | nu
   );
 }
 
-export function BudgetVsActual({ section }: { section: NonNullable<DashboardView['budget_vs_actual']> }) {
+export function BudgetVsActual({
+  section, start, end,
+}: {
+  section: NonNullable<DashboardView['budget_vs_actual']>;
+  start?: string;
+  end?: string;
+}) {
   const [open, setOpen] = useState<string | null>(null);
-  const months = section.months ?? [];
+  const from = start?.slice(0, 7);
+  const to = end?.slice(0, 7);
+  const months = (section.months ?? []).filter((month) => {
+    if (!from || !to || !month.month) return true;
+    return month.month >= from && month.month <= to;
+  });
   const visible = months.filter((month) => (month.categories ?? []).length > 0);
   return (
     <section className="d-card">
@@ -615,11 +627,12 @@ export function BudgetVsActual({ section }: { section: NonNullable<DashboardView
                     row={line}
                     detail={open === id ? line : null}
                     onClick={() => setOpen(open === id ? null : id)}
+                    asOf={month.month}
                   />
                 );
               })}
-              <BudgetRow label='סה"כ הכנסות' row={month.totals?.revenue} strong />
-              <BudgetRow label='סה"כ הוצאות' row={month.totals?.costs} strong />
+              <BudgetRow label='סה"כ הכנסות' row={month.totals?.revenue} strong asOf={month.month} />
+              <BudgetRow label='סה"כ הוצאות' row={month.totals?.costs} strong asOf={month.month} />
             </tbody>
           ))}
         </table>
@@ -1019,7 +1032,7 @@ export default function ClientDashboardPage() {
             <div id="dashboard-panel" role="tabpanel" aria-labelledby={`tab-${tab}`} className="mt-4 grid gap-4">
               {tab === 'balance' ? <BalanceSheetCard sheet={scoped.balance_sheet} /> : null}
               {tab === 'status' || tab === 'liquidity' || tab === 'cashforecast' || tab === 'bva' ? (
-                <PeriodCompareTable report={compare} />
+                <PeriodCompareTable report={compare} booksFirst={tab === 'bva'} />
               ) : null}
               {tab === 'status' ? (
                 <>
@@ -1070,7 +1083,7 @@ export default function ClientDashboardPage() {
                 </>
               ) : null}
               {tab === 'bva' ? (
-                scoped.budget_vs_actual ? <BudgetVsActual section={scoped.budget_vs_actual} /> : <EmptyState title="אין נתוני תקציב">אפשר להזין תקציב בלשונית "תקציב ופרמטרים".</EmptyState>
+                scoped.budget_vs_actual ? <BudgetVsActual section={scoped.budget_vs_actual} start={rangeStart} end={rangeEnd} /> : <EmptyState title="אין נתוני תקציב">אפשר להזין תקציב בלשונית "תקציב ופרמטרים".</EmptyState>
               ) : null}
               {tab === 'liquidity' ? <LiquidityTodayCard block={liquidityToday} /> : null}
               {tab === 'liquidity' ? <LiquidityPanel section={scoped.liquidity} /> : null}
@@ -1317,11 +1330,11 @@ function planAllocation(payload: PlanPayload | null | undefined): Record<string,
   return raw as Record<string, { method: string; percentages?: Record<string, number> }>;
 }
 
-function divisionAmount(row: BooksDivision | undefined, noBooks: boolean): string {
-  if (noBooks || !row) return '—';
-  if (row.id === 'shared') return money(row.costs);
-  if (row.id === 'clarify') return row.share_pct === null || row.share_pct === undefined ? '—' : `${row.share_pct}%`;
-  return money(row.profit_before_shared ?? row.net);
+function divisionAmount(row: BooksDivision | undefined, noBooks: boolean, asOf?: string | null): string {
+  if (noBooks || !row) return missingAsOf(asOf);
+  if (row.id === 'shared') return money(row.costs, asOf);
+  if (row.id === 'clarify') return row.share_pct === null || row.share_pct === undefined ? missingAsOf(asOf) : `${row.share_pct}%`;
+  return money(row.profit_before_shared ?? row.net, asOf);
 }
 
 function PnlCard({
@@ -1356,10 +1369,10 @@ function PnlCard({
               <tr key={month.month}>
                 <td>{month.month}</td>
                 <td className="py-2 text-xs text-stone-600">{month.basis_label || (month.basis === 'no_books' ? 'אין נתוני ספרים' : 'ספרים')}</td>
-                <td>{month.basis === 'no_books' ? 'אין נתוני ספרים' : money(month.revenue)}</td>
-                <td>{month.basis === 'no_books' ? 'אין נתוני ספרים' : money(month.costs)}</td>
-                <td>{money(month.net)}</td>
-                <td>{month.clarify_share_pct === null || month.clarify_share_pct === undefined ? '—' : `${month.clarify_share_pct}%`}</td>
+                <td>{month.basis === 'no_books' || month.revenue == null ? missingAsOf(month.month) : money(month.revenue, month.month)}</td>
+                <td>{month.basis === 'no_books' || month.costs == null ? missingAsOf(month.month) : money(month.costs, month.month)}</td>
+                <td>{month.basis === 'no_books' || month.net == null ? missingAsOf(month.month) : money(month.net, month.month)}</td>
+                <td>{month.clarify_share_pct === null || month.clarify_share_pct === undefined ? missingAsOf(month.month) : `${month.clarify_share_pct}%`}</td>
               </tr>
             ))}
           </tbody>
@@ -1384,7 +1397,7 @@ function PnlCard({
                   <td>{division.id === 'shared' ? 'עלויות משותפות' : division.label}{division.id === 'pizza' || division.id === 'deliveries' || division.id === 'culinary' ? ' (לפני משותפות)' : ''}</td>
                   {months.map((month) => {
                     const row = month.divisions?.find((item) => item.id === division.id);
-                    return <td key={month.month}>{divisionAmount(row, month.basis === 'no_books')}</td>;
+                    return <td key={month.month}>{divisionAmount(row, month.basis === 'no_books', month.month)}</td>;
                   })}
                 </tr>
               ))}

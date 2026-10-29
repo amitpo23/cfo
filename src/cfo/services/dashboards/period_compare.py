@@ -1,7 +1,9 @@
 """Budget, booked bank, and filed books for one grain and date range.
 
 No provider call. A month budget is not divided into a day or a week unless
-that line's driver says so. A missing figure stays null.
+that line's driver says so, and it is not multiplied by the number of months
+in a quarter or a year. A month that has not started stays out of the
+comparison. A missing figure stays null.
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from .books_pnl import _net
 from .budget_fill import counts_in_total
 
 _MONEY = Decimal("0.01")
-GRAINS = ("day", "week", "month")
+GRAINS = ("day", "week", "month", "quarter", "year")
 _DAY_TOKENS = ("per_day", "daily", "ליום", "/30", "÷30", "grain:day")
 _WEEK_TOKENS = ("per_week", "weekly", "לשבוע", "grain:week")
 
@@ -44,6 +46,26 @@ def iter_buckets(grain: str, start: date, end: date):
             yield f"{day.isoformat()}–{hi.isoformat()}", day, hi
             day = hi + timedelta(days=1)
         return
+    if grain == "quarter":
+        quarter_month = ((start.month - 1) // 3) * 3 + 1
+        cursor = date(start.year, quarter_month, 1)
+        while cursor <= end:
+            last_month = cursor.month + 2
+            last = date(cursor.year, last_month, monthrange(cursor.year, last_month)[1])
+            lo = max(cursor, start)
+            hi = min(last, end)
+            yield f"{cursor.year}-Q{(cursor.month - 1) // 3 + 1}", lo, hi
+            cursor = date(cursor.year + 1, 1, 1) if cursor.month >= 10 else date(cursor.year, cursor.month + 3, 1)
+        return
+    if grain == "year":
+        cursor = date(start.year, 1, 1)
+        while cursor <= end:
+            last = date(cursor.year, 12, 31)
+            lo = max(cursor, start)
+            hi = min(last, end)
+            yield str(cursor.year), lo, hi
+            cursor = date(cursor.year + 1, 1, 1)
+        return
     cursor = date(start.year, start.month, 1)
     while cursor <= end:
         last = date(cursor.year, cursor.month, monthrange(cursor.year, cursor.month)[1])
@@ -53,24 +75,27 @@ def iter_buckets(grain: str, start: date, end: date):
         cursor = date(cursor.year + 1, 1, 1) if cursor.month == 12 else date(cursor.year, cursor.month + 1, 1)
 
 
-def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, start: date, end: date) -> dict:
+def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, start: date, end: date,
+                   as_of: date | None = None) -> dict:
     if grain not in GRAINS:
         raise ValueError("grain")
     if end < start:
         raise ValueError("range")
     plan = plan if isinstance(plan, dict) else {}
+    as_of = as_of or date.today()
     bank_rows = _booked_rows(db, organization_id, start, end)
     bank_known = _org_has_bank(db, organization_id)
     books_rows = _books_rows(db, organization_id, start, end)
     periods = []
     for label, lo, hi in iter_buckets(grain, start, end):
-        budget = _budget_bucket(plan, grain, lo, hi)
-        bank = _bank_bucket(bank_rows, lo, hi, bank_known, include_lines=grain == "day")
-        books = _books_bucket(books_rows, lo, hi)
+        budget = _budget_span(plan, lo, hi, as_of=as_of) if grain in {"quarter", "year"} else _budget_bucket(plan, grain, lo, hi, as_of=as_of)
+        bank = _bank_bucket(bank_rows, lo, hi, bank_known, include_lines=grain == "day", as_of=as_of)
+        books = _books_bucket(books_rows, lo, hi, as_of=as_of)
         periods.append({
             "label": label,
             "start": lo.isoformat(),
             "end": hi.isoformat(),
+            "elapsed": lo <= as_of,
             "budget": budget,
             "bank": bank,
             "books": books,
@@ -80,10 +105,17 @@ def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, s
         "grain": grain,
         "start": start.isoformat(),
         "end": end.isoformat(),
+        "as_of": as_of.isoformat(),
         "provider_calls": 0,
         "periods": periods,
+        "totals": _totals(periods),
+        "profit": [
+            {"label": period["label"], "books": period["books"]["net"], "bank": period["bank"]["net"], "budget": period["budget"]["net"]}
+            for period in periods
+        ],
         "note_he": (
-            "תקציב מתוך שורות התקציב השמורות. בנק הוא תנועות BOOKED בלבד. "
+            "תקציב מתוך שורות התקציב השמורות, רק לחודשים שמולאו ושכבר התחילו. "
+            "חודש אחד לא מוכפל במספר החודשים ברבעון. בנק הוא תנועות BOOKED בלבד. "
             "ספרים הם מסמכים שכבר תויקו ברצף, בלי משיכת SUMIT. חסר אינו 0."
         ),
     }
@@ -182,11 +214,12 @@ def _overlap_days(month: str, lo: date, hi: date) -> int:
     return (finish - start).days + 1
 
 
-def _budget_bucket(plan: dict, grain: str, lo: date, hi: date) -> dict:
+def _budget_bucket(plan: dict, grain: str, lo: date, hi: date, as_of: date | None = None) -> dict:
     months = _months_touched(lo, hi)
     context = _context(plan, months)
     source = "plan.budgetLines"
-    as_of = next((line.get("source") for line in (plan.get("budgetLines") or []) if isinstance(line, dict) and line.get("source")), None)
+    as_of_source = next((line.get("source") for line in (plan.get("budgetLines") or []) if isinstance(line, dict) and line.get("source")), None)
+    as_of_text = as_of.isoformat() if as_of is not None else as_of_source
     if grain == "month" and _covers_full_month(lo, hi):
         lines = _month_lines(plan, months[0])
         revenue = _side_sum(lines, "revenue")
@@ -194,14 +227,14 @@ def _budget_bucket(plan: dict, grain: str, lo: date, hi: date) -> dict:
         net = None if revenue is None or costs is None else revenue - costs
         missing = None if net is not None else "אין תקציב מלא לחודש (הכנסה או הוצאה חסרה). לא הוזן 0."
         return {
-            "revenue": _figure(revenue, source=source, as_of=as_of, missing_label="אין תקציב הכנסות לחודש. לא הוזן 0."),
-            "costs": _figure(costs, source=source, as_of=as_of, missing_label="אין תקציב הוצאות לחודש. לא הוזן 0."),
-            "net": _figure(net, source=source, as_of=as_of, missing_label=missing),
+            "revenue": _figure(revenue, source=source, as_of=as_of_text, missing_label="אין תקציב הכנסות לחודש. לא הוזן 0."),
+            "costs": _figure(costs, source=source, as_of=as_of_text, missing_label="אין תקציב הוצאות לחודש. לא הוזן 0."),
+            "net": _figure(net, source=source, as_of=as_of_text, missing_label=missing),
             "month_context": context,
         }
     revenue = costs = Decimal("0")
     revenue_known = costs_known = True
-    saw_amount = False
+    saw_revenue = saw_cost = False
     for month in months:
         lines = _month_lines(plan, month)
         days = _overlap_days(month, lo, hi)
@@ -209,7 +242,6 @@ def _budget_bucket(plan: dict, grain: str, lo: date, hi: date) -> dict:
         for line in lines:
             if line["amount"] is None:
                 continue
-            saw_amount = True
             mode = line["allocation"]
             applies = (grain == "day" and mode == "day") or (grain == "week" and mode in {"day", "week"})
             if not applies:
@@ -221,10 +253,14 @@ def _budget_bucket(plan: dict, grain: str, lo: date, hi: date) -> dict:
             share = (line["amount"] * Decimal(days) / Decimal(length)).quantize(_MONEY, rounding=ROUND_HALF_UP)
             if line["side"] == "revenue":
                 revenue += share
+                saw_revenue = True
             else:
                 costs += share
-    if not saw_amount:
-        revenue_known = costs_known = False
+                saw_cost = True
+    if not saw_revenue:
+        revenue_known = False
+    if not saw_cost:
+        costs_known = False
     label = (
         "תקציב היום לא ידוע: התקציב חודשי ואין דרייבר שמפצל אותו לימים. תקציב החודש מוצג כהקשר."
         if grain == "day" else
@@ -236,10 +272,159 @@ def _budget_bucket(plan: dict, grain: str, lo: date, hi: date) -> dict:
     costs_amount = costs if costs_known else None
     net = None if revenue_amount is None or costs_amount is None else revenue_amount - costs_amount
     return {
-        "revenue": _figure(revenue_amount, source=source, as_of=as_of, missing_label=label),
-        "costs": _figure(costs_amount, source=source, as_of=as_of, missing_label=label),
-        "net": _figure(net, source=source, as_of=as_of, missing_label=label),
+        "revenue": _figure(revenue_amount, source=source, as_of=as_of_text, missing_label=label),
+        "costs": _figure(costs_amount, source=source, as_of=as_of_text, missing_label=label),
+        "net": _figure(net, source=source, as_of=as_of_text, missing_label=label),
         "month_context": context,
+    }
+
+
+def _partial_sides(lines: list[dict], days: int, length: int) -> tuple[Decimal | None, Decimal | None]:
+    """A clipped month keeps a share only when the driver names a daily split."""
+    revenue = costs = Decimal("0")
+    revenue_known = costs_known = True
+    saw = False
+    for line in lines:
+        if line["amount"] is None:
+            continue
+        saw = True
+        if line["allocation"] != "day":
+            if line["side"] == "revenue":
+                revenue_known = False
+            else:
+                costs_known = False
+            continue
+        share = (line["amount"] * Decimal(days) / Decimal(length)).quantize(_MONEY, rounding=ROUND_HALF_UP)
+        if line["side"] == "revenue":
+            revenue += share
+        else:
+            costs += share
+    if not saw or (not revenue_known and not costs_known):
+        return None, None
+    return (revenue if revenue_known else None), (costs if costs_known else None)
+
+
+def _budget_span(plan: dict, lo: date, hi: date, *, as_of: date) -> dict:
+    """Sum explicit months inside the span. Never multiply one month by the span length.
+
+    A month that starts after ``as_of`` is reported under ``ahead`` and is not
+    part of the comparison amount.
+    """
+    months = _months_touched(lo, hi)
+    context = _context(plan, months)
+    source = "plan.budgetLines"
+    as_of_source = next(
+        (line.get("source") for line in (plan.get("budgetLines") or []) if isinstance(line, dict) and line.get("source")),
+        None,
+    )
+    revenue = costs = ahead_revenue = ahead_costs = Decimal("0")
+    revenue_known = costs_known = ahead_revenue_known = ahead_costs_known = False
+    filled: list[str] = []
+    missing: list[str] = []
+    ahead_months: list[str] = []
+    for month in months:
+        year, mon = int(month[:4]), int(month[5:])
+        month_lo = date(year, mon, 1)
+        month_hi = date(year, mon, monthrange(year, mon)[1])
+        overlap_lo = max(lo, month_lo)
+        overlap_hi = min(hi, month_hi)
+        if overlap_hi < overlap_lo:
+            continue
+        lines = _month_lines(plan, month)
+        future = month_lo > as_of
+        full = overlap_lo == month_lo and overlap_hi == month_hi
+        if not full:
+            if future:
+                ahead_months.append(month)
+                continue
+            days = (overlap_hi - overlap_lo).days + 1
+            side_rev, side_cost = _partial_sides(lines, days, monthrange(year, mon)[1])
+        else:
+            side_rev = _side_sum(lines, "revenue")
+            side_cost = _side_sum(lines, "cost")
+        if future:
+            ahead_months.append(month)
+            if side_rev is not None:
+                ahead_revenue += side_rev
+                ahead_revenue_known = True
+            if side_cost is not None:
+                ahead_costs += side_cost
+                ahead_costs_known = True
+            continue
+        if side_rev is None and side_cost is None:
+            missing.append(month)
+            continue
+        if side_rev is not None:
+            revenue += side_rev
+            revenue_known = True
+        if side_cost is not None:
+            costs += side_cost
+            costs_known = True
+        if side_rev is not None and side_cost is not None:
+            filled.append(month)
+        else:
+            missing.append(month)
+    gap = "אין תקציב לחודשים שכבר התחילו. לא הוזן 0 ולא הוכפל חודש שמולא."
+    ahead_gap = "אין תקציב לחודשים שעוד לא התחילו. לא הוזן 0."
+    net = None if not revenue_known or not costs_known else revenue - costs
+    ahead_net = None if not ahead_revenue_known or not ahead_costs_known else ahead_revenue - ahead_costs
+    return {
+        "revenue": _figure(revenue if revenue_known else None, source=source, as_of=as_of_source, missing_label=gap),
+        "costs": _figure(costs if costs_known else None, source=source, as_of=as_of_source, missing_label=gap),
+        "net": _figure(net, source=source, as_of=as_of_source, missing_label=gap),
+        "month_context": context,
+        "months_filled": filled,
+        "months_missing": missing,
+        "months_ahead": ahead_months,
+        "ahead": {
+            "revenue": _figure(ahead_revenue if ahead_revenue_known else None, source=source, as_of=as_of_source, missing_label=ahead_gap),
+            "costs": _figure(ahead_costs if ahead_costs_known else None, source=source, as_of=as_of_source, missing_label=ahead_gap),
+            "net": _figure(ahead_net, source=source, as_of=as_of_source, missing_label=ahead_gap),
+            "months": ahead_months,
+        },
+    }
+
+
+def _sum_known(figures: list[dict], *, gap_is_missing: bool) -> dict:
+    total = Decimal("0")
+    known = False
+    missing = False
+    source = None
+    as_of = None
+    for figure in figures:
+        if figure.get("amount") is None:
+            missing = True
+            source = source or figure.get("source")
+            as_of = as_of or figure.get("as_of")
+            continue
+        total += Decimal(str(figure["amount"]))
+        known = True
+        source = source or figure.get("source")
+        as_of = as_of or figure.get("as_of")
+    if not known or (missing and gap_is_missing):
+        return _figure(None, source=source or "plan.budgetLines", as_of=as_of, missing_label="חסר בחלק מהטווח. לא הוזן 0.")
+    return _figure(total, source=source or "plan.budgetLines", as_of=as_of, missing_label=None)
+
+
+def _totals(periods: list[dict]) -> dict:
+    elapsed = [period for period in periods if period.get("elapsed")]
+    budget_periods = elapsed or []
+    return {
+        "budget": {
+            "revenue": _sum_known([period["budget"]["revenue"] for period in budget_periods], gap_is_missing=False),
+            "costs": _sum_known([period["budget"]["costs"] for period in budget_periods], gap_is_missing=False),
+            "net": _sum_known([period["budget"]["net"] for period in budget_periods], gap_is_missing=False),
+        },
+        "books": {
+            "revenue": _sum_known([period["books"]["revenue"] for period in elapsed], gap_is_missing=True),
+            "costs": _sum_known([period["books"]["costs"] for period in elapsed], gap_is_missing=True),
+            "net": _sum_known([period["books"]["net"] for period in elapsed], gap_is_missing=True),
+        },
+        "bank": {
+            "in": _sum_known([period["bank"]["in"] for period in elapsed], gap_is_missing=True),
+            "out": _sum_known([period["bank"]["out"] for period in elapsed], gap_is_missing=True),
+            "net": _sum_known([period["bank"]["net"] for period in elapsed], gap_is_missing=True),
+        },
     }
 
 
@@ -258,22 +443,23 @@ def _booked_rows(db, organization_id: int, start: date, end: date) -> list:
     return [row for row in rows if counts_in_cash_flow(row)]
 
 
-def _bank_bucket(rows: list, lo: date, hi: date, bank_known: bool, *, include_lines: bool) -> dict:
+def _bank_bucket(rows: list, lo: date, hi: date, bank_known: bool, *, include_lines: bool, as_of: date | None = None) -> dict:
     chosen = [row for row in rows if row.transaction_date and lo <= row.transaction_date <= hi]
     source = "bank.BOOKED"
-    if not bank_known:
-        empty = _figure(None, source=source, as_of=None, missing_label="אין תנועות בנק שמורות. לא הוזן 0.")
-        return {"in": empty, "out": empty, "net": empty, "count": 0, "lines": []}
-    incoming = sum((Decimal(str(row.amount)) for row in chosen if Decimal(str(row.amount)) > 0), Decimal("0"))
-    outgoing = sum((abs(Decimal(str(row.amount))) for row in chosen if Decimal(str(row.amount)) < 0), Decimal("0"))
-    as_of = max((row.transaction_date for row in chosen), default=None)
-    as_of_text = as_of.isoformat() if as_of else None
+    stamp = as_of.isoformat() if as_of is not None else None
+    if not bank_known or not chosen:
+        empty = _figure(None, source=source, as_of=stamp, missing_label="אין תנועות BOOKED בטווח. לא הוזן 0.")
+        return {"in": empty, "out": empty, "net": empty, "count": len(chosen), "lines": []}
+    incoming = sum((Decimal(str(row.amount)) for row in chosen if row.amount is not None and Decimal(str(row.amount)) > 0), Decimal("0"))
+    outgoing = sum((abs(Decimal(str(row.amount))) for row in chosen if row.amount is not None and Decimal(str(row.amount)) < 0), Decimal("0"))
+    movement_as_of = max((row.transaction_date for row in chosen), default=None)
+    as_of_text = movement_as_of.isoformat() if movement_as_of else stamp
     lines = []
     if include_lines:
         for row in sorted(chosen, key=lambda item: (item.transaction_date, item.id))[:100]:
             lines.append({
                 "date": row.transaction_date.isoformat(),
-                "amount": float(row.amount or 0),
+                "amount": None if row.amount is None else float(row.amount),
                 "description": row.description,
                 "account_id": row.account_id,
             })
@@ -316,11 +502,12 @@ def _books_rows(db, organization_id: int, start: date, end: date) -> list[dict]:
     return found
 
 
-def _books_bucket(rows: list[dict], lo: date, hi: date) -> dict:
+def _books_bucket(rows: list[dict], lo: date, hi: date, as_of: date | None = None) -> dict:
     chosen = [row for row in rows if lo <= row["date"] <= hi]
     source = "books.local_documents"
+    stamp = as_of.isoformat() if as_of is not None else None
     if not chosen:
-        empty = _figure(None, source=source, as_of=None, missing_label="אין מסמכי ספרים בטווח. לא הוזן 0.")
+        empty = _figure(None, source=source, as_of=stamp, missing_label="אין מסמכי ספרים בטווח. לא הוזן 0.")
         return {"revenue": empty, "costs": empty, "net": empty}
     revenue_rows = [row["net"] for row in chosen if row["side"] == "revenue"]
     cost_rows = [row["net"] for row in chosen if row["side"] == "cost"]

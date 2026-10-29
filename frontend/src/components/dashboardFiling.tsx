@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { missingAsOf } from './dashboardUi';
 
 export type FilingRule = {
   id: string;
@@ -188,7 +189,7 @@ export function cellAmount(cell: CellDraft | undefined, defaults: CellDraft | un
   const fromSeed = !cell?.quantity.trim() && !cell?.rate.trim();
   if (!quantity && rate) return fromSeed ? `חסרה כמות · תעריף ${rate} מהכלי` : 'חסרה כמות';
   if (quantity && !rate) return fromSeed ? `חסר תעריף · כמות ${quantity} מהכלי` : 'חסר תעריף';
-  return 'אין תקציב';
+  return missingAsOf();
 }
 
 // How many lines have an amount in the month: the editor says it above the table.
@@ -258,14 +259,22 @@ function groupTotal(lines: LineDraft[], group: string, month: string): number | 
   return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) : null;
 }
 
-export function monthTotal(lines: LineDraft[], month: string, categories: BudgetCategory[], kind: BudgetCategory['kind']): number {
+export function monthTotal(lines: LineDraft[], month: string, categories: BudgetCategory[], kind: BudgetCategory['kind']): number | null {
   const kindByKey = new Map(categories.map((category) => [category.key, category.kind]));
   let total = 0;
+  let saw = false;
   for (const line of lines) {
     if (kindByKey.get(line.category) !== kind) continue;
-    total += cellValue(line.months[month]) ?? 0;
+    const value = cellValue(line.months[month]);
+    if (value == null) continue;
+    total += value;
+    saw = true;
   }
-  return total;
+  return saw ? total : null;
+}
+
+function showTotal(value: number | null, asOf: string): string {
+  return value == null ? missingAsOf(asOf) : money(value);
 }
 
 function Card({ title, children }: { title: string; children: ReactNode }) {
@@ -395,7 +404,7 @@ export function BudgetEditor({
                     <td className="py-2 font-medium" colSpan={canEdit ? 3 : 2}>
                       {(() => {
                         const total = groupTotal(lines, header, month);
-                        return total === null ? 'אין תקציב' : money(total);
+                        return total === null ? missingAsOf(month) : money(total);
                       })()}
                     </td>
                   </tr>
@@ -451,7 +460,7 @@ export function BudgetEditor({
                     />
                   </td>
                   <td className={`py-2 ${cellValue(stored) === null ? 'text-stone-400' : ''}`}>{cellAmount(stored, defaults)}</td>
-                  <td className="py-2 text-stone-600">{yearTotal === null ? 'אין תקציב' : money(yearTotal)}</td>
+                  <td className="py-2 text-stone-600">{yearTotal === null ? missingAsOf(month) : money(yearTotal)}</td>
                   {canEdit ? (
                     <td>
                       <button
@@ -472,7 +481,7 @@ export function BudgetEditor({
       )}
       {lines.length > 0 ? (
         <p className="mt-3 text-sm text-stone-600">
-          סה״כ {month}: הכנסות {money(monthTotal(lines, month, categories, 'revenue'))} · הוצאות {money(monthTotal(lines, month, categories, 'cost'))} · מימון {money(monthTotal(lines, month, categories, 'financing'))}
+          סה״כ {month}: הכנסות {showTotal(monthTotal(lines, month, categories, 'revenue'), month)} · הוצאות {showTotal(monthTotal(lines, month, categories, 'cost'), month)} · מימון {showTotal(monthTotal(lines, month, categories, 'financing'), month)}
         </p>
       ) : null}
       {lines.length > 0 ? (
@@ -495,7 +504,7 @@ export function BudgetEditor({
                 <tr key={kind}>
                   <td>{label}</td>
                   {yearMonths(month).map((key) => (
-                    <td key={key}>{money(monthTotal(lines, key, categories, kind))}</td>
+                    <td key={key}>{showTotal(monthTotal(lines, key, categories, kind), key)}</td>
                   ))}
                 </tr>
               ))}

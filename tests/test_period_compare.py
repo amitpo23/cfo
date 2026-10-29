@@ -125,6 +125,36 @@ def test_cashflow_period_route_reads_stored_rows_only(client, fresh_org):
     assert body["periods"][0]["bank"]["net"]["amount"] is None
 
 
+def test_empty_window_is_missing_not_zero_even_when_another_day_has_a_bank_row(fresh_org):
+    """A quiet day is not a zero. Books, bank and budget stay missing, with as-of."""
+    db = SessionLocal()
+    org_id = fresh_org()["org_id"]
+    db.add(BankTransaction(
+        organization_id=org_id, source="open_finance", external_id="other-day",
+        transaction_date=date(2026, 1, 2), amount=Decimal("10"),
+        description="הפקדה", raw_data={"status": "BOOKED"},
+    ))
+    db.commit()
+
+    result = compare_period(
+        db, org_id, None, grain="day",
+        start=date(2026, 1, 5), end=date(2026, 1, 5), as_of=date(2026, 10, 29),
+    )
+
+    period = result["periods"][0]
+    figures = [
+        period["books"]["revenue"], period["books"]["costs"], period["books"]["net"],
+        period["bank"]["in"], period["bank"]["out"], period["bank"]["net"],
+        period["budget"]["revenue"], period["budget"]["costs"], period["budget"]["net"],
+        result["totals"]["books"]["net"], result["totals"]["bank"]["net"], result["totals"]["budget"]["net"],
+    ]
+    for figure in figures:
+        assert figure["amount"] is None
+        assert figure["amount"] != 0
+        assert figure["as_of"] == "2026-10-29"
+        assert figure["missing_label"]
+
+
 def test_empty_books_and_bank_stay_missing_not_zero(fresh_org):
     db = SessionLocal()
     org_id = fresh_org()["org_id"]
@@ -139,3 +169,99 @@ def test_empty_books_and_bank_stay_missing_not_zero(fresh_org):
     assert period["books"]["revenue"]["amount"] is None
     assert period["books"]["revenue"]["amount"] != 0
     assert period["variance"]["bank_vs_budget"]["amount"] is None
+
+
+def _sides(month, revenue, costs):
+    def cell(amount):
+        return {"amount": amount, "quantity": 1, "rate": amount, "status": "confirmed"}
+    return {"budgetLines": [
+        {"id": "income", "kind": "revenue", "label": "הכנסות", "months": {month: cell(revenue)}},
+        {"id": "costs", "kind": "cost", "label": "הוצאות", "months": {month: cell(costs)}},
+    ]}
+
+
+def test_quarter_budget_is_not_three_times_one_filled_month(fresh_org):
+    """A quarter is the months that actually have lines. One month is not ×3."""
+    db = SessionLocal()
+    org_id = fresh_org()["org_id"]
+    plan = _sides("2026-01", 283200, 226000)
+
+    result = compare_period(
+        db, org_id, plan, grain="quarter",
+        start=date(2026, 1, 1), end=date(2026, 3, 31), as_of=date(2026, 10, 29),
+    )
+
+    budget = result["periods"][0]["budget"]
+    assert budget["revenue"]["amount"] == 283200
+    assert budget["costs"]["amount"] == 226000
+    assert budget["revenue"]["amount"] != 849600
+    assert budget["costs"]["amount"] != 678000
+    assert budget["net"]["amount"] == 283200 - 226000
+    assert "2026-02" in budget["months_missing"]
+    assert "2026-03" in budget["months_missing"]
+    assert budget["ahead"]["revenue"]["amount"] is None
+    assert result["totals"]["budget"]["revenue"]["amount"] == 283200
+    assert result["totals"]["books"]["net"]["amount"] is None
+    assert result["totals"]["books"]["revenue"]["amount"] != 0
+    assert result["totals"]["bank"]["net"]["amount"] is None
+    assert result["profit"][0]["books"]["amount"] is None
+    assert result["profit"][0]["budget"]["amount"] == 283200 - 226000
+    assert result["provider_calls"] == 0
+
+
+def test_quarter_does_not_add_months_that_have_not_started(fresh_org):
+    db = SessionLocal()
+    org_id = fresh_org()["org_id"]
+    income = {"id": "income", "kind": "revenue", "label": "הכנסות", "months": {}}
+    costs = {"id": "costs", "kind": "cost", "label": "הוצאות", "months": {}}
+    for month in ("2026-10", "2026-11", "2026-12"):
+        income["months"][month] = {"amount": 283200, "quantity": 1, "rate": 283200, "status": "confirmed"}
+        costs["months"][month] = {"amount": 226000, "quantity": 1, "rate": 226000, "status": "confirmed"}
+
+    result = compare_period(
+        db, org_id, {"budgetLines": [income, costs]}, grain="quarter",
+        start=date(2026, 10, 1), end=date(2026, 12, 31), as_of=date(2026, 10, 29),
+    )
+
+    budget = result["periods"][0]["budget"]
+    assert budget["revenue"]["amount"] == 283200
+    assert budget["costs"]["amount"] == 226000
+    assert budget["ahead"]["revenue"]["amount"] == 566400
+    assert budget["ahead"]["costs"]["amount"] == 452000
+    assert result["totals"]["budget"]["revenue"]["amount"] == 283200
+    assert result["totals"]["books"]["net"]["amount"] is None
+    assert result["totals"]["bank"]["net"]["amount"] is None
+
+
+def test_period_switch_refreshes_budget_totals(client, fresh_org):
+    owner = fresh_org()
+    created = client.post("/api/dashboards", headers=owner["headers"], json={
+        "primary_organization_id": owner["org_id"], "slug": "period-switch", "title": "טווח", "access_mode": "link",
+    })
+    assert created.status_code == 201, created.text
+    saved = client.put("/api/financial/budget/lines", headers=owner["headers"], json={"updates": [
+        {"id": "sales", "label": "מכירות", "category": "sales", "kind": "revenue",
+         "month": "2026-01", "status": "filled", "amount": 283200},
+        {"id": "sales", "label": "מכירות", "category": "sales", "kind": "revenue",
+         "month": "2026-02", "status": "filled", "amount": 1000},
+        {"id": "other", "label": "אחר", "category": "other", "kind": "cost",
+         "month": "2026-01", "status": "filled", "amount": 226000},
+    ]})
+    assert saved.status_code == 200, saved.text
+
+    def read(grain, start, end):
+        response = client.get("/api/cashflow/period", headers=owner["headers"], params={
+            "grain": grain, "start": start, "end": end,
+        })
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    month = read("month", "2026-01-01", "2026-01-31")
+    quarter = read("quarter", "2026-01-01", "2026-03-31")
+    assert month["totals"]["budget"]["revenue"]["amount"] == 283200
+    assert quarter["totals"]["budget"]["revenue"]["amount"] == 284200
+    assert quarter["totals"]["budget"]["revenue"]["amount"] != 283200 * 3
+    assert quarter["totals"]["books"]["net"]["amount"] is None
+    assert quarter["totals"]["bank"]["net"]["amount"] is None
+    assert quarter["periods"][0]["books"]["revenue"]["amount"] is None
+    assert quarter["dashboard_slug"] == "period-switch"
