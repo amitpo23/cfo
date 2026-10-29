@@ -106,7 +106,7 @@ def update_dashboard(db, user: User, dashboard_id: int, changes: dict) -> Client
 
 
 def role_for(db, user: User | None, row: ClientDashboard) -> str | None:
-    if user is None:
+    if user is None or row is None:
         return None
     if _can_access_org(db, user, row.primary_organization_id, row.office_organization_id):
         return "owner"
@@ -115,11 +115,30 @@ def role_for(db, user: User | None, row: ClientDashboard) -> str | None:
         .filter_by(dashboard_id=row.id, user_id=user.id, status="active")
         .first()
     )
-    if member is None:
+    if member is not None and not (member.expires_at and member.expires_at < datetime.utcnow()):
+        if member.role in READ_ROLES:
+            return member.role
+    return _membership_role_for_dashboard(db, user, row)
+
+
+def _membership_role_for_dashboard(db, user: User, row: ClientDashboard) -> str | None:
+    """Active membership on the dashboard's organization can read it.
+
+    Edit stays with admin and accountant. A viewer is ``client_viewer``.
+    """
+    org_ids = [row.primary_organization_id]
+    for entity in db.query(DashboardEntity).filter_by(dashboard_id=row.id):
+        if entity.organization_id not in org_ids:
+            org_ids.append(entity.organization_id)
+    roles = [role_in(db, user.id, org_id) for org_id in org_ids]
+    roles = [role for role in roles if role is not None]
+    if not roles:
         return None
-    if member.expires_at and member.expires_at < datetime.utcnow():
-        return None
-    return member.role if member.role in READ_ROLES else None
+    if any(role in (UserRole.ADMIN, UserRole.SUPER_ADMIN) for role in roles):
+        return "owner"
+    if any(role == UserRole.ACCOUNTANT for role in roles):
+        return "accountant"
+    return "client_viewer"
 
 
 def create_share_link(db, user: User, dashboard_id: int, *, label: str | None = None,

@@ -3,6 +3,7 @@
  * שירות API מלא למערכת CFO עם אינטגרציה ל-SUMIT
  */
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
+import { readActiveOrgId, resolveActiveOrgId, writeActiveOrgId } from '../activeOrg';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -32,7 +33,7 @@ class ApiService {
         // אין נפילה ל-'1' תחת AUTH_BYPASS: זו הייתה ברירת מחדל שקטה לתיק
         // של לקוח אמיתי בצד הלקוח, מקבילה לזו שהוסרה מהשרת ב-11/08/2026.
         // בלי בחירה מפורשת השרת מחזיר 409 והמסך החוסם נפתח.
-        const activeOrg = localStorage.getItem('active_org_id');
+        const activeOrg = readActiveOrgId();
         if (activeOrg) {
           config.headers['X-Active-Org-Id'] = activeOrg;
         }
@@ -67,7 +68,6 @@ class ApiService {
       (error) => {
         if (error.response?.status === 401) {
           localStorage.removeItem('auth_token');
-          localStorage.removeItem('active_org_id');
           window.location.href = '/';
         }
         // 409 active_organization_required — סופר-אדמין בלי ארגון פעיל.
@@ -80,17 +80,17 @@ class ApiService {
         ) {
           const organizations = detail.organizations ?? [];
           const config = error.config;
-          // A single active organization is the file to open. Don't cover the
-          // page with a chooser, and don't leave the failed request as zeros.
-          if (organizations.length === 1 && config && !config._soleOrgRetry) {
-            const id = String(organizations[0].id);
-            localStorage.setItem('active_org_id', id);
-            config._soleOrgRetry = true;
+          const resolved = resolveActiveOrgId(readActiveOrgId(), organizations);
+          // A stored choice, or the only membership, is retried with the header.
+          // The chooser opens only when several memberships and none is stored.
+          if (resolved && config && !config._orgRetry) {
+            writeActiveOrgId(resolved);
+            config._orgRetry = true;
             config.headers = config.headers ?? {};
-            config.headers['X-Active-Org-Id'] = id;
+            config.headers['X-Active-Org-Id'] = resolved;
             return this.client.request(config);
           }
-          if (organizations.length !== 1) {
+          if (!resolved) {
             window.dispatchEvent(
               new CustomEvent('rezef:active-org-required', {
                 detail: { organizations },

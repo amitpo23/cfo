@@ -20,9 +20,10 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from ..dependencies import get_current_user
+from ...auth import decode_access_token
 from ...config import settings
 from ...database import get_db_session
-from ...models import DashboardRateLimit, PublishedSnapshot, User
+from ...models import ClientDashboard, DashboardRateLimit, PublishedSnapshot, User
 from ...services.build_timing import log_build, measured, server_timing
 from ...services.dashboards import budget, multi_entity, provider_gate, service, view_model
 from ...services.dashboards.service import READ_ROLES, DashboardError
@@ -729,10 +730,46 @@ def open_share_session(slug: str, body: SessionBody, request: Request,
     return response
 
 
+def _bearer_user(request: Request, db: Session) -> User | None:
+    header = request.headers.get("authorization") or ""
+    if not header.lower().startswith("bearer "):
+        return None
+    payload = decode_access_token(header.split(" ", 1)[1].strip())
+    if not payload:
+        return None
+    try:
+        user_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        return None
+    user = db.get(User, user_id)
+    if user is None or not user.is_active:
+        return None
+    claimed = payload.get("token_version", 0)
+    if not isinstance(claimed, int) or isinstance(claimed, bool) or claimed != (user.token_version or 0):
+        return None
+    return user
+
+
+def _member_dashboard(slug: str, request: Request, db: Session):
+    """A signed-in member of the dashboard's organization can read it."""
+    user = _bearer_user(request, db)
+    if user is None:
+        return None
+    row = db.query(ClientDashboard).filter_by(slug=slug).first()
+    if row is None or row.status == "archived":
+        return None
+    if service.role_for(db, user, row) not in READ_ROLES:
+        return None
+    return row
+
+
 def _public_dashboard_or_error(slug: str, request: Request, db: Session):
     limited = _claim_public_limit(db, request, slug)
     if limited:
         return None, limited
+    member = _member_dashboard(slug, request, db)
+    if member is not None:
+        return member, None
     try:
         dashboard = service.public_dashboard(db, slug)
     except DashboardError as exc:
@@ -810,12 +847,16 @@ def read_public_dashboard(slug: str, request: Request, start: date | None = None
     limited = _claim_public_limit(db, request, slug)
     if limited:
         return limited
-    try:
-        dashboard = service.public_dashboard(db, slug)
-    except DashboardError as exc:
-        return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
+    member = _member_dashboard(slug, request, db)
+    if member is not None:
+        dashboard = member
+    else:
+        try:
+            dashboard = service.public_dashboard(db, slug)
+        except DashboardError as exc:
+            return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
     link = None
-    if dashboard.access_mode != "public":
+    if member is None and dashboard.access_mode != "public":
         link = _cookie_dashboard(db, request, dashboard.id)
         if link is None:
             return _login_required(slug)

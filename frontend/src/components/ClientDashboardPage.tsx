@@ -684,7 +684,10 @@ export default function ClientDashboardPage() {
     let cancelled = false;
 
     async function loadPublic(signedIn: boolean) {
-      const response = await fetch(`/api/public/d/${slug}`, { credentials: 'include' });
+      const response = await fetch(`/api/public/d/${slug}`, {
+        credentials: 'include',
+        headers: signedIn ? authHeaders() : {},
+      });
       const body = (await response.json().catch(() => ({}))) as DashboardView & {
         error?: { code?: string; message_he?: string; login_path?: string };
       };
@@ -788,7 +791,7 @@ export default function ClientDashboardPage() {
         ? `/api/dashboards/${editor.id}/revision`
         : `/api/public/d/${slug}/revision`;
       const response = await fetch(url, {
-        headers: editor?.id ? authHeaders() : {},
+        headers: authHeaders(),
         credentials: 'include',
         cache: 'no-store',
       });
@@ -799,7 +802,7 @@ export default function ClientDashboardPage() {
           editor?.id
             ? `/api/dashboards/${editor.id}/view${ranged ? `?start=${rangeStart}&end=${rangeEnd}` : ''}`
             : `/api/public/d/${slug}${ranged ? `?start=${rangeStart}&end=${rangeEnd}` : ''}`,
-          { headers: editor?.id ? authHeaders() : {}, credentials: 'include', cache: 'no-store' },
+          { headers: authHeaders(), credentials: 'include', cache: 'no-store' },
         );
         if (again.ok && !stopped) setView((await again.json()) as DashboardView);
       }
@@ -822,7 +825,7 @@ export default function ClientDashboardPage() {
         ? `/api/dashboards/${editor.id}/view?start=${rangeStart}&end=${rangeEnd}`
         : `/api/public/d/${slug}?start=${rangeStart}&end=${rangeEnd}`;
       const response = await fetch(url, {
-        headers: editor?.id ? authHeaders() : {},
+        headers: authHeaders(),
         credentials: 'include',
       });
       if (cancelled || !response.ok) return;
@@ -844,7 +847,7 @@ export default function ClientDashboardPage() {
         ? `/api/dashboards/${editor.id}/period-compare?${query}`
         : `/api/public/d/${slug}/period-compare?${query}`;
       const response = await fetch(url, {
-        headers: editor?.id ? authHeaders() : {},
+        headers: authHeaders(),
         credentials: 'include',
       });
       if (cancelled || !response.ok) return;

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Building2, ChevronDown, Check } from 'lucide-react';
 import api from '../services/api';
+import { ACTIVE_ORG_KEY, readActiveOrgId, resolveActiveOrgId, writeActiveOrgId } from '../activeOrg';
 
 export interface CurrentUser {
   id: number;
@@ -16,7 +17,7 @@ interface Org {
   name: string;
 }
 
-export const ACTIVE_ORG_KEY = 'active_org_id';
+export { ACTIVE_ORG_KEY };
 
 export default function OrgSwitcher({
   currentUser,
@@ -28,14 +29,23 @@ export default function OrgSwitcher({
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [open, setOpen] = useState(false);
   const [activeId, setActiveId] = useState<number | null>(() => {
-    const raw = localStorage.getItem(ACTIVE_ORG_KEY);
+    const raw = readActiveOrgId();
     return raw ? Number(raw) : currentUser.organization_id;
   });
 
   useEffect(() => {
     (async () => {
       try {
-        setOrgs(await api.get<Org[]>('/admin/auth/organizations'));
+        const listed = await api.get<Org[]>('/admin/auth/organizations');
+        setOrgs(listed);
+        const resolved = resolveActiveOrgId(readActiveOrgId(), listed);
+        if (!resolved) return;
+        if (resolved !== readActiveOrgId()) {
+          writeActiveOrgId(resolved);
+          window.location.reload();
+          return;
+        }
+        setActiveId(Number(resolved));
       } catch {
         /* non-fatal: switcher just stays empty */
       }
@@ -45,7 +55,7 @@ export default function OrgSwitcher({
   if (orgs.length === 0) return null;
 
   const select = (id: number) => {
-    localStorage.setItem(ACTIVE_ORG_KEY, String(id));
+    writeActiveOrgId(id);
     setActiveId(id);
     setOpen(false);
     // Hard reload so every dashboard refetches under the new org scope.

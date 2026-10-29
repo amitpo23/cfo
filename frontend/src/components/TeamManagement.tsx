@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import api from '../services/api';
+import { readActiveOrgId } from '../activeOrg';
+import { canManageTeam } from '../teamAccess';
 import { CurrentUser } from './OrgSwitcher';
 import {
   Loader2,
@@ -147,7 +149,7 @@ const TeamManagement: React.FC<Props> = ({ darkMode, currentUser }) => {
     setInviteBusy(true);
     const password = generateTempPassword();
     try {
-      const activeOrg = localStorage.getItem('active_org_id');
+      const activeOrg = readActiveOrgId();
       const orgId = activeOrg ? Number(activeOrg) : currentUser?.organization_id;
       await api.post('/admin/users', {
         email: inviteEmail,
@@ -221,6 +223,9 @@ const TeamManagement: React.FC<Props> = ({ darkMode, currentUser }) => {
     }
   };
 
+  const self = members.find((member) => member.id === currentUser?.id);
+  const canManage = canManageTeam(currentUser?.role, self?.role);
+
   const card = `rounded-xl border shadow-sm ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`;
   const inputClass = `px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
     darkMode
@@ -267,7 +272,7 @@ const TeamManagement: React.FC<Props> = ({ darkMode, currentUser }) => {
         </button>
       </div>
 
-      {/* טופס הזמנה */}
+      {canManage ? (
       <div className={`${card} p-5`}>
         <h2 className={`text-lg font-semibold mb-3 ${textMain}`}>הזמנת חבר צוות</h2>
         <form onSubmit={handleInvite} className="flex flex-wrap items-center gap-3">
@@ -346,6 +351,7 @@ const TeamManagement: React.FC<Props> = ({ darkMode, currentUser }) => {
           </div>
         )}
       </div>
+      ) : null}
 
       {notice && (
         <div className={`text-sm rounded-lg px-4 py-3 ${darkMode ? 'bg-green-900/20 text-green-300' : 'bg-green-50 text-green-700'}`}>
@@ -397,7 +403,7 @@ const TeamManagement: React.FC<Props> = ({ darkMode, currentUser }) => {
                     </td>
                     <td className={`px-4 py-3 ${textSub}`} dir="ltr">{member.email}</td>
                     <td className="px-4 py-3">
-                      {isSelf || member.role === 'super_admin' ? (
+                      {!canManage || isSelf || member.role === 'super_admin' ? (
                         <span className={textMain}>{ROLE_LABELS[member.role] || member.role}</span>
                       ) : (
                         <select
@@ -421,7 +427,9 @@ const TeamManagement: React.FC<Props> = ({ darkMode, currentUser }) => {
                       {member.last_login ? new Date(member.last_login).toLocaleString('he-IL') : 'טרם התחבר'}
                     </td>
                     <td className="px-4 py-3">
-                      {isSelf ? (
+                      {!canManage ? (
+                        <span className={`text-xs ${textSub}`}>צפייה בלבד</span>
+                      ) : isSelf ? (
                         <span className={`text-xs ${textSub}`}>אין פעולות עצמיות</span>
                       ) : busy ? (
                         <Loader2 size={16} className="animate-spin text-blue-500" />

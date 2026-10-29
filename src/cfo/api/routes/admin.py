@@ -1714,9 +1714,10 @@ async def list_users(
     limit: int = 100,
     db: Session = Depends(get_db_session),
     ctx: OrganizationAccessContext = Depends(get_access_context),
-    _admin: User = Depends(get_organization_admin),
 ):
     """רשימת משתמשים **בארגון הפעיל**.
+
+    כל חבר פעיל יכול לקרוא. הזמנה, השעיה ושינוי תפקיד נשארים למנהל.
 
     לשעבר סינן לפי `current_user.organization_id` — ארגון הבית. אדם עם
     ארגון בית A וחברות ב-B היה מקבל את רשימת המשתמשים של A בזמן שכל

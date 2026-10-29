@@ -12,7 +12,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Building2, AlertTriangle } from 'lucide-react';
-import { ACTIVE_ORG_KEY } from './OrgSwitcher';
+import { writeActiveOrgId } from '../activeOrg';
 
 interface Org {
   id: number;
@@ -36,7 +36,7 @@ export default function ActiveOrgRequired({ darkMode = false }: { darkMode?: boo
   if (orgs === null) return null;
 
   const select = (id: number) => {
-    localStorage.setItem(ACTIVE_ORG_KEY, String(id));
+    writeActiveOrgId(id);
     window.location.reload();
   };
 
