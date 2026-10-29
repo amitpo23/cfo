@@ -1,529 +1,359 @@
 /**
- * Document Creation and Management Component
+ * Hebrew document issuance. SUMIT writes go through the existing
+ * /financial/documents approval gate. Local drafts do not call SUMIT.
  */
-import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Download, Send, X } from 'lucide-react';
-import { format } from 'date-fns';
+import React, { useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import apiService from '../services/api';
 
-interface Document {
-  id?: number;
-  external_id?: string;
-  document_id?: string;
-  document_number?: string;
-  document_type: string;
-  document_label?: string;
-  customer_id?: string;
-  total_amount?: number;
-  total?: number;
-  status: string;
-  issue_date: string;
-  due_date?: string;
-}
-
-interface DocumentItem {
-  description: string;
-  quantity: number;
-  price: number;
-}
-
-export const DocumentManager: React.FC = () => {
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [filterType, setFilterType] = useState<string>('all');
-
-  const { data: integrationStatus } = useQuery<{ configured: Record<string, boolean> }>({
-    queryKey: ['integration-status'],
-    queryFn: () => apiService.get('/integration/status'),
-  });
-  const isSumitConfigured = integrationStatus?.configured?.sumit === true;
-
-  const { data: documents, isLoading } = useQuery<Document[]>({
-    queryKey: ['documents', filterType],
-    queryFn: async (): Promise<Document[]> => {
-      const params = filterType !== 'all' ? { document_type: filterType } : {};
-      const res: any = await apiService.listDocuments(params);
-      return res.data || res;
-    },
-    enabled: isSumitConfigured,
-  });
-
-  const sendDocumentMutation = useMutation({
-    mutationFn: ({ documentId, email }: { documentId: string; email: string }) =>
-      apiService.sendDocument(documentId, email),
-    onSuccess: () => {
-      alert('Document sent successfully!');
-    },
-  });
-
-  const downloadPdf = async (documentId: string) => {
-    try {
-      const blob = await apiService.downloadDocumentPdf(documentId);
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `document_${documentId}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } catch (error) {
-      console.error('Error downloading PDF:', error);
-    }
-  };
-
-  return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold text-gray-800">Documents</h1>
-        <button
-          onClick={() => setIsCreateModalOpen(true)}
-          disabled={!isSumitConfigured}
-          className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <Plus size={20} />
-          New Document
-        </button>
-      </div>
-
-      {/* Filter Tabs */}
-      <div className="mb-6 flex gap-2 border-b border-gray-200">
-        {['all', 'invoice', 'receipt', 'proforma', 'quote', 'order', 'purchase_order', 'work_order', 'delivery_note', 'credit_note'].map((type) => (
-          <button
-            key={type}
-            onClick={() => setFilterType(type)}
-            className={`px-4 py-2 font-medium transition ${
-              filterType === type
-                ? 'text-primary-600 border-b-2 border-primary-600'
-                : 'text-gray-600 hover:text-gray-800'
-            }`}
-          >
-            {type.charAt(0).toUpperCase() + type.slice(1).replace('_', ' ')}
-          </button>
-        ))}
-      </div>
-
-      {/* Documents Table */}
-      {isLoading ? (
-        <div className="text-center py-12">Loading...</div>
-      ) : !isSumitConfigured ? (
-        <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-lg p-6">
-          חיבור מסמכים לא מוגדר לארגון הזה עדיין. לאחר הגדרת האינטגרציה, החשבוניות והמסמכים ייטענו כאן.
-        </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Document #
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Type
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Date
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Amount
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {documents?.map((doc: Document) => (
-                <tr key={doc.id || doc.document_id || doc.external_id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                    {doc.document_number || doc.external_id || doc.id}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {doc.document_label || doc.document_type}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {format(new Date(doc.issue_date), 'MMM dd, yyyy')}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ₪{Number(doc.total ?? doc.total_amount ?? 0).toFixed(2)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span
-                      className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        doc.status === 'paid'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-yellow-100 text-yellow-800'
-                      }`}
-                    >
-                      {doc.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <div className="flex justify-end gap-2">
-                      <button
-                        onClick={() => downloadPdf(doc.external_id || doc.document_id || '')}
-                        disabled={!doc.external_id && !doc.document_id}
-                        className="text-gray-600 hover:text-primary-600"
-                        title="Download PDF"
-                      >
-                        <Download size={18} />
-                      </button>
-                      <button
-                        onClick={() => {
-                          const email = prompt('Enter email address:');
-                          if (email) {
-                            sendDocumentMutation.mutate({
-                              documentId: String(doc.id || doc.document_id || doc.external_id),
-                              email,
-                            });
-                          }
-                        }}
-                        className="text-gray-600 hover:text-primary-600"
-                        title="Send by Email"
-                      >
-                        <Send size={18} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {isCreateModalOpen && (
-        <CreateDocumentModal onClose={() => setIsCreateModalOpen(false)} />
-      )}
-    </div>
-  );
+type DocType = { value: string; label: string };
+type ContactSuggestion = {
+  id: number;
+  name: string;
+  email?: string | null;
+  external_id?: string | null;
 };
-
-const DOCUMENT_TYPES: { value: string; label: string }[] = [
-  { value: 'invoice', label: 'חשבונית מס' },
-  { value: 'receipt', label: 'קבלה' },
-  { value: 'invoice_receipt', label: 'חשבונית מס קבלה' },
-  { value: 'proforma', label: 'חשבונית עסקה' },
-  { value: 'quote', label: 'הצעת מחיר' },
-  { value: 'order', label: 'הזמנה' },
-  { value: 'purchase_order', label: 'הזמנת רכש' },
-  { value: 'work_order', label: 'הזמנת עבודה' },
-  { value: 'delivery_note', label: 'תעודת משלוח' },
-  { value: 'credit_note', label: 'חשבונית זיכוי' },
-];
-
-interface CreatedDocumentResult {
+type Line = { description: string; quantity: number; price: number; vatRate: number };
+type Created = {
   id: number;
   document_label?: string;
   document_number?: string | null;
   external_id?: string | null;
   total?: number;
-  status?: string | null;
   sumit?: { pdf_url?: string | null } | null;
+};
+type IssuedRow = {
+  id?: number;
+  external_id?: string;
+  document_number?: string;
+  document_type: string;
+  document_label?: string;
+  total?: number;
+  total_amount?: number;
+  status: string;
+  issue_date?: string;
+};
+
+const FALLBACK_TYPES: DocType[] = [
+  { value: 'invoice', label: 'חשבונית מס' },
+  { value: 'receipt', label: 'קבלה' },
+  { value: 'invoice_receipt', label: 'חשבונית מס קבלה' },
+  { value: 'credit_note', label: 'חשבונית זיכוי' },
+  { value: 'quote', label: 'הצעת מחיר' },
+  { value: 'proforma', label: 'חשבונית עסקה' },
+  { value: 'order', label: 'הזמנה' },
+  { value: 'purchase_order', label: 'הזמנת רכש' },
+  { value: 'work_order', label: 'הזמנת עבודה' },
+  { value: 'delivery_note', label: 'תעודת משלוח' },
+  { value: 'payment_request', label: 'דרישת תשלום' },
+];
+
+function money(value: number): string {
+  return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 2 }).format(value);
 }
 
-interface ContactSuggestion {
-  id: number;
-  name: string;
-  email?: string | null;
+function lineMath(line: Line) {
+  const net = line.quantity * line.price;
+  const tax = net * (line.vatRate / 100);
+  return { net, tax, total: net + tax };
 }
 
-const CreateDocumentModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-  const [items, setItems] = useState<DocumentItem[]>([
-    { description: '', quantity: 1, price: 0 },
-  ]);
+function hebrewError(err: unknown): string {
+  const response = (err as { response?: { status?: number; data?: { detail?: unknown; code?: string } } })?.response;
+  const code = response?.data?.code;
+  if (code === 'request_budget_exceeded') return 'נגמרה מכסת הקריאות ל-SUMIT. המסמך לא הופק.';
+  if (code === 'request_budget_unavailable') return 'לא ניתן לאמת את מכסת SUMIT, ולכן ההפקה נעצרה.';
+  if (response?.status === 409) return 'הפקה ב-SUMIT דורשת אישור. אשרו את הסיכום, או שמרו טיוטה מקומית בלי שליחה.';
+  if (response?.status === 403) return 'אין הרשאה להפיק את המסמך.';
+  if (response?.status === 502) return 'SUMIT לא אישר את המסמך. לא נשמר מסמך כאילו הופק.';
+  const detail = response?.data?.detail;
+  if (typeof detail === 'string' && /[\u0590-\u05FF]/.test(detail)) return detail;
+  return 'הפקת המסמך נכשלה.';
+}
+
+export const DocumentManager: React.FC = () => {
+  const queryClient = useQueryClient();
   const [documentType, setDocumentType] = useState('invoice');
   const [customerName, setCustomerName] = useState('');
+  const [customerId, setCustomerId] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
-  const [sendToSumit, setSendToSumit] = useState(true);
-  const [result, setResult] = useState<CreatedDocumentResult | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [originalInvoiceId, setOriginalInvoiceId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [items, setItems] = useState<Line[]>([{ description: '', quantity: 1, price: 0, vatRate: 18 }]);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<Created | null>(null);
+  const [filterType, setFilterType] = useState('all');
 
-  // Autocomplete against existing contacts -- picking a real match avoids
-  // creating a near-duplicate customer in SUMIT on a slightly different
-  // spelling (the server also resolves-or-creates by exact name, but
-  // showing suggestions helps the user pick the right existing one).
+  const typesQuery = useQuery<{ data: DocType[] }>({
+    queryKey: ['document-types'],
+    queryFn: () => apiService.get('/financial/documents/types'),
+  });
+  const types = typesQuery.data?.data?.length ? typesQuery.data.data : FALLBACK_TYPES;
+  const typeLabel = types.find((row) => row.value === documentType)?.label || documentType;
+
+  const { data: integrationStatus } = useQuery<{ configured: Record<string, boolean> }>({
+    queryKey: ['integration-status'],
+    queryFn: () => apiService.get('/integration/status'),
+  });
+  const sumitReady = integrationStatus?.configured?.sumit === true;
+
   const { data: contactSuggestions } = useQuery({
     queryKey: ['contacts-search', customerName],
-    queryFn: () =>
-      apiService.get<{ data: ContactSuggestion[] }>(
-        `/contacts?query=${encodeURIComponent(customerName)}`
-      ),
+    queryFn: () => apiService.get<{ data: ContactSuggestion[] }>(`/contacts?query=${encodeURIComponent(customerName)}`),
     enabled: customerName.trim().length >= 2 && showSuggestions,
     select: (res) => res.data,
   });
 
-  const queryClient = useQueryClient();
-  const createMutation = useMutation({
-    mutationFn: () =>
-      apiService.post<{ data: CreatedDocumentResult }>('/financial/documents', {
-        document_type: documentType,
-        customer_id: customerName,
-        customer_name: customerName,
-        customer_email: customerEmail || undefined,
-        send_to_sumit: sendToSumit,
-        send_email: Boolean(customerEmail),
-        items: items
-          .filter((it) => it.description.trim())
-          .map((it) => ({
-            description: it.description,
-            quantity: it.quantity,
-            unit_price: it.price,
-            vat_rate: 18,
-            discount: 0,
-          })),
-      }),
-    onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ['documents'] });
-      setResult(res.data);
-    },
-    onError: (err: unknown) => {
-      const msg =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        'הפקת המסמך נכשלה';
-      alert(msg);
+  const documentsQuery = useQuery<IssuedRow[]>({
+    queryKey: ['documents', filterType],
+    queryFn: async () => {
+      const params = filterType !== 'all' ? { document_type: filterType } : {};
+      const res = await apiService.listDocuments(params) as { data?: IssuedRow[] } | IssuedRow[];
+      return Array.isArray(res) ? res : (res.data || []);
     },
   });
 
-  const downloadResultPdf = async () => {
-    if (!result?.external_id) return;
-    const blob = await apiService.downloadDocumentPdf(result.external_id);
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${result.document_number || result.external_id}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
-  };
+  const totals = useMemo(() => {
+    return items.reduce((sum, line) => {
+      const row = lineMath(line);
+      return { net: sum.net + row.net, tax: sum.tax + row.tax, total: sum.total + row.total };
+    }, { net: 0, tax: 0, total: 0 });
+  }, [items]);
 
-  if (result) {
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-        <div className="bg-white rounded-lg max-w-md w-full p-6 text-center">
-          <h2 className="text-2xl font-bold text-gray-800 mb-2">המסמך הופק בהצלחה</h2>
-          <p className="text-gray-600 mb-1">{result.document_label}</p>
-          {result.document_number && (
-            <p className="text-lg font-semibold text-gray-900 mb-1">#{result.document_number}</p>
-          )}
-          <p className="text-2xl font-bold text-primary-600 mb-6">₪{Number(result.total ?? 0).toFixed(2)}</p>
-          <div className="flex justify-center gap-3">
-            {(result.sumit?.pdf_url || result.external_id) && (
-              <button
-                onClick={() =>
-                  result.sumit?.pdf_url ? window.open(result.sumit.pdf_url, '_blank') : downloadResultPdf()
-                }
-                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
-              >
-                <Download size={18} />
-                הורד PDF
-              </button>
-            )}
-            <button
-              onClick={onClose}
-              className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
-            >
-              סגור
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+  const payloadItems = items
+    .filter((line) => line.description.trim())
+    .map((line) => ({
+      description: line.description.trim(),
+      quantity: line.quantity,
+      unit_price: line.price,
+      vat_rate: line.vatRate,
+      discount: 0,
+    }));
+
+  function requestBody(sendToSumit: boolean) {
+    return {
+      document_type: documentType,
+      customer_id: customerId || customerName.trim(),
+      customer_name: customerName.trim(),
+      customer_email: customerEmail || null,
+      customer_address: null,
+      items: payloadItems,
+      issue_date: null,
+      due_date: null,
+      notes: notes.trim() || null,
+      send_to_sumit: sendToSumit,
+      send_email: Boolean(customerEmail) && sendToSumit,
+      original_invoice_id: documentType === 'credit_note' && originalInvoiceId ? Number(originalInvoiceId) : null,
+      payments: null,
+    };
   }
 
-  const canSubmit =
-    customerName.trim().length > 0 &&
-    items.some((it) => it.description.trim()) &&
-    !createMutation.isPending;
+  const ready = customerName.trim().length > 0 && payloadItems.length > 0 && payloadItems.every((line) => line.quantity > 0);
 
-  const addItem = () => {
-    setItems([...items, { description: '', quantity: 1, price: 0 }]);
-  };
+  async function saveLocal() {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await apiService.post<{ data: Created }>('/financial/documents', requestBody(false));
+      setResult(res.data);
+      await queryClient.invalidateQueries({ queryKey: ['documents'] });
+    } catch (err) {
+      setError(hebrewError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
-  const removeItem = (index: number) => {
-    setItems(items.filter((_, i) => i !== index));
-  };
-
-  const total = items.reduce((sum, item) => sum + item.quantity * item.price, 0);
+  async function issueToSumit() {
+    setBusy(true);
+    setError('');
+    const body = requestBody(true);
+    try {
+      const proposed = await apiService.post<{ id: number }>('/approvals', {
+        action_type: 'document_issue',
+        idempotency_key: crypto.randomUUID(),
+        description: `הפקת ${typeLabel} עבור ${customerName.trim()}`,
+        payload: {
+          operation: 'financial_operations.create_document',
+          arguments: { request: body },
+        },
+      });
+      await apiService.post(`/approvals/${proposed.id}/approve`, {});
+      const res = await apiService.post<{ data: Created }>('/financial/documents', body, {
+        headers: { 'X-Rezef-Approval-Id': String(proposed.id) },
+      });
+      setResult(res.data);
+      setConfirming(false);
+      await queryClient.invalidateQueries({ queryKey: ['documents'] });
+    } catch (err) {
+      setError(hebrewError(err));
+      setConfirming(false);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="p-6 border-b border-gray-200 flex justify-between items-center">
-          <h2 className="text-2xl font-bold text-gray-800">Create New Document</h2>
-          <button onClick={onClose} className="text-gray-600 hover:text-gray-800">
-            <X size={24} />
-          </button>
-        </div>
+    <main dir="rtl" className="mx-auto max-w-5xl px-4 py-8 text-stone-900">
+      <h1 className="text-2xl font-semibold">הפקת מסמכים</h1>
+      <p className="mt-1 text-sm text-stone-600">
+        חשבונית מס, קבלה, זיכוי והצעת מחיר נשלחים ל-SUMIT רק אחרי אישור. טיוטה מקומית לא קוראת ל-SUMIT.
+        {sumitReady ? '' : ' חיבור SUMIT לארגון הזה עדיין לא מוגדר.'}
+      </p>
 
-        <div className="p-6">
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                סוג מסמך
-              </label>
-              <select
-                value={documentType}
-                onChange={(e) => setDocumentType(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-              >
-                {DOCUMENT_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
+      {error ? <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
+
+      {result ? (
+        <section className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4" aria-label="מסמך שהופק">
+          <h2 className="text-lg font-medium">המסמך נשמר</h2>
+          <p>{result.document_label}</p>
+          <p>מזהה מקומי: {result.id}</p>
+          <p>מספר מסמך: {result.document_number || 'עדיין אין מספר מסאמית'}</p>
+          <p>מזהה SUMIT: {result.external_id || 'לא נשלח ל-SUMIT'}</p>
+          <p>סכום: {money(Number(result.total || 0))}</p>
+          {result.sumit?.pdf_url ? (
+            <a className="mt-2 inline-block underline" href={result.sumit.pdf_url} target="_blank" rel="noopener noreferrer">קישור למסמך</a>
+          ) : null}
+          <button type="button" className="mt-3 block text-sm underline" onClick={() => setResult(null)}>מסמך נוסף</button>
+        </section>
+      ) : (
+        <form className="mt-6 space-y-4 rounded-xl border bg-white p-4" onSubmit={(event) => event.preventDefault()}>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="text-sm">סוג מסמך
+              <select className="mt-1 w-full rounded-lg border px-3 py-2" value={documentType} onChange={(event) => setDocumentType(event.target.value)} aria-label="סוג מסמך">
+                {types.map((row) => <option key={row.value} value={row.value}>{row.label}</option>)}
               </select>
-            </div>
-            <div className="relative">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                לקוח / ספק
-              </label>
+            </label>
+            <label className="relative text-sm">לקוח
               <input
-                type="text"
-                placeholder="שם הלקוח/ספק"
+                className="mt-1 w-full rounded-lg border px-3 py-2"
                 value={customerName}
-                onChange={(e) => {
-                  setCustomerName(e.target.value);
+                placeholder="שם הלקוח"
+                aria-label="לקוח"
+                autoComplete="off"
+                onChange={(event) => {
+                  setCustomerName(event.target.value);
+                  setCustomerId('');
                   setShowSuggestions(true);
                 }}
                 onFocus={() => setShowSuggestions(true)}
                 onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-                autoComplete="off"
               />
-              {showSuggestions && !!contactSuggestions?.length && (
-                <ul className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {contactSuggestions.map((c) => (
-                    <li
-                      key={c.id}
-                      className="px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm"
-                      onMouseDown={() => {
-                        setCustomerName(c.name);
-                        if (c.email) setCustomerEmail(c.email);
-                        setShowSuggestions(false);
-                      }}
-                    >
-                      {c.name}
-                      {c.email && <span className="text-gray-400"> · {c.email}</span>}
+              {showSuggestions && contactSuggestions?.length ? (
+                <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border bg-white shadow">
+                  {contactSuggestions.map((contact) => (
+                    <li key={contact.id}>
+                      <button
+                        type="button"
+                        className="w-full px-3 py-2 text-right text-sm hover:bg-stone-50"
+                        onMouseDown={() => {
+                          setCustomerName(contact.name);
+                          setCustomerId(contact.external_id || String(contact.id));
+                          if (contact.email) setCustomerEmail(contact.email);
+                          setShowSuggestions(false);
+                        }}
+                      >
+                        {contact.name}{contact.external_id ? ` · SUMIT ${contact.external_id}` : ''}
+                      </button>
                     </li>
                   ))}
                 </ul>
-              )}
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                אימייל לשליחה (אופציונלי)
+              ) : null}
+            </label>
+            <label className="text-sm">אימייל
+              <input className="mt-1 w-full rounded-lg border px-3 py-2" type="email" value={customerEmail} aria-label="אימייל" onChange={(event) => setCustomerEmail(event.target.value)} />
+            </label>
+            {documentType === 'credit_note' ? (
+              <label className="text-sm">מזהה המסמך המזוכה
+                <input className="mt-1 w-full rounded-lg border px-3 py-2" inputMode="numeric" value={originalInvoiceId} aria-label="מסמך מקור לזיכוי" onChange={(event) => setOriginalInvoiceId(event.target.value)} />
               </label>
-              <input
-                type="email"
-                placeholder="example@domain.com"
-                value={customerEmail}
-                onChange={(e) => setCustomerEmail(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-              />
-            </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 text-sm text-gray-700">
-                <input
-                  type="checkbox"
-                  checked={sendToSumit}
-                  onChange={(e) => setSendToSumit(e.target.checked)}
-                />
-                הפקה ב-SUMIT
-              </label>
-            </div>
+            ) : null}
           </div>
 
-          {/* Items */}
-          <div className="mb-6">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-gray-800">Items</h3>
-              <button
-                onClick={addItem}
-                className="text-primary-600 hover:text-primary-700 text-sm font-medium"
-              >
-                + Add Item
-              </button>
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="font-medium">שורות</h2>
+              <button type="button" className="text-sm underline" onClick={() => setItems([...items, { description: '', quantity: 1, price: 0, vatRate: 18 }])}>הוספת שורה</button>
             </div>
-
-            {items.map((item, index) => (
-              <div key={index} className="grid grid-cols-12 gap-4 mb-4">
-                <input
-                  type="text"
-                  placeholder="Description"
-                  className="col-span-6 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  value={item.description}
-                  onChange={(e) => {
-                    const newItems = [...items];
-                    newItems[index].description = e.target.value;
-                    setItems(newItems);
-                  }}
-                />
-                <input
-                  type="number"
-                  placeholder="Qty"
-                  className="col-span-2 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  value={item.quantity}
-                  onChange={(e) => {
-                    const newItems = [...items];
-                    newItems[index].quantity = parseFloat(e.target.value) || 0;
-                    setItems(newItems);
-                  }}
-                />
-                <input
-                  type="number"
-                  placeholder="Price"
-                  className="col-span-3 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  value={item.price}
-                  onChange={(e) => {
-                    const newItems = [...items];
-                    newItems[index].price = parseFloat(e.target.value) || 0;
-                    setItems(newItems);
-                  }}
-                />
-                {items.length > 1 && (
-                  <button
-                    onClick={() => removeItem(index)}
-                    className="col-span-1 text-red-600 hover:text-red-700"
-                  >
-                    <X size={20} />
-                  </button>
-                )}
+            {items.map((line, index) => (
+              <div key={index} className="mb-2 grid grid-cols-12 gap-2">
+                <input className="col-span-5 rounded-lg border px-3 py-2" placeholder="תיאור" aria-label={`תיאור ${index + 1}`} value={line.description} onChange={(event) => {
+                  const next = [...items];
+                  next[index] = { ...line, description: event.target.value };
+                  setItems(next);
+                }} />
+                <input className="col-span-2 rounded-lg border px-3 py-2" type="number" min="0" step="0.01" aria-label={`כמות ${index + 1}`} value={line.quantity} onChange={(event) => {
+                  const next = [...items];
+                  next[index] = { ...line, quantity: Number(event.target.value) };
+                  setItems(next);
+                }} />
+                <input className="col-span-2 rounded-lg border px-3 py-2" type="number" min="0" step="0.01" aria-label={`מחיר ${index + 1}`} value={line.price} onChange={(event) => {
+                  const next = [...items];
+                  next[index] = { ...line, price: Number(event.target.value) };
+                  setItems(next);
+                }} />
+                <input className="col-span-2 rounded-lg border px-3 py-2" type="number" min="0" step="0.01" aria-label={`מע״מ ${index + 1}`} value={line.vatRate} onChange={(event) => {
+                  const next = [...items];
+                  next[index] = { ...line, vatRate: Number(event.target.value) };
+                  setItems(next);
+                }} />
+                <button type="button" className="col-span-1 text-sm text-red-700" aria-label={`מחיקת שורה ${index + 1}`} onClick={() => setItems(items.filter((_, itemIndex) => itemIndex !== index))}>✕</button>
               </div>
             ))}
           </div>
 
-          {/* Total */}
-          <div className="border-t border-gray-200 pt-4 mb-6">
-            <div className="flex justify-between items-center text-xl font-bold">
-              <span>Total:</span>
-              <span>₪{total.toFixed(2)}</span>
-            </div>
-          </div>
+          <section className="rounded-lg bg-stone-50 p-3 text-sm" aria-label="סיכום">
+            <p>לפני מע״מ: {money(totals.net)}</p>
+            <p>מע״מ: {money(totals.tax)}</p>
+            <p className="text-lg font-semibold">סה״כ: {money(totals.total)}</p>
+          </section>
 
-          {/* Actions */}
-          <div className="flex justify-end gap-4">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
-            >
-              ביטול
-            </button>
-            <button
-              onClick={() => createMutation.mutate()}
-              disabled={!canSubmit}
-              className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {createMutation.isPending ? 'מפיק...' : 'הפק מסמך'}
-            </button>
-          </div>
+          <label className="block text-sm">הערה
+            <textarea className="mt-1 w-full rounded-lg border px-3 py-2" value={notes} aria-label="הערה" onChange={(event) => setNotes(event.target.value)} />
+          </label>
+
+          {confirming ? (
+            <section className="rounded-lg border border-amber-300 bg-amber-50 p-3" role="dialog" aria-label="אישור הפקה">
+              <p className="font-medium">לאשר הפקה ב-SUMIT?</p>
+              <p className="mt-1 text-sm">{typeLabel} עבור {customerName} · {money(totals.total)}. זו שליחה אמיתית לסאמית, לא טיוטה.</p>
+              <div className="mt-3 flex gap-2">
+                <button type="button" className="rounded-lg bg-emerald-700 px-4 py-2 text-white disabled:opacity-50" disabled={busy} onClick={() => void issueToSumit()}>
+                  {busy ? 'שולח…' : 'אישור ושליחה'}
+                </button>
+                <button type="button" className="rounded-lg border px-4 py-2" disabled={busy} onClick={() => setConfirming(false)}>חזרה</button>
+              </div>
+            </section>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="rounded-lg border px-4 py-2 disabled:opacity-50" disabled={!ready || busy} onClick={() => void saveLocal()}>שמירת טיוטה מקומית</button>
+              <button type="button" className="rounded-lg bg-blue-700 px-4 py-2 text-white disabled:opacity-50" disabled={!ready || busy || !sumitReady} onClick={() => { setError(''); setConfirming(true); }}>הפקה ב-SUMIT</button>
+            </div>
+          )}
+        </form>
+      )}
+
+      <section className="mt-8">
+        <h2 className="text-lg font-medium">מסמכים שהופקו מכאן</h2>
+        <div className="mt-2 flex flex-wrap gap-2 text-sm">
+          <button type="button" className={filterType === 'all' ? 'underline' : ''} onClick={() => setFilterType('all')}>הכל</button>
+          {types.map((row) => (
+            <button key={row.value} type="button" className={filterType === row.value ? 'underline' : ''} onClick={() => setFilterType(row.value)}>{row.label}</button>
+          ))}
         </div>
-      </div>
-    </div>
+        {documentsQuery.isLoading ? <p className="mt-3 text-sm">טוען…</p> : (
+          <ul className="mt-3 divide-y rounded-xl border bg-white">
+            {(documentsQuery.data || []).map((row) => (
+              <li key={row.id || row.external_id} className="px-3 py-2 text-sm">
+                {row.document_label || row.document_type} · {row.document_number || row.external_id || row.id} · {money(Number(row.total ?? row.total_amount ?? 0))} · {row.status}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </main>
   );
 };
 

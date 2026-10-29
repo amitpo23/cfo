@@ -44,7 +44,13 @@ async def execute_approved_action(
                                                 'verification_required': True})
     except Exception as exc:
         db.rollback()  # Keep uncommitted business rows out of the failure record.
-        service.mark_failed(approval_id, error=f'Provider outcome unknown: {type(exc).__name__}')
+        from ..integrations.sumit_integration import SumitRequestBudgetRequired
+        from ..services.sumit_request_budget import (
+            SumitRequestBudgetExceeded, SumitRequestBudgetUnavailable,
+        )
+        service.mark_failed(approval_id, error=f'{type(exc).__name__}: {exc}')
+        if isinstance(exc, (SumitRequestBudgetExceeded, SumitRequestBudgetUnavailable, SumitRequestBudgetRequired)):
+            raise
         raise HTTPException(502, 'Provider outcome is unverified; do not retry automatically') from exc
     response.headers['X-Rezef-Approval-Id'] = str(approval_id)
     response.headers['X-Rezef-Approval-Status'] = 'executed_unverified'
