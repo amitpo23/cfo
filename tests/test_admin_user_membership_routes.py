@@ -181,6 +181,100 @@ def test_role_update_changes_the_membership_not_the_global_role(client, admin):
     )
 
 
+def test_admin_activate_turns_an_invited_membership_active(client, admin):
+    """הפעלת הזמנה היא אותו PATCH שמפעיל חברות מושהית."""
+    created = client.post("/api/admin/users", json={
+        "email": "activate-invited@example.com",
+        "password": "secret123",
+        "full_name": "Invited Viewer",
+        "role": "viewer",
+        "organization_id": admin["org"],
+    }, headers=admin["headers"])
+    assert created.status_code == 201, created.text
+    user_id = created.json()["id"]
+    assert _membership(user_id, admin["org"]).status == "invited"
+
+    activated = client.patch(
+        f"/api/admin/users/{user_id}",
+        json={"is_active": True},
+        headers=admin["headers"],
+    )
+    assert activated.status_code == 200, activated.text
+    assert _membership(user_id, admin["org"]).status == "active"
+
+
+def test_org_admin_cannot_rename_global_identity(client, admin):
+    target = _register(client, "rename-blocked@example.com")
+    resp = client.patch(
+        f"/api/admin/users/{target['user_id']}/identity",
+        json={"full_name": "לא מורשה"},
+        headers=admin["headers"],
+    )
+    assert resp.status_code == 403, resp.text
+
+
+def test_super_admin_identity_route_renames_the_person(client, admin):
+    target = _register(client, "rename-allowed@example.com")
+    db = SessionLocal()
+    try:
+        operator = db.query(User).filter(User.id == admin["user_id"]).one()
+        previous_role = operator.role
+        operator.role = UserRole.SUPER_ADMIN
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        renamed = client.patch(
+            f"/api/admin/users/{target['user_id']}/identity",
+            json={"full_name": "שם חדש", "phone": "050-0000000"},
+            headers=admin["headers"],
+        )
+        assert renamed.status_code == 200, renamed.text
+        assert renamed.json()["full_name"] == "שם חדש"
+        assert renamed.json()["phone"] == "050-0000000"
+        db = SessionLocal()
+        try:
+            stored = db.query(User).filter(User.id == target["user_id"]).one()
+            assert stored.full_name == "שם חדש"
+            assert stored.role != UserRole.SUPER_ADMIN
+        finally:
+            db.close()
+    finally:
+        db = SessionLocal()
+        try:
+            operator = db.query(User).filter(User.id == admin["user_id"]).one()
+            operator.role = previous_role
+            db.commit()
+        finally:
+            db.close()
+
+
+def test_pending_invitations_accept_makes_the_org_selectable(client, admin):
+    created = client.post("/api/admin/users", json={
+        "email": "accept-banner@example.com",
+        "password": "secret123",
+        "full_name": "Needs Accept",
+        "role": "viewer",
+        "organization_id": admin["org"],
+    }, headers=admin["headers"])
+    assert created.status_code == 201, created.text
+    login = client.post("/api/admin/auth/login", json={
+        "email": "accept-banner@example.com", "password": "secret123",
+    })
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    pending = client.get("/api/admin/memberships/pending", headers=headers)
+    assert pending.status_code == 200, pending.text
+    ids = [item["organization_id"] for item in pending.json()["items"]]
+    assert admin["org"] in ids
+
+    accepted = client.post("/api/admin/memberships/accept", json={"organization_id": admin["org"]}, headers=headers)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "active"
+    orgs = client.get("/api/admin/auth/organizations", headers=headers)
+    assert admin["org"] in [org["id"] for org in orgs.json()]
+
+
 def test_role_update_does_not_touch_other_organizations(client, admin):
     """אותו אדם, שני תיקים: שינוי באחד אינו נוגע בשני."""
     target = _register(client, "role-isolation-target@example.com")

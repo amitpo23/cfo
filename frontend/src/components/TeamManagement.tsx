@@ -193,8 +193,13 @@ const TeamManagement: React.FC<Props> = ({ darkMode, currentUser }) => {
   const suspendMembership = (member: TeamMember) =>
     runAction(member.id, () => api.post(`/admin/memberships/${member.id}/suspend`), 'השעיית החברות נכשלה.');
 
-  const reactivateMembership = (member: TeamMember) =>
-    runAction(member.id, () => api.patch(`/admin/users/${member.id}`, { is_active: true }), 'הפעלת החברות מחדש נכשלה.');
+  const reactivateMembership = (member: TeamMember) => {
+    if (member.membership_status === 'invited'
+      && !window.confirm(`להפוך את ההזמנה של ${member.full_name} לפעילה? הוא יוכל להיכנס לארגון בלי לאשר בעצמו.`)) {
+      return;
+    }
+    return runAction(member.id, () => api.patch(`/admin/users/${member.id}`, { is_active: true }), 'הפעלת החברות מחדש נכשלה.');
+  };
 
   const revokeMembership = (member: TeamMember) => {
     if (!window.confirm(`לבטל את החברות של ${member.full_name} בארגון? הפעולה מסירה את הגישה שלו לתיק.`)) return;
@@ -430,13 +435,13 @@ const TeamManagement: React.FC<Props> = ({ darkMode, currentUser }) => {
                             >
                               <ShieldOff size={16} />
                             </button>
-                          ) : member.membership_status === 'suspended' ? (
+                          ) : member.membership_status === 'suspended' || member.membership_status === 'invited' ? (
                             <button
                               onClick={() => reactivateMembership(member)}
-                              title="הפעלה מחדש"
-                              className={`p-1.5 rounded-lg transition ${darkMode ? 'text-green-300 hover:bg-green-900/30' : 'text-green-600 hover:bg-green-50'}`}
+                              title={member.membership_status === 'invited' ? 'הפעל הזמנה' : 'הפעלה מחדש'}
+                              className={`rounded-lg px-2 py-1 text-xs transition ${darkMode ? 'text-green-300 hover:bg-green-900/30' : 'text-green-700 hover:bg-green-50'}`}
                             >
-                              <RefreshCw size={16} />
+                              {member.membership_status === 'invited' ? 'הפעל הזמנה' : 'הפוך לפעיל'}
                             </button>
                           ) : null}
                           {member.membership_status !== 'revoked' && (
