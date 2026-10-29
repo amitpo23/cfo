@@ -18,6 +18,7 @@ import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, Fi
 import { safeLoginHref } from './dashboardReturn';
 import { DASHBOARD_POLL_MS, revisionToken, shouldReloadView } from './dashboardLive';
 import TransferClassification from './TransferClassification';
+import { PeriodCompare, PeriodCompareTable, PeriodControls, isoDate, presetRange, type Grain } from './PeriodCompare';
 
 type CashMonth = {
   month: string;
@@ -666,6 +667,11 @@ export default function ClientDashboardPage() {
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<TabId>(tabFromLocation);
   const [scope, setScope] = useState('combined');
+  const [grain, setGrain] = useState<Grain>('month');
+  const [rangeStart, setRangeStart] = useState(() => `${new Date().getFullYear()}-01-01`);
+  const [rangeEnd, setRangeEnd] = useState(() => isoDate(new Date()));
+  const [ranged, setRanged] = useState(false);
+  const [compare, setCompare] = useState<PeriodCompare | null>(null);
   // The title from the last visit, shown with the skeleton before the first request returns.
   const [cachedTitle] = useState(() => sessionStorage.getItem(`rezef:d:title:${slugFromLocation()}`));
 
@@ -790,7 +796,9 @@ export default function ClientDashboardPage() {
       const next = revisionToken(await response.json());
       if (shouldReloadView(seen, next)) {
         const again = await fetch(
-          editor?.id ? `/api/dashboards/${editor.id}/view` : `/api/public/d/${slug}`,
+          editor?.id
+            ? `/api/dashboards/${editor.id}/view${ranged ? `?start=${rangeStart}&end=${rangeEnd}` : ''}`
+            : `/api/public/d/${slug}${ranged ? `?start=${rangeStart}&end=${rangeEnd}` : ''}`,
           { headers: editor?.id ? authHeaders() : {}, credentials: 'include', cache: 'no-store' },
         );
         if (again.ok && !stopped) setView((await again.json()) as DashboardView);
@@ -803,7 +811,50 @@ export default function ClientDashboardPage() {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [editor?.id]);
+  }, [editor?.id, ranged, rangeStart, rangeEnd]);
+
+  useEffect(() => {
+    if (!ranged) return undefined;
+    const slug = slugFromLocation();
+    let cancelled = false;
+    async function loadWindow() {
+      const url = editor?.id
+        ? `/api/dashboards/${editor.id}/view?start=${rangeStart}&end=${rangeEnd}`
+        : `/api/public/d/${slug}?start=${rangeStart}&end=${rangeEnd}`;
+      const response = await fetch(url, {
+        headers: editor?.id ? authHeaders() : {},
+        credentials: 'include',
+      });
+      if (cancelled || !response.ok) return;
+      setView((await response.json()) as DashboardView);
+    }
+    void loadWindow();
+    return () => {
+      cancelled = true;
+    };
+  }, [ranged, editor?.id, rangeStart, rangeEnd]);
+
+  useEffect(() => {
+    const slug = slugFromLocation();
+    if (!slug && !editor?.id) return undefined;
+    let cancelled = false;
+    const query = `grain=${grain}&start=${rangeStart}&end=${rangeEnd}`;
+    async function loadCompare() {
+      const url = editor?.id
+        ? `/api/dashboards/${editor.id}/period-compare?${query}`
+        : `/api/public/d/${slug}/period-compare?${query}`;
+      const response = await fetch(url, {
+        headers: editor?.id ? authHeaders() : {},
+        credentials: 'include',
+      });
+      if (cancelled || !response.ok) return;
+      setCompare((await response.json()) as PeriodCompare);
+    }
+    void loadCompare();
+    return () => {
+      cancelled = true;
+    };
+  }, [editor?.id, grain, rangeStart, rangeEnd]);
 
   async function reloadFiling(page: number) {
     if (!editor) return;
@@ -821,7 +872,8 @@ export default function ClientDashboardPage() {
 
   async function reloadView() {
     if (!editor) return;
-    const response = await fetch(`/api/dashboards/${editor.id}/view`, { headers: authHeaders() });
+    const windowQuery = ranged ? `?start=${rangeStart}&end=${rangeEnd}` : '';
+    const response = await fetch(`/api/dashboards/${editor.id}/view${windowQuery}`, { headers: authHeaders() });
     if (!response.ok) return;
     setView((await response.json()) as DashboardView);
   }
@@ -933,6 +985,22 @@ export default function ClientDashboardPage() {
         {view && scoped ? (
           <>
             <StatusTabs tabs={TABS.filter((item) => item.id !== 'budget' || editor)} active={tab} onSelect={setTab} />
+            <div className="mt-3">
+              <PeriodControls
+                grain={grain}
+                start={rangeStart}
+                end={rangeEnd}
+                onGrain={(next) => {
+                  const range = presetRange(next);
+                  setGrain(next);
+                  setRangeStart(range.start);
+                  setRangeEnd(range.end);
+                  setRanged(true);
+                }}
+                onStart={(value) => { setRangeStart(value); setRanged(true); }}
+                onEnd={(value) => { setRangeEnd(value); setRanged(true); }}
+              />
+            </div>
             {multi ? (
               <FilterBar>
                 <Segmented
@@ -947,6 +1015,9 @@ export default function ClientDashboardPage() {
             <TabErrorBoundary tab={`${tab}:${scope}`}>
             <div id="dashboard-panel" role="tabpanel" aria-labelledby={`tab-${tab}`} className="mt-4 grid gap-4">
               {tab === 'balance' ? <BalanceSheetCard sheet={scoped.balance_sheet} /> : null}
+              {tab === 'status' || tab === 'liquidity' || tab === 'cashforecast' || tab === 'bva' ? (
+                <PeriodCompareTable report={compare} />
+              ) : null}
               {tab === 'status' ? (
                 <>
                   <LiquidityTodayCard block={liquidityToday} />

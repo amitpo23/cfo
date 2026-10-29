@@ -33,6 +33,7 @@ import {
   Database,
 } from 'lucide-react';
 import api from '../services/api';
+import { PeriodCompare, PeriodCompareTable, PeriodControls, isoDate, presetRange, type Grain } from './PeriodCompare';
 import { AgentPanel, FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
 import ExportButtons, { ExportSheet } from './ExportButtons';
 
@@ -122,6 +123,13 @@ interface CategoryBreakdownResponse {
 
 const CashFlowDashboard: React.FC = () => {
   const [timeRange, setTimeRange] = useState(12);
+  const [grain, setGrain] = useState<Grain>('month');
+  const [rangeStart, setRangeStart] = useState(() => `${new Date().getFullYear()}-01-01`);
+  const [rangeEnd, setRangeEnd] = useState(() => isoDate(new Date()));
+  const { data: periodCompare } = useQuery<PeriodCompare>({
+    queryKey: ['cashflow-period', grain, rangeStart, rangeEnd],
+    queryFn: () => api.get<PeriodCompare>(`/cashflow/period?grain=${grain}&start=${rangeStart}&end=${rangeEnd}`),
+  });
 
   // Fetch monthly cash flow — ספרים חיים (BankTransaction), honest-null.
   const { data: monthlyResp, isLoading: loadingMonthly } = useQuery<LiveMonthlyResponse>({
@@ -283,6 +291,19 @@ const CashFlowDashboard: React.FC = () => {
       ]}
       actions={
         <>
+          <PeriodControls
+            grain={grain}
+            start={rangeStart}
+            end={rangeEnd}
+            onGrain={(next) => {
+              const range = presetRange(next);
+              setGrain(next);
+              setRangeStart(range.start);
+              setRangeEnd(range.end);
+            }}
+            onStart={setRangeStart}
+            onEnd={setRangeEnd}
+          />
           <select
             value={timeRange}
             onChange={(e) => setTimeRange(Number(e.target.value))}
@@ -319,6 +340,10 @@ const CashFlowDashboard: React.FC = () => {
           ))}
         </div>
       )}
+
+      <div className="mb-8">
+        <PeriodCompareTable report={periodCompare ?? null} />
+      </div>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">

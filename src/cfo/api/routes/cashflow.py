@@ -68,6 +68,34 @@ class BudgetRequest(BaseModel):
 
 # ============= Cash Flow Endpoints =============
 
+@router.get("/period")
+async def get_period_compare(
+    grain: str = Query("month", pattern="^(day|week|month)$"),
+    start: date = Query(...),
+    end: date = Query(...),
+    db=Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    org_id: int = Depends(get_current_org_id),
+):
+    """Budget, booked bank, and filed books for the org. No SUMIT or Open Finance call."""
+    from ...services.dashboards.period_compare import compare_period
+    from ...services.dashboards.view_model import MAX_RANGE_DAYS
+    if end < start:
+        raise HTTPException(422, "תאריך הסיום מוקדם מתאריך ההתחלה")
+    if (end - start).days > MAX_RANGE_DAYS:
+        raise HTTPException(422, "טווח התאריכים ארוך מ-366 ימים")
+    from ...models import ClientDashboard
+    from ...services.dashboards.view_model import plan_payload
+    dashboard = (
+        db.query(ClientDashboard)
+        .filter(ClientDashboard.primary_organization_id == org_id)
+        .order_by(ClientDashboard.id)
+        .first()
+    )
+    plan = plan_payload(db, dashboard.id) if dashboard is not None else None
+    return compare_period(db, org_id, plan, grain=grain, start=start, end=end)
+
+
 @router.get("/monthly")
 async def get_monthly_cash_flow(
     months: int = Query(12, ge=1, le=36, description="מספר חודשים"),

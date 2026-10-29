@@ -306,6 +306,34 @@ def dashboard_revision(dashboard_id: int, response: Response, db: Session = Depe
     return view_model.dashboard_revision(db, row)
 
 
+def _period_or_error(grain: str, start: date | None, end: date | None):
+    from ...services.dashboards.period_compare import GRAINS
+    if grain not in GRAINS:
+        raise DashboardError(422, "invalid_grain", "התצוגה חייבת להיות יום, שבוע או חודש")
+    if start is None or end is None:
+        raise DashboardError(422, "invalid_range", "חסרים תאריכי התחלה וסיום")
+    _check_window(start, end)
+    return start, end
+
+
+@router.get("/dashboards/{dashboard_id}/period-compare")
+def dashboard_period_compare(dashboard_id: int, grain: str = "month", start: date | None = None,
+                             end: date | None = None, db: Session = Depends(get_db_session),
+                             user: User = Depends(get_current_user)):
+    """Budget, booked bank, and filed books for the selected grain. No provider call."""
+    from ...services.dashboards.period_compare import compare_period
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
+        window_start, window_end = _period_or_error(grain, start, end)
+        plan = view_model.plan_payload(db, row.id)
+        return compare_period(
+            db, row.primary_organization_id, plan,
+            grain=grain, start=window_start, end=window_end,
+        )
+    except DashboardError as exc:
+        return _error(exc)
+
+
 @router.get("/dashboards/{dashboard_id}/view")
 def dashboard_view(dashboard_id: int, response: Response, start: date | None = None, end: date | None = None,
                    db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
@@ -755,8 +783,30 @@ def public_revision(slug: str, request: Request, db: Session = Depends(get_db_se
     return _public_response(view_model.dashboard_revision(db, dashboard))
 
 
+@public_router.get("/d/{slug}/period-compare")
+def public_period_compare(slug: str, request: Request, grain: str = "month",
+                          start: date | None = None, end: date | None = None,
+                          db: Session = Depends(get_db_session)):
+    """Same three-source comparison for a dashboard the caller can already open."""
+    from ...services.dashboards.period_compare import compare_period
+    dashboard, error = _public_dashboard_or_error(slug, request, db)
+    if error is not None:
+        return error
+    try:
+        window_start, window_end = _period_or_error(grain, start, end)
+        plan = view_model.plan_payload(db, dashboard.id)
+        payload = compare_period(
+            db, dashboard.primary_organization_id, plan,
+            grain=grain, start=window_start, end=window_end,
+        )
+    except DashboardError as exc:
+        return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
+    return _public_response(payload)
+
+
 @public_router.get("/d/{slug}")
-def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get_db_session)):
+def read_public_dashboard(slug: str, request: Request, start: date | None = None, end: date | None = None,
+                          db: Session = Depends(get_db_session)):
     limited = _claim_public_limit(db, request, slug)
     if limited:
         return limited
@@ -773,17 +823,24 @@ def read_public_dashboard(slug: str, request: Request, db: Session = Depends(get
     snapshot = None
     if dashboard.current_snapshot_id:
         snapshot = db.get(PublishedSnapshot, dashboard.current_snapshot_id)
-    if snapshot is not None and view_model.snapshot_is_current(db, dashboard, snapshot):
+    today = date.today()
+    window_end = end or today
+    window_start = start or date(window_end.year, 1, 1)
+    if start or end:
+        try:
+            _check_window(window_start, window_end)
+        except DashboardError as exc:
+            return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
+    elif snapshot is not None and view_model.snapshot_is_current(db, dashboard, snapshot):
         payload = view_model.redact_public_view(dict(snapshot.view_model or {}))
         payload["provider_calls"] = 0
         payload["freshness"] = dict(snapshot.freshness or {})
         payload["freshness"]["published"] = True
         payload["source"] = "snapshot"
         return _public_response(payload)
-    today = date.today()
     try:
         with measured(db) as measure:
-            live = multi_entity.build_dashboard_view(db, dashboard, date(today.year, 1, 1), today,
+            live = multi_entity.build_dashboard_view(db, dashboard, window_start, window_end,
                                                      plan=view_model.plan_payload(db, dashboard.id))
     except DashboardError as exc:
         return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
