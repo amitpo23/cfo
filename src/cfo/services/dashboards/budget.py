@@ -27,6 +27,8 @@ MAX_AMOUNT = Decimal("9999999999.99")
 _LABELS = FinancialReportsService.CATEGORY_HEBREW
 _PUBLIC_LINE_KEYS = (
     "kind", "category", "category_he", "budget", "actual", "variance", "variance_pct",
+    "driver", "division", "driver_formula", "quantity", "rate", "line_source", "line_status",
+    "placeholder", "placeholder_warning", "placeholder_amount",
 )
 _PUBLIC_TOTAL_KEYS = ("budget", "actual", "variance", "variance_pct")
 # A cash-basis month reports actuals by the tool's comparison rows
@@ -407,6 +409,64 @@ def _public_line(line: dict) -> dict:
     return out
 
 
+def with_driver_rows(section: dict, plan: dict | None) -> dict:
+    """Replace a rolled-up category with one row per custom line when that category is only those lines."""
+    if not isinstance(section, dict):
+        return section
+    from .budget_fill import driver_month_rows
+    months = []
+    changed = False
+    for month in section.get("months") or []:
+        if not isinstance(month, dict):
+            months.append(month)
+            continue
+        drivers = driver_month_rows(plan, str(month.get("month") or ""))
+        if not drivers:
+            months.append(month)
+            continue
+        changed = True
+        explained: dict[str, float] = {}
+        public = []
+        for row in drivers:
+            rolled = row.get("rolled_category")
+            folded = CASH_ROW_FOR_CATEGORY.get(rolled, rolled)
+            if row.get("budget") is not None:
+                for key in {rolled, folded}:
+                    if key:
+                        explained[key] = round(explained.get(key, 0.0) + row["budget"], 2)
+            public.append({key: value for key, value in row.items() if key != "rolled_category"})
+        kept = []
+        for line in month.get("categories") or []:
+            if not isinstance(line, dict):
+                continue
+            cover = explained.get(line.get("category"))
+            if cover is not None and line.get("budget") is not None and abs(float(line["budget"]) - cover) < 0.05:
+                continue
+            kept.append(line)
+        categories = kept + public
+        previous = month.get("totals") if isinstance(month.get("totals"), dict) else {}
+        copied = dict(month)
+        copied["categories"] = categories
+        copied["totals"] = _retotal_kinds(categories, previous)
+        months.append(copied)
+    if not changed:
+        return section
+    return {**section, "months": months, "has_budget": True}
+
+
+def _retotal_kinds(lines: list[dict], previous: dict) -> dict:
+    out = {}
+    for kind, name in (("revenue", "revenue"), ("cost", "costs")):
+        amounts = [
+            line["budget"] for line in lines
+            if line.get("kind") == kind and line.get("budget") is not None and not line.get("placeholder")
+        ]
+        budget = round(sum(amounts), 2) if amounts else None
+        actual = (previous.get(name) or {}).get("actual") if isinstance(previous.get(name), dict) else None
+        out[name] = _compare(budget, actual)
+    return out
+
+
 def redact_public(section):
     """Keep only the published fields. No ids, notes or staff identity."""
     if not isinstance(section, dict):
@@ -587,6 +647,11 @@ def _period_summary(db, org_ids: list[int], section: dict, start: date, end: dat
     for item in in_period:
         for line in item.get("categories") or []:
             target = slot(line["kind"], line["category"])
+            if line.get("category_he"):
+                target["category_he"] = line["category_he"]
+            for field in ("driver", "division", "driver_formula", "quantity", "rate", "line_source", "line_status"):
+                if line.get(field) is not None:
+                    target[field] = line[field]
             if line.get("budget") is not None:
                 target["budget"] = round((target["budget"] or 0.0) + line["budget"], 2)
             if line.get("placeholder"):
@@ -609,13 +674,20 @@ def _period_summary(db, org_ids: list[int], section: dict, start: date, end: dat
     for (kind, key), value in sorted(rows.items(), key=lambda item: (item[0][0] != "revenue", item[0][1])):
         budget = value["budget"]
         actual = value["actual"] if value["actual_known"] else None
-        if budget is None and actual is None and not value.get("placeholder_warning"):
+        if budget is None and actual is None and not value.get("placeholder_warning") and not value.get("driver"):
             continue
         variance = None if budget is None or actual is None else round(budget - actual, 2)
         categories.append({
             "category_id": key,
             "category_name": key,
-            "category_hebrew": _cash_label(key),
+            "category_hebrew": value.get("category_he") or _cash_label(key),
+            "driver": bool(value.get("driver")),
+            "division": value.get("division"),
+            "driver_formula": value.get("driver_formula"),
+            "quantity": value.get("quantity"),
+            "rate": value.get("rate"),
+            "line_source": value.get("line_source"),
+            "line_status": value.get("line_status"),
             "kind": kind,
             "budget_amount": budget,
             "actual_amount": actual,

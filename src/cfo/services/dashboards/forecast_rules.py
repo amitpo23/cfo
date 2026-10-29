@@ -138,10 +138,12 @@ def _category_sum(lines: list[dict] | None, month: str, categories: frozenset[st
         if line.get("category") not in categories:
             continue
         cell = (line.get("months") or {}).get(month)
-        if not isinstance(cell, dict) or cell.get("amount") is None:
+        from .budget_fill import counts_in_total
+        amount = counts_in_total(line, cell)
+        if amount is None:
             continue
         found = True
-        total += float(cell["amount"])
+        total += float(amount)
     return round(total, 2) if found else None
 
 
@@ -359,6 +361,46 @@ def budget_outflow_items(plan: dict | None, lines: list[dict] | None, first: dat
                 "date": day, "label": labels[kind],
                 "amount": -round(abs(amount), 2), "certainty": SCHEDULED,
                 "source": "plan.budgetLines", "rule": "budget_assumption",
+            })
+    return items
+
+
+_ALREADY_CASH = PAYROLL_CATEGORIES | SUPPLIER_CATEGORIES | frozenset({
+    "vehicle", "interest_expense", "loan_principal", "headcount", "depreciation",
+})
+
+
+def custom_operating_items(lines: list[dict] | None, first: date, last: date) -> list[dict]:
+    """Custom expense lines that are not already payroll, suppliers, or a financing row.
+
+    Each known amount is cash on the first business day of its month. A missing
+    month is omitted, not emitted as 0.
+    """
+    from .budget_fill import counts_in_total
+    from .cashflow_truth import roll_saturday
+
+    items = []
+    for line in lines or []:
+        if not line.get("custom") or line.get("kind") != "cost":
+            continue
+        if line.get("category") in _ALREADY_CASH:
+            continue
+        for month, cell in (line.get("months") or {}).items():
+            amount = counts_in_total(line, cell)
+            if amount is None:
+                continue
+            year, mon = int(month[:4]), int(month[5:])
+            day = roll_saturday(date(year, mon, 1))
+            if not first <= day <= last:
+                continue
+            items.append({
+                "date": day,
+                "label": line.get("label") or "הוצאה לפי תקציב",
+                "amount": -round(abs(float(amount)), 2),
+                "certainty": SCHEDULED,
+                "source": "plan.budgetLines",
+                "rule": "custom_budget_line",
+                "division": line.get("division"),
             })
     return items
 

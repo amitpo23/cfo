@@ -422,9 +422,10 @@ def build_entity_forecast(view: dict, *, plan: dict | None, organization_id: int
         lines = forecast_rules.load_lines(plan)
         ruled, ruled_unknown = forecast_rules.supplier_and_payroll(plan, lines, first, last)
         budget_cash = forecast_rules.budget_outflow_items(plan, lines, first, last)
+        custom_cash = forecast_rules.custom_operating_items(lines, first, last)
         loans, loan_unknown = forecast_rules.loan_items(plan, organization_id, first, last)
         cheques, cheque_unknown = forecast_rules.discounted_cheque_items(plan, organization_id, first, last)
-        items = items + ruled + budget_cash + loans + cheques
+        items = items + ruled + budget_cash + custom_cash + loans + cheques
         unknown = ruled_unknown + loan_unknown + cheque_unknown
         income_days, income_unknown = forecast_rules.income_for_window(lines, first, last)
         unknown += [(day, "income") for day in income_unknown]

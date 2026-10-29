@@ -23,6 +23,14 @@ STATUS_HE = {
     "none": "אין",
     "missing": "חסר, הבעלים יזין",
     "assumption": "הנחה מהיסטוריה",
+    "confirmed": "מאושר",
+}
+_KIND_IN = {
+    "income": "revenue",
+    "revenue": "revenue",
+    "expense": "cost",
+    "cost": "cost",
+    "financing": "financing",
 }
 _ACTIVE = {"revenue", "cost", "expense", "interest", "depreciation"}
 _MONEY = Decimal("0.01")
@@ -187,14 +195,16 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
                 elif stored is not None:
                     status, amount = "filled", Decimal(str(stored.budgeted_amount or 0)).quantize(_MONEY)
             source_name = None
-            if status == "missing":
+            if isinstance(cell, dict) and cell.get("status") in {"assumption", "confirmed"} and amount is not None:
+                status = cell["status"]
+            if status == "missing" and not raw.get("custom"):
                 prior = history.get((month, line_id)) or history.get((month, str(raw.get("category") or "")))
                 if prior is not None and prior != 0:
                     status, amount = "assumption", prior
                     source_name = "history"
             warning = None
             income = kind == "revenue" or str(raw.get("category") or "") in {"revenue", "sales", "income"}
-            if income and status == "filled":
+            if income and status in {"filled", "assumption", "confirmed"}:
                 warning = looks_like_placeholder(amount)
             by_month[key] = {
                 "status": status,
@@ -205,6 +215,10 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
             }
             if status == "missing":
                 line_missing.append(key)
+            if raw.get("custom") and status == "missing":
+                by_month[key]["status_he"] = "חסר"
+            elif status == "assumption" and raw.get("custom") and source_name != "history":
+                by_month[key]["status_he"] = "הנחה"
         if line_missing:
             missing.append({"id": line_id, "label": raw.get("label") or line_id, "months": line_missing})
         else:
@@ -220,7 +234,12 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
             "label": raw.get("label") or line_id,
             "kind": "revenue" if kind == "revenue" else "cost",
             "category": raw.get("category"),
+            "custom": bool(raw.get("custom")),
             "months": by_month,
+            **({"division": raw.get("division")} if raw.get("custom") else {}),
+            **({"line_source": raw.get("source")} if raw.get("custom") and raw.get("source") else {}),
+            **({"driver_formula": raw.get("driver_formula")} if raw.get("custom") and raw.get("driver_formula") else {}),
+            **({"covers": raw.get("covers")} if raw.get("covers") else {}),
             **({"placeholder_warning": line_warning} if line_warning else {}),
         })
     wage_months = []
@@ -262,12 +281,49 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
     }
 
 
+def _normalize_kind(kind) -> str | None:
+    if not isinstance(kind, str):
+        return None
+    return _KIND_IN.get(kind.strip())
+
+
+def _stamp_custom(line: dict, update: dict) -> None:
+    if update.get("custom") is True:
+        line["custom"] = True
+    for field, limit in (("division", 40), ("source", 80), ("driver_formula", 160), ("covers", 40)):
+        value = update.get(field)
+        if isinstance(value, str) and value.strip():
+            line[field] = value.strip()[:limit]
+            line["custom"] = True
+
+
+def _amount_cell(update: dict, status: str) -> dict:
+    quantity = update.get("qty", update.get("quantity"))
+    rate = update.get("unit_price", update.get("rate"))
+    amount = update.get("amount")
+    if quantity is not None and rate is not None:
+        qty = Decimal(str(quantity))
+        price = Decimal(str(rate))
+    elif amount is not None:
+        qty = Decimal("1")
+        price = Decimal(str(amount))
+    else:
+        raise ValueError("סכום חסר")
+    if qty < 0 or price < 0:
+        raise ValueError("סכום שלילי")
+    cell = {"quantity": float(qty), "rate": float(price)}
+    if status in {"assumption", "confirmed"}:
+        cell["status"] = status
+    return cell
+
+
 def apply_updates(payload: dict, updates: list[dict]) -> dict:
     """Return a new plan payload. Unknown amounts are not created."""
     payload = dict(payload or {})
     lines = [dict(line) for line in payload.get("budgetLines") or [] if isinstance(line, dict)]
     by_id = {str(line.get("id")): line for line in lines if line.get("id")}
-    for update in updates:
+    for raw_update in updates:
+        update = dict(raw_update)
         line_id = str(update.get("id") or "").strip()
         if not line_id:
             raise ValueError("חסר מזהה שורה")
@@ -275,6 +331,11 @@ def apply_updates(payload: dict, updates: list[dict]) -> dict:
             lines = [line for line in lines if str(line.get("id")) != line_id]
             by_id.pop(line_id, None)
             continue
+        mapped = _normalize_kind(update.get("kind"))
+        if mapped is not None:
+            update["kind"] = mapped
+        if update.get("custom") is True and not update.get("category"):
+            update["category"] = "revenue" if update.get("kind") == "revenue" else "other"
         line = by_id.get(line_id)
         if line is None:
             label = update.get("label")
@@ -287,20 +348,17 @@ def apply_updates(payload: dict, updates: list[dict]) -> dict:
             line = {"id": line_id, "label": label.strip(), "category": category, "kind": kind, "months": {}}
             lines.append(line)
             by_id[line_id] = line
+        _stamp_custom(line, update)
+        if isinstance(update.get("label"), str) and update["label"].strip():
+            line["label"] = update["label"].strip()
         month = update.get("month")
         if not isinstance(month, str):
             continue
         months = dict(line.get("months") or {})
         marks = dict(line.get("fill") or {})
         status = update.get("status")
-        if status == "filled":
-            amount = update.get("amount")
-            if amount is None:
-                raise ValueError("סכום חסר")
-            number = Decimal(str(amount))
-            if number < 0:
-                raise ValueError("סכום שלילי")
-            months[month] = {"quantity": 1, "rate": float(number)}
+        if status in {"filled", "assumption", "confirmed"}:
+            months[month] = _amount_cell(update, status)
             marks.pop(month, None)
         elif status == NONE_MARK:
             months.pop(month, None)
@@ -370,6 +428,127 @@ def _save_budget_rows(db, organization_id: int, updates: list[dict]) -> dict:
 
 
 PLACEHOLDER_MIN = Decimal("1000000")
+
+
+def driver_month_rows(plan: dict | None, month: str) -> list[dict]:
+    """One comparison row per custom line. A missing amount stays null, not 0."""
+    rows = []
+    raw = (plan or {}).get("budgetLines") if isinstance(plan, dict) else None
+    for line in raw or []:
+        if not isinstance(line, dict) or not line.get("custom"):
+            continue
+        kind = "revenue" if line.get("kind") == "revenue" else "cost"
+        cell = (line.get("months") or {}).get(month)
+        quantity = rate = amount = None
+        status = "missing"
+        if isinstance(cell, dict) and cell.get("quantity") is not None and cell.get("rate") is not None:
+            quantity = float(cell["quantity"])
+            rate = float(cell["rate"])
+            amount = round(quantity * rate, 2)
+            status = cell.get("status") or "assumption"
+        warning = looks_like_placeholder(amount) if kind == "revenue" and amount is not None else None
+        budget = None if warning or amount is None else amount
+        rolled = line.get("category") or ("revenue" if kind == "revenue" else "other")
+        rows.append({
+            "kind": kind,
+            "category": str(line.get("id") or ""),
+            "category_he": line.get("label") or str(line.get("id") or ""),
+            "budget": budget,
+            "actual": None,
+            "variance": None,
+            "variance_pct": None,
+            "driver": True,
+            "division": line.get("division"),
+            "driver_formula": line.get("driver_formula"),
+            "quantity": quantity,
+            "rate": rate,
+            "line_source": line.get("source"),
+            "line_status": status,
+            "placeholder": bool(warning),
+            "placeholder_warning": warning,
+            "placeholder_amount": amount if warning else None,
+            "rolled_category": rolled,
+        })
+    return rows
+
+
+def counts_in_total(line: dict, cell) -> Decimal | None:
+    """An amount that belongs in a month total. Missing and round-million income stay out."""
+    if not isinstance(line, dict) or not isinstance(cell, dict) or cell.get("amount") is None:
+        return None
+    if cell.get("status") == "missing" or cell.get("placeholder") is True:
+        return None
+    try:
+        number = Decimal(str(cell["amount"]))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    income = line.get("kind") == "revenue" or line.get("category") in {
+        "sales", "services", "other_income", "interest_income", "rent_income", "revenue",
+    }
+    if income and looks_like_placeholder(number):
+        return None
+    return number
+
+
+def driver_csv_updates(text: str, month: str) -> list[dict]:
+    """One month of driver lines from the budget_lines.csv columns. Blank amount stays missing."""
+    import csv
+    import io
+
+    if not isinstance(month, str) or len(month) != 7 or month[4] != "-":
+        raise ValueError("חודש הייבוא חייב להיות YYYY-MM")
+    reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
+    updates = []
+    for raw in reader:
+        if not raw:
+            continue
+        line_id = str(raw.get("line_key") or "").strip()
+        label = str(raw.get("label_he") or "").strip()
+        if not line_id or not label:
+            raise ValueError("לשורת CSV חסר מזהה או כותרת")
+        kind_raw = str(raw.get("kind") or "").strip()
+        covers = None
+        if "income" in kind_raw and "expense" in kind_raw:
+            kind = "revenue"
+            covers = "income_and_expense"
+        elif kind_raw == "expense":
+            kind = "cost"
+        else:
+            kind = "revenue"
+        status = str(raw.get("status") or "missing").strip() or "missing"
+        if status not in {"assumption", "confirmed", "missing"}:
+            raise ValueError("סטטוס CSV אינו מוכר")
+        amount_text = str(raw.get("amount") or "").strip()
+        qty_text = str(raw.get("qty") or "").strip()
+        price_text = str(raw.get("unit_price") or "").strip()
+        if status != "missing" and not amount_text and not (qty_text and price_text):
+            status = "missing"
+        update = {
+            "id": line_id,
+            "label": label,
+            "kind": kind,
+            "custom": True,
+            "division": str(raw.get("division") or "").strip(),
+            "source": str(raw.get("source") or "").strip(),
+            "driver_formula": str(raw.get("driver_formula") or "").strip(),
+            "month": month,
+            "status": status,
+        }
+        if covers:
+            update["covers"] = covers
+        if qty_text and price_text:
+            update["qty"] = float(qty_text)
+            update["unit_price"] = float(price_text)
+        elif amount_text and status != "missing":
+            update["amount"] = float(amount_text)
+        if status == "missing":
+            update.pop("amount", None)
+            update.pop("qty", None)
+            update.pop("unit_price", None)
+        updates.append(update)
+    if not updates:
+        raise ValueError("הקובץ לא מכיל שורות")
+    return updates
 
 
 def looks_like_placeholder(amount, actual=None) -> str | None:

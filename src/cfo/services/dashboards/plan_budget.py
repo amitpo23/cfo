@@ -106,10 +106,15 @@ def validate_budget_lines(payload: dict) -> list[dict] | None:
         seen.add(line_id)
         if not isinstance(label, str) or not label.strip() or len(label.strip()) > 80:
             raise _invalid("לשורת תקציב חסרה כותרת")
-        key = _known_key((item.get("category") or "").strip() if isinstance(item.get("category"), str) else "")
-        kind = item.get("kind")
-        if kind is not None and kind != _kind_for(key):
-            raise _invalid("סוג השורה לא תואם לקטגוריה")
+        custom = item.get("custom") is True
+        if custom:
+            key, kind = _custom_key(item)
+        else:
+            key = _known_key((item.get("category") or "").strip() if isinstance(item.get("category"), str) else "")
+            kind = item.get("kind")
+            if kind is not None and kind != _kind_for(key):
+                raise _invalid("סוג השורה לא תואם לקטגוריה")
+            kind = _kind_for(key)
         months_raw = item.get("months") or {}
         if not isinstance(months_raw, dict):
             raise _invalid("חודשי השורה חייבים להיות אובייקט")
@@ -125,15 +130,52 @@ def validate_budget_lines(payload: dict) -> list[dict] | None:
             amount = (quantity * rate).quantize(Decimal("0.01"))
             if amount > MAX_AMOUNT:
                 raise _invalid("סכום התקציב גדול מדי")
-            months[parsed] = {"quantity": quantity, "rate": rate, "amount": amount}
-        lines.append({
+            stored = {"quantity": quantity, "rate": rate, "amount": amount}
+            cell_status = cell.get("status")
+            if cell_status in {"assumption", "confirmed", "filled"}:
+                stored["status"] = cell_status
+            if _kind_for(key) == "revenue":
+                from .budget_fill import looks_like_placeholder
+                if looks_like_placeholder(amount):
+                    stored["placeholder"] = True
+            months[parsed] = stored
+        built = {
             "id": line_id,
             "label": label.strip(),
             "category": key,
             "kind": _kind_for(key),
             "months": months,
-        })
+        }
+        if custom:
+            built["custom"] = True
+            for field in ("division", "source", "driver_formula", "covers"):
+                value = item.get(field)
+                if isinstance(value, str) and value.strip():
+                    built[field] = value.strip()
+        lines.append(built)
     return lines
+
+
+def _custom_key(item: dict) -> tuple[str, str]:
+    """A driver line keeps its own id. Income rolls into revenue, expense into other."""
+    raw = item.get("kind")
+    if raw in {"income", "revenue"}:
+        key, kind = "revenue", "revenue"
+    elif raw in {"expense", "cost"}:
+        key, kind = "other", "cost"
+    elif raw in {"income/expense", "both"}:
+        key, kind = "revenue", "revenue"
+    else:
+        raise _invalid("סוג שורה מותאמת הוא הכנסה או הוצאה")
+    category = item.get("category")
+    if isinstance(category, str) and category.strip():
+        try:
+            known = _known_key(category.strip())
+        except PlanBudgetError:
+            known = None
+        if known is not None:
+            key, kind = known, _kind_for(known)
+    return key, kind
 
 
 def _month(value) -> str:
@@ -166,9 +208,13 @@ def _sums(lines: list[dict]) -> dict[tuple[int, int, str], Decimal]:
         if line["kind"] == FINANCING:
             continue
         for month_key, cell in line["months"].items():
+            from .budget_fill import counts_in_total
+            amount = counts_in_total(line, cell)
+            if amount is None:
+                continue
             year, month = int(month_key[:4]), int(month_key[5:])
             ident = (year, month, line["category"])
-            totals[ident] = totals.get(ident, Decimal("0")) + cell["amount"]
+            totals[ident] = totals.get(ident, Decimal("0")) + amount
             if totals[ident] > MAX_AMOUNT:
                 raise _invalid("סכום התקציב גדול מדי")
     return totals
@@ -249,11 +295,15 @@ def category_label_he(key: str) -> str:
 
 def monthly_line_sums(lines: list[dict] | None) -> dict[str, dict[str, float]]:
     """{"YYYY-MM": {kind: Σ quantity×rate}} of validated lines. Depreciation is not cash."""
+    from .budget_fill import counts_in_total
     out: dict[str, dict[str, float]] = {}
     for line in lines or []:
         if line["category"] == "depreciation":
             continue
         for month_key, cell in line["months"].items():
+            amount = counts_in_total(line, cell)
+            if amount is None:
+                continue
             slot = out.setdefault(month_key, {})
-            slot[line["kind"]] = round(slot.get(line["kind"], 0.0) + float(cell["amount"]), 2)
+            slot[line["kind"]] = round(slot.get(line["kind"], 0.0) + float(amount), 2)
     return out
