@@ -1603,6 +1603,42 @@ async def invite_existing_identity(
     return _membership_payload(membership)
 
 
+class UserIdentityUpdate(BaseModel):
+    """Platform identity only. Organization admins cannot rename a person."""
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+    model_config = {"extra": "forbid"}
+
+
+@router.get("/memberships/pending", tags=["Users"])
+async def list_pending_memberships(
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Invitations the signed-in person has not accepted. No active org required."""
+    from ...services import membership_service
+    rows = [
+        membership for membership in membership_service.memberships_for(db, current_user.id)
+        if membership.status == membership_service.INVITED
+    ]
+    names = {
+        org.id: org.name
+        for org in db.query(Organization).filter(
+            Organization.id.in_([row.organization_id for row in rows] or [-1]),
+        ).all()
+    }
+    return {"items": [
+        {
+            "organization_id": row.organization_id,
+            "name": names.get(row.organization_id) or f"ארגון {row.organization_id}",
+            "role": row.role.value if hasattr(row.role, "value") else row.role,
+        }
+        for row in rows
+    ]}
+
+
 @router.post("/memberships/accept", tags=["Users"])
 async def accept_membership_invitation(
     body: MembershipAcceptRequest,
@@ -2067,6 +2103,39 @@ async def update_app_user(
     if effective is not None:
         payload = payload.model_copy(update={"role": effective})
     return payload
+
+
+@router.patch("/users/{user_id}/identity", response_model=UserResponse, tags=["Users"])
+async def update_user_identity(
+    user_id: int,
+    body: UserIdentityUpdate,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_super_admin),
+):
+    """Rename a person's global identity. Organization admins stay on the membership route."""
+    if body.full_name is None and body.email is None and body.phone is None:
+        raise HTTPException(status_code=422, detail="No identity fields to update")
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if body.full_name is not None:
+        name = body.full_name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="full_name is required")
+        user.full_name = name
+    if body.email is not None:
+        email = body.email.strip().lower()
+        if not email or "@" not in email:
+            raise HTTPException(status_code=422, detail="email is invalid")
+        taken = db.query(User).filter(User.email == email, User.id != user.id).first()
+        if taken is not None:
+            raise HTTPException(status_code=409, detail="Email already belongs to another user")
+        user.email = email
+    if body.phone is not None:
+        user.phone = body.phone.strip() or None
+    db.commit()
+    db.refresh(user)
+    return UserResponse.model_validate(user)
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["Users"])

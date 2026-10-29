@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } f
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import api from './services/api';
 import OrgSwitcher, { CurrentUser } from './components/OrgSwitcher';
+import PendingInvitations from './components/PendingInvitations';
 import ActiveOrgRequired from './components/ActiveOrgRequired';
 import {
   LayoutDashboard,
@@ -411,6 +412,7 @@ function App() {
 
             {/* Main Content */}
             <main className={`flex-1 overflow-y-auto ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
+              {currentUser ? <PendingInvitations darkMode={darkMode} /> : null}
               <Suspense fallback={<div role="status" className="p-6">Loading…</div>}>
               <Routes>
                 {/* CFO Command Center */}
