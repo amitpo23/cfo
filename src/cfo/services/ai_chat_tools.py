@@ -2443,7 +2443,440 @@ async def _update_task(
     )
 
 
+def _num(value):
+    """Float for JSON. None stays None — never a stand-in zero."""
+    if value is None or isinstance(value, bool):
+        return value
+    from decimal import Decimal
+
+    if isinstance(value, Decimal):
+        return round(float(value), 2)
+    return value
+
+
+def _iso(value) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _stream_view(db, org_id: int):
+    """The same year-to-date view the weekly cash-flow route reads. No provider call."""
+    from datetime import date
+
+    from .dashboards.budget_fill import dashboard_for_org
+    from .dashboards.view_model import build_view, plan_payload
+
+    today = date.today()
+    dashboard = dashboard_for_org(db, org_id)
+    plan = plan_payload(db, dashboard.id) if dashboard is not None else None
+    view = build_view(db, org_id, date(today.year, 1, 1), today, plan=plan)
+    return today, dashboard, plan, view
+
+
+def _freshness(as_of: str | None, today) -> str:
+    """Open Finance figures older than two days are unknown, not a number."""
+    if not as_of:
+        return "unknown"
+    from datetime import date
+
+    age = (today - date.fromisoformat(as_of[:10])).days
+    return "unknown" if age > 2 else "fresh"
+
+
+async def _get_checking_snapshot(db, org_id: int, **_kwargs) -> dict:
+    """Stored checking balance, its date, and why it is or is not usable.
+
+    A missing or stale Open Finance balance stays null. It is never reported as 0.
+    """
+    from .dashboards.balance_diagnostic import diagnose_org
+
+    report = diagnose_org(db, org_id)
+    balance = report["snapshot_balance"]
+    if report["status"] == "unknown":
+        balance = None
+    sources = sorted({row.get("source") for row in report["accounts"] if row.get("source")})
+    report["balance"] = balance
+    report["as_of"] = report["snapshot_as_of"]
+    report["source"] = sources[0] if len(sources) == 1 else ("mixed" if sources else None)
+    report["figure"] = "checking_snapshot"
+    report["provider_calls"] = 0
+    return report
+
+
+async def _get_weekly_cashflow_forecast(db, org_id: int, **_kwargs) -> dict:
+    """13-week forecast from cashflow_source.forecast. Missing lines stay null."""
+    _today, _dashboard, _plan, view = _stream_view(db, org_id)
+    source = view.get("cashflow_source") or {}
+    forecast = source.get("forecast") or view.get("cash_forecast") or {}
+    opening = forecast.get("opening")
+    if not isinstance(opening, dict):
+        opening = {"amount": opening, "as_of": None, "source": None}
+    weeks = []
+    for week in forecast.get("weeks") or []:
+        if not isinstance(week, dict):
+            continue
+        weeks.append({
+            "start": week.get("start"),
+            "end": week.get("end"),
+            "in": week.get("in"),
+            "out": week.get("out"),
+            "net": week.get("net"),
+            "closing": week.get("closing"),
+            "headroom": week.get("headroom"),
+            "unknown": week.get("unknown") or [],
+        })
+    return {
+        "status": forecast.get("status") or "unknown",
+        "engine": forecast.get("engine") or "cashflow_source",
+        "opening": opening,
+        "weeks": weeks,
+        "week_count": len(weeks),
+        "funding_need": forecast.get("funding_need"),
+        "supplier_terms": forecast.get("supplierTermsMode"),
+        "provider_calls": 0,
+        "note_he": "התחזית היא cashflow_source.forecast. סעיף חסר נשאר null ולא 0.",
+    }
+
+
+async def _get_budget_vs_actual_summary(db, org_id: int, **_kwargs) -> dict:
+    """Budget assumptions and budget-vs-actual from the dashboard view. No invented actuals."""
+    from .dashboards.budget_assumptions import list_assumptions
+
+    today, _dashboard, plan, view = _stream_view(db, org_id)
+    months = [f"{today.year:04d}-{month:02d}" for month in range(1, 13)]
+    opening = ((view.get("cash_forecast") or {}).get("opening") or {})
+    assumptions = list_assumptions(
+        plan, months, as_of=today,
+        bank_balance=opening.get("amount") if isinstance(opening, dict) else None,
+        bank_as_of=opening.get("as_of") if isinstance(opening, dict) else None,
+    )
+    confirmed = [row for row in assumptions if row.get("amount") is not None]
+    missing = [row for row in assumptions if row.get("amount") is None]
+    budget = view.get("budget_vs_actual") or {}
+    books = view.get("books_pnl") or {}
+    return {
+        "as_of": today.isoformat(),
+        "assumptions": {
+            "confirmed": confirmed,
+            "missing_count": len(missing),
+            "missing_label": missing[0]["missing_label"] if missing else None,
+        },
+        "budget_vs_actual": {
+            "status": budget.get("status") or "unknown",
+            "has_budget": bool(budget.get("has_budget")),
+            "no_budget_label": budget.get("no_budget_label"),
+            "months": [
+                {
+                    "month": month.get("month"),
+                    "source": month.get("source"),
+                    "source_label": month.get("source_label"),
+                    "totals": month.get("totals"),
+                }
+                for month in (budget.get("months") or []) if isinstance(month, dict)
+            ],
+        },
+        "books_pnl": {
+            "basis": books.get("basis"),
+            "months": [
+                {
+                    "month": month.get("month"),
+                    "basis": month.get("basis"),
+                    "basis_label": month.get("basis_label"),
+                    "revenue": _num(month.get("revenue")),
+                    "costs": _num(month.get("costs")),
+                    "net": _num(month.get("net")),
+                }
+                for month in (books.get("months") or []) if isinstance(month, dict)
+            ],
+        },
+        "provider_calls": 0,
+    }
+
+
+def _org_bank_pack(db, org_id: int) -> tuple[dict, object | None]:
+    """Same bank-pack services the dashboard route uses."""
+    from datetime import date
+
+    from .dashboards import multi_entity
+    from .dashboards.budget_assumptions import bank_pack, list_assumptions
+    from .dashboards.budget_fill import dashboard_for_org
+    from .dashboards.view_model import build_view, plan_payload
+
+    today = date.today()
+    row = dashboard_for_org(db, org_id)
+    if row is not None:
+        plan = plan_payload(db, row.id)
+        view = multi_entity.build_dashboard_view(db, row, date(today.year, 1, 1), today, plan=plan)
+        entities = view.get("entities") or []
+        pack_view = view.get("combined") if len(entities) > 1 else view
+        if len(entities) > 1 and isinstance(pack_view, dict):
+            primary = next((entity for entity in entities if entity.get("role") == "primary"), entities[0])
+            primary_view = primary.get("view") or {}
+            pack_view = dict(pack_view)
+            combined_bva = pack_view.get("budget_vs_actual") or {}
+            primary_bva = primary_view.get("budget_vs_actual") or {}
+            if combined_bva.get("status") != "ready" and primary_bva.get("months"):
+                pack_view["budget_vs_actual"] = primary_bva
+            combined_pnl = pack_view.get("pnl") or {}
+            primary_pnl = primary_view.get("pnl") or {}
+            if combined_pnl.get("status") != "ready" and primary_pnl.get("status") == "ready":
+                pack_view["pnl"] = primary_pnl
+    else:
+        plan = None
+        pack_view = build_view(db, org_id, date(today.year, 1, 1), today, plan=None)
+    months = [f"{today.year:04d}-{month:02d}" for month in range(1, 13)]
+    opening = ((pack_view or {}).get("cash_forecast") or {}).get("opening") or {}
+    assumptions = list_assumptions(
+        plan, months, as_of=today,
+        bank_balance=opening.get("amount") if isinstance(opening, dict) else None,
+        bank_as_of=opening.get("as_of") if isinstance(opening, dict) else None,
+    )
+    pack = bank_pack(pack_view or {}, assumptions, as_of=today)
+    return pack, row
+
+
+async def _get_bank_pack_summary(db, org_id: int, **_kwargs) -> dict:
+    """What the bank pack contains, plus the key figures. Not a second set of numbers."""
+    pack, row = _org_bank_pack(db, org_id)
+    forecast = pack.get("forecast") or {}
+    weeks = forecast.get("weeks") or []
+    assumptions = pack.get("assumptions") or []
+    budget = pack.get("budget_vs_actual") or {}
+    slug = getattr(row, "slug", None)
+    dashboard_id = getattr(row, "id", None)
+    return {
+        "as_of": pack.get("as_of"),
+        "title_he": pack.get("title_he"),
+        "contains_he": ["רווח והפסד", "תחזית מזומנים", "תקציב מול ביצוע", "הנחות עבודה"],
+        "dashboard_id": dashboard_id,
+        "slug": slug,
+        "page": f"/d/{slug}/bank-pack" if slug else None,
+        "api": f"/api/dashboards/{dashboard_id}/bank-pack" if dashboard_id else None,
+        "pnl": pack.get("pnl"),
+        "opening": forecast.get("opening"),
+        "engine": forecast.get("engine"),
+        "supplier_terms": forecast.get("supplier_terms"),
+        "week_count": len(weeks),
+        "first_week": (
+            {"start": weeks[0].get("start"), "end": weeks[0].get("end"), "closing": weeks[0].get("closing")}
+            if weeks else None
+        ),
+        "assumptions_confirmed": sum(1 for row in assumptions if row.get("amount") is not None),
+        "assumptions_missing": sum(1 for row in assumptions if row.get("amount") is None),
+        "budget_status": budget.get("status"),
+        "has_budget": bool(budget.get("has_budget")),
+        "provider_calls": 0,
+    }
+
+
+async def _get_unclassified_transfers(db, org_id: int, **_kwargs) -> dict:
+    """Unclassified bank transfers and signed coverage for the year to date."""
+    from datetime import date
+
+    from .dashboards.budget_fill import dashboard_for_org
+    from .dashboards.transfer_queue import load_queue
+    from .dashboards.view_model import plan_payload
+
+    today = date.today()
+    dashboard = dashboard_for_org(db, org_id)
+    plan = plan_payload(db, dashboard.id) if dashboard is not None else None
+    report = load_queue(db, org_id, date(today.year, 1, 1), today, plan)
+    rows = report.get("rows") or []
+    return {
+        "start": report.get("start"),
+        "end": report.get("end"),
+        "coverage": report.get("coverage"),
+        "unclassified_count": (report.get("coverage") or {}).get("unclassified_count"),
+        "rows": rows[:50],
+        "truncated": len(rows) > 50,
+        "provider_calls": 0,
+        "note_he": "כיסוי 0 הוא תור ריק ידוע, לא יתרה חסרה. סיווג חסר נשאר לא מסווג עד אישור בעלים.",
+    }
+
+
+async def _get_open_finance_health(db, org_id: int, **_kwargs) -> dict:
+    """Stored Open Finance connection, sync, and facility figures. No provider call."""
+    from datetime import date
+
+    from ..models import Account, AccountType, IntegrationConnection, SyncCheckpoint, SyncRun
+    from .dashboards.balance_diagnostic import diagnose_org
+
+    today = date.today()
+    connection = (
+        db.query(IntegrationConnection)
+        .filter_by(organization_id=org_id, source="open_finance")
+        .first()
+    )
+    latest = (
+        db.query(SyncRun)
+        .filter(SyncRun.organization_id == org_id, SyncRun.source == "open_finance")
+        .order_by(SyncRun.id.desc())
+        .first()
+    )
+    checkpoint = (
+        db.query(SyncCheckpoint)
+        .filter_by(organization_id=org_id, source="open_finance", entity_type="__source__")
+        .first()
+    )
+    report = diagnose_org(db, org_id, today=today)
+    snap = {
+        "balance": report["snapshot_balance"],
+        "as_of": report["snapshot_as_of"],
+        "status": report["status"],
+        "stale_balances": report["stale_balances"],
+    }
+    stale_ids = {
+        row.get("name") for row in (snap.get("stale_balances") or [])
+    }
+    facilities = []
+    for account in (
+        db.query(Account)
+        .filter(Account.organization_id == org_id, Account.account_type == AccountType.BANK)
+        .order_by(Account.id)
+        .all()
+    ):
+        as_of = account.balance_as_of.date().isoformat() if account.balance_as_of else None
+        freshness = _freshness(as_of, today) if account.source == "open_finance" else (
+            "unknown" if account.balance is None or as_of is None else "stored"
+        )
+        stale = account.source == "open_finance" and (freshness == "unknown" or account.name in stale_ids)
+        facilities.append({
+            "name": account.name,
+            "source": account.source,
+            "as_of": as_of,
+            "freshness": "unknown" if stale else freshness,
+            "booked": None if stale or account.balance is None else round(float(account.balance), 2),
+            "available": None if stale or account.available_limit is None else round(float(account.available_limit), 2),
+            "credit_limit": None if account.credit_limit is None else round(float(account.credit_limit), 2),
+        })
+    run_status = latest.status.value if latest is not None and hasattr(latest.status, "value") else (
+        str(latest.status) if latest is not None and latest.status is not None else None
+    )
+    return {
+        "configured": connection is not None and bool(connection.credentials_encrypted or connection.status == "active"),
+        "status": connection.status if connection is not None else "not_configured",
+        "last_synced_at": _iso(connection.last_synced_at) if connection is not None else None,
+        "checkpoint_last_success_at": _iso(checkpoint.last_success_at) if checkpoint is not None else None,
+        "last_run_status": run_status,
+        "last_run_finished_at": _iso(latest.finished_at) if latest is not None else None,
+        "last_error": latest.error_summary if latest is not None else None,
+        "balance": None if snap["status"] == "unknown" else snap["balance"],
+        "as_of": snap["as_of"],
+        "freshness": "unknown" if snap["status"] == "unknown" or _freshness(snap["as_of"], today) == "unknown" else "fresh",
+        "snapshot_status": snap["status"],
+        "stale_balances": snap["stale_balances"],
+        "facilities": facilities,
+        "scheduled_open_finance_includes_org": report["scheduled_open_finance_includes_org"],
+        "provider_calls": 0,
+        "note_he": "מצב שמור בלבד. יתרת Open Finance ישנה מיומיים היא לא ידועה. אין קריאה לספק.",
+    }
+
+
+async def _get_sumit_connection_status(db, org_id: int, **_kwargs) -> dict:
+    """Whether SUMIT is configured for this org, from stored rows. No SUMIT call."""
+    from ..models import IntegrationConnection, SyncRun
+
+    connection = (
+        db.query(IntegrationConnection)
+        .filter_by(organization_id=org_id, source="sumit")
+        .first()
+    )
+    latest = (
+        db.query(SyncRun)
+        .filter(SyncRun.organization_id == org_id, SyncRun.source == "sumit")
+        .order_by(SyncRun.id.desc())
+        .first()
+    )
+    run_status = latest.status.value if latest is not None and hasattr(latest.status, "value") else (
+        str(latest.status) if latest is not None and latest.status is not None else None
+    )
+    return {
+        "configured": connection is not None and bool(connection.credentials_encrypted),
+        "active": connection is not None and connection.status == "active",
+        "status": connection.status if connection is not None else "not_configured",
+        "last_synced_at": _iso(connection.last_synced_at) if connection is not None else None,
+        "last_run_status": run_status,
+        "last_run_finished_at": _iso(latest.finished_at) if latest is not None else None,
+        "last_error": latest.error_summary if latest is not None else None,
+        "provider_calls": 0,
+        "note_he": "מצב שמור בלבד. אין קריאה ל-SUMIT.",
+    }
+
+
 TOOLS: dict[str, ChatTool] = {
+    "get_checking_snapshot": ChatTool(
+        name="get_checking_snapshot",
+        description=(
+            "יתרת העו״ש השמורה, המקור שלה והתאריך שלה. "
+            "יתרה חסרה או יתרת Open Finance ישנה מיומיים חוזרת null ולא 0. "
+            "אין קריאה לספק."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_checking_snapshot,
+    ),
+    "get_weekly_cashflow_forecast": ChatTool(
+        name="get_weekly_cashflow_forecast",
+        description=(
+            "סיכום תחזית התזרים השבועית מ-cashflow_source.forecast, "
+            "אותה תחזית של מסך התזרים. סעיף חסר נשאר null. אין קריאה לספק."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        truth_class="forecast",
+        fn=_get_weekly_cashflow_forecast,
+    ),
+    "get_budget_vs_actual_summary": ChatTool(
+        name="get_budget_vs_actual_summary",
+        description=(
+            "הנחות התקציב ותקציב מול ביצוע, מאותם שירותים של הדשבורד. "
+            "ביצוע לא ידוע נשאר null ולא 0. אין קריאה לספק."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_budget_vs_actual_summary,
+    ),
+    "get_bank_pack_summary": ChatTool(
+        name="get_bank_pack_summary",
+        description=(
+            "מה יש בחבילה לבנק ולאן לפתוח אותה, עם יתרת פתיחה, רווח והפסד "
+            "וסטטוס התקציב מאותם שירותים. אין קריאה לספק."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_bank_pack_summary,
+    ),
+    "get_unclassified_transfers": ChatTool(
+        name="get_unclassified_transfers",
+        description=(
+            "העברות בנק שלא סווגו וכיסוי הסיווג מתחילת השנה. "
+            "כיסוי 0 הוא תור ריק, לא יתרה. אין קריאה לספק ואין שמירת סיווג."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_unclassified_transfers,
+    ),
+    "get_open_finance_health": ChatTool(
+        name="get_open_finance_health",
+        description=(
+            "מצב חיבור Open Finance מהשורות השמורות: סנכרון אחרון, יתרה, "
+            "מסגרת, יתרה שמורה מול פנוי. ישן מיומיים הוא לא ידוע. אין קריאה לספק ואין סנכרון."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_open_finance_health,
+    ),
+    "get_sumit_connection_status": ChatTool(
+        name="get_sumit_connection_status",
+        description=(
+            "האם SUMIT מוגדר ופעיל לארגון, מתי היה הסנכרון האחרון ומה השגיאה האחרונה. "
+            "קריאה מהמסד בלבד, בלי קריאה ל-SUMIT."
+        ),
+        input_schema={"type": "object", "properties": {}},
+        category="read",
+        fn=_get_sumit_connection_status,
+    ),
     'get_saved_reports': ChatTool(name='get_saved_reports', category='read',
         description='דוחות ותזמונים שמורים והיסטוריית הרצות בארגון הפעיל. קריאה מקומית בלבד; אין הרצה, משלוח או סנכרון.',
         input_schema={'type': 'object', 'properties': {}}, fn=_get_saved_reports),

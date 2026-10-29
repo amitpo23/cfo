@@ -26,6 +26,10 @@
 `docs/rezef_capabilities.json` הוא מפת המימוש והראיות, ו-
 `docs/MASTER_EXECUTION_PLAN.md` הוא לוח הסטטוס היחיד.
 
+KesefSkills ([kesefskills.co.il](https://kesefskills.co.il/)) הוא מקור סקילים
+אופציונלי למושקו. לא משוכפל לריפו. התקנה: `npx kesef install <pack> --agent cursor`.
+מדריך: `docs/guides/KESEFSKILLS.md`.
+
 ## פורטל SUMIT — runbooks מאושרים מראש (הכרעת בעלים 23/10/2026)
 
 הכלל הקודם ("אין לגרד פורטלים במקום API") מוחלף בכלל הזה. סוכן ה-CFO **רשאי**

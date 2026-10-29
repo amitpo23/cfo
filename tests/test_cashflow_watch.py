@@ -30,7 +30,7 @@ def _dashboard(client, platform_admin, fresh_org, slug, *, balance="-35000"):
         db.add(Account(
             organization_id=chef["org_id"], name="עו״ש", account_type=AccountType.BANK,
             raw_account_type="CHECKING", balance=Decimal(balance), source="open_finance",
-            balance_as_of=datetime(2026, 10, 26),
+            balance_as_of=datetime.combine(date.today(), datetime.min.time()),
         ))
         db.commit()
     added = client.post(f"/api/dashboards/{dashboard_id}/entities", headers=platform_admin["headers"],
@@ -70,8 +70,8 @@ def test_a_breach_in_the_coming_weeks_raises_a_critical_insight_with_its_week(cl
     assert len(breach) == 1
     _type, severity, status, fingerprint, title = breach[0]
     assert (severity, status) == ("critical", "active")
-    assert fingerprint == "cash_forecast_breach:2026-10-28"
-    assert "28/10" in title
+    assert fingerprint == f"cash_forecast_breach:{date.today().isoformat()}"
+    assert date.today().strftime("%d/%m") in title
     assert result["provider_calls"] == 0
 
 

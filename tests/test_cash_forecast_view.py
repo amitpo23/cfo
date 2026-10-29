@@ -1,6 +1,6 @@
 """The 13-week cash forecast inside `/api/dashboards/{id}/view`, and the group
 budget that belongs to the combined view only. No provider calls."""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from cfo.database import SessionLocal
@@ -61,7 +61,7 @@ def test_the_view_carries_a_13_week_cash_forecast_per_entity_and_combined(client
 
     chef_forecast = body["entities"][0]["view"]["cash_forecast"]
     assert len(chef_forecast["weeks"]) == 13
-    assert chef_forecast["weeks"][0]["start"] == "2026-10-28"
+    assert chef_forecast["weeks"][0]["start"] == date.today().isoformat()
     assert chef_forecast["opening"]["amount"] == -35000.0
     assert chef_forecast["opening"]["as_of"] == date.today().isoformat()
     assert chef_forecast["opening"]["rule"] == "today_position"
@@ -80,16 +80,19 @@ def test_only_the_owner_may_change_cash_forecast_items(client, fresh_org, platfo
     dashboard_id, chef, _food = _consolidated(client, platform_admin, fresh_org, "cash-forecast-items")
     accountant = fresh_org()
     _member(dashboard_id, accountant["org_id"], "accountant")
+    item_day = date.today() + timedelta(days=1)
+    if item_day.weekday() == 5:
+        item_day += timedelta(days=1)
     items = {"cashForecastItems": [
-        {"organizationId": chef["org_id"], "date": "2026-10-29", "amount": -17000, "label": "חוב לעובדים"},
+        {"organizationId": chef["org_id"], "date": item_day.isoformat(), "amount": -17000, "label": "חוב לעובדים"},
     ]}
 
     denied = _put(client, accountant["headers"], dashboard_id, items)
     assert denied.status_code == 403 and denied.json()["error"]["code"] == "cash_forecast_items_forbidden"
     assert _put(client, platform_admin["headers"], dashboard_id, items).status_code == 200
 
-    week = _view(client, platform_admin["headers"], dashboard_id)["entities"][0]["view"]["cash_forecast"]["weeks"][0]
-    manual = next(item for item in week["items"] if item["certainty"] == "manual")
+    weeks = _view(client, platform_admin["headers"], dashboard_id)["entities"][0]["view"]["cash_forecast"]["weeks"]
+    manual = next(item for week in weeks for item in week["items"] if item["certainty"] == "manual")
     assert (manual["label"], manual["amount"]) == ("חוב לעובדים", -17000.0)
 
 
