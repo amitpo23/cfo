@@ -14,7 +14,7 @@ import {
   CashForecast, CashForecastItemsCard, CashForecastPanel, Overdue, cashForecastItemsFromPayload,
 } from './cashForecastTab';
 import { BalanceSheetView, BalanceSheetCard } from './balanceSheetTab';
-import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, FilterBar, KpiCards, Segmented, StatusTabs, missingAsOf } from './dashboardUi';
+import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, FilterBar, KpiCards, PartialDataBanner, Segmented, StatusTabs, missingAsOf } from './dashboardUi';
 import { safeLoginHref } from './dashboardReturn';
 import { DASHBOARD_POLL_MS, revisionToken, shouldReloadView } from './dashboardLive';
 import TransferClassification from './TransferClassification';
@@ -1001,7 +1001,13 @@ export default function ClientDashboardPage() {
         {view && scoped ? (
           <>
             <StatusTabs tabs={TABS.filter((item) => item.id !== 'budget' || editor)} active={tab} onSelect={setTab} />
-            <div className="mt-3">
+            <div className="mt-3 grid gap-3">
+              <PartialDataBanner
+                text={compare?.partial_banner?.text_he}
+                extra={compare?.unclassified_outflows?.label_he
+                  ? `${compare.unclassified_outflows.label_he} (${compare.unclassified_outflows.count})`
+                  : null}
+              />
               <PeriodControls
                 grain={grain}
                 start={rangeStart}
@@ -1179,6 +1185,9 @@ type LiquidityToday = {
     used?: number | null;
     headroom?: number | null;
     breach?: boolean | null;
+    overrun?: number | null;
+    overrun_status?: string | null;
+    overrun_label?: string | null;
     available_limit?: number | null;
     note_he?: string;
   };
@@ -1207,7 +1216,9 @@ function LiquidityTodayCard({ block }: { block: LiquidityToday | null | undefine
       ) : null}
       <p className="mt-3 text-sm">
         מסגרת {knownMoney(facility?.limit)} · ניצול {knownMoney(facility?.used)} · פנוי {knownMoney(facility?.headroom)}
-        {facility?.breach == null ? '' : facility.breach ? ' · חריגה' : ' · בתוך המסגרת'}
+        {facility?.overrun_status === 'overrun'
+          ? ` · ${facility.overrun_label || 'חריגת מסגרת'}`
+          : facility?.breach == null ? '' : facility.breach ? ' · חריגה' : ' · בתוך המסגרת'}
       </p>
       {facility?.available_limit != null ? (
         <p className="text-sm text-stone-600">יתרה זמינה מהבנק (לא יתרת העו״ש): {money(facility.available_limit)}</p>

@@ -44,6 +44,7 @@ export type CashForecast = {
   discounted_cheque_balances?: { check?: string | null; amount: number; closes_on: string; outstanding: boolean }[];
   missing: string[];
   funding_need?: { amount: number | null; label?: string; sum_of_negative_weeks?: number | null };
+  balance_mismatch?: { amount?: number | null; label_he?: string | null; counts_as_funding_need?: boolean } | null;
   shared_identity_note?: string | null;
   run_rate?: Record<string, number>;
 };
@@ -251,6 +252,12 @@ export function CashForecastPanel({ forecast, overdue }: { forecast: CashForecas
   const missing = forecast.missing.filter((key) => MISSING[key]);
   return (
     <div className="grid gap-6">
+      {forecast.balance_mismatch?.label_he ? (
+        <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950" role="status">
+          {forecast.balance_mismatch.label_he}
+          {forecast.balance_mismatch.amount != null ? ` · ${money(forecast.balance_mismatch.amount)}` : ''}
+        </p>
+      ) : null}
       {forecast.funding_need ? (
         <p className="text-sm text-stone-700">
           צורך מימון: {forecast.funding_need.amount == null

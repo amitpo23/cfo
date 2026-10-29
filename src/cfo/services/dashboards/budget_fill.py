@@ -209,11 +209,13 @@ def entry_lines(db, organization_id: int, year: int, from_month: int, to_month: 
             by_month[key] = {
                 "status": status,
                 "status_he": STATUS_HE[status],
-                "amount": None if amount is None else _q(amount),
-                "quantity": None if not isinstance(cell, dict) else cell.get("quantity"),
-                "rate": None if not isinstance(cell, dict) else cell.get("rate"),
+                # A round-million income placeholder stays on the line so the
+                # owner can delete it, and is left out of the amount and the total.
+                "amount": None if amount is None or warning else _q(amount),
+                "quantity": None if not isinstance(cell, dict) or warning else cell.get("quantity"),
+                "rate": None if not isinstance(cell, dict) or warning else cell.get("rate"),
                 **({"source": source_name} if source_name else {}),
-                **({"placeholder_warning": warning} if warning else {}),
+                **({"placeholder_warning": warning, "placeholder_amount": _q(amount)} if warning else {}),
             }
             if status == "missing":
                 line_missing.append(key)
@@ -555,6 +557,30 @@ def driver_csv_updates(text: str, month: str) -> list[dict]:
     if not updates:
         raise ValueError("הקובץ לא מכיל שורות")
     return updates
+
+
+def budget_lines_for_org(plan, organization_id: int | None, *, primary: bool) -> list[dict]:
+    """Budget lines of one organization.
+
+    A line without ``organizationId`` belongs to the dashboard's primary
+    organization (Chef's 49,700 payroll). It is not applied to the other
+    entities. A line that names an organization is only that organization's.
+    """
+    raw = plan.get("budgetLines") if isinstance(plan, dict) else None
+    if not isinstance(raw, list):
+        return []
+    kept = []
+    for line in raw:
+        if not isinstance(line, dict):
+            continue
+        named = line.get("organizationId")
+        if named is None:
+            if primary:
+                kept.append(line)
+            continue
+        if organization_id is not None and named == organization_id:
+            kept.append(line)
+    return kept
 
 
 def looks_like_placeholder(amount, actual=None) -> str | None:

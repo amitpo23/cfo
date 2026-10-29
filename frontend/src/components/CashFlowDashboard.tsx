@@ -35,6 +35,7 @@ import {
 import api from '../services/api';
 import { PeriodCompare, PeriodCompareTable, PeriodControls, isoDate, presetRange, type Grain } from './PeriodCompare';
 import { missingFigure, sumPeriodBankTotals } from './periodBankTotals';
+import { PartialDataBanner } from './dashboardUi';
 import { AgentPanel, FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
 import ExportButtons, { ExportSheet } from './ExportButtons';
 
@@ -126,6 +127,9 @@ interface LiquidityRatios {
     used?: number | null;
     headroom?: number | null;
     breach?: boolean | null;
+    overrun?: number | null;
+    overrun_status?: string | null;
+    overrun_label?: string | null;
     available_limit?: number | null;
     note_he?: string | null;
   };
@@ -387,6 +391,12 @@ const CashFlowDashboard: React.FC = () => {
         </>
       }
     >
+      <PartialDataBanner
+        text={periodCompare?.partial_banner?.text_he}
+        extra={periodCompare?.unclassified_outflows?.label_he
+          ? `${periodCompare.unclassified_outflows.label_he} (${periodCompare.unclassified_outflows.count})`
+          : null}
+      />
 
       {/* נכון לתאריך + מקורות נתונים חיים — אותה מוסכמה כמו מסך התחזית */}
       {asOf && (
@@ -735,7 +745,9 @@ function CheckingFacility({
       ) : null}
       <p className="mt-2">
         מסגרת {dated(facility?.limit)} · ניצול {dated(facility?.used)} · פנוי {dated(facility?.headroom)}
-        {breach == null ? '' : breach ? ' · חריגה' : ' · בתוך המסגרת'}
+        {facility?.overrun_status === 'overrun'
+          ? ` · ${facility.overrun_label || 'חריגת מסגרת'}`
+          : breach == null ? '' : breach ? ' · חריגה' : ' · בתוך המסגרת'}
       </p>
       {facility?.available_limit != null ? (
         <p className="mt-1 text-slate-500">

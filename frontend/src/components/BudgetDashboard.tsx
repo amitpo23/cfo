@@ -17,7 +17,7 @@ import api from '../services/api';
 import { categoryLabel } from '../services/categoryLabels';
 import ExportButtons from './ExportButtons';
 import { PIE_LABEL_MIN_SHARE, pieSlices } from './budgetChart';
-import { missingAsOf } from './dashboardUi';
+import { PartialDataBanner, missingAsOf } from './dashboardUi';
 import { BudgetAssumptionsEditor } from './BudgetAssumptionsEditor';
 import { PeriodCompareTable, PeriodControls, presetRange, type Grain, type PeriodCompare } from './PeriodCompare';
 
@@ -320,6 +320,12 @@ export const BudgetDashboard: React.FC = () => {
         </div>
       </div>
 
+      <PartialDataBanner
+        text={periodReport?.partial_banner?.text_he}
+        extra={periodReport?.unclassified_outflows?.label_he
+          ? `${periodReport.unclassified_outflows.label_he} (${periodReport.unclassified_outflows.count})`
+          : null}
+      />
       <PeriodCompareTable report={periodReport ?? null} booksFirst />
       <BudgetAssumptionsEditor start={rangeStart} end={rangeEnd} slug={periodReport?.dashboard_slug ?? meta.dashboardSlug} />
 

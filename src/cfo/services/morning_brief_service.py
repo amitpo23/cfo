@@ -128,6 +128,8 @@ def compose_brief(
 
     cash_balance = _f("cash_balance")
     credit_headroom = _f("credit_headroom")
+    from .dashboards.liquidity import checking_snapshot
+    live_cash = checking_snapshot(db, organization_id, today=today)
 
     credit_breach_date_raw = _field("credit_breach_date")
     if credit_breach_date_raw is None:
@@ -157,6 +159,15 @@ def compose_brief(
         as_of = snap.created_at.isoformat() + "Z"
     else:
         missing_reason = "לא נמצא מחזור-בוקר להיום (DailySnapshot חסר)"
+    # A stored morning snapshot is not a second checking balance. When Open
+    # Finance has a booked figure, or the booked figure is stale, that snapshot
+    # wins. An org with no checking account keeps the cycle figure.
+    if live_cash.get("balance") is not None or live_cash.get("stale_balances"):
+        cash_balance = live_cash.get("balance")
+        if live_cash.get("as_of"):
+            as_of = live_cash["as_of"]
+        if cash_balance is None:
+            missing_reason = "יתרת העו״ש לא ידועה לשימוש"
 
     # ------------------------------------------------------------- #
     # reds — bank anomaly, credit-line breach, parity mismatch, deadline

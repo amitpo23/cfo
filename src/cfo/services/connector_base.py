@@ -49,7 +49,10 @@ class NormalizedAccount:
     credit_limit: Optional[Decimal] = None
     # כמה פנוי לפי הבנק — רשומת interimAvailable האחרונה ב-balances[] (בכרטיס:
     # open to buy). None כשאין רשומה קריאה; לעולם לא נגזר מ-creditLimit.
+    # forwardAvailable is the forward available balance. It is not the booked
+    # checking balance and it is not stored on Account (no extra column).
     available_limit: Optional[Decimal] = None
+    forward_available: Optional[Decimal] = None
     # בעלות מדויקת — ownerInfo.{nationalId, fullName} של Open Finance (חבילה H,
     # docs/OPEN_FINANCE_KNOWLEDGE_BASE.md:248). nationalId מנורמל לספרות בלבד.
     # None כשהספק לא סיפק ownerInfo. משמש להתאמה אוטומטית מול Organization.tax_id

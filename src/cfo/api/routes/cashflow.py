@@ -43,6 +43,9 @@ class CreditFacilityLiquidity(BaseModel):
     used: Optional[float] = None
     headroom: Optional[float] = None
     breach: Optional[bool] = None
+    overrun: Optional[float] = None
+    overrun_status: Optional[str] = None
+    overrun_label: Optional[str] = None
     available_limit: Optional[float] = None
     available_as_of: Optional[str] = None
     note_he: Optional[str] = None

@@ -626,20 +626,38 @@ def match_checks(checks: list[dict], bank_rows: list, *, last_covered: date | No
 
 
 def _debt_service(classified, months: list[str]) -> list[dict]:
+    """Loan principal for the forecast. A cheque-discount repayment is not one.
+
+    October's 66,424 "loan repayments" were mostly a ~62k discount repayment
+    plus ~4.4k of real principal. Only the real principal is recurring.
+    """
     sums: dict[str, dict[str, float]] = {month: {} for month in months}
     for txn, filed in classified:
         month = txn.date[:7]
-        if month in sums and filed.category in ("loans_out", "interest", "loans_in"):
-            sums[month][filed.category] = sums[month].get(filed.category, 0.0) + txn.amount
+        if month not in sums:
+            continue
+        extra = filed.extra or {}
+        if filed.category == "loans_out" and (
+            extra.get("financing") == "repayment" or extra.get("recurring_loan") is False
+        ):
+            key = "discount_repayment"
+        elif filed.category in ("loans_out", "interest", "loans_in"):
+            key = filed.category
+        else:
+            continue
+        sums[month][key] = sums[month].get(key, 0.0) + txn.amount
     out = []
     for month in months:
         slot = sums[month]
-        out.append({
+        row = {
             "month": month,
             "principal": _r(abs(slot.get("loans_out", 0.0))),
             "interest": _r(abs(slot.get("interest", 0.0))),
             "new_loans": _r(slot.get("loans_in", 0.0)),
-        })
+        }
+        if slot.get("discount_repayment"):
+            row["discount_repayment"] = _r(abs(slot["discount_repayment"]))
+        out.append(row)
     return out
 
 
@@ -824,6 +842,18 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
         classified = classified_bank(db, organization_id, start, end, plan)
     status = "ready" if accounts or evidence["loans"] or evidence["checks"] else "unknown"
     opening_comparison = _opening_comparison(evidence["openingBalances"], bank_before, today)
+    from .money_screens import credit_overrun, org_partial_banner, unexplained_gap
+    overrun = credit_overrun(balance, limit)
+    latest_eod = None
+    if days:
+        last_day = max(day["date"] for day in days)
+        same = [day["balance"] for day in days if day["date"] == last_day]
+        if len(same) == 1:
+            latest_eod = same[0]
+    mismatch = unexplained_gap(balance, latest_eod)
+    available_values = [_num(getattr(account, "available_limit", None)) for account in checking]
+    available_known = [value for value in available_values if value is not None]
+    available = _r(sum(available_known)) if available_known else None
     return {
         "status": status,
         "position": {
@@ -881,6 +911,10 @@ def build_liquidity(db, organization_id: int, start: date, end: date, *, plan: d
             "יתרות מ-Open Finance כפי שנשמרו ברצף, וראיות מתוארכות מהתוכנית. יתרת סוף יום היא שדה ספק ולא דף בנק מאומת. "
             "חשבון \"מסגרת\" משקף את המינוס בעו״ש ואינו נספר שוב."
         ),
+        "credit_overrun": overrun,
+        "available": available,
+        "balance_mismatch": mismatch,
+        "partial_banner": org_partial_banner(db, organization_id),
         "provider_calls": 0,
     }
 
@@ -1322,12 +1356,24 @@ def checking_snapshot(db, organization_id: int, *, today: date | None = None) ->
     through = last.isoformat() if last is not None else None
     missing = through if as_of and through and through < as_of else None
     balance = position.get("balance")
+    from .money_screens import credit_overrun, org_partial_banner
+    limit = position.get("limit")
+    overrun = credit_overrun(None if balance is None else balance, limit)
     return {
         "balance": balance,
+        "booked_balance": balance,
         "as_of": as_of,
+        "source": "checking_snapshot" if balance is not None else None,
+        "balance_source": position.get("balance_source"),
+        "available": section.get("available"),
+        "forward_available": None,
+        "credit_limit": limit,
         "transactions_through": through,
         "transactions_missing_after": missing,
         "stale_balances": section.get("stale_balances") or [],
+        "credit_overrun": overrun,
+        "balance_mismatch": section.get("balance_mismatch"),
+        "partial_banner": org_partial_banner(db, organization_id),
         "status": "unknown" if balance is None else ("partial" if missing else "ready"),
         "provider_calls": 0,
     }

@@ -7,10 +7,17 @@ import { useLocation } from 'react-router-dom';
 import { TrendingUp, Loader2, Clock, Building2, Download } from 'lucide-react';
 import api from '../services/api';
 import ExportButtons, { ExportSheet } from './ExportButtons';
+import { PartialDataBanner } from './dashboardUi';
 import MorningBriefPanel from './MorningBriefPanel';
 
-interface PLDay { date: string; revenue_cum: number; expense_cum: number; profit_cum: number; }
-interface PLReport { period: string; days: PLDay[]; totals: { revenue: number; expense: number; profit: number }; }
+interface PLDay { date: string; revenue_cum: number | null; expense_cum: number | null; profit_cum: number | null; }
+interface PLReport {
+  period: string;
+  days: PLDay[];
+  totals: { revenue: number | null; expense: number | null; profit: number | null };
+  partial_banner?: { text_he?: string | null };
+  missing_label?: string | null;
+}
 interface Aging { buckets: Record<string, number>; total: number; as_of: string; }
 interface Suppliers { suppliers: { supplier: string; total: number }[]; total: number; }
 interface VatReport {
@@ -20,7 +27,7 @@ interface VatReport {
 }
 
 const now = new Date();
-const fmt = (n: number) => `₪${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const fmt = (n: number | null | undefined) => (n == null ? 'חסר' : `₪${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`);
 const BUCKET_LABELS: Record<string, string> = {
   current: 'שוטף', '1_30': '1–30 יום', '31_60': '31–60', '61_90': '61–90', '90_plus': '90+ יום',
 };
@@ -141,7 +148,8 @@ export default function DailyReportsDashboard() {
           )}
         </div>
       </div>
-      <p className="text-xs text-slate-400 mb-5">נגזר ממסמכי SUMIT — לבדיקת רו"ח.</p>
+      <p className="text-xs text-slate-400 mb-5">נגזר ממסמכים שכבר ברצף — לבדיקת רו"ח. חסר אינו 0.</p>
+      <PartialDataBanner text={pl?.partial_banner?.text_he || (pl?.missing_label ? 'חסר' : null)} />
 
       <MorningBriefPanel />
 

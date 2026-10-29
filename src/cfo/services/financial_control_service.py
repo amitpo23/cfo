@@ -77,7 +77,7 @@ class FinancialControlService:
                 "to": end_date.isoformat(),
             },
             "cash": {
-                "bank_account_balance": float(cash_balance),
+                "bank_account_balance": None if cash_balance is None else float(cash_balance),
                 "bank_inflow": float(bank_inflow),
                 "bank_outflow": float(bank_outflow),
                 "net_bank_flow": float(bank_inflow - bank_outflow),
@@ -357,12 +357,14 @@ class FinancialControlService:
             reasons=reasons,
         )
 
-    def _cash_balance(self) -> Decimal:
-        total = self.db.query(func.sum(Account.balance)).filter(
-            Account.organization_id == self.organization_id,
-            Account.account_type == AccountType.BANK,
-        ).scalar()
-        return Decimal(total or 0)
+    def _cash_balance(self):
+        """Same checking_snapshot as the other money screens. Missing is None, not 0."""
+        from .dashboards.liquidity import checking_snapshot
+        snap = checking_snapshot(self.db, self.organization_id)
+        balance = snap.get("balance")
+        if balance is None:
+            return None
+        return Decimal(str(balance))
 
     def _transaction_totals(self, start_date: date, end_date: date) -> tuple[Decimal, Decimal]:
         rows = self.db.query(

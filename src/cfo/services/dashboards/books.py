@@ -100,6 +100,11 @@ def cash_basis_month(items, vat_rate: float = filing.VAT_RATE) -> dict:
     by_cat: dict[str, float] = {}
     for t, f in items:
         by_cat[f.category] = by_cat.get(f.category, 0.0) + t.amount
+        # The fee between a discounted cheque's face and its repayment is
+        # financing cost. The collection itself stays out of operating revenue.
+        fee = (f.extra or {}).get("financing_cost")
+        if fee:
+            by_cat["interest"] = by_cat.get("interest", 0.0) - abs(float(fee))
     lines = []
     revenue = costs = 0.0
     for row in filing.PNL_ROWS:

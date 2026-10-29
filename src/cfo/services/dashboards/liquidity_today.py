@@ -32,6 +32,8 @@ def build_liquidity_today(liquidity: dict | None, forecast: dict | None, *, toda
         label = f"היתרה אינה מהיום. נכון ל-{as_of}"
     limit = position.get("limit")
     headroom = None if balance is None or limit is None else position.get("available_to_limit")
+    from .money_screens import credit_overrun
+    overrun = credit_overrun(balance, limit)
     used = None
     if balance is not None:
         used = round(-float(balance), 2) if float(balance) < 0 else 0.0
@@ -84,9 +86,12 @@ def build_liquidity_today(liquidity: dict | None, forecast: dict | None, *, toda
             "used": used,
             "headroom": headroom,
             "breach": breach,
+            "overrun": overrun["overrun"],
+            "overrun_status": overrun["status"],
+            "overrun_label": overrun["label_he"],
             "available_limit": available_limit,
             "available_as_of": available_as_of,
-            "note_he": "הפנוי מול המסגרת הוא מסגרת ועוד יתרת העו״ש. יתרה זמינה מהבנק, אם נשמרה, מוצגת בנפרד.",
+            "note_he": "הפנוי מול המסגרת הוא מסגרת ועוד יתרת העו״ש. יתרה זמינה מהבנק, אם נשמרה, מוצגת בנפרד ואינה מחליפה את היתרה הסגורה.",
         },
         "upcoming": upcoming,
         "weeks": weeks,

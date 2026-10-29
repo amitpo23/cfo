@@ -101,6 +101,7 @@ def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, s
             "books": books,
             "variance": _variance(budget, books, bank),
         })
+    from .money_screens import org_partial_banner
     return {
         "grain": grain,
         "start": start.isoformat(),
@@ -109,6 +110,8 @@ def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, s
         "provider_calls": 0,
         "periods": periods,
         "totals": _totals(periods),
+        "partial_banner": org_partial_banner(db, organization_id),
+        "unclassified_outflows": _unclassified_outflows(db, organization_id, bank_rows, plan),
         "profit": [
             {"label": period["label"], "books": period["books"]["net"], "bank": period["bank"]["net"], "budget": period["budget"]["net"]}
             for period in periods
@@ -425,6 +428,43 @@ def _totals(periods: list[dict]) -> dict:
             "out": _sum_known([period["bank"]["out"] for period in elapsed], gap_is_missing=True),
             "net": _sum_known([period["bank"]["net"] for period in elapsed], gap_is_missing=True),
         },
+    }
+
+
+def _unclassified_outflows(db, organization_id: int, rows: list, plan: dict) -> dict:
+    """Outflows still in the filing queue. They are חסר/לסיווג, not an expense of 0.
+
+    Full classification is an operations task. The amount is shown so /pnl can
+    say the books column is not the whole cash picture.
+    """
+    from . import filing
+    from .books import classified_bank
+    dated = [row.transaction_date for row in rows if row.transaction_date]
+    if not rows or not dated:
+        return {
+            "count": 0,
+            "amount": None,
+            "label_he": None,
+        }
+    start = min(dated)
+    end = max(dated)
+    filed = classified_bank(db, organization_id, start, end, plan)
+    amount = 0.0
+    count = 0
+    for txn, result in filed:
+        if txn.amount is None or txn.amount >= 0:
+            continue
+        fallback = result.filed_by == "default" and result.category in filing.FALLBACK_RULES
+        if result.category not in filing.UNRESOLVED and not fallback:
+            continue
+        count += 1
+        amount += abs(float(txn.amount))
+    if count == 0:
+        return {"count": 0, "amount": None, "label_he": None}
+    return {
+        "count": count,
+        "amount": round(amount, 2),
+        "label_he": "חסר/לסיווג — יציאות בנק שלא תויקו. אינן נספרות כהוצאה ולא כ־0.",
     }
 
 
