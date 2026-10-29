@@ -2,12 +2,21 @@
 
 A suggestion is only the counterparty's own history or a rule the owner
 already saved. Nothing here picks a category for a name it has not seen.
-Accepting writes a counterparty rule, so the next transfer of that name
-files the same way. Coverage is signed: classified + unclassified = total.
+Accepting a real counterparty writes a rule, so the next transfer of that
+name files the same way. A row with no counterparty is filed as a decision
+on that transaction (its date, amount and description). No placeholder name
+is stored. Coverage is signed: classified + unclassified = total.
 """
 from __future__ import annotations
 
-from .filing import CATEGORIES, DECISION_CATEGORIES, FALLBACK_RULES, UNRESOLVED, Filed, Txn
+import re
+
+from .filing import (
+    CATEGORIES, DECISION_CATEGORIES, FALLBACK_RULES, UNRESOLVED, Filed, Txn,
+    _party_text, displayed_counterparty,
+)
+
+_DATE_RE = re.compile(r"^20\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 
 
 def unclassified(filed: Filed) -> bool:
@@ -20,7 +29,7 @@ def unclassified(filed: Filed) -> bool:
 
 
 def _party(txn: Txn) -> str:
-    return " ".join(part for part in (txn.debtor, txn.creditor) if part).strip()
+    return displayed_counterparty(txn)
 
 
 def suggest(counterparty: str, classified: list[dict], rules: list[dict]) -> dict | None:
@@ -129,29 +138,104 @@ def load_queue(db, organization_id: int, start, end, plan: dict | None) -> dict:
     return report
 
 
-def apply_accepts(plan: dict | None, accepts: list[dict]) -> dict:
-    """Persist one counterparty rule per accepted row. Does not invent a category."""
-    plan = dict(plan or {})
-    rules = [dict(rule) for rule in (plan.get("statusRules") or []) if isinstance(rule, dict)]
+def _identity(item: dict) -> dict:
+    txn_id = item.get("transaction_id")
+    org_id = item.get("organization_id")
+    when = item.get("date")
+    amount = item.get("amount")
+    if (
+        isinstance(txn_id, bool) or not isinstance(txn_id, int) or txn_id <= 0
+        or isinstance(org_id, bool) or not isinstance(org_id, int)
+        or not isinstance(when, str) or _DATE_RE.fullmatch(when) is None
+        or isinstance(amount, bool) or not isinstance(amount, (int, float))
+        or abs(amount) > 1e9
+    ):
+        raise ValueError("בלי צד נגדי הסיווג נשמר לפי התנועה, התאריך והסכום")
+    decision = {
+        "category": item.get("category"),
+        "organizationId": org_id,
+        "date": when,
+        "amount": round(float(amount), 2),
+    }
+    description = item.get("description")
+    if isinstance(description, str) and description.strip():
+        decision["description"] = description.strip()[:500]
+    return {"id": txn_id, "decision": decision}
+
+
+def bind_accepts(db, organization_id: int, accepts: list[dict]) -> list[dict]:
+    """Fill date, amount and description from the bank row when the party is empty.
+
+    The client does not get to choose those fields. A placeholder counterparty
+    is treated as empty.
+    """
+    from ...models import BankTransaction
+
+    bound = []
     for item in accepts:
         if not isinstance(item, dict):
             raise ValueError("אישור סיווג לא תקין")
-        party = str(item.get("counterparty") or "").strip()
-        category = item.get("category")
-        if not party or category not in DECISION_CATEGORIES:
-            raise ValueError("צריך צד נגדי וקטגוריה שהבעלים בחר")
-        if any(
-            rule.get("field") == "counterparty" and str(rule.get("contains") or "").strip() == party
-            and rule.get("category") == category
-            for rule in rules
-        ):
+        party = _party_text(item.get("counterparty"))
+        if party:
+            bound.append({"counterparty": party, "category": item.get("category")})
             continue
-        rules.append({
-            "id": f"counterparty:{party}"[:80],
-            "field": "counterparty",
-            "contains": party[:120],
-            "category": category,
-            "direction": "both",
+        txn_id = item.get("transaction_id")
+        if isinstance(txn_id, bool) or not isinstance(txn_id, int) or txn_id <= 0:
+            raise ValueError("בלי צד נגדי הסיווג נשמר לפי התנועה, התאריך והסכום")
+        txn = db.get(BankTransaction, txn_id)
+        if txn is None or txn.organization_id != organization_id:
+            raise ValueError("התנועה לא נמצאה בארגון הזה")
+        when = txn.transaction_date
+        bound.append({
+            "category": item.get("category"),
+            "transaction_id": txn.id,
+            "organization_id": txn.organization_id,
+            "date": when.isoformat() if hasattr(when, "isoformat") else str(when),
+            "amount": round(float(txn.amount), 2),
+            "description": txn.description or "",
         })
+    return bound
+
+
+def apply_accepts(plan: dict | None, accepts: list[dict]) -> dict:
+    """A named accept becomes a counterparty rule. An unnamed one files that row.
+
+    Does not invent a category or a counterparty.
+    """
+    plan = dict(plan or {})
+    rules = [dict(rule) for rule in (plan.get("statusRules") or []) if isinstance(rule, dict)]
+    decisions = {
+        str(key): dict(value)
+        for key, value in (plan.get("statusDecisions") or {}).items()
+        if isinstance(value, dict)
+    }
+    wrote_decision = False
+    for item in accepts:
+        if not isinstance(item, dict):
+            raise ValueError("אישור סיווג לא תקין")
+        category = item.get("category")
+        if category not in DECISION_CATEGORIES:
+            raise ValueError("צריך קטגוריה שהבעלים בחר")
+        party = _party_text(item.get("counterparty"))
+        if party:
+            if any(
+                rule.get("field") == "counterparty" and str(rule.get("contains") or "").strip() == party
+                and rule.get("category") == category
+                for rule in rules
+            ):
+                continue
+            rules.append({
+                "id": f"counterparty:{party}"[:80],
+                "field": "counterparty",
+                "contains": party[:120],
+                "category": category,
+                "direction": "both",
+            })
+            continue
+        identity = _identity(item)
+        decisions[str(identity["id"])] = identity["decision"]
+        wrote_decision = True
     plan["statusRules"] = rules
+    if wrote_decision or isinstance(plan.get("statusDecisions"), dict):
+        plan["statusDecisions"] = decisions
     return plan

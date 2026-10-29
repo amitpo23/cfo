@@ -5,7 +5,8 @@ A one-to-one port of the built-in rules of the Eliav tool
 Rezef and the tool file every row the same way. Order of precedence:
 
 1. a manager decision (``plan.statusDecisions[bank_id]``) that still matches
-   the row (organization, date, amount within 0.005);
+   the row (organization, date, amount within 0.005, and the description
+   when the decision stored one);
 2. a custom rule (``plan.statusRules``), first match wins;
 3. the built-in rules below, first match wins.
 
@@ -14,6 +15,7 @@ where it did. Unresolved categories ("לבירור") are never forced into a lin
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -231,6 +233,9 @@ class Txn:
     description: str = ""
     debtor: str = ""
     creditor: str = ""
+    # A payee/merchant/memo from the bank row when debtor and creditor are empty.
+    # Shown and used by counterparty rules. Not an intercompany name by itself.
+    party_label: str = ""
 
 
 @dataclass
@@ -267,9 +272,9 @@ def _custom_match(rule: dict, t: Txn) -> bool:
         return False
     fieldname = rule.get("field") or "description"
     if fieldname == "counterparty":
-        haystack = f"{t.debtor or ''} {t.creditor or ''}"
+        haystack = f"{t.debtor or ''} {t.creditor or ''} {t.party_label or ''}"
     elif fieldname == "any":
-        haystack = f"{t.description or ''} {t.debtor or ''} {t.creditor or ''}"
+        haystack = f"{t.description or ''} {t.debtor or ''} {t.creditor or ''} {t.party_label or ''}"
     else:
         haystack = t.description or ""
     return needle.casefold() in haystack.casefold()
@@ -280,6 +285,10 @@ def _decision_fits(decision: dict, t: Txn) -> bool:
         amount_ok = abs(float(decision.get("amount")) - t.amount) < 0.005
     except (TypeError, ValueError):
         return False
+    remembered = decision.get("description")
+    if isinstance(remembered, str) and remembered.strip():
+        if remembered.strip() != (t.description or "").strip():
+            return False
     return (
         decision.get("organizationId") == t.organization_id
         and decision.get("date") == t.date
@@ -301,18 +310,110 @@ def classify(t: Txn, *, decisions: dict | None = None, custom_rules: list | None
     return Filed(rule_category, rule_by, rule_category, decision_mismatch=decision is not None)
 
 
+_PLACEHOLDER_PARTIES = frozenset({
+    "", "-", "—", "–", "−", "חסר", "לא ידוע", "לא ידועה",
+    "unknown", "n/a", "na", "none", "null",
+})
+_EXPLICIT_PARTY_KEYS = (
+    "payee", "payeeName", "beneficiary", "beneficiaryName",
+    "merchantName", "merchant", "counterparty", "counterpartyName",
+)
+_MEMO_KEYS = ("purposeDescription", "memo", "comment", "details")
+
+
+def _party_text(value) -> str:
+    """A real name. Placeholders and non-text stay empty."""
+    if not isinstance(value, str):
+        return ""
+    text = " ".join(value.split()).strip()
+    if text.casefold() in _PLACEHOLDER_PARTIES:
+        return ""
+    return text[:120]
+
+
+def _additional_info(raw: dict) -> dict:
+    desc = raw.get("description")
+    info = desc.get("additionalInfo") if isinstance(desc, dict) else None
+    if info is None:
+        info = raw.get("additionalInfo")
+    if isinstance(info, str):
+        stripped = info.strip()
+        if not stripped:
+            return {}
+        if stripped.startswith("{"):
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {"memo": stripped}
+    return info if isinstance(info, dict) else {}
+
+
+def _named(sources: list[dict], keys: tuple[str, ...]) -> str:
+    for source in sources:
+        for key in keys:
+            text = _party_text(source.get(key))
+            if text:
+                return text
+    return ""
+
+
+def parties_from_raw(raw, description: str = "") -> tuple[str, str, str]:
+    """``(debtor, creditor, party_label)`` from fields already on the bank row.
+
+    Explicit debtor/creditor names stay on those fields. A payee, merchant or
+    memo is a label only, and only when it is not the bank description repeated.
+    An empty row stays empty: no placeholder name is invented.
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    info = _additional_info(raw)
+    accounts = []
+    for key in ("debtorAccount", "creditorAccount"):
+        account = raw.get(key)
+        if isinstance(account, dict):
+            accounts.append(account)
+    sources = [raw, info, *accounts]
+    debtor = _named(sources, ("debtorName",))
+    creditor = _named(sources, ("creditorName",))
+    if debtor or creditor:
+        return debtor, creditor, ""
+    label = _named(sources, _EXPLICIT_PARTY_KEYS)
+    if label:
+        return "", "", label
+    narrative = {_party_text(description).casefold()}
+    desc_obj = raw.get("description")
+    if isinstance(desc_obj, dict):
+        narrative.add(_party_text(desc_obj.get("description")).casefold())
+    elif isinstance(desc_obj, str):
+        narrative.add(_party_text(desc_obj).casefold())
+    narrative.discard("")
+    label = _named([info, raw], _MEMO_KEYS)
+    if label.casefold() in narrative:
+        return "", "", ""
+    return "", "", label
+
+
+def displayed_counterparty(txn: Txn) -> str:
+    named = " ".join(part for part in (txn.debtor, txn.creditor) if part).strip()
+    return named or (txn.party_label or "").strip()
+
+
 def txn_from_row(row) -> Txn:
     raw = row.raw_data if isinstance(getattr(row, "raw_data", None), dict) else {}
     when = row.transaction_date
+    description = row.description or ""
+    debtor, creditor, label = parties_from_raw(raw, description)
     return Txn(
         id=row.id,
         organization_id=row.organization_id,
         account_id=row.account_id,
         date=when.isoformat() if isinstance(when, date) else str(when),
         amount=float(row.amount or 0),
-        description=row.description or "",
-        debtor=str(raw.get("debtorName") or ""),
-        creditor=str(raw.get("creditorName") or ""),
+        description=description,
+        debtor=debtor,
+        creditor=creditor,
+        party_label=label,
     )
 
 

@@ -142,7 +142,7 @@ def _review(paired: list[tuple], *, page: int, page_size: int) -> dict:
 
 
 def _review_item(txn: filing.Txn, final: filing.Filed) -> dict:
-    counterparty = " ".join(part for part in (txn.debtor, txn.creditor) if part).strip()
+    counterparty = filing.displayed_counterparty(txn)
     return {
         "id": str(txn.id),
         "organization_id": txn.organization_id,
