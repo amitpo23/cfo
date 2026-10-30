@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import api from '../services/api';
 import { PeriodCompare, PeriodCompareTable, PeriodControls, isoDate, presetRange, type Grain } from './PeriodCompare';
-import { missingFigure, sumPeriodBankTotals } from './periodBankTotals';
+import { missingFigure, periodBankTotals } from './periodBankTotals';
 import { PartialDataBanner } from './dashboardUi';
 import { AgentPanel, FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
 import ExportButtons, { ExportSheet } from './ExportButtons';
@@ -245,7 +245,7 @@ const CashFlowDashboard: React.FC = () => {
   };
 
   // Header KPIs follow PeriodControls. The 6/12/24 selector only feeds the rolling charts.
-  const periodTotals = sumPeriodBankTotals(periodCompare);
+  const periodTotals = periodBankTotals(periodCompare);
   const periodLoading = periodPending && !periodCompare;
   const rollingInflows = monthlyCashFlow.reduce((sum, m) => sum + m.inflows, 0);
   const rollingOutflows = monthlyCashFlow.reduce((sum, m) => sum + m.outflows, 0);

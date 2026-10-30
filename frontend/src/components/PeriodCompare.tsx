@@ -34,16 +34,20 @@ export type PeriodTotals = {
   budget: { revenue: Figure; costs: Figure; net: Figure };
   books: { revenue: Figure; costs: Figure; net: Figure };
   bank: { in: Figure; out: Figure; net: Figure };
+  /** Booked movement. Stays known when a profit claim withholds bank.net. */
+  cash?: { in: Figure; out: Figure; net: Figure };
 };
 
 export type PeriodCompare = {
   grain: Grain;
   start: string;
   end: string;
+  as_of?: string;
   note_he?: string;
   periods: PeriodRow[];
   totals?: PeriodTotals;
   profit?: { label: string; books: Figure; bank: Figure; budget: Figure }[];
+  organization_id?: number;
   dashboard_slug?: string | null;
   partial_banner?: { text_he?: string | null; bank_as_of?: string | null; books_as_of?: string | null };
   unclassified_outflows?: { count?: number; amount?: number | null; label_he?: string | null; blocks_profit?: boolean };

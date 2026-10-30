@@ -1,68 +1,62 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { missingFigure, sumPeriodBankTotals } from './periodBankTotals.ts';
-import type { PeriodCompare, PeriodRow } from './PeriodCompare.tsx';
+import { missingFigure, periodBankTotals } from './periodBankTotals.ts';
+import type { Figure, PeriodCompare } from './PeriodCompare.tsx';
 
-function row(bank: { in: number | null; out: number | null; net: number | null }): PeriodRow {
-  const figure = (amount: number | null) => ({
-    amount,
-    missing_label: amount == null ? 'חסר' : null,
-  });
-  return {
-    label: 'יום',
-    start: '2026-10-29',
-    end: '2026-10-29',
-    budget: { revenue: figure(null), costs: figure(null), net: figure(null) },
-    bank: { in: figure(bank.in), out: figure(bank.out), net: figure(bank.net) },
-    books: { revenue: figure(null), costs: figure(null), net: figure(null) },
-    variance: { books_vs_budget: figure(null), bank_vs_budget: figure(null) },
-  };
+const figure = (amount: number | null, as_of: string | null = null): Figure => ({
+  amount,
+  as_of,
+  missing_label: amount == null ? 'חסר' : null,
+});
+
+function side(inflow: number | null, outflow: number | null, net: number | null) {
+  return { in: figure(inflow), out: figure(outflow), net: figure(net) };
 }
 
-function report(periods: PeriodRow[]): PeriodCompare {
-  return { grain: 'day', start: '2026-10-29', end: '2026-10-29', periods };
+function report(totals: PeriodCompare['totals']): PeriodCompare {
+  return { grain: 'day', start: '2026-10-29', end: '2026-10-29', periods: [], totals };
 }
 
-test('selected days sum bank inflows, outflows and net', () => {
-  const totals = sumPeriodBankTotals(report([
-    row({ in: 100, out: 40, net: 60 }),
-    row({ in: 0, out: 15.5, net: -15.5 }),
-  ]));
+const empty = { revenue: figure(null), costs: figure(null), net: figure(null) };
+
+test('KPIs are the server totals for the selected range, not a client sum', () => {
+  const totals = periodBankTotals(report({
+    budget: empty, books: empty,
+    bank: side(100, 55.5, 44.5),
+    cash: side(100, 55.5, 44.5),
+  }));
   assert.equal(totals?.inflows, 100);
   assert.equal(totals?.outflows, 55.5);
   assert.equal(totals?.net, 44.5);
 });
 
-test('a day with no booked movement stays a real zero', () => {
-  const totals = sumPeriodBankTotals(report([row({ in: 0, out: 0, net: 0 })]));
+test('withheld profit does not hide the cash that moved', () => {
+  const totals = periodBankTotals(report({
+    budget: empty, books: empty,
+    bank: side(500, 200, null),
+    cash: side(500, 200, 300),
+  }));
+  assert.equal(totals?.net, 300);
+});
+
+test('a real zero stays zero', () => {
+  const totals = periodBankTotals(report({ budget: empty, books: empty, bank: side(0, 0, 0), cash: side(0, 0, 0) }));
   assert.equal(totals?.inflows, 0);
-  assert.equal(totals?.outflows, 0);
   assert.equal(totals?.net, 0);
   assert.equal(missingFigure(0, '2026-10-29'), null);
 });
 
-test('a missing figure stays missing and is not added as zero', () => {
-  const totals = sumPeriodBankTotals(report([
-    row({ in: 10, out: null, net: null }),
-    row({ in: 5, out: 1, net: 4 }),
-  ]));
-  assert.equal(totals?.inflows, 15);
-  assert.equal(totals?.outflows, null);
-  assert.equal(totals?.net, null);
-});
-
-test('loading and an empty period payload are not a total', () => {
-  assert.equal(sumPeriodBankTotals(null), null);
-  assert.equal(sumPeriodBankTotals(undefined), null);
-  assert.equal(sumPeriodBankTotals(report([])), null);
+test('loading or a payload without totals is not a total', () => {
+  assert.equal(periodBankTotals(null), null);
+  assert.equal(periodBankTotals(undefined), null);
+  assert.equal(periodBankTotals(report(undefined)), null);
 });
 
 test('a missing amount stays חסר and keeps its as-of', () => {
   assert.equal(missingFigure(null, null), 'חסר');
   assert.equal(missingFigure(undefined, '2026-10-26'), 'חסר · נכון ל-2026-10-26');
-  const dated = row({ in: null, out: 0, net: null });
-  dated.bank.in.as_of = '2026-10-26';
-  const totals = sumPeriodBankTotals(report([dated]));
+  const cash = { in: figure(null, '2026-10-26'), out: figure(0, '2026-10-26'), net: figure(null, '2026-10-26') };
+  const totals = periodBankTotals(report({ budget: empty, books: empty, bank: cash, cash }));
   assert.equal(totals?.inflows, null);
   assert.equal(totals?.inflowsAsOf, '2026-10-26');
   assert.equal(totals?.outflows, 0);
