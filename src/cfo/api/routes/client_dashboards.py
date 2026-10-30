@@ -322,13 +322,12 @@ def dashboard_period_compare(dashboard_id: int, grain: str = "month", start: dat
                              end: date | None = None, db: Session = Depends(get_db_session),
                              user: User = Depends(get_current_user)):
     """Budget, booked bank, and filed books for the selected grain. No provider call."""
-    from ...services.dashboards.period_compare import compare_period
+    from ...services.dashboards.period_compare import period_payload
     try:
         row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
         window_start, window_end = _period_or_error(grain, start, end)
-        plan = view_model.plan_payload(db, row.id)
-        return compare_period(
-            db, row.primary_organization_id, plan,
+        return period_payload(
+            db, row.primary_organization_id, dashboard=row,
             grain=grain, start=window_start, end=window_end,
         )
     except DashboardError as exc:
@@ -828,15 +827,14 @@ def public_period_compare(slug: str, request: Request, grain: str = "month",
                           start: date | None = None, end: date | None = None,
                           db: Session = Depends(get_db_session)):
     """Same three-source comparison for a dashboard the caller can already open."""
-    from ...services.dashboards.period_compare import compare_period
+    from ...services.dashboards.period_compare import period_payload
     dashboard, error = _public_dashboard_or_error(slug, request, db)
     if error is not None:
         return error
     try:
         window_start, window_end = _period_or_error(grain, start, end)
-        plan = view_model.plan_payload(db, dashboard.id)
-        payload = compare_period(
-            db, dashboard.primary_organization_id, plan,
+        payload = period_payload(
+            db, dashboard.primary_organization_id, dashboard=dashboard,
             grain=grain, start=window_start, end=window_end,
         )
     except DashboardError as exc:

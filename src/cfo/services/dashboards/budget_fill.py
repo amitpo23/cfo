@@ -48,13 +48,18 @@ def is_active(kind: str | None) -> bool:
     return kind in _ACTIVE
 
 
-def dashboard_for_org(db, organization_id: int) -> ClientDashboard | None:
-    row = (
+def primary_dashboard_for_org(db, organization_id: int) -> ClientDashboard | None:
+    """The org's own dashboard. Its plan lines belong to this org only."""
+    return (
         db.query(ClientDashboard)
         .filter(ClientDashboard.primary_organization_id == organization_id)
         .order_by(ClientDashboard.id)
         .first()
     )
+
+
+def dashboard_for_org(db, organization_id: int) -> ClientDashboard | None:
+    row = primary_dashboard_for_org(db, organization_id)
     if row is not None:
         return row
     entity = (

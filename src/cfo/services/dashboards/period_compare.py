@@ -75,6 +75,26 @@ def iter_buckets(grain: str, start: date, end: date):
         cursor = date(cursor.year + 1, 1, 1) if cursor.month == 12 else date(cursor.year, cursor.month + 1, 1)
 
 
+def period_payload(db, organization_id: int, *, grain: str, start: date, end: date, dashboard=None,
+                   as_of: date | None = None) -> dict:
+    """The one Bank | Books | Budget payload behind /pnl, /budget, /cashflow and the /d tabs.
+
+    ``dashboard`` is the org's primary dashboard when the caller already has it.
+    Otherwise it is looked up the same way for every screen. A secondary entity
+    does not borrow the primary org's plan lines, because those lines are not
+    filtered by organization.
+    """
+    from .budget_fill import primary_dashboard_for_org
+    from .view_model import plan_payload
+    if dashboard is None:
+        dashboard = primary_dashboard_for_org(db, organization_id)
+    plan = plan_payload(db, dashboard.id) if dashboard is not None else None
+    payload = compare_period(db, organization_id, plan, grain=grain, start=start, end=end, as_of=as_of)
+    payload["organization_id"] = organization_id
+    payload["dashboard_slug"] = dashboard.slug if dashboard is not None else None
+    return payload
+
+
 def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, start: date, end: date,
                    as_of: date | None = None) -> dict:
     if grain not in GRAINS:
@@ -104,6 +124,8 @@ def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, s
     from .money_screens import org_partial_banner, profit_claim, withhold_profit
     unclassified = _unclassified_outflows(db, organization_id, bank_rows, plan)
     claim = profit_claim(unclassified)
+    # Booked movement is a cash fact. Withholding a profit claim does not erase it.
+    cash = _totals(periods)["bank"]
     if not claim["allowed"]:
         reason = claim["reason_he"]
         for period in periods:
@@ -128,6 +150,7 @@ def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, s
             {"label": period["label"], "books": period["books"]["net"], "bank": period["bank"]["net"], "budget": period["budget"]["net"]}
             for period in periods
         ]
+    totals["cash"] = cash
     return {
         "grain": grain,
         "start": start.isoformat(),
