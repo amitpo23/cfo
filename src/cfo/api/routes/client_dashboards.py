@@ -479,23 +479,28 @@ def bank_match(dashboard_id: int, start: date | None = None, end: date | None = 
         return _error(exc)
     report = load_report(db, row.primary_organization_id, window_start, window_end,
                          view_model.plan_payload(db, row.id))
-    report["read_only"] = service.role_for(db, user, row) not in service.PLAN_ROLES
+    report["read_only"] = service.role_for(db, user, row) not in service.EVIDENCE_ROLES
     return report
 
 
 @router.post("/dashboards/{dashboard_id}/bank-match")
 def bank_match_decide(dashboard_id: int, body: BankMatchAction,
                       db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
-    """One owner action on one bank row. Nothing is posted to SUMIT."""
+    """One owner action on one bank row. Nothing is posted to SUMIT.
+
+    The plan is saved first. A database match that then fails leaves a stale
+    approval, which the screen shows as open again.
+    """
     from ...models import DashboardPlan
-    from ...services.dashboards.bank_match import apply_decision
+    from ...services.dashboards.bank_match import plan_decision, run_effect
     try:
-        row = service.get_dashboard(db, user, dashboard_id, allowed=service.PLAN_ROLES)
+        row = service.get_dashboard(db, user, dashboard_id, allowed=service.EVIDENCE_ROLES)
         current = db.get(DashboardPlan, row.id)
         payload = dict(current.payload) if current is not None and isinstance(current.payload, dict) else {}
-        updated = apply_decision(db, row.primary_organization_id, payload, body.model_dump())
+        updated, effect = plan_decision(db, row.primary_organization_id, payload, body.model_dump())
         version = current.version if current is not None else "null"
         saved = service.save_plan(db, user, row.id, updated, version)
+        run_effect(db, row.primary_organization_id, effect)
     except DashboardError as exc:
         return _error(exc)
     except ValueError as exc:

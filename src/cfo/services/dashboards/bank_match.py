@@ -161,12 +161,17 @@ def load_report(db, organization_id: int, start, end, plan: dict | None) -> dict
     return report
 
 
-def apply_decision(db, organization_id: int, plan: dict | None, item: dict) -> dict:
-    """Apply one owner action and return the new plan.
+def plan_decision(db, organization_id: int, plan: dict | None, item: dict) -> tuple[dict, tuple | None]:
+    """Validate one owner action. Returns the new plan and the database effect.
+
+    Nothing is written here. The caller saves the plan first and then runs
+    the effect with ``run_effect``. If the effect fails after the plan is
+    saved, the approval is stale and the row shows as open again.
 
     The bank row's date and amount come from the database, not the client.
     אשר needs a document of this organization. Leaving an approved row
-    (בדיקה, חסר מסמך, פתח מחדש) undoes its database match.
+    (בדיקה, חסר מסמך, פתח מחדש) undoes its database match, but only when the
+    database still holds the document that was approved.
     """
     from ...models import BankTransaction
     from ..manual_reconciliation import ManualReconciliationService
@@ -194,20 +199,31 @@ def apply_decision(db, organization_id: int, plan: dict | None, item: dict) -> d
     previous = decisions.get(key) or {}
     service = ManualReconciliationService(db, organization_id=organization_id)
 
+    effect = None
     if action == "approve":
         entity_type = item.get("entity_type")
         entity_id = item.get("entity_id")
         if entity_type not in ENTITY_TYPES or isinstance(entity_id, bool) or not isinstance(entity_id, int):
             raise ValueError("אישור דורש מסמך: חשבונית, חשבון ספק או הוצאה")
-        service.match_transaction(txn.id, entity_type, entity_id)
+        if txn.is_provisional:
+            raise ValueError("תנועה זמנית לא מותאמת סופית")
+        service._assert_not_allocated(txn)
+        if service._load_entity(entity_type, entity_id) is None:
+            raise ValueError("המסמך לא נמצא בארגון הזה")
+        effect = ("match", txn.id, entity_type, entity_id)
         decision = {"status": "approved", "entity_type": entity_type, "entity_id": entity_id}
     else:
-        if previous.get("status") == "approved" and txn.is_reconciled:
-            service.unmatch_transaction(txn.id)
+        if (
+            previous.get("status") == "approved" and txn.is_reconciled
+            and (txn.matched_entity_type, txn.matched_entity_id)
+            == (previous.get("entity_type"), previous.get("entity_id"))
+        ):
+            service._assert_not_allocated(txn)
+            effect = ("unmatch", txn.id, previous.get("entity_type"), previous.get("entity_id"))
         if action == "reopen":
             decisions.pop(key, None)
             plan["bankMatchDecisions"] = decisions
-            return plan
+            return plan, effect
         decision = {"status": action}
 
     when = txn.transaction_date
@@ -220,7 +236,25 @@ def apply_decision(db, organization_id: int, plan: dict | None, item: dict) -> d
         decision["note"] = note.strip()
     decisions[key] = decision
     plan["bankMatchDecisions"] = decisions
-    return plan
+    return plan, effect
+
+
+def run_effect(db, organization_id: int, effect: tuple | None) -> None:
+    """Write the match columns after the plan is saved. Unmatch re-checks the stored document."""
+    from ...models import BankTransaction
+    from ..manual_reconciliation import ManualReconciliationService
+
+    if effect is None:
+        return
+    kind, txn_id, entity_type, entity_id = effect
+    service = ManualReconciliationService(db, organization_id=organization_id)
+    if kind == "match":
+        service.match_transaction(txn_id, entity_type, entity_id)
+        return
+    txn = db.get(BankTransaction, txn_id)
+    if txn is not None and txn.organization_id == organization_id and txn.is_reconciled \
+            and (txn.matched_entity_type, txn.matched_entity_id) == (entity_type, entity_id):
+        service.unmatch_transaction(txn_id)
 
 
 def validate_decisions(value, limit: int) -> str | None:

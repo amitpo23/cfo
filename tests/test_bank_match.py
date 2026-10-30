@@ -177,6 +177,27 @@ def test_owner_approves_flags_and_reopens(client, fresh_org):
     assert final[out_id]["status"] == "open"
 
 
+def test_flagging_an_auto_matched_row_keeps_the_auto_match(client, fresh_org):
+    """Only a match the owner approved is undone. An auto match the owner flags stays in the DB."""
+    owner = fresh_org()
+    dashboard_id = _dashboard(client, owner, "bank-match-auto")
+    out_id, _, bill_id = _seed(owner["org_id"])
+    with SessionLocal() as db:
+        txn = db.get(BankTransaction, out_id)
+        txn.matched_entity_type, txn.matched_entity_id, txn.is_reconciled = "bill", bill_id, True
+        db.commit()
+    url = f"/api/dashboards/{dashboard_id}/bank-match"
+    params = {"start": "2026-10-01", "end": "2026-10-31"}
+    row = next(r for r in client.get(url, headers=owner["headers"], params=params).json()["rows"] if r["id"] == out_id)
+    assert row["status"] == "open"
+    assert row["auto_match"] == {"entity_type": "bill", "entity_id": bill_id}
+
+    flagged = client.post(url, headers=owner["headers"], json={"transaction_id": out_id, "action": "check"})
+    assert flagged.status_code == 200, flagged.text
+    with SessionLocal() as db:
+        assert db.get(BankTransaction, out_id).is_reconciled is True
+
+
 def test_approve_needs_a_document_and_cannot_cross_orgs(client, fresh_org):
     owner = fresh_org()
     other = fresh_org()
