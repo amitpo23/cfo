@@ -55,6 +55,14 @@ def test_auto_match_waits_for_the_owner_and_owner_approval_is_approved():
     assert rows[2]["matched"]["entity_id"] == 20
 
 
+def test_an_auto_match_outside_the_tolerance_is_still_offered_unscored():
+    docs = [DocLite(10, "bill", 900.0, date(2026, 10, 5), "x")]
+    row = build_report([_pair(1, -1000.0)], {1: ("bill", 10)}, {}, docs)["rows"][0]
+    assert row["candidates"] == [{
+        "entity_type": "bill", "entity_id": 10, "score": None, "amount": 900.0, "date": "2026-10-05", "name": "x",
+    }]
+
+
 def test_a_stale_approval_without_the_db_match_is_open_again():
     rows = build_report([_pair(1, -100.0)], {}, {"1": {"status": "approved", "entity_type": "bill", "entity_id": 9}}, [])["rows"]
     assert rows[0]["status"] == "open"

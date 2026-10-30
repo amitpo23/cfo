@@ -97,6 +97,7 @@ def build_report(paired, recon: dict, decisions: dict | None, docs: list[DocLite
         resolved.append((txn, filed, status, decision))
         if status == "approved":
             taken.add((decision["entity_type"], decision["entity_id"]))
+    by_key = {(doc.entity_type, doc.id): doc for doc in docs}
     rows = []
     for txn, filed, status, decision in resolved:
         auto = recon.get(txn.id) if status != "approved" else None
@@ -118,6 +119,15 @@ def build_report(paired, recon: dict, decisions: dict | None, docs: list[DocLite
             row["matched"] = {"entity_type": decision["entity_type"], "entity_id": decision["entity_id"]}
         elif status == "open":
             row["candidates"] = candidates_for(txn, docs, taken)
+            doc = by_key.get(auto) if auto else None
+            if doc is not None and not any(
+                (item["entity_type"], item["entity_id"]) == auto for item in row["candidates"]
+            ):
+                row["candidates"].insert(0, {
+                    "entity_type": doc.entity_type, "entity_id": doc.id, "score": None,
+                    "amount": round(doc.amount, 2),
+                    "date": doc.date.isoformat() if doc.date else None, "name": doc.name or "",
+                })
         rows.append(row)
     summary = {status: _bucket(rows, status) for status in (*STATUSES, "open")}
     summary["total"] = _bucket(rows)
