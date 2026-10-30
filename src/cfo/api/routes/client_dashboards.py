@@ -451,6 +451,58 @@ def accept_classification(dashboard_id: int, body: ClassificationWrite,
     return {"version": saved["version"], "rules": len(updated.get("statusRules") or []), "provider_calls": 0}
 
 
+class BankMatchAction(BaseModel):
+    transaction_id: int = Field(ge=1)
+    action: str
+    entity_type: str | None = None
+    entity_id: int | None = Field(default=None, ge=1)
+    note: str | None = Field(default=None, max_length=300)
+
+
+def _match_window(start: date | None, end: date | None):
+    window_end = end or date.today()
+    window_start = start or window_end.replace(day=1)
+    if window_start > window_end:
+        raise DashboardError(422, "bad_window", "טווח התאריכים הפוך")
+    return window_start, window_end
+
+
+@router.get("/dashboards/{dashboard_id}/bank-match")
+def bank_match(dashboard_id: int, start: date | None = None, end: date | None = None,
+               db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    """Bank rows against book documents, with the owner's אשר / בדיקה / חסר מסמך."""
+    from ...services.dashboards.bank_match import load_report
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
+        window_start, window_end = _match_window(start, end)
+    except DashboardError as exc:
+        return _error(exc)
+    report = load_report(db, row.primary_organization_id, window_start, window_end,
+                         view_model.plan_payload(db, row.id))
+    report["read_only"] = service.role_for(db, user, row) not in service.PLAN_ROLES
+    return report
+
+
+@router.post("/dashboards/{dashboard_id}/bank-match")
+def bank_match_decide(dashboard_id: int, body: BankMatchAction,
+                      db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    """One owner action on one bank row. Nothing is posted to SUMIT."""
+    from ...models import DashboardPlan
+    from ...services.dashboards.bank_match import apply_decision
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=service.PLAN_ROLES)
+        current = db.get(DashboardPlan, row.id)
+        payload = dict(current.payload) if current is not None and isinstance(current.payload, dict) else {}
+        updated = apply_decision(db, row.primary_organization_id, payload, body.model_dump())
+        version = current.version if current is not None else "null"
+        saved = service.save_plan(db, user, row.id, updated, version)
+    except DashboardError as exc:
+        return _error(exc)
+    except ValueError as exc:
+        return _error(DashboardError(422, "invalid_match", str(exc)))
+    return {"version": saved["version"], "provider_calls": 0}
+
+
 @router.post("/dashboards/{dashboard_id}/snapshots", status_code=201)
 def publish_snapshot(dashboard_id: int, db: Session = Depends(get_db_session),
                      user: User = Depends(get_current_user)):
@@ -798,6 +850,24 @@ def public_unclassified(slug: str, request: Request, start: date | None = None, 
     plan = view_model.plan_payload(db, dashboard.id)
     report = load_queue(db, dashboard.primary_organization_id, window_start, window_end, plan)
     report["coverage_only"] = False
+    return _public_response(report)
+
+
+@public_router.get("/d/{slug}/bank-match")
+def public_bank_match(slug: str, request: Request, start: date | None = None, end: date | None = None,
+                      db: Session = Depends(get_db_session)):
+    """The match screen, read-only. Decisions are made by a signed-in owner. No provider call."""
+    from ...services.dashboards.bank_match import load_report
+    dashboard, error = _public_dashboard_or_error(slug, request, db)
+    if error is not None:
+        return error
+    try:
+        window_start, window_end = _match_window(start, end)
+    except DashboardError as exc:
+        return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
+    report = load_report(db, dashboard.primary_organization_id, window_start, window_end,
+                         view_model.plan_payload(db, dashboard.id))
+    report["read_only"] = True
     return _public_response(report)
 
 

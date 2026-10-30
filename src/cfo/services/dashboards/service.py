@@ -282,6 +282,10 @@ def validate_filing_payload(payload: dict) -> None:
                 raise _invalid_plan("שדה הכלל אינו מוכר")
             if rule.get("direction", "both") not in _RULE_DIRECTIONS:
                 raise _invalid_plan("כיוון הכלל אינו מוכר")
+    from .bank_match import validate_decisions
+    match_error = validate_decisions(payload.get("bankMatchDecisions"), MAX_DECISIONS)
+    if match_error:
+        raise _invalid_plan(match_error)
     _validate_parameters(payload.get("statusParameters"))
     _validate_evidence(payload.get("liquidityEvidence"))
     _validate_builtin_pin(payload.get("filingRulesBuiltin"))

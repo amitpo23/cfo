@@ -163,8 +163,10 @@ def load_docs_for_org(db, organization_id: int) -> tuple[list[DocLite], list[Doc
                 name=_vendor_name(r))
         for r in db.query(Bill).filter(Bill.organization_id == organization_id).all()
     ]
+    # The bank pays an expense's total with VAT. ``amount`` is before VAT.
     expenses = [
-        DocLite(id=r.id, entity_type="expense", amount=float(getattr(r, "amount", 0) or 0),
+        DocLite(id=r.id, entity_type="expense",
+                amount=float(getattr(r, "total", 0) or getattr(r, "amount", 0) or 0),
                 date=getattr(r, "expense_date", None) or getattr(r, "date", None),
                 name=getattr(r, "supplier_name", "") or getattr(r, "description", "") or "")
         for r in db.query(Expense).filter(Expense.organization_id == organization_id).all()
