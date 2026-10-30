@@ -502,6 +502,9 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
     if (payload.get("zReports") or None) != ((stored or {}).get("zReports") or None) \
             and role_for(db, user, row) not in EVIDENCE_ROLES:
         raise DashboardError(403, "z_reports_forbidden", "רק בעלי הדשבורד או מנהל יכולים להזין דוחות Z")
+    if (payload.get("bankMatchDecisions") or None) != ((stored or {}).get("bankMatchDecisions") or None) \
+            and role_for(db, user, row) not in EVIDENCE_ROLES:
+        raise DashboardError(403, "bank_match_forbidden", "רק בעלי הדשבורד יכולים לשנות החלטות התאמת בנק")
     if (payload.get("cashForecastItems") or None) != ((stored or {}).get("cashForecastItems") or None) \
             and role_for(db, user, row) not in EVIDENCE_ROLES:
         raise DashboardError(403, "cash_forecast_items_forbidden",

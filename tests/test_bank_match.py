@@ -232,6 +232,27 @@ def test_public_link_reads_but_does_not_write(client, fresh_org):
     assert write.status_code in {404, 405}
 
 
+def test_an_accountant_cannot_record_a_match_decision(client, fresh_org):
+    """The match screen and the generic plan PUT are both owner-only for match decisions."""
+    from tests.test_dashboard_eliav_ui_r2 import _member, _put
+    owner = fresh_org()
+    accountant = fresh_org()
+    dashboard_id = _dashboard(client, owner, "bank-match-roles")
+    _member(dashboard_id, accountant["org_id"], "accountant")
+    _, fee_id, _ = _seed(owner["org_id"])
+
+    screen = client.post(f"/api/dashboards/{dashboard_id}/bank-match", headers=accountant["headers"],
+                         json={"transaction_id": fee_id, "action": "check"})
+    assert screen.status_code in {403, 404}
+    listed = client.get(f"/api/dashboards/{dashboard_id}/bank-match", headers=accountant["headers"],
+                        params={"start": "2026-10-01", "end": "2026-10-31"})
+    assert listed.status_code == 200 and listed.json()["read_only"] is True
+    forged = _put(client, accountant["headers"], dashboard_id, {"bankMatchDecisions": {str(fee_id): {
+        "status": "check", "organizationId": owner["org_id"], "date": "2026-10-06", "amount": -15.0,
+    }}})
+    assert forged.status_code == 403 and forged.json()["error"]["code"] == "bank_match_forbidden"
+
+
 def test_plan_validator_rejects_a_bad_match_decision():
     import pytest
     from cfo.services.dashboards.service import DashboardError, validate_filing_payload
