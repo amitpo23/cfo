@@ -19,7 +19,7 @@ import ExportButtons from './ExportButtons';
 import { PIE_LABEL_MIN_SHARE, pieSlices } from './budgetChart';
 import { PartialDataBanner, missingAsOf } from './dashboardUi';
 import { BudgetAssumptionsEditor } from './BudgetAssumptionsEditor';
-import { PeriodCompareTable, PeriodControls, presetRange, type Grain, type PeriodCompare } from './PeriodCompare';
+import { PeriodCompareTable, PeriodControls, presetRange, type Figure, type Grain, type PeriodCompare } from './PeriodCompare';
 
 interface BudgetComparison {
   category: string;
@@ -203,6 +203,12 @@ export const BudgetDashboard: React.FC = () => {
   const totalVariancePct = totalVariance == null || !plannedTotal ? null : (totalVariance / plannedTotal) * 100;
 
   const formatCurrency = (value: number | null) => (value === null ? missingAsOf(rangeEnd) : `₪${value.toLocaleString()}`);
+  const periodTotals = periodReport?.totals;
+  const figureText = (figure: Figure | undefined) => {
+    if (!periodReport) return loadingPeriod ? 'טוען…' : missingAsOf(rangeEnd);
+    if (figure?.amount == null) return missingAsOf(figure?.as_of ?? periodReport.as_of);
+    return `₪${figure.amount.toLocaleString()}`;
+  };
   const byKind = meta.totals ?? null;
   // The pie splits the cost budget (all rows on a page without kinds).
   const slices = pieSlices((budgetData ?? []).filter((row) => (!row.kind || row.kind === 'cost') && row.planned != null) as { category: string; planned: number }[]);
@@ -329,59 +335,36 @@ export const BudgetDashboard: React.FC = () => {
       <PeriodCompareTable report={periodReport ?? null} booksFirst />
       <BudgetAssumptionsEditor start={rangeStart} end={rangeEnd} slug={periodReport?.dashboard_slug ?? meta.dashboardSlug} />
 
-      <h2 className="text-lg font-semibold text-gray-800">פירוט לחודש {rangeStart.slice(0, 7)}</h2>
-      {/* Summary Cards */}
-      {byKind ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {([['revenue', 'הכנסות'], ['costs', 'הוצאות']] as const).map(([key, label]) => {
-            const total = byKind[key];
-            return (
-              <div key={key} className="bg-white rounded-xl shadow-sm p-6 border border-gray-100" data-total={key}>
-                <h3 className="text-sm font-medium text-gray-500">{label}: תקציב מול ביצוע</h3>
-                <p className="text-2xl font-bold text-gray-900 mt-2">{formatCurrency(total.actual)}</p>
-                <p className="text-sm text-gray-500">תקציב: {formatCurrency(total.budget)}</p>
-              </div>
-            );
-          })}
-          <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-            <h3 className="text-sm font-medium text-gray-500">התראות פעילות</h3>
-            <p className="text-2xl font-bold text-orange-600 mt-2">{alerts?.length || 0}</p>
-          </div>
-        </div>
-      ) : (
+      {/* Headline cards: the period payload /pnl and /cashflow read for this range. */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <h3 className="text-sm font-medium text-gray-500">תקציב מתוכנן</h3>
-          <p className="text-2xl font-bold text-gray-900 mt-2">
-            {formatCurrency(plannedTotal)}
-          </p>
-        </div>
-        <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-          <h3 className="text-sm font-medium text-gray-500">ביצוע בפועל</h3>
-          <p className="text-2xl font-bold text-gray-900 mt-2">
-            {formatCurrency(actualTotal)}
-          </p>
-        </div>
-        <div className={`rounded-xl shadow-sm p-6 border ${
-          totalVariance == null ? 'bg-white border-gray-100' : totalVariance >= 0 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
-        }`}>
-          <h3 className="text-sm font-medium text-gray-500">סטייה</h3>
-          <p className={`text-2xl font-bold mt-2 ${
-            totalVariance == null ? 'text-gray-500' : totalVariance >= 0 ? 'text-green-700' : 'text-red-700'
-          }`}>
-            {formatCurrency(totalVariance)}
-          </p>
-          <p className={`text-sm ${totalVariance == null ? 'text-gray-500' : totalVariance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-            {totalVariancePct == null ? '' : `${totalVariancePct.toFixed(1)}%`}
-          </p>
-        </div>
+        {([['revenue', 'הכנסות'], ['costs', 'הוצאות'], ['net', 'נטו']] as const).map(([key, label]) => {
+          const books = periodTotals?.books[key];
+          const budget = periodTotals?.budget[key];
+          return (
+            <div key={key} className="bg-white rounded-xl shadow-sm p-6 border border-gray-100" data-total={key}>
+              <h3 className="text-sm font-medium text-gray-500">{label}: ספרים מול תקציב</h3>
+              <p className="text-2xl font-bold text-gray-900 mt-2">{figureText(books)}</p>
+              <p className="text-sm text-gray-500">תקציב: {figureText(budget)}</p>
+            </div>
+          );
+        })}
         <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
           <h3 className="text-sm font-medium text-gray-500">התראות פעילות</h3>
-          <p className="text-2xl font-bold text-orange-600 mt-2">
-            {alerts?.length || 0}
-          </p>
+          <p className="text-2xl font-bold text-orange-600 mt-2">{alerts?.length || 0}</p>
         </div>
       </div>
+
+      <h2 className="text-lg font-semibold text-gray-800">פירוט קטגוריות לחודש {rangeStart.slice(0, 7)}</h2>
+      {byKind ? (
+        <p className="text-sm text-gray-500">
+          פירוט החודש: הכנסות {formatCurrency(byKind.revenue.actual)} מול תקציב {formatCurrency(byKind.revenue.budget)} ·
+          הוצאות {formatCurrency(byKind.costs.actual)} מול תקציב {formatCurrency(byKind.costs.budget)}
+        </p>
+      ) : (
+        <p className="text-sm text-gray-500">
+          פירוט החודש: תקציב {formatCurrency(plannedTotal)} · ביצוע {formatCurrency(actualTotal)} · סטייה {formatCurrency(totalVariance)}
+          {totalVariancePct == null ? '' : ` (${totalVariancePct.toFixed(1)}%)`}
+        </p>
       )}
 
       {/* Alerts Section */}

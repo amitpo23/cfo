@@ -220,13 +220,9 @@ async def import_budget_excel(
 
 
 def _org_dashboard(db: Session, org_id: int):
-    from ...models import ClientDashboard
-    return (
-        db.query(ClientDashboard)
-        .filter(ClientDashboard.primary_organization_id == org_id)
-        .order_by(ClientDashboard.id)
-        .first()
-    )
+    """The same dashboard /cashflow/period reads, so BvA detail and totals agree."""
+    from ...services.dashboards.budget_fill import primary_dashboard_for_org
+    return primary_dashboard_for_org(db, org_id)
 
 
 @router.get("/budget/vs-actual")

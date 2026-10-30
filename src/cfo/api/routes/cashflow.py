@@ -107,25 +107,18 @@ async def get_period_compare(
     current_user: dict = Depends(get_current_user),
     org_id: int = Depends(get_current_org_id),
 ):
-    """Budget, booked bank, and filed books for the org. No SUMIT or Open Finance call."""
-    from ...services.dashboards.period_compare import compare_period
+    """Budget, booked bank, and filed books for the org. No SUMIT or Open Finance call.
+
+    /pnl, /budget and /cashflow read this. The /d tabs get the same payload
+    from ``period_payload``.
+    """
+    from ...services.dashboards.period_compare import period_payload
     from ...services.dashboards.view_model import MAX_RANGE_DAYS
     if end < start:
         raise HTTPException(422, "תאריך הסיום מוקדם מתאריך ההתחלה")
     if (end - start).days > MAX_RANGE_DAYS:
         raise HTTPException(422, "טווח התאריכים ארוך מ-366 ימים")
-    from ...models import ClientDashboard
-    from ...services.dashboards.view_model import plan_payload
-    dashboard = (
-        db.query(ClientDashboard)
-        .filter(ClientDashboard.primary_organization_id == org_id)
-        .order_by(ClientDashboard.id)
-        .first()
-    )
-    plan = plan_payload(db, dashboard.id) if dashboard is not None else None
-    payload = compare_period(db, org_id, plan, grain=grain, start=start, end=end)
-    payload["dashboard_slug"] = dashboard.slug if dashboard is not None else None
-    return payload
+    return period_payload(db, org_id, grain=grain, start=start, end=end)
 
 
 @router.get("/monthly")
