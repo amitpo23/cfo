@@ -95,6 +95,26 @@ def test_summary_is_signed_and_balanced():
     assert summary["done"] is False
 
 
+def test_an_empty_window_is_not_done():
+    from cfo.services.dashboards.bank_match import closing_state
+    summary = build_report([], {}, {}, [])["summary"]
+    state = closing_state(summary, "2026-10-06", "2026-10-31")
+    assert state["done"] is False
+    assert "אין תנועות" in state["label_he"]
+
+
+def test_a_window_past_the_bank_date_is_decided_only_up_to_that_date():
+    from cfo.services.dashboards.bank_match import closing_state
+    summary = build_report([_pair(1, -5.0)], {}, {"1": {"status": "check"}}, [])["summary"]
+    past = closing_state(summary, "2026-10-06", "2026-10-31")
+    assert past["done"] is True
+    assert past["label_he"] == "כל התנועות הוכרעו עד 06.10 — הבנק לא מעודכן אחרי התאריך הזה"
+    whole = closing_state(summary, "2026-10-31", "2026-10-31")
+    assert whole["label_he"] == "כל התנועות בטווח הוכרעו"
+    missing = closing_state(summary, None, "2026-10-31")
+    assert "תאריך הבנק חסר" in missing["label_he"]
+
+
 def test_load_docs_scores_an_expense_on_its_total_with_vat(fresh_org):
     from cfo.services.bank_reconciliation import load_docs_for_org
     owner = fresh_org()
@@ -176,6 +196,7 @@ def test_owner_approves_flags_and_reopens(client, fresh_org):
     assert rows[out_id]["status"] == "approved"
     assert rows[fee_id]["status"] == "missing_doc"
     assert again["summary"]["done"] is True
+    assert again["closing"]["label_he"].startswith("כל התנועות הוכרעו עד 06.10")
 
     reopened = client.post(url, headers=owner["headers"], json={"transaction_id": out_id, "action": "reopen"})
     assert reopened.status_code == 200, reopened.text

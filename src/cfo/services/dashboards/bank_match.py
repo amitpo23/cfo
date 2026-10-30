@@ -136,8 +136,24 @@ def build_report(paired, recon: dict, decisions: dict | None, docs: list[DocLite
         sum(part["count"] for part in parts) == summary["total"]["count"]
         and abs(sum(part["amount"] for part in parts) - summary["total"]["amount"]) < 0.01
     )
-    summary["done"] = summary["open"]["count"] == 0
+    summary["done"] = summary["total"]["count"] > 0 and summary["open"]["count"] == 0
     return {"rows": rows, "summary": summary, "status_labels": STATUS_HE}
+
+
+def closing_state(summary: dict, bank_as_of: str | None, end: str) -> dict:
+    """Whether the window is decided, and up to which bank date. No rows is not done."""
+    total = summary["total"]["count"]
+    open_count = summary["open"]["count"]
+    if total == 0:
+        return {"done": False, "label_he": "אין תנועות בנק שמורות בטווח. זה לא מאוזן — זה חסר."}
+    if open_count:
+        return {"done": False, "label_he": f"עדיין לא מאוזן — {open_count} תנועות ממתינות להחלטה"}
+    if not bank_as_of:
+        return {"done": True, "label_he": "כל התנועות השמורות הוכרעו. תאריך הבנק חסר."}
+    if bank_as_of < end:
+        ddmm = f"{bank_as_of[8:10]}.{bank_as_of[5:7]}"
+        return {"done": True, "label_he": f"כל התנועות הוכרעו עד {ddmm} — הבנק לא מעודכן אחרי התאריך הזה"}
+    return {"done": True, "label_he": "כל התנועות בטווח הוכרעו"}
 
 
 def load_report(db, organization_id: int, start, end, plan: dict | None) -> dict:
@@ -167,6 +183,7 @@ def load_report(db, organization_id: int, start, end, plan: dict | None) -> dict
     report["start"] = start.isoformat()
     report["end"] = end.isoformat()
     report["partial_banner"] = org_partial_banner(db, organization_id)
+    report["closing"] = closing_state(report["summary"], report["partial_banner"].get("bank_as_of"), report["end"])
     report["provider_calls"] = 0
     return report
 

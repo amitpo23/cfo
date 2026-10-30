@@ -94,8 +94,7 @@ export default function BankMatch({ dashboardId, slug, start, end }: { dashboard
       <p className="mt-1 text-sm text-stone-600">
         כל תנועת בנק מול מסמך בספרים. מסמך מוצע הוא הצעה בלבד: רק «אשר» מתאים. התאמה אוטומטית ממתינה לאישור. כלום לא נשלח לסאמיט.
       </p>
-      {report?.partial_banner?.text_he ? <p className="mt-2 text-sm text-amber-900">{report.partial_banner.text_he}</p> : null}
-      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+      {error ?<p className="mt-2 text-sm text-red-700">{error}</p> : null}
       {notice ? <p className="mt-2 text-sm text-amber-800" role="status">{notice}</p> : null}
       {summary ? (
         <p className="mt-3 text-sm">
@@ -104,7 +103,7 @@ export default function BankMatch({ dashboardId, slug, start, end }: { dashboard
           {' · '}חסר מסמך {summary.missing_doc.count} ({money(summary.missing_doc.amount)})
           {' · '}ממתין {summary.open.count} ({money(summary.open.amount)})
           {' = '}סה״כ {summary.total.count} ({money(summary.total.amount)})
-          {summary.done ? ' · כל התנועות הוכרעו' : ' · עדיין לא מאוזן'}
+          {report?.closing ? ` · ${report.closing.label_he}` : null}
         </p>
       ) : null}
       {!canWrite && report ? <p className="mt-1 text-xs text-stone-500">צפייה בלבד. ההחלטות נרשמות על ידי בעלי הדשבורד.</p> : null}

@@ -32,6 +32,7 @@ export type MatchReport = {
   rows: MatchRow[];
   summary: Record<MatchStatus | 'total', Bucket> & { balanced: boolean; done: boolean };
   partial_banner?: { text_he?: string | null };
+  closing?: { done: boolean; label_he: string };
   read_only?: boolean;
 };
 
