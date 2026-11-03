@@ -24,7 +24,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from ..bank_reconciliation import BankTxnLite, DocLite, _score
+from ..bank_reconciliation import BankTxnLite, DocLite, score_match
 from .filing import Txn, displayed_counterparty
 
 STATUSES = ("approved", "check", "missing_doc")
@@ -102,7 +102,7 @@ def candidates_for(txn: Txn, docs: list[MatchDoc], taken: set[tuple[str, int]]) 
     for doc in docs:
         if (doc.entity_type, doc.id) in taken or not doc.amount or (doc.amount > 0) != (amount > 0):
             continue
-        score = _score(lite, DocLite(doc.id, doc.entity_type, abs(doc.amount), doc.date, doc.name),
+        score = score_match(lite, DocLite(doc.id, doc.entity_type, abs(doc.amount), doc.date, doc.name),
                        amount_tol=0.02, date_window=7)
         if score is None or score < MIN_SCORE:
             continue
@@ -294,23 +294,23 @@ def _open_amount(row) -> float:
 
 def invoice_doc(row) -> MatchDoc | None:
     """A sale invoice (+) or credit note (−). A paid, void or cancelled invoice is not open."""
-    from ..bank_reconciliation import _contact_name
+    from ..bank_reconciliation import contact_name
     credit = _is_credit_invoice(row)
     status = _status_value(row)
     if status in {"void", "cancelled"} or (status == "paid" and not credit):
         return None
     amount = -abs(float(row.total or 0)) if credit else _open_amount(row)
-    return MatchDoc("invoice", row.id, amount, row.issue_date or row.due_date, _contact_name(row), credit)
+    return MatchDoc("invoice", row.id, amount, row.issue_date or row.due_date, contact_name(row), credit)
 
 
 def bill_doc(row) -> MatchDoc | None:
     """A supplier bill (−) or supplier credit (+). A paid or void bill is not open."""
-    from ..bank_reconciliation import _vendor_name
+    from ..bank_reconciliation import vendor_name
     if _status_value(row) in _CLOSED_BILL:
         return None
     total = float(row.total or 0)
     amount = abs(total) if total < 0 else -_open_amount(row)
-    return MatchDoc("bill", row.id, amount, row.issue_date or row.due_date, _vendor_name(row), total < 0)
+    return MatchDoc("bill", row.id, amount, row.issue_date or row.due_date, vendor_name(row), total < 0)
 
 
 def expense_doc(row) -> MatchDoc:
@@ -443,7 +443,7 @@ def load_report(db, organization_id: int, start, end, plan: dict | None) -> dict
 def _returned_cheque_invoices(db, organization_id: int, paired) -> list[MatchDoc]:
     """Sale invoices, paid or not, at the amount of a returned cheque in the window."""
     from ...models import Invoice
-    from ..bank_reconciliation import _contact_name
+    from ..bank_reconciliation import contact_name
     amounts = [abs(float(txn.amount)) for txn, _ in paired if returned_cheque_warning(txn, []) is not None]
     if not amounts:
         return []
@@ -454,7 +454,7 @@ def _returned_cheque_invoices(db, organization_id: int, paired) -> list[MatchDoc
             Invoice.total.between(amount - TOLERANCE, amount + TOLERANCE),
         ).limit(10):
             number = f"מס׳ {row.invoice_number}" if row.invoice_number else ""
-            name = " ".join(part for part in (number, _contact_name(row)) if part)
+            name = " ".join(part for part in (number, contact_name(row)) if part)
             found.append(MatchDoc("invoice", row.id, float(row.total), row.issue_date, name))
     return found
 

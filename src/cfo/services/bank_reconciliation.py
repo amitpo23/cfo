@@ -242,3 +242,9 @@ def _contact_name(invoice) -> str:
 def _vendor_name(bill) -> str:
     vendor = getattr(bill, "vendor", None)
     return getattr(vendor, "name", "") if vendor else ""
+
+
+# Public names for callers outside this module (the bank match screen).
+score_match = _score
+contact_name = _contact_name
+vendor_name = _vendor_name

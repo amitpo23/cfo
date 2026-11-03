@@ -395,6 +395,9 @@ def test_bank_match_uses_only_the_public_reconciliation_api():
                if isinstance(node, ast.Attribute) and node.attr.startswith("_")
                and isinstance(node.value, ast.Name) and node.value.id == "service"}
     assert private == set()
+    imported = {alias.name for node in ast.walk(ast.parse(source.read_text()))
+                if isinstance(node, ast.ImportFrom) for alias in node.names if alias.name.startswith("_")}
+    assert imported == set()
 
 
 def test_public_reconciliation_building_blocks_do_not_commit(fresh_org):
