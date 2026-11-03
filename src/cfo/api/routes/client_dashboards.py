@@ -473,6 +473,8 @@ def _match_window(start: date | None, end: date | None):
     window_start = start or window_end.replace(day=1)
     if window_start > window_end:
         raise DashboardError(422, "bad_window", "טווח התאריכים הפוך")
+    if (window_end - window_start).days > 92:
+        raise DashboardError(422, "bad_window", "טווח התאמה עד 92 ימים")
     return window_start, window_end
 
 
@@ -489,6 +491,8 @@ def bank_match(dashboard_id: int, start: date | None = None, end: date | None = 
     report = load_report(db, row.primary_organization_id, window_start, window_end,
                          view_model.plan_payload(db, row.id))
     report["read_only"] = service.role_for(db, user, row) not in service.EVIDENCE_ROLES
+    if report["read_only"]:
+        report.pop("documents", None)  # the pick list is for the owner who decides
     return report
 
 
@@ -886,6 +890,7 @@ def public_bank_match(slug: str, request: Request, start: date | None = None, en
     report = load_report(db, dashboard.primary_organization_id, window_start, window_end,
                          view_model.plan_payload(db, dashboard.id))
     report["read_only"] = True
+    report.pop("documents", None)
     return _public_response(report)
 
 

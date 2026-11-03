@@ -470,6 +470,9 @@ def test_public_link_reads_but_does_not_write(client, fresh_org):
     assert listed.status_code == 200, listed.text
     assert len(listed.json()["rows"]) == 2
     assert listed.json()["read_only"] is True
+    assert "documents" not in listed.json()
+    too_wide = client.get("/api/public/d/bank-match-public/bank-match", params={"start": "2026-01-01", "end": "2026-10-31"})
+    assert too_wide.status_code == 422
     write = client.post("/api/public/d/bank-match-public/bank-match", json={"transaction_id": 1, "action": "check"})
     assert write.status_code in {404, 405}
 
@@ -486,5 +489,6 @@ def test_an_accountant_cannot_record_a_match_decision(client, fresh_org):
     assert screen.status_code in {403, 404}
     listed = client.get(URL.format(dashboard_id), headers=accountant["headers"], params=WINDOW)
     assert listed.status_code == 200 and listed.json()["read_only"] is True
+    assert "documents" not in listed.json()
     with SessionLocal() as db:
         assert db.query(BankMatchDecision).filter_by(bank_transaction_id=fee_id).count() == 0
