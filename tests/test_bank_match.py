@@ -321,7 +321,7 @@ def test_approve_by_category_without_a_document(client, fresh_org):
     owner = fresh_org()
     dashboard_id = _dashboard(client, owner, "bank-match-category")
     with SessionLocal() as db:
-        loan = _bank(db, owner["org_id"], "loan-1", 65000, when=date(2026, 10, 2), description="הלוואה")
+        loan = _bank(db, owner["org_id"], "loan-1", 50000, when=date(2026, 10, 2), description="הלוואה")
         db.commit()
         loan_id = loan.id
     url = URL.format(dashboard_id)
@@ -497,23 +497,23 @@ def test_an_accountant_cannot_record_a_match_decision(client, fresh_org):
 def test_a_returned_cheque_warns_of_double_income_and_names_the_same_amount_invoice(client, fresh_org):
     """Fixlist 11: a returned cheque next to an invoice of the same amount may be income counted twice."""
     from cfo.services.dashboards.bank_match import returned_cheque_warning
-    txn, _ = _pair(1, -62898.0, "שיק חוזר")
-    warning = returned_cheque_warning(txn, [MatchDoc("invoice", 20056, 62898.0, date(2026, 10, 1), "K Express")])
+    txn, _ = _pair(1, -4321.0, "שיק חוזר")
+    warning = returned_cheque_warning(txn, [MatchDoc("invoice", 7701, 4321.0, date(2026, 10, 1), "לקוח קפא")])
     assert warning["code"] == "returned_cheque"
-    assert "K Express" in warning["label_he"] and "חשבונית #20056" in warning["label_he"]
+    assert "לקוח קפא" in warning["label_he"] and "חשבונית #7701" in warning["label_he"]
     assert "פעמיים" in warning["label_he"]
-    assert returned_cheque_warning(_pair(2, -62898.0, "העברה לספק")[0], []) is None
+    assert returned_cheque_warning(_pair(2, -4321.0, "העברה לספק")[0], []) is None
     bare = returned_cheque_warning(_pair(3, -500.0, "החזרת שיק")[0], [])
     assert bare is not None and "אין חשבונית" in bare["label_he"]
 
     owner = fresh_org()
     dashboard_id = _dashboard(client, owner, "bank-match-returned")
     with SessionLocal() as db:
-        _bank(db, owner["org_id"], "ret-1", -62898, description="שיק חוזר")
-        db.add(Invoice(organization_id=owner["org_id"], invoice_number="20056", issue_date=date(2026, 9, 1),
-                       status=InvoiceStatus.PAID, total=62898, balance=0))
+        _bank(db, owner["org_id"], "ret-1", -4321, description="שיק חוזר")
+        db.add(Invoice(organization_id=owner["org_id"], invoice_number="7701", issue_date=date(2026, 9, 1),
+                       status=InvoiceStatus.PAID, total=4321, balance=0))
         db.commit()
     body = client.get(URL.format(dashboard_id), headers=owner["headers"], params=WINDOW).json()
     assert body["rows"][0]["warning"]["code"] == "returned_cheque"
-    assert "מס׳ 20056" in body["rows"][0]["warning"]["label_he"]
+    assert "מס׳ 7701" in body["rows"][0]["warning"]["label_he"]
     assert body["summary"]["warnings"] == 1
