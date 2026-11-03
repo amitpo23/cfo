@@ -34,12 +34,10 @@ class ManualReconciliationService:
         if not txn:
             raise ValueError(f"Bank transaction {bank_txn_id} not found")
 
-        self._assert_not_allocated(txn)
-        if txn.is_provisional:
-            raise ValueError("A provisional bank movement cannot be finally reconciled")
+        self.assert_matchable(txn)
 
         # Validate entity exists
-        entity = self._load_entity(entity_type, entity_id)
+        entity = self.get_document(entity_type, entity_id)
         if not entity:
             raise ValueError(f"{entity_type} {entity_id} not found")
 
@@ -48,13 +46,7 @@ class ManualReconciliationService:
         txn_amount = abs(float(txn.amount))
         amount_mismatch = abs(txn_amount - entity_amount) > max(0.02 * entity_amount, 0.01)
 
-        # Perform match
-        txn.matched_entity_type = entity_type
-        txn.matched_entity_id = entity_id
-        txn.is_reconciled = True
-        # Reset dispatch status for manual matches (will need re-dispatch if configured)
-        txn.reconciliation_dispatch_status = "not_sent"
-        txn.reconciliation_error = None
+        self.mark_reconciled(txn, entity_type, entity_id)
         self.db.commit()
 
         return {
@@ -71,12 +63,8 @@ class ManualReconciliationService:
         if not txn:
             raise ValueError(f"Bank transaction {bank_txn_id} not found")
 
-        self._assert_not_allocated(txn)
-        txn.matched_entity_type = None
-        txn.matched_entity_id = None
-        txn.is_reconciled = False
-        txn.reconciliation_dispatch_status = "not_sent"
-        txn.reconciliation_error = None
+        self.assert_not_allocated(txn)
+        self.clear_reconciled(txn)
         self.db.commit()
 
         return {
@@ -202,13 +190,46 @@ class ManualReconciliationService:
         candidates.sort(key=lambda c: c["score"], reverse=True)
         return candidates[:limit]
 
-    # ---------- helpers ----------
+    # ---------- public building blocks (no commit) ----------
+    # A caller that writes more than the match columns (the bank match
+    # screen writes its decision rows too) uses these inside its own
+    # transaction and commits once.
 
-    def _assert_not_allocated(self, txn):
+    def assert_not_allocated(self, txn) -> None:
+        """Raise ValueError if a reviewed receipt allocation holds this bank row."""
         from ..models import CollectionPaymentAllocation
         if self.db.query(CollectionPaymentAllocation).filter_by(
             organization_id=self.organization_id, bank_transaction_id=txn.id, status='active').first():
             raise ValueError("This bank movement has a reviewed receipt allocation; use a reversal review")
+
+    def assert_matchable(self, txn) -> None:
+        """Raise ValueError unless this bank row may be finally reconciled."""
+        self.assert_not_allocated(txn)
+        if txn.is_provisional:
+            raise ValueError("A provisional bank movement cannot be finally reconciled")
+
+    def get_document(self, entity_type: str, entity_id: int):
+        """This organization's invoice, bill or expense, or None."""
+        return self._load_entity(entity_type, entity_id)
+
+    @staticmethod
+    def mark_reconciled(txn, entity_type: str, entity_id: int) -> None:
+        txn.matched_entity_type = entity_type
+        txn.matched_entity_id = entity_id
+        txn.is_reconciled = True
+        # Reset dispatch status for manual matches (will need re-dispatch if configured)
+        txn.reconciliation_dispatch_status = "not_sent"
+        txn.reconciliation_error = None
+
+    @staticmethod
+    def clear_reconciled(txn) -> None:
+        txn.matched_entity_type = None
+        txn.matched_entity_id = None
+        txn.is_reconciled = False
+        txn.reconciliation_dispatch_status = "not_sent"
+        txn.reconciliation_error = None
+
+    # ---------- helpers ----------
 
     def _load_transaction(self, txn_id: int) -> Optional[BankTransaction]:
         return (

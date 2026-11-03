@@ -451,11 +451,20 @@ def accept_classification(dashboard_id: int, body: ClassificationWrite,
     return {"version": saved["version"], "rules": len(updated.get("statusRules") or []), "provider_calls": 0}
 
 
+class BankMatchDocumentRef(BaseModel):
+    entity_type: str
+    entity_id: int = Field(ge=1)
+
+
 class BankMatchAction(BaseModel):
     transaction_id: int = Field(ge=1)
     action: str
+    documents: list[BankMatchDocumentRef] | None = Field(default=None, max_length=200)
     entity_type: str | None = None
     entity_id: int | None = Field(default=None, ge=1)
+    fee: float | None = Field(default=None, ge=0)
+    category: str | None = Field(default=None, max_length=30)
+    target_account: str | None = Field(default=None, max_length=40)
     note: str | None = Field(default=None, max_length=300)
 
 
@@ -488,24 +497,28 @@ def bank_match_decide(dashboard_id: int, body: BankMatchAction,
                       db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
     """One owner action on one bank row. Nothing is posted to SUMIT.
 
-    The plan is saved first. A database match that then fails leaves a stale
-    approval, which the screen shows as open again.
+    The decision, its documents and the bank row's match columns are written
+    in one transaction. Any failure rolls all of it back.
     """
-    from ...models import DashboardPlan
-    from ...services.dashboards.bank_match import plan_decision, run_effect
+    from sqlalchemy.exc import IntegrityError
+    from ...services.dashboards.bank_match import decide
     try:
         row = service.get_dashboard(db, user, dashboard_id, allowed=service.EVIDENCE_ROLES)
-        current = db.get(DashboardPlan, row.id)
-        payload = dict(current.payload) if current is not None and isinstance(current.payload, dict) else {}
-        updated, effect = plan_decision(db, row.primary_organization_id, payload, body.model_dump())
-        version = current.version if current is not None else "null"
-        saved = service.save_plan(db, user, row.id, updated, version)
-        run_effect(db, row.primary_organization_id, effect)
+        result = decide(db, row.primary_organization_id, user.id, body.model_dump(exclude_none=True))
+        db.commit()
     except DashboardError as exc:
+        db.rollback()
         return _error(exc)
     except ValueError as exc:
+        db.rollback()
         return _error(DashboardError(422, "invalid_match", str(exc)))
-    return {"version": saved["version"], "provider_calls": 0}
+    except IntegrityError:
+        db.rollback()
+        return _error(DashboardError(409, "match_conflict", "המסמך כבר מותאם לתנועת בנק אחרת"))
+    except Exception:
+        db.rollback()
+        raise
+    return {**result, "provider_calls": 0}
 
 
 @router.post("/dashboards/{dashboard_id}/snapshots", status_code=201)

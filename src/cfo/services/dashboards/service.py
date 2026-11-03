@@ -282,8 +282,8 @@ def validate_filing_payload(payload: dict) -> None:
                 raise _invalid_plan("שדה הכלל אינו מוכר")
             if rule.get("direction", "both") not in _RULE_DIRECTIONS:
                 raise _invalid_plan("כיוון הכלל אינו מוכר")
-    from .bank_match import validate_decisions
-    match_error = validate_decisions(payload.get("bankMatchDecisions"), MAX_DECISIONS)
+    from .bank_match import reject_plan_decisions
+    match_error = reject_plan_decisions(payload.get("bankMatchDecisions"))
     if match_error:
         raise _invalid_plan(match_error)
     _validate_parameters(payload.get("statusParameters"))
@@ -502,9 +502,6 @@ def save_plan(db, user: User, dashboard_id: int, payload: dict, if_match: str | 
     if (payload.get("zReports") or None) != ((stored or {}).get("zReports") or None) \
             and role_for(db, user, row) not in EVIDENCE_ROLES:
         raise DashboardError(403, "z_reports_forbidden", "רק בעלי הדשבורד או מנהל יכולים להזין דוחות Z")
-    if (payload.get("bankMatchDecisions") or None) != ((stored or {}).get("bankMatchDecisions") or None) \
-            and role_for(db, user, row) not in EVIDENCE_ROLES:
-        raise DashboardError(403, "bank_match_forbidden", "רק בעלי הדשבורד יכולים לשנות החלטות התאמת בנק")
     if (payload.get("cashForecastItems") or None) != ((stored or {}).get("cashForecastItems") or None) \
             and role_for(db, user, row) not in EVIDENCE_ROLES:
         raise DashboardError(403, "cash_forecast_items_forbidden",
