@@ -492,3 +492,28 @@ def test_an_accountant_cannot_record_a_match_decision(client, fresh_org):
     assert "documents" not in listed.json()
     with SessionLocal() as db:
         assert db.query(BankMatchDecision).filter_by(bank_transaction_id=fee_id).count() == 0
+
+
+def test_a_returned_cheque_warns_of_double_income_and_names_the_same_amount_invoice(client, fresh_org):
+    """Fixlist 11: a returned cheque next to an invoice of the same amount may be income counted twice."""
+    from cfo.services.dashboards.bank_match import returned_cheque_warning
+    txn, _ = _pair(1, -62898.0, "שיק חוזר")
+    warning = returned_cheque_warning(txn, [MatchDoc("invoice", 20056, 62898.0, date(2026, 10, 1), "K Express")])
+    assert warning["code"] == "returned_cheque"
+    assert "K Express" in warning["label_he"] and "חשבונית #20056" in warning["label_he"]
+    assert "פעמיים" in warning["label_he"]
+    assert returned_cheque_warning(_pair(2, -62898.0, "העברה לספק")[0], []) is None
+    bare = returned_cheque_warning(_pair(3, -500.0, "החזרת שיק")[0], [])
+    assert bare is not None and "אין חשבונית" in bare["label_he"]
+
+    owner = fresh_org()
+    dashboard_id = _dashboard(client, owner, "bank-match-returned")
+    with SessionLocal() as db:
+        _bank(db, owner["org_id"], "ret-1", -62898, description="שיק חוזר")
+        db.add(Invoice(organization_id=owner["org_id"], invoice_number="20056", issue_date=date(2026, 9, 1),
+                       status=InvoiceStatus.PAID, total=62898, balance=0))
+        db.commit()
+    body = client.get(URL.format(dashboard_id), headers=owner["headers"], params=WINDOW).json()
+    assert body["rows"][0]["warning"]["code"] == "returned_cheque"
+    assert "מס׳ 20056" in body["rows"][0]["warning"]["label_he"]
+    assert body["summary"]["warnings"] == 1

@@ -37,6 +37,7 @@ export type MatchRow = {
   matched: Matched | null;
   auto_match: { entity_type: string; entity_id: number } | null;
   candidates: Candidate[];
+  warning?: { code: string; label_he: string; invoices: number[] } | null;
 };
 
 export type Bucket = { count: number; amount: number; abs_amount?: number };
@@ -45,7 +46,9 @@ export type MatchReport = {
   start: string;
   end: string;
   rows: MatchRow[];
-  summary: Record<MatchStatus | 'total', Bucket> & { balanced: boolean; decided: boolean; done: boolean; coverage_ok: boolean };
+  summary: Record<MatchStatus | 'total', Bucket> & {
+    balanced: boolean; decided: boolean; done: boolean; coverage_ok: boolean; warnings?: number;
+  };
   categories?: Record<string, string>;
   documents?: Candidate[];
   partial_banner?: { text_he?: string | null };

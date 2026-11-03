@@ -52,8 +52,8 @@ STATUS_HE = {
     "missing_doc": "חסר מסמך",
     "open": "ממתין להחלטה",
 }
-_CLOSED_INVOICE = {"paid", "void", "cancelled"}
 _CLOSED_BILL = {"paid", "void"}
+RETURNED_CHEQUE = re.compile(r"(שיק|צ['׳]?ק)\s*(חוזר|שחזר)|החזר(ת)?\s*(שיק|צ['׳]?ק)|returned\s+cheque", re.IGNORECASE)
 
 
 @dataclass
@@ -123,6 +123,28 @@ def pickable_documents(docs: list[MatchDoc], taken: set[tuple[str, int]], start:
     return picked
 
 
+def returned_cheque_warning(txn: Txn, invoices: list[MatchDoc]) -> dict | None:
+    """A returned cheque may leave its income counted twice: the deposit was booked, the invoice too.
+
+    Names any sale invoice of the same amount (within ₪1), paid or not.
+    The owner decides; nothing is reversed here.
+    """
+    text = " ".join(part for part in (txn.description, displayed_counterparty(txn)) if part)
+    if not txn.amount or float(txn.amount) >= 0 or not RETURNED_CHEQUE.search(text):
+        return None
+    amount = abs(float(txn.amount))
+    same = [doc for doc in invoices if doc.entity_type == "invoice" and doc.amount > 0
+            and abs(doc.amount - amount) <= TOLERANCE]
+    if same:
+        names = ", ".join(f"חשבונית #{doc.id}" + (f" ({doc.name})" if doc.name else "") for doc in same[:3])
+        label = (f"צ׳ק חוזר {_money(amount)} — באותו סכום: {names}. "
+                 "ודאו שההכנסה לא נספרה פעמיים (ההפקדה וגם החשבונית).")
+    else:
+        label = (f"צ׳ק חוזר {_money(amount)} — אין חשבונית באותו סכום בספרים. "
+                 "ודאו שההפקדה המקורית לא נשארה כהכנסה.")
+    return {"code": "returned_cheque", "label_he": label, "invoices": [doc.id for doc in same[:3]]}
+
+
 def _bucket(rows: list[dict], status: str | None = None) -> dict:
     picked = rows if status is None else [row for row in rows if row["status"] == status]
     return {"count": len(picked), "amount": round(sum(row["amount"] for row in picked), 2)}
@@ -147,7 +169,7 @@ def expected_match(decision: dict) -> tuple[str, int]:
 
 def build_report(paired, recon: dict, decisions: dict | None, docs: list[MatchDoc],
                  taken: set[tuple[str, int]] | None = None, start: date | None = None,
-                 end: date | None = None) -> dict:
+                 end: date | None = None, all_invoices: list[MatchDoc] | None = None) -> dict:
     """Rows, candidates and a signed summary.
 
     ``recon`` maps txn id → (matched_entity_type, matched_entity_id) for
@@ -181,6 +203,7 @@ def build_report(paired, recon: dict, decisions: dict | None, docs: list[MatchDo
             "matched": None,
             "auto_match": {"entity_type": auto[0], "entity_id": auto[1]} if auto else None,
             "candidates": [],
+            "warning": returned_cheque_warning(txn, all_invoices if all_invoices is not None else docs),
         }
         if status == "approved":
             lines = decision.get("documents") or []
@@ -215,6 +238,7 @@ def build_report(paired, recon: dict, decisions: dict | None, docs: list[MatchDo
     # A row in check or missing a document is decided, not balanced.
     summary["balanced"] = summary["total"]["count"] > 0 and summary["approved"]["count"] == summary["total"]["count"]
     summary["done"] = summary["balanced"]
+    summary["warnings"] = sum(1 for row in rows if row["warning"])
     report = {"rows": rows, "summary": summary, "status_labels": STATUS_HE, "categories": CATEGORIES}
     if start is not None and end is not None:
         report["documents"] = pickable_documents(docs, taken, start, end)
@@ -406,6 +430,7 @@ def load_report(db, organization_id: int, start, end, plan: dict | None) -> dict
     report = build_report(
         paired, recon, load_decisions(db, organization_id, ids), docs,
         taken=set(taken_documents(db, organization_id)), start=start, end=end,
+        all_invoices=_returned_cheque_invoices(db, organization_id, paired),
     )
     report["start"] = start.isoformat()
     report["end"] = end.isoformat()
@@ -413,6 +438,25 @@ def load_report(db, organization_id: int, start, end, plan: dict | None) -> dict
     report["closing"] = closing_state(report["summary"], report["partial_banner"].get("bank_as_of"), report["end"])
     report["provider_calls"] = 0
     return report
+
+
+def _returned_cheque_invoices(db, organization_id: int, paired) -> list[MatchDoc]:
+    """Sale invoices, paid or not, at the amount of a returned cheque in the window."""
+    from ...models import Invoice
+    from ..bank_reconciliation import _contact_name
+    amounts = [abs(float(txn.amount)) for txn, _ in paired if returned_cheque_warning(txn, []) is not None]
+    if not amounts:
+        return []
+    found = []
+    for amount in amounts:
+        for row in db.query(Invoice).filter(
+            Invoice.organization_id == organization_id,
+            Invoice.total.between(amount - TOLERANCE, amount + TOLERANCE),
+        ).limit(10):
+            number = f"מס׳ {row.invoice_number}" if row.invoice_number else ""
+            name = " ".join(part for part in (number, _contact_name(row)) if part)
+            found.append(MatchDoc("invoice", row.id, float(row.total), row.issue_date, name))
+    return found
 
 
 # ---------------------------------------------------------------------- #

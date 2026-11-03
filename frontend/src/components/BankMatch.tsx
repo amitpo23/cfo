@@ -222,7 +222,10 @@ export default function BankMatch({ dashboardId, slug, start, end }: { dashboard
                   <td>{row.date}</td>
                   <td>{money(row.amount)}</td>
                   <td>{row.counterparty || '—'}</td>
-                  <td>{row.description}</td>
+                  <td>
+                    {row.description}
+                    {row.warning ? <span className="block text-xs font-semibold text-red-700" role="alert">{row.warning.label_he}</span> : null}
+                  </td>
                   <td className="text-sm">
                     {row.matched?.kind === 'category' ? (
                       <span>{row.matched.category_he || row.matched.category} → כרטיס {row.matched.target_account}</span>
