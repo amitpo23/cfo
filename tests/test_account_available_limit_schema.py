@@ -30,7 +30,8 @@ def test_the_migration_adds_it_on_top_of_the_single_head():
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
     heads = script.get_heads()
     assert len(heads) == 1
-    revision = script.get_revision(heads[0])
+    assert "k40a1b2c3d4e" in {rev.revision for rev in script.walk_revisions()}
+    revision = script.get_revision("k40a1b2c3d4e")
     assert revision.down_revision == "g15b7d43e9f0"
     source = Path(revision.path).read_text(encoding="utf-8")
     assert "available_limit" in source and "add_column" in source and "drop_column" in source

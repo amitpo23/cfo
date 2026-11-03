@@ -1,11 +1,13 @@
 # PR #103 — תיקונים אחרי REJECT 03.11.2026
 
 מיפוי 21 הפריטים ברשימת התיקונים ל-CTO. טסטים: `tests/test_bank_match.py` (25 עוברים) ו-`frontend/src/components/bankMatchModel.test.ts` (7 עוברים, vitest).
-`npx tsc --noEmit` נקי. במודולים השכנים (reconcil/dashboard/plan/eliav/payable/money/cashflow/period: 536 טסטים) נכשלים 10. אותם 10 בדיוק נכשלים גם ב-HEAD לפני התיקונים, בלי קשר לשינוי הזה.
+`npx tsc --noEmit` נקי. סוויטה מלאה (`pytest tests/`): הענף 3,579 עברו / 46 נכשלו. ה-baseline `450bed1` (לפני התיקונים): 3,569 / 45. ההשוואה נעשתה לפי שמות הטסטים. הכשל החדש היחיד היה `test_the_migration_adds_it_on_top_of_the_single_head`: הוא קיבע את `k40a1b2c3d4e` כ-head. תוקן כך שיבדוק head יחיד ו-k40 מעל g15, והוא ירוק. 45 הכשלים האחרים קיימים כבר ב-baseline.
 
 ## ⚠️ לפני פריסה: migration (תוספתי)
 
 `alembic/versions/m50b2c3d4e5f_bank_match_decisions.py` (down: `k40a1b2c3d4e`) מוסיף שתי טבלאות חדשות, `bank_match_decisions` ו-`bank_match_documents`. אין שינוי בעמודה קיימת. ה-migration **לא הוחל בפרוד**. מחילים לפי `docs/GATE0_DEPLOYMENT_RUNBOOK.md`: נקודת שחזור pg_dump, GO של עמית, ואז `POST /api/admin/db/migrate`. `k40a1b2c3d4e` עדיין ממתין בעצמו, ולכן שניהם יעלו יחד.
+
+**לא למזג לפני ה-migration.** ב-Vercel `auto_create_db=False`, ולכן `create_all` לא רץ בעלייה והטבלאות לא נוצרות מעצמן. עד שה-migration יוחל, טאב «התאמת בנק» יחזיר 500. מצד שני, אין גם התנגשות "relation already exists" מול Alembic.
 
 ## P0 — PR #103
 
@@ -26,7 +28,7 @@
 | # | פריט | מצב | טסט / מה נותר |
 |---|------|------|------|
 | 8 | P&L אחד בכל המסכים | ⏳ נותר. #102 מאחד את ה-period payload, ויש טסטים: `test_cashflow_period_and_dashboard_routes_share_one_payload`, `test_budget_vs_actual_reads_the_same_dashboard_as_the_period_payload`. **חסר** טסט שמשווה את 4 המסכים (/daily-reports, /budget, /pnl, דשבורד) ואימות לאוקטובר בפרוד |
-| 9 | יתרה + מסגרת + ניצול + פנוי + חריגה | ⏳ חלקי (#99): `credit_overrun` ב-liquidity, נבדק ב-`test_overrun_uses_the_booked_balance_not_the_friendlier_number`. **חסר**: פירוט לכל חשבון (FG/שף בנפרד), אותה יתרה בכל מסך, באדג׳ אדום בכל מסך, ואימות בפרוד |
+| 9 | יתרה + מסגרת + ניצול + פנוי + חריגה | ⏳ חלקי (#99): `credit_overrun` ב-liquidity, נבדק ב-`test_overrun_uses_the_booked_balance_not_the_friendlier_number`. **חסר**: פירוט לכל חשבון בנפרד, אותה יתרה בכל מסך, באדג׳ אדום בכל מסך, ואימות בפרוד |
 | 10 | תחזית: כרטיסים, החזרי הלוואה, שכר, מע״מ | ⏳ נותר. התחזית ל-13 שבועות יודעת פריטים מתוארכים, פירעון הלוואה ופריטי בעלים (`test_cash_forecast_13w.py`). **חסר**: חיוב כרטיסים מ-interimBooked של OF, פריט שכר קבוע ב-10 לחודש, מע״מ, והבאג "/forecasting מציג יציאה 0" (לא אובחן) |
 | 11 | הלוואות/ניכיון = מימון; אזהרת צ׳ק חוזר | ✅ חלקי. מימון: #99 (`test_discount_repayment_is_not_recurring_principal_and_the_fee_is_not_income`). כאן אפשר גם לאשר שורה בקטגוריית הלוואה/ניכיון. **חדש**: שורת צ׳ק חוזר במסך ההתאמה מציגה אזהרת הכנסה כפולה ומציינת חשבונית באותו סכום (`test_a_returned_cheque_warns_of_double_income_and_names_the_same_amount_invoice`). **חסר**: אימות #99 בפרוד, והאזהרה במסכי התזרים וה-P&L |
 | 12 | פילטר יום/שבוע/חודש/טווח + עמודות בנק/סאמיט/תקציב | ⏳ לא נבדק בסשן הזה. #92 הוסיף טווחים והשוואה משלושה מקורות (`PeriodCompare.tsx`). לא אימתתי שזה מופיע בכל מסכי הכסף |
@@ -50,4 +52,5 @@
 - **מסמך אחד ↔ שורת בנק אחת** (אינדקס ייחודי). מסמך שמשולם בכמה העברות בנק עדיין לא נתמך: הבעלים מסמן "בדיקה".
 - **דוחות Z** ב-plan הם סיכומים חודשיים, ולכן אינם מסמכים להתאמה. סליקת מקס מותאמת מול שורות Invoice (מסמכי Z/חשבוניות מסונכרנים).
 - **התאמה מרובה או לפי קטגוריה** כותבת `matched_entity_type='bank_match'` (כמו התקדים `settlement_allocation`). קוראים שבודקים `=='bill'/'invoice'` (`bank_expense_gap`, `open_payables`, `ledger_service`, `dashboard_service`) לא מזהים אותה עדיין כמסמך. זה נותר להמשך. התאמה 1:1 בלי עמלה כותבת את העמודות הישנות כמו קודם.
+- **אין שליחה ל-SUMIT.** `mark_reconciled` מסמן `reconciliation_dispatch_status='not_sent'`, ו-`reconciliation_dispatch` עשוי לאסוף שורות `bank_match`. אבל הוא אף פעם לא שולח: הוא מסמן רק `failed`/`unsupported`/`approval_required`, כי אין adapter מאושר.
 - **לא נבדק בדפדפן.** נבדקו רק tsc, eslint ו-vitest למודל.
