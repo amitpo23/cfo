@@ -30,6 +30,69 @@ from ..models import (
 )
 
 
+_FORECAST_CACHE: dict[tuple[int, date], tuple[float, dict | None]] = {}
+_FORECAST_TTL_SECONDS = 120
+
+
+def published_cash_forecast(db, organization_id: int, today: date) -> dict | None:
+    """The 13-week forecast /cashflow/weekly serves. Cached briefly: one screen asks for it several times."""
+    import time
+    key = (organization_id, today)
+    hit = _FORECAST_CACHE.get(key)
+    if hit is not None and time.monotonic() - hit[0] < _FORECAST_TTL_SECONDS:
+        return hit[1]
+    from .dashboards.budget_fill import dashboard_for_org
+    from .dashboards.view_model import build_view, plan_payload
+    dashboard = dashboard_for_org(db, organization_id)
+    plan = plan_payload(db, dashboard.id) if dashboard is not None else None
+    view = build_view(db, organization_id, date(today.year, 1, 1), today, plan=plan)
+    forecast = view.get("cash_forecast")
+    _FORECAST_CACHE[key] = (time.monotonic(), forecast)
+    return forecast
+
+
+def _forecast_usable(forecast) -> bool:
+    if not isinstance(forecast, dict) or not forecast.get("weeks"):
+        return False
+    return forecast.get("status") in ("ready", "partial")
+
+
+def _weeks_from_forecast(forecast: dict, weeks: int, today: date) -> list:
+    """One row per week. A side with nothing known is None, never 0; past the horizon nothing is invented."""
+    rows = []
+    source_weeks = forecast.get("weeks") or []
+    for index in range(weeks):
+        if index >= len(source_weeks):
+            rows.append({
+                "week": (today + timedelta(weeks=index)).isoformat(),
+                "expected_inflows": None, "expected_outflows": None, "net_flow": None,
+                "cumulative_balance": None, "limit": None, "headroom": None,
+                "unknown": ["מעבר לאופק התחזית (13 שבועות)"], "source": "cash_forecast_13w",
+            })
+            continue
+        week = source_weeks[index]
+        inflow = week.get("in")
+        outflow = week.get("out")
+        inflow = None if not inflow else round(float(inflow), 2)
+        outflow = None if not outflow else round(abs(float(outflow)), 2)
+        net = week.get("net")
+        if inflow is None and outflow is None:
+            net = None
+        rows.append({
+            "week": week.get("start"),
+            "expected_inflows": inflow,
+            "expected_outflows": outflow,
+            "net_flow": net,
+            "cumulative_balance": week.get("closing"),
+            "limit": week.get("limit"),
+            "headroom": week.get("headroom"),
+            "unknown": week.get("unknown") or [],
+            "items": week.get("items") or [],
+            "source": "cash_forecast_13w",
+        })
+    return rows
+
+
 class DashboardService:
     def __init__(self, db: Session, organization_id: int):
         self.db = db
@@ -46,11 +109,16 @@ class DashboardService:
         cash = self._get_of_cash_summary()
 
         pnl_period = self._resolve_pnl_period(today)
+        # The same books figures /pnl shows for this month (period_compare.books_months).
+        pnl_books = None
         if pnl_period["has_data"]:
-            month_revenue = self._month_revenue_accrual(pnl_period["start"], pnl_period["end"])
-            month_expenses = self._month_expenses_accrual(pnl_period["start"], pnl_period["end"])
-            month_gross_profit = month_revenue - month_expenses
-            month_net_profit = month_gross_profit  # simplified; COGS not separated yet
+            from .dashboards.period_compare import books_months
+            pnl_books = books_months(self.db, self.org_id, pnl_period["start"], pnl_period["end"], as_of=today)
+            figures = pnl_books["totals"]
+            month_revenue = figures["revenue"]["amount"]
+            month_expenses = figures["costs"]["amount"]
+            month_net_profit = figures["net"]["amount"]
+            month_gross_profit = month_net_profit  # COGS not separated yet
         else:
             month_revenue = month_expenses = month_gross_profit = month_net_profit = None
 
@@ -92,6 +160,7 @@ class DashboardService:
             # ---- new fields (section ד of the plan) ----
             "cash_as_of": cash["cash_as_of"],
             "credit_overrun": cash.get("credit_overrun"),
+            "credit_lines": cash.get("credit_lines"),
             "balance_mismatch": cash.get("balance_mismatch"),
             "partial_banner": cash.get("partial_banner"),
             "available": cash.get("available"),
@@ -100,6 +169,9 @@ class DashboardService:
             "card_outstanding": cash["card_outstanding"],
             "pnl_month": pnl_period["pnl_month"],
             "pnl_is_current_month": pnl_period["is_current"],
+            "pnl_source": "cashflow.period",
+            "pnl_figures": pnl_books["totals"] if pnl_books else None,
+            "pnl_profit_claim": pnl_books["profit_claim"] if pnl_books else None,
             "bank_month_inflow": bank_flows["inflow"],
             "bank_month_outflow": bank_flows["outflow"],
             "bank_month_net": bank_flows["net"],
@@ -149,6 +221,7 @@ class DashboardService:
             "cash_balance": cash_balance,
             "cash_as_of": cash_as_of,
             "credit_overrun": overrun,
+            "credit_lines": snap.get("credit_lines"),
             "balance_mismatch": snap.get("balance_mismatch"),
             "partial_banner": banner,
             "available": snap.get("available"),
@@ -195,33 +268,15 @@ class DashboardService:
         ).first() is not None
 
     def _resolve_pnl_period(self, today: date, lookback_months: int = 24) -> dict:
-        """בוחר את החודש שה-P&L מוצג עבורו: החודש הקלנדרי הנוכחי אם יש בו
-        ספרים, אחרת החודש הסגור האחרון עם נתונים. אם אין נתונים בכלל —
-        חוזר לחודש הנוכחי עם has_data=False (הצרכן מציג None לכל month_*)."""
-        year, month = today.year, today.month
-        cur_start, cur_end = self._month_bounds_v2(year, month)
-        if self._month_has_books(cur_start, cur_end):
-            return {
-                "year": year, "month": month, "start": cur_start, "end": cur_end,
-                "pnl_month": f"{year:04d}-{month:02d}", "is_current": True, "has_data": True,
-            }
-
-        yy, mm = year, month
-        for _ in range(lookback_months):
-            mm -= 1
-            if mm == 0:
-                mm = 12
-                yy -= 1
-            start, end = self._month_bounds_v2(yy, mm)
-            if self._month_has_books(start, end):
-                return {
-                    "year": yy, "month": mm, "start": start, "end": end,
-                    "pnl_month": f"{yy:04d}-{mm:02d}", "is_current": False, "has_data": True,
-                }
-
+        """The month the P&L opens on. Same rule as /pnl, /budget and /daily-reports
+        (period_compare.latest_books_month)."""
+        from .dashboards.period_compare import latest_books_month
+        found = latest_books_month(self.db, self.org_id, today, lookback_months=lookback_months)
+        start = date.fromisoformat(found["start"])
+        end = date.fromisoformat(found["end"])
         return {
-            "year": year, "month": month, "start": cur_start, "end": cur_end,
-            "pnl_month": f"{year:04d}-{month:02d}", "is_current": True, "has_data": False,
+            "year": start.year, "month": start.month, "start": start, "end": end,
+            "pnl_month": found["month"], "is_current": found["is_current"], "has_data": found["has_data"],
         }
 
     def _month_revenue_accrual(self, start: date, end: date) -> float:
@@ -264,6 +319,9 @@ class DashboardService:
             BankTransaction.transaction_date >= start,
             BankTransaction.transaction_date <= end,
         ).all()
+        if not rows:
+            # No bank rows in the month is missing, not 0/0.
+            return {"inflow": None, "outflow": None, "net": None}
         inflow = sum(float(amount) for (amount,) in rows if amount and amount > 0)
         outflow = sum(abs(float(amount)) for (amount,) in rows if amount and amount < 0)
         return {
@@ -297,7 +355,7 @@ class DashboardService:
         if not has_history:
             return None
 
-        nets = [self._bank_month_flows(start, end)["net"] for start, end in months]
+        nets = [self._bank_month_flows(start, end)["net"] or 0 for start, end in months]
         avg_net = sum(nets) / len(nets)
         if avg_net >= 0:
             return None  # לא בשריפה נטו — מושג ה-runway לא רלוונטי
@@ -739,13 +797,13 @@ class DashboardService:
 
     # ===== P&L =====
 
-    def get_pnl(self, months: int = 6) -> list:
+    def get_pnl(self, months: int = 6, today: Optional[date] = None) -> list:
         """Monthly P&L for the past N months.
 
         A month with no imported documents is ``no_books`` and its amounts are
         null. Bank and unclassified transactions are not a silent substitute.
         """
-        today = date.today()
+        today = today or date.today()
         from .dashboards.freshness import build_freshness
         stale_sources = [
             {
@@ -762,6 +820,12 @@ class DashboardService:
             if item.get("status") == "stale"
         ]
         result = []
+        from .dashboards.period_compare import books_months
+        first = today.replace(day=1)
+        for _ in range(months - 1):
+            first = (first - timedelta(days=1)).replace(day=1)
+        last_day = (date(today.year + (today.month == 12), today.month % 12 + 1, 1) - timedelta(days=1))
+        books = books_months(self.db, self.org_id, first, last_day, as_of=today)
 
         for i in range(months - 1, -1, -1):
             if today.month - i <= 0:
@@ -777,7 +841,11 @@ class DashboardService:
             else:
                 month_end = date(y, m + 1, 1) - timedelta(days=1)
 
-            has_books = self._month_has_books(month_start, month_end)
+            figures = books["months"].get(month_start.strftime("%Y-%m")) or {}
+            revenue_fig = figures.get("revenue") or {}
+            costs_fig = figures.get("costs") or {}
+            net_fig = figures.get("net") or {}
+            has_books = revenue_fig.get("amount") is not None or costs_fig.get("amount") is not None
             if not has_books:
                 result.append({
                     "month": month_start.strftime("%Y-%m"),
@@ -796,13 +864,14 @@ class DashboardService:
                     "stale_sources": stale_sources,
                 })
                 continue
-            revenue = float(self._get_month_revenue(month_start, month_end))
-            expenses = float(self._get_month_expenses(month_start, month_end))
+            # Same figures as /pnl for this month. A missing side stays null.
+            revenue = revenue_fig.get("amount")
+            expenses = costs_fig.get("amount")
             cogs = self._get_month_direct_cost(month_start, month_end)
             cogs_available = cogs is not None
-            gross_profit = revenue - cogs if cogs_available else None
-            opex = expenses - cogs if cogs_available else expenses
-            net_profit = revenue - expenses
+            gross_profit = revenue - cogs if cogs_available and revenue is not None else None
+            opex = (expenses - cogs if cogs_available else expenses) if expenses is not None else None
+            net_profit = net_fig.get("amount")
 
             # Category breakdown from transactions
             categories = self._get_expense_categories(month_start, month_end)
@@ -820,6 +889,8 @@ class DashboardService:
                 "gross_profit": gross_profit,
                 "opex": opex,
                 "net_profit": net_profit,
+                "net_profit_label": None if net_profit is not None else net_fig.get("missing_label"),
+                "pnl_source": "cashflow.period",
                 "categories": categories,
                 "stale_sources": stale_sources,
             })
@@ -841,14 +912,19 @@ class DashboardService:
 
     # ===== Cash Flow Projection =====
 
-    def get_cashflow_projection(self, weeks: int = 12, scenario: str = "base") -> list:
+    def get_cashflow_projection(self, weeks: int = 12, scenario: str = "base",
+                                today: Optional[date] = None) -> list:
+        """Weekly expected flows for the next N weeks.
+
+        The 13-week forecast of /cashflow/weekly comes first: it carries loans,
+        payroll, cards, the operating run-rate and the budget rules, and keeps
+        cheque discounting as financing. Only an organization with no forecast
+        falls back to budget lines, then to open invoices and bills.
         """
-        Project cash flow for the next N weeks based on:
-        - Open invoices (expected collections by due date)
-        - Open bills (expected payments)
-        - Historical average for recurring items
-        """
-        today = date.today()
+        today = today or date.today()
+        forecast = published_cash_forecast(self.db, self.org_id, today)
+        if _forecast_usable(forecast):
+            return _weeks_from_forecast(forecast, weeks, today)
         budget_flows = self._budget_week_flows(today, weeks)
         cash_balance, _ = self._get_cash_balance()
         if budget_flows is not None:

@@ -82,10 +82,22 @@ def _num(value) -> Decimal:
 
 
 def _net(row, net_attr: str, gross_attr: str, tax_attr: str) -> Decimal:
+    """Amount before VAT.
+
+    A document stored before the sync split VAT has net 0 and only a gross
+    total. Its net is the gross less the stored VAT, or the gross split at the
+    document date's rate (the same rule the SUMIT sync applies), not 0.
+    """
     net = getattr(row, net_attr, None)
-    if net is not None:
+    gross = _num(getattr(row, gross_attr, None))
+    tax = _num(getattr(row, tax_attr, None))
+    if net is not None and (_num(net) != 0 or gross == 0):
         return _num(net)
-    return _num(getattr(row, gross_attr, None)) - _num(getattr(row, tax_attr, None))
+    if tax != 0:
+        return gross - tax
+    from ..vat_utils import split_inclusive
+    doc_day = getattr(row, "issue_date", None) or getattr(row, "expense_date", None)
+    return split_inclusive(gross, doc_day)[0]
 
 
 def division_aliases(plan: dict | None) -> dict[str, str]:

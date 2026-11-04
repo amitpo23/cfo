@@ -272,10 +272,17 @@ def _connection_freshness(as_of: Optional[datetime]) -> str:
 
 @router.get("/status")
 async def open_finance_status(
+    include_inactive: bool = Query(False, description="Also list expired consents that have no accounts"),
     org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
-    """DB-only, one row per consent connection; never merges bank totals."""
+    """DB-only, one row per consent connection; never merges bank totals.
+
+    An expired consent with no accounts is hidden unless ``include_inactive``.
+    """
+    from ...services.dashboards.provider_gate import bank_connection_hidden, bank_connection_inactive
+
+    hidden = 0
     connections = db.query(BankConnection).filter(
         BankConnection.organization_id == org_id,
     ).order_by(BankConnection.created_at).all()
@@ -294,10 +301,14 @@ async def open_finance_status(
                 BankTransaction.source == "open_finance",
                 BankTransaction.account_id.in_(account_ids),
             ).count()
+        if not include_inactive and bank_connection_hidden(connection, len(accounts)):
+            hidden += 1
+            continue
         observed = [a.balance_as_of for a in accounts if a.balance_as_of]
         as_of = max(observed) if observed else connection.last_refresh_at
         output.append({
             **_bank_connection_dict(connection),
+            "inactive": bank_connection_inactive(connection),
             "accounts_count": len(accounts),
             "transactions_count": transaction_count,
             "as_of": as_of.isoformat() if as_of else None,
@@ -312,6 +323,7 @@ async def open_finance_status(
         "organization_id": org_id,
         "connections": output,
         "count": len(output),
+        "hidden_inactive_count": hidden,
         "unmapped_accounts_count": unmapped_accounts,
         "mapping_complete": unmapped_accounts == 0,
     }
@@ -416,6 +428,7 @@ async def onboarding_status(
 @router.get("/connections")
 async def list_connections(
     live: bool = Query(False, description="Force a live refresh from Open Finance instead of the local cache (cooldown-gated)"),
+    include_inactive: bool = Query(False, description="Also list expired consents that have no accounts"),
     org_id: int = Depends(get_current_org_id),
     db: Session = Depends(get_db_session),
 ):
@@ -433,7 +446,24 @@ async def list_connections(
         .order_by(BankConnection.created_at.desc())
         .all()
     )
-    return {"items": [_bank_connection_dict(r) for r in rows], "count": len(rows)}
+    from ...services.dashboards.provider_gate import bank_connection_hidden
+
+    with_accounts = {
+        connection_id for (connection_id,) in db.query(Account.open_finance_connection_id).filter(
+            Account.organization_id == org_id,
+            Account.source == "open_finance",
+            Account.open_finance_connection_id.isnot(None),
+        ).distinct()
+    }
+    shown = [
+        r for r in rows
+        if include_inactive or not bank_connection_hidden(r, int(r.connection_id in with_accounts))
+    ]
+    return {
+        "items": [_bank_connection_dict(r) for r in shown],
+        "count": len(shown),
+        "hidden_inactive_count": len(rows) - len(shown),
+    }
 
 
 @router.post("/connections/refresh-all")

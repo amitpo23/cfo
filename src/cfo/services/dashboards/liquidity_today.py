@@ -33,10 +33,13 @@ def build_liquidity_today(liquidity: dict | None, forecast: dict | None, *, toda
     limit = position.get("limit")
     headroom = None if balance is None or limit is None else position.get("available_to_limit")
     from .money_screens import credit_overrun
-    overrun = credit_overrun(balance, limit)
-    used = None
-    if balance is not None:
-        used = round(-float(balance), 2) if float(balance) < 0 else 0.0
+    # A stale balance is not today's, but its overrun is real. Measure it on the
+    # last booked balance and say so (``basis``), instead of hiding it as unknown.
+    measured = balance if balance is not None else last_booked
+    basis = "today" if balance is not None else ("last_booked" if last_booked is not None else None)
+    overrun = credit_overrun(measured, limit)
+    # ``used`` is today's. A stale balance leaves it null; ``last_booked_used`` keeps the dated figure.
+    used = overrun["used"] if basis == "today" else None
     breach = None if headroom is None else float(headroom) < 0
     available_limit = None
     available_as_of = None
@@ -89,6 +92,9 @@ def build_liquidity_today(liquidity: dict | None, forecast: dict | None, *, toda
             "overrun": overrun["overrun"],
             "overrun_status": overrun["status"],
             "overrun_label": overrun["label_he"],
+            "basis": basis,
+            "last_booked_used": overrun["used"],
+            "as_of": as_of if basis == "today" else (last_as_of if basis == "last_booked" else None),
             "available_limit": available_limit,
             "available_as_of": available_as_of,
             "note_he": "הפנוי מול המסגרת הוא מסגרת ועוד יתרת העו״ש. יתרה זמינה מהבנק, אם נשמרה, מוצגת בנפרד ואינה מחליפה את היתרה הסגורה.",

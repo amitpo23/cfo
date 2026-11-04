@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { AlertCircle, Calendar, ChevronDown, Database, RefreshCw } from 'lucide-react';
 import api from '../services/api';
+import { PartialDataBanner } from './dashboardUi';
 
 interface ForecastComponent {
   source: string;
@@ -56,6 +57,7 @@ interface LiveForecastResponse {
   // חודש) — שורה אחת לכל הנחה שאכן הופעלה בתשובה הזו, לא רשימה גנרית.
   assumptions?: string[];
   message: string | null;
+  partial_banner?: { text_he?: string | null } | null;
 }
 
 // תיוג עברי למקורות הנתונים — מוצג כתגית "נכון לתאריך + מקורות" מעל התחזית,
@@ -113,6 +115,12 @@ const ForecastingDashboard: React.FC = () => {
           <option value={18}>18 חודשים</option>
         </select>
       </div>
+
+      <PartialDataBanner text={forecast?.partial_banner?.text_he} />
+      <p className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900" role="note">
+        כאן מוצגת תחזית חודשית לפי חשבוניות וחשבונות ספק פתוחים בלבד, בלי הלוואות, שכר, כרטיסים ומע״מ.
+        התזרים המחייב, עם יתרת פתיחה ומסגרות, נמצא ב-<a href="/cashflow" className="font-semibold underline">תזרים מזומנים חזוי</a>.
+      </p>
 
       {/* נכון לתאריך + מקורות נתונים */}
       {forecast && (

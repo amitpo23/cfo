@@ -95,6 +95,68 @@ def period_payload(db, organization_id: int, *, grain: str, start: date, end: da
     return payload
 
 
+def books_months(db, organization_id: int, start: date, end: date, *, as_of: date | None = None) -> dict:
+    """Books revenue/costs/net per calendar month, exactly as /pnl shows them.
+
+    The dashboard, /dashboard/pnl and the daily reports read this instead of
+    their own sums, so October is one figure on every screen. The net is
+    withheld the same way /pnl withholds it.
+    """
+    payload = period_payload(db, organization_id, grain="month", start=start, end=end, as_of=as_of)
+    return {
+        "months": {period["label"]: period["books"] for period in payload["periods"]},
+        "totals": payload["totals"]["books"],
+        "profit_claim": payload["profit_claim"],
+        "partial_banner": payload["partial_banner"],
+        "source": "cashflow.period",
+    }
+
+
+def books_pnl_summary(db, organization_id: int, start: date, end: date, *, as_of: date | None = None) -> dict:
+    """The /pnl figures for a range, in the shape the bank report and executive panel show.
+
+    The net margin is a percent. Gross and operating profit are not separable
+    in the books, so they are null rather than a copy of the net.
+    """
+    books = books_months(db, organization_id, start, end, as_of=as_of)
+    totals = books["totals"]
+    revenue = totals["revenue"]["amount"]
+    costs = totals["costs"]["amount"]
+    net = totals["net"]["amount"]
+    margin = round(net / revenue * 100, 1) if net is not None and revenue else None
+    return {
+        "total_revenue": revenue,
+        "total_expenses": costs,
+        "gross_profit": None,
+        "gross_margin": None,
+        "operating_income": None,
+        "net_income": net,
+        "net_margin": margin,
+        "missing_label_he": totals["net"]["missing_label"] or totals["revenue"]["missing_label"],
+        "profit_claim": books["profit_claim"],
+        "partial_banner": books["partial_banner"],
+        "source": books["source"],
+    }
+
+
+def latest_books_month(db, organization_id: int, today: date, *, lookback_months: int = 24) -> dict:
+    """The month every P&L screen opens on: this month if it has counted books, else the latest that has."""
+    year, month = today.year, today.month
+    for _ in range(lookback_months + 1):
+        lo = date(year, month, 1)
+        hi = date(year, month, monthrange(year, month)[1])
+        if any(row["net"] != 0 for row in _books_rows(db, organization_id, lo, hi)):
+            return {"month": f"{year:04d}-{month:02d}", "start": lo.isoformat(), "end": hi.isoformat(),
+                    "is_current": (year, month) == (today.year, today.month), "has_data": True}
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+    lo = date(today.year, today.month, 1)
+    hi = date(today.year, today.month, monthrange(today.year, today.month)[1])
+    return {"month": f"{today.year:04d}-{today.month:02d}", "start": lo.isoformat(), "end": hi.isoformat(),
+            "is_current": True, "has_data": False}
+
+
 def compare_period(db, organization_id: int, plan: dict | None, *, grain: str, start: date, end: date,
                    as_of: date | None = None) -> dict:
     if grain not in GRAINS:
@@ -561,8 +623,21 @@ def _bank_bucket(rows: list, lo: date, hi: date, bank_known: bool, *, include_li
 
 
 def _books_rows(db, organization_id: int, start: date, end: date) -> list[dict]:
+    """Counted book documents of the range, net of VAT. Every P&L screen reads these rows.
+
+    A SUMIT document synced as both a Bill and an Expense with the same
+    ``external_id`` counts once, as the Bill.
+    """
     from ...models import Bill, Expense, Invoice
     found = []
+    bill_ids = {
+        str(external_id)
+        for external_id, status in db.query(Bill.external_id, Bill.status).filter(
+            Bill.organization_id == organization_id,
+            Bill.external_id.isnot(None),
+        ).all()
+        if bill_counts(status)
+    }
     for row in db.query(Invoice).filter(
         Invoice.organization_id == organization_id,
         Invoice.issue_date >= start,
@@ -585,6 +660,8 @@ def _books_rows(db, organization_id: int, start: date, end: date) -> list[dict]:
         Expense.expense_date <= end,
     ).all():
         if row.expense_date is None or not expense_counts(row.status):
+            continue
+        if row.external_id and str(row.external_id) in bill_ids:
             continue
         found.append({"date": row.expense_date, "side": "cost", "net": _net(row, "amount", "total", "vat_amount")})
     return found

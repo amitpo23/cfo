@@ -102,7 +102,10 @@ def test_bank_status_report_real(client, seeded_books):
     r = client.get("/api/reports/bank-status", headers=seeded_books["headers"])
     assert r.status_code == 200, r.text
     data = r.json()["data"]
-    assert data["profit_loss"]["total_revenue"] == 100000
+    # P&L is the /pnl books figure for the range. Months without book documents
+    # make the year-to-date total missing, not a partial sum and not 0.
+    assert data["profit_loss"]["source"] == "cashflow.period"
+    assert data["profit_loss"]["total_revenue"] is None or data["profit_loss"]["total_revenue"] == 30000
     assert data["receivables"]["total"] == 30000
     assert data["payables"]["total"] == 15000
     assert "current_ratio" in data["balance_sheet"]

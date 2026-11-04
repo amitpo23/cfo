@@ -575,3 +575,13 @@ def test_live_monthly_forecast_route_honest_null_for_empty_org(client, fresh_org
     assert body["months"] == []
     assert body["data_sources"] == []
     assert body["message"]
+
+
+def test_live_monthly_forecast_route_carries_the_freshness_banner(client, fresh_org):
+    """/forecasting shows «בנק עד · ספרים עד». No stamp is חסר, never a date."""
+    org = fresh_org()
+    r = client.get("/api/cashflow/forecast/live-monthly", headers=org["headers"])
+    assert r.status_code == 200
+    banner = r.json()["partial_banner"]
+    assert banner["bank_as_of"] is None and banner["books_as_of"] is None
+    assert banner["text_he"] == "נתונים חלקיים — בנק עד חסר, ספרים עד חסר"

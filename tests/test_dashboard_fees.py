@@ -64,8 +64,10 @@ def test_executive_dashboard_has_all_panels(client, feebooks):
     # כל פאנל מחזיר ok=True (מבודד מכשלים, לא 500)
     failed = [k for k, v in panels.items() if not v.get("ok")]
     assert not failed, failed
-    # נתון אמיתי זולג דרך הפאנל
-    assert panels["profit_loss"]["data"]["total_revenue"] == 100000
+    # P&L reads the books (/cashflow/period), not the legacy Transaction table.
+    # This org has no book documents, so revenue is missing, not 0.
+    assert panels["profit_loss"]["data"]["source"] == "cashflow.period"
+    assert panels["profit_loss"]["data"]["total_revenue"] is None
     assert panels["fees"]["data"]["total_fees"] == 2500
 
 
