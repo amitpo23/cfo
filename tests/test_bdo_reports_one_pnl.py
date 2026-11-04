@@ -119,3 +119,25 @@ def test_budget_variance_with_no_actual_is_missing_not_100_percent():
     assert partial["variance_percentage"] == 1 / 3 * 100
     assert partial["categories"][0]["variance_percentage"] == 20.0
     assert partial["categories"][1]["variance_percentage"] is None
+
+
+def test_executive_computes_insights_once_and_times_each_panel(client, fresh_org, monkeypatch):
+    from cfo.services import ai_analytics_service
+
+    calls = []
+    original = ai_analytics_service.AdvancedAIService.generate_insights
+
+    def counted(self, *args, **kwargs):
+        calls.append(1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(ai_analytics_service.AdvancedAIService, "generate_insights", counted)
+    owner = fresh_org()
+    _seed(owner["org_id"])
+    r = client.get("/api/dashboard/executive", headers=owner["headers"], params=RANGE)
+    assert r.status_code == 200, r.text
+    panels = r.json()["data"]["panels"]
+    assert len(calls) == 1
+    assert all(isinstance(panel["elapsed_ms"], int) for panel in panels.values())
+    timings = sorted(((p["elapsed_ms"], name) for name, p in panels.items()), reverse=True)
+    print("PANEL_MS", timings)

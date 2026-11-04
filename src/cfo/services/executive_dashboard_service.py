@@ -4,6 +4,7 @@ Executive dashboard: aggregates the 8 business-health panels, each isolated so
 a failure in one never breaks the whole dashboard.
 """
 import logging
+import time
 from datetime import date
 from typing import Callable, Dict, Optional
 
@@ -38,14 +39,27 @@ class ExecutiveDashboardService:
     def __init__(self, db: Session, organization_id: int = 1):
         self.db = db
         self.organization_id = organization_id
+        self._insights_cache = None
 
     def _safe(self, name: str, fn: Callable) -> Dict:
-        """מריץ פאנל ומחזיר תוצאה או שגיאה מבודדת."""
+        """מריץ פאנל ומחזיר תוצאה או שגיאה מבודדת, עם זמן הריצה שלו (לאבחון איטיות)."""
+        started = time.perf_counter()
         try:
-            return {"ok": True, "data": fn()}
+            result = {"ok": True, "data": fn()}
         except Exception as exc:  # פאנל בודד לא מפיל את הדשבורד
             logger.exception("dashboard panel %s failed", name)
-            return {"ok": False, "error": str(exc)}
+            result = {"ok": False, "error": str(exc)}
+        result["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
+        return result
+
+    def _insights(self):
+        """All insights, computed once per dashboard. Panels 6 and 8 used to compute them separately."""
+        if self._insights_cache is None:
+            from .ai_analytics_service import AdvancedAIService
+            self._insights_cache = AdvancedAIService(
+                self.db, organization_id=self.organization_id
+            ).generate_insights()
+        return self._insights_cache
 
     def build(
         self,
@@ -114,11 +128,8 @@ class ExecutiveDashboardService:
 
     # 6. בדיקת שיפור רווחיות
     def _improvement(self):
-        from .ai_analytics_service import AdvancedAIService
-        insights = AdvancedAIService(
-            self.db, organization_id=self.organization_id
-        ).generate_insights(focus_areas=["cost_saving", "revenue_opportunity"])
-        return [vars(i) for i in insights]
+        focus = {"cost_saving", "revenue_opportunity"}
+        return [vars(i) for i in self._insights() if i.insight_type.value in focus]
 
     # 7. דוח עמלות
     def _fees(self, start, end):
@@ -130,10 +141,8 @@ class ExecutiveDashboardService:
     # 8. מיפוי מקום לשיפור באמצעות AI
     def _ai_opportunities(self):
         from .ai_analytics_service import AdvancedAIService
-        ai = AdvancedAIService(self.db, organization_id=self.organization_id)
-        risks = ai.assess_financial_risks()
-        insights = ai.generate_insights()
+        risks = AdvancedAIService(self.db, organization_id=self.organization_id).assess_financial_risks()
         return {
             "risks": [vars(r) for r in risks],
-            "insights": [vars(i) for i in insights],
+            "insights": [vars(i) for i in self._insights()],
         }
