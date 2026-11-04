@@ -1356,7 +1356,7 @@ def checking_snapshot(db, organization_id: int, *, today: date | None = None) ->
     through = last.isoformat() if last is not None else None
     missing = through if as_of and through and through < as_of else None
     balance = position.get("balance")
-    from .money_screens import credit_overrun, org_partial_banner
+    from .money_screens import credit_lines, credit_overrun, org_partial_banner
     limit = position.get("limit")
     overrun = credit_overrun(None if balance is None else balance, limit)
     return {
@@ -1372,6 +1372,7 @@ def checking_snapshot(db, organization_id: int, *, today: date | None = None) ->
         "transactions_missing_after": missing,
         "stale_balances": section.get("stale_balances") or [],
         "credit_overrun": overrun,
+        "credit_lines": credit_lines(section),
         "balance_mismatch": section.get("balance_mismatch"),
         "partial_banner": org_partial_banner(db, organization_id),
         "status": "unknown" if balance is None else ("partial" if missing else "ready"),

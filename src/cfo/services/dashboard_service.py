@@ -97,6 +97,7 @@ class DashboardService:
             # ---- new fields (section ד of the plan) ----
             "cash_as_of": cash["cash_as_of"],
             "credit_overrun": cash.get("credit_overrun"),
+            "credit_lines": cash.get("credit_lines"),
             "balance_mismatch": cash.get("balance_mismatch"),
             "partial_banner": cash.get("partial_banner"),
             "available": cash.get("available"),
@@ -157,6 +158,7 @@ class DashboardService:
             "cash_balance": cash_balance,
             "cash_as_of": cash_as_of,
             "credit_overrun": overrun,
+            "credit_lines": snap.get("credit_lines"),
             "balance_mismatch": snap.get("balance_mismatch"),
             "partial_banner": banner,
             "available": snap.get("available"),

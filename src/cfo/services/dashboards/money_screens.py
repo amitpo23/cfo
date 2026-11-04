@@ -77,6 +77,52 @@ def partial_data_banner(bank_as_of, books_as_of) -> dict:
     }
 
 
+def credit_lines(section: dict | None) -> dict:
+    """Balance, limit, used, available and overrun of each checking account.
+
+    The balance is the last booked one. A snapshot older than two days is not
+    today's balance, but its overrun is still an overrun: it is shown with its
+    date (``stale``). A missing limit leaves available and overrun null.
+    """
+    section = section if isinstance(section, dict) else {}
+    stale = {
+        row.get("account_id"): row for row in section.get("stale_balances") or []
+        if isinstance(row, dict)
+    }
+    accounts = []
+    for account in section.get("accounts") or []:
+        if not isinstance(account, dict) or account.get("kind") != "checking":
+            continue
+        balance = account.get("balance")
+        as_of = account.get("as_of")
+        old = stale.get(account.get("account_id"))
+        if balance is None and old is not None:
+            balance = old.get("observed_balance")
+            as_of = old.get("as_of") or as_of
+        limit = account.get("credit_limit")
+        overrun = credit_overrun(balance, limit)
+        available = None if balance is None or limit is None else round(float(limit) + float(balance), 2)
+        dated = f"נכון ל-{_ddmm(as_of)}" if _ddmm(as_of) else "תאריך היתרה חסר"
+        accounts.append({
+            "name": account.get("name"),
+            "balance": balance,
+            "as_of": as_of,
+            "stale": old is not None,
+            "limit": limit,
+            "used": overrun["used"],
+            "available": available,
+            "available_from_bank": account.get("available_limit"),
+            "overrun": overrun["overrun"],
+            "status": overrun["status"],
+            "label_he": f"{overrun['label_he']} · {dated}" if balance is not None else overrun["label_he"],
+        })
+    return {
+        "accounts": accounts,
+        "any_overrun": any(row["status"] == "overrun" for row in accounts),
+        "source": "accounts.closing_booked",
+    }
+
+
 def credit_overrun(balance, limit) -> dict:
     """Used above the credit line is an overrun. Unknown stays null, not zero."""
     if balance is None:
