@@ -57,3 +57,22 @@ def test_command_center_month_without_bank_rows_is_missing(fresh_org):
     with SessionLocal() as db:
         flows = DashboardService(db, owner["org_id"])._bank_month_flows(date(2026, 11, 1), date(2026, 11, 30))
     assert flows == {"inflow": None, "outflow": None, "net": None}
+
+
+def test_bank_report_excel_carries_the_last_booked_balance_not_zero(client, fresh_org):
+    from io import BytesIO
+
+    import openpyxl
+
+    owner = fresh_org()
+    _accounts(owner["org_id"])
+    r = client.get("/api/reports/bank-status/export", headers=owner["headers"])
+    assert r.status_code == 200, r.text
+    rows = {row[0]: row[1] for row in openpyxl.load_workbook(BytesIO(r.content)).active.iter_rows(values_only=True)}
+    assert rows["עו״ש בדיקה: יתרה"] == -21000
+    assert rows["עו״ש בדיקה: נכון ל-"] == "2026-10-26"
+    assert rows["עו״ש בדיקה: מסגרת"] == 9000
+    assert rows["עו״ש בדיקה: חריגה"] == 12000
+    assert rows["הלוואות (יתרה)"] == -250000
+    # No bank rows in the period: the net flow is not invented.
+    assert rows["תזרים בנק נטו בתקופה"] in ("חסר", 0)

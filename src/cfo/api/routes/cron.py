@@ -98,14 +98,46 @@ def _of_consent_gate(db: Session, org_id: int) -> Optional[dict]:
         str(row.status or "UNKNOWN").upper()
         for row in rows
     })
-    if any(status in _OF_SYNCABLE_CONNECTION_STATUSES for status in statuses):
+    if not any(status in _OF_SYNCABLE_CONNECTION_STATUSES for status in statuses):
+        return {
+            "organization_id": org_id,
+            "source": "open_finance",
+            "skipped": "consent_pending",
+            "connection_statuses": statuses,
+        }
+    # The sync reads only the stored connection. If that one has expired while
+    # a newer consent is ACTIVE, it would ingest nothing past the expiry and the
+    # bank feed would go stale silently. Say so instead.
+    stored = _stored_of_connection_id(db, org_id)
+    by_id = {row.connection_id: str(row.status or "UNKNOWN").upper() for row in rows if row.connection_id}
+    if stored and stored in by_id and by_id[stored] not in _OF_SYNCABLE_CONNECTION_STATUSES:
+        return {
+            "organization_id": org_id,
+            "source": "open_finance",
+            "skipped": "stored_connection_not_active",
+            "stored_connection_status": by_id[stored],
+            "active_connections": sum(1 for status in by_id.values() if status in _OF_SYNCABLE_CONNECTION_STATUSES),
+        }
+    return None
+
+
+def _stored_of_connection_id(db: Session, org_id: int) -> Optional[str]:
+    """The connection id the sync will read. No provider call."""
+    from ...services.credentials_vault import decrypt_credentials
+
+    conn = db.query(IntegrationConnection).filter(
+        IntegrationConnection.organization_id == org_id,
+        IntegrationConnection.source == "open_finance",
+        IntegrationConnection.status == "active",
+    ).order_by(IntegrationConnection.id).first()
+    if conn is None or not conn.credentials_encrypted:
         return None
-    return {
-        "organization_id": org_id,
-        "source": "open_finance",
-        "skipped": "consent_pending",
-        "connection_statuses": statuses,
-    }
+    try:
+        creds = decrypt_credentials(conn.credentials_encrypted) or {}
+    except Exception:  # an unreadable secret is not this gate's decision
+        return None
+    value = creds.get("connection_id")
+    return str(value) if value else None
 
 
 # 25/08/2026 (הנחיית בעלים, ממצא בדיקה חיה על אליהב כהן/org2): ריצת

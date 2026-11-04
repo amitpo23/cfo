@@ -162,10 +162,17 @@ class BankReportService:
         line("יחס שוטף", bs["current_ratio"], "0.00")
         row += 1
 
-        cash = report["cash_position"]
-        section("מצב מזומנים")
-        line("יתרת בנק", cash.get("bank_account_balance", 0))
-        line("תזרים נטו בתקופה", cash.get("net_flow", 0))
+        cash = report["cash_position"] or {}
+        section("עו״ש ומסגרות (יתרה סגורה אחרונה)")
+        for account in (report.get("credit_lines") or {}).get("accounts") or []:
+            name = account.get("name") or "חשבון עו״ש"
+            line(f"{name}: יתרה", account.get("balance"))
+            line(f"{name}: נכון ל-", account.get("as_of"), "@")
+            line(f"{name}: מסגרת", account.get("limit"))
+            line(f"{name}: ניצול", account.get("used"))
+            line(f"{name}: חריגה", account.get("overrun"))
+        line("הלוואות (יתרה)", report.get("loans_total"))
+        line("תזרים בנק נטו בתקופה", cash.get("net_bank_flow"))
         row += 1
 
         ar = report["receivables"]
