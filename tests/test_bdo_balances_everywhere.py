@@ -76,3 +76,21 @@ def test_bank_report_excel_carries_the_last_booked_balance_not_zero(client, fres
     assert rows["הלוואות (יתרה)"] == -250000
     # No bank rows in the period: the net flow is not invented.
     assert rows["תזרים בנק נטו בתקופה"] in ("חסר", 0)
+
+
+def test_bank_report_excel_does_not_start_a_formula_from_an_account_name(client, fresh_org):
+    from io import BytesIO
+
+    import openpyxl
+
+    owner = fresh_org()
+    with SessionLocal() as db:
+        db.add(Account(
+            organization_id=owner["org_id"], name="=HYPERLINK(\"x\")", account_type=AccountType.BANK,
+            raw_account_type="CHECKING", source="open_finance", external_id=f"t-inj-{owner['org_id']}",
+            balance=Decimal("100"), balance_as_of=datetime(2026, 10, 26), currency="ILS",
+        ))
+        db.commit()
+    r = client.get("/api/reports/bank-status/export", headers=owner["headers"])
+    labels = [row[0] for row in openpyxl.load_workbook(BytesIO(r.content)).active.iter_rows(values_only=True) if row[0]]
+    assert not any(str(label).startswith("=") for label in labels)

@@ -19,6 +19,13 @@ def _fraction(percent):
     return None if percent is None else round(percent / 100, 4)
 
 
+def _cell_text(value):
+    """Text from a provider (an account name) must not start an Excel formula."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 class BankReportService:
     def __init__(self, db: Session, organization_id: int = 1):
         self.db = db
@@ -135,8 +142,8 @@ class BankReportService:
 
         def line(label: str, value, fmt: str = currency):
             nonlocal row
-            ws.cell(row=row, column=1, value=label)
-            cell = ws.cell(row=row, column=2, value="חסר" if value is None else value)
+            ws.cell(row=row, column=1, value=_cell_text(label))
+            cell = ws.cell(row=row, column=2, value="חסר" if value is None else _cell_text(value))
             if value is not None:
                 cell.number_format = fmt
             row += 1
