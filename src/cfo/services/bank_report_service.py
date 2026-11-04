@@ -65,8 +65,14 @@ class BankReportService:
             ).all()
         ))
 
+        from .dashboards.money_screens import checking_and_loans
+        checking = checking_and_loans(self.db, self.organization_id)
+
         return {
             "company_name": company_name,
+            "credit_lines": checking["credit_lines"],
+            "loans_total": checking["loans_total"],
+            "partial_banner": checking["partial_banner"],
             "generated_at": date.today().isoformat(),
             "period": {"start": period_start.isoformat(), "end": today.isoformat()},
             "profit_loss": pl,

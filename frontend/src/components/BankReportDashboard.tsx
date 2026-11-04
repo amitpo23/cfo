@@ -3,6 +3,8 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { Landmark, Download, TrendingUp, Wallet, Receipt, CreditCard } from 'lucide-react';
 import apiService from '../services/api';
 import { formatReportMoney } from './dailyReportsMoney';
+import CreditLinesPanel from './CreditLinesPanel';
+import { PartialDataBanner } from './dashboardUi';
 
 interface Props {
   darkMode?: boolean;
@@ -73,6 +75,8 @@ const BankReportDashboard: React.FC<Props> = ({ darkMode }) => {
           <div className="text-sm text-gray-500">
             {data.company_name} · לתקופה {data.period.start} עד {data.period.end}
           </div>
+          <PartialDataBanner text={data.partial_banner?.text_he} />
+          <CreditLinesPanel lines={data.credit_lines} />
           {data.profit_loss.missing_label_he ? (
             <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950" role="status">
               רווח והפסד: {data.profit_loss.missing_label_he}
@@ -91,7 +95,7 @@ const BankReportDashboard: React.FC<Props> = ({ darkMode }) => {
               ['סך התחייבויות', fmt(data.balance_sheet.total_liabilities)],
               ['הון עצמי', fmt(data.balance_sheet.total_equity)],
               ['יחס שוטף', data.balance_sheet.current_ratio ? data.balance_sheet.current_ratio.toFixed(2) : 'חסר'],
-              ['יתרת בנק', fmt(data.cash_position?.bank_account_balance)],
+              ['הלוואות (יתרה)', fmt(data.loans_total)],
             ]} />
             <Section icon={Receipt} title="חייבים (לקוחות)" rows={[
               ['סך חוב לקוחות', fmt(data.receivables.total)],

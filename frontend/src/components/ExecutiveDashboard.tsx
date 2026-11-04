@@ -7,6 +7,8 @@ import {
 import apiService from '../services/api';
 import { AgentPanel, FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
 import { formatReportMoney } from './dailyReportsMoney';
+import CreditLinesPanel from './CreditLinesPanel';
+import { PartialDataBanner } from './dashboardUi';
 
 interface Props {
   darkMode?: boolean;
@@ -33,6 +35,7 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
 
   const panels: Record<string, Panel> = data?.panels || {};
   const profitLoss = panels.profit_loss?.data || {};
+  const checking = panels.checking?.data || {};
   const bank = panels.bank_reconciliation?.data || {};
   const budget = panels.budget_vs_actual?.data || {};
   const fees = panels.fees?.data || {};
@@ -96,6 +99,11 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
         { label: 'עמלות', value: fmt(fees.total_fees), tone: 'slate' },
       ]}
     >
+      <PartialDataBanner text={checking.partial_banner?.text_he} />
+      <CreditLinesPanel lines={checking.credit_lines} />
+      {checking.loans_total != null ? (
+        <p className="text-sm text-slate-600">הלוואות (יתרה, בנפרד מהמסגרת): {fmt(checking.loans_total)}</p>
+      ) : null}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
         <MetricCard
           darkMode={darkMode}

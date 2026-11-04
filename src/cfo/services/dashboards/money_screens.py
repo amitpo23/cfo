@@ -77,6 +77,29 @@ def partial_data_banner(bank_as_of, books_as_of) -> dict:
     }
 
 
+def checking_and_loans(db, organization_id: int, *, today=None) -> dict:
+    """The checking picture every money screen shows, plus loans kept apart from the credit line."""
+    from sqlalchemy import func
+
+    from ...models import Account, AccountType
+    from .liquidity import checking_snapshot
+
+    snap = checking_snapshot(db, organization_id, today=today)
+    loans = db.query(func.count(Account.id), func.sum(Account.balance)).filter(
+        Account.organization_id == organization_id,
+        Account.source == "open_finance",
+        Account.account_type == AccountType.LIABILITY,
+        Account.raw_account_type == "LOAN",
+    ).one()
+    return {
+        "balance": snap.get("balance"),
+        "as_of": snap.get("as_of"),
+        "credit_lines": snap.get("credit_lines"),
+        "partial_banner": snap.get("partial_banner"),
+        "loans_total": float(loans[1]) if loans[0] and loans[1] is not None else None,
+    }
+
+
 def credit_lines(section: dict | None) -> dict:
     """Balance, limit, used, available and overrun of each checking account.
 

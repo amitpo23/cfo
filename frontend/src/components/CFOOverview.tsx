@@ -415,7 +415,7 @@ const CFOOverview: React.FC<CFOOverviewProps> = ({ darkMode }) => {
               <div>{runwayMonths != null ? `${runwayMonths} חודשי runway` : 'אין נתונים עדיין ל-runway'}</div>
               {savingsBalance != null && <div>פיקדונות: {fmt(savingsBalance)}</div>}
               {loansTotal != null && (
-                <div className={darkMode ? 'text-rose-300' : 'text-rose-600'}>הלוואות/מסגרות: {fmt(loansTotal)}</div>
+                <div className={darkMode ? 'text-rose-300' : 'text-rose-600'}>הלוואות (יתרה, בנפרד מהמסגרת): {fmt(loansTotal)}</div>
               )}
               {cardOutstanding != null && <div>חוב כרטיס פתוח: {fmt(cardOutstanding)}</div>}
             </div>

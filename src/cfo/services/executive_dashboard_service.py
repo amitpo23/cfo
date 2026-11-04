@@ -60,6 +60,7 @@ class ExecutiveDashboardService:
             "period": {"start": start.isoformat(), "end": end.isoformat()},
             "panels": {
                 "profit_loss": self._safe("profit_loss", lambda: self._profit_loss(start, end)),
+                "checking": self._safe("checking", lambda: self._checking()),
                 "bank_reconciliation": self._safe("bank_reconciliation", lambda: self._reconciliation(start, end)),
                 "expense_overruns": self._safe("expense_overruns", lambda: self._overruns()),
                 "budget_vs_actual": self._safe("budget_vs_actual", lambda: self._budget(end)),
@@ -74,6 +75,11 @@ class ExecutiveDashboardService:
     def _profit_loss(self, start, end):
         from .dashboards.period_compare import books_pnl_summary
         return books_pnl_summary(self.db, self.organization_id, start, end)
+
+    # עו״ש, מסגרות והלוואות: אותה תמונה כמו בדשבורד וב-/cashflow
+    def _checking(self):
+        from .dashboards.money_screens import checking_and_loans
+        return checking_and_loans(self.db, self.organization_id)
 
     # 2. פערי התאמת בנקים
     def _reconciliation(self, start, end):

@@ -319,6 +319,9 @@ class DashboardService:
             BankTransaction.transaction_date >= start,
             BankTransaction.transaction_date <= end,
         ).all()
+        if not rows:
+            # No bank rows in the month is missing, not 0/0.
+            return {"inflow": None, "outflow": None, "net": None}
         inflow = sum(float(amount) for (amount,) in rows if amount and amount > 0)
         outflow = sum(abs(float(amount)) for (amount,) in rows if amount and amount < 0)
         return {
@@ -352,7 +355,7 @@ class DashboardService:
         if not has_history:
             return None
 
-        nets = [self._bank_month_flows(start, end)["net"] for start, end in months]
+        nets = [self._bank_month_flows(start, end)["net"] or 0 for start, end in months]
         avg_net = sum(nets) / len(nets)
         if avg_net >= 0:
             return None  # לא בשריפה נטו — מושג ה-runway לא רלוונטי
