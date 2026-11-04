@@ -162,7 +162,7 @@ def test_pnl_falls_back_to_last_closed_month_with_data(fresh_org):
         # מאי 2026 — יש ספרים
         db.add(Invoice(organization_id=org_id, contact_id=cust.id, invoice_number="I1",
                        issue_date=date(2026, 5, 15), status=InvoiceStatus.SENT,
-                       total=1000, paid_amount=0, balance=1000))
+                       subtotal=1000, tax=0, total=1000, paid_amount=0, balance=1000))
         db.commit()
 
         overview = DashboardService(db, org_id).get_overview(today=fixed_today)
@@ -188,7 +188,7 @@ def test_pnl_uses_current_month_when_it_has_books(fresh_org):
         db.flush()
         db.add(Invoice(organization_id=org_id, contact_id=cust.id, invoice_number="I1",
                        issue_date=date(2026, 7, 5), status=InvoiceStatus.SENT,
-                       total=2000, paid_amount=0, balance=2000))
+                       subtotal=2000, tax=0, total=2000, paid_amount=0, balance=2000))
         db.commit()
 
         overview = DashboardService(db, org_id).get_overview(today=fixed_today)

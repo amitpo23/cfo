@@ -27,6 +27,8 @@ def test_pnl_cogs_honest_null_when_unavailable(client, fresh_org):
             issue_date=today,
             status=InvoiceStatus.PAID,
             paid_amount=Decimal("10000"),
+            subtotal=Decimal("10000"),
+            tax=Decimal("0"),
             total=Decimal("10000"),
         ))
         db.add(Bill(
@@ -34,6 +36,8 @@ def test_pnl_cogs_honest_null_when_unavailable(client, fresh_org):
             issue_date=today,
             status=BillStatus.PAID,
             paid_amount=Decimal("4000"),
+            subtotal=Decimal("4000"),
+            tax=Decimal("0"),
             total=Decimal("4000"),
         ))
         db.commit()
@@ -88,6 +92,8 @@ def test_pnl_cogs_real_when_classified_transactions_exist(client, fresh_org):
             issue_date=today,
             status=InvoiceStatus.PAID,
             paid_amount=Decimal("10000"),
+            subtotal=Decimal("10000"),
+            tax=Decimal("0"),
             total=Decimal("10000"),
         ))
         db.add(Transaction(

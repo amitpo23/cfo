@@ -32,44 +32,23 @@ def _month_bounds(year: int, month: int) -> tuple[date, date]:
 
 
 def cumulative_pl(db, organization_id: int, year: int, month: int) -> dict[str, Any]:
-    """Day-by-day cumulative revenue/expense/profit within the month."""
-    from ..models import Invoice, Bill, Expense, InvoiceStatus, BillStatus
+    """Day-by-day cumulative revenue/expense/profit within the month.
+
+    Same documents and the same month totals as /pnl (period_compare), so the
+    month here equals the month there. A profit /pnl withholds is withheld here.
+    """
+    from .dashboards.money_screens import org_partial_banner
+    from .dashboards.period_compare import _books_rows, books_months
 
     start, end = _month_bounds(year, month)
-    skip_inv = {InvoiceStatus.DRAFT, InvoiceStatus.VOID, InvoiceStatus.CANCELLED}
-    skip_bill = {BillStatus.DRAFT, BillStatus.VOID}
-
-    # Bucket net amounts by day-of-month.
+    rows = _books_rows(db, organization_id, start, end)
     rev_by_day: dict[int, float] = {}
     exp_by_day: dict[int, float] = {}
+    for row in rows:
+        bucket = rev_by_day if row["side"] == "revenue" else exp_by_day
+        bucket[row["date"].day] = bucket.get(row["date"].day, 0.0) + float(row["net"])
 
-    for inv in db.query(Invoice).filter(Invoice.organization_id == organization_id).all():
-        if inv.status in skip_inv:
-            continue
-        d = _doc_date(inv)
-        if d and start <= d <= end:
-            rev_by_day[d.day] = rev_by_day.get(d.day, 0.0) + _f(inv.subtotal)
-
-    for bill in db.query(Bill).filter(Bill.organization_id == organization_id).all():
-        if bill.status in skip_bill:
-            continue
-        d = _doc_date(bill)
-        if d and start <= d <= end:
-            exp_by_day[d.day] = exp_by_day.get(d.day, 0.0) + _f(bill.subtotal)
-
-    for exp in db.query(Expense).filter(Expense.organization_id == organization_id).all():
-        if str(getattr(exp, "status", "") or "").lower() == "error":
-            continue
-        d = getattr(exp, "expense_date", None)
-        if d and start <= d <= end:
-            exp_by_day[d.day] = exp_by_day.get(d.day, 0.0) + _f(exp.amount)
-
-    from .dashboards.money_screens import org_partial_banner
-    books_as_of = None
-    if rev_by_day or exp_by_day:
-        last_day_with_docs = max([*rev_by_day.keys(), *exp_by_day.keys()])
-        books_as_of = date(year, month, last_day_with_docs)
-    if not rev_by_day and not exp_by_day:
+    if not rows:
         return {
             "period": f"{year}-{month:02d}",
             "days": [],
@@ -82,28 +61,38 @@ def cumulative_pl(db, organization_id: int, year: int, month: int) -> dict[str, 
             "source": "books.local_documents",
             "disclaimer": DISCLAIMER,
         }
+    month_books = books_months(db, organization_id, start, end)
+    figures = month_books["totals"]
+    claim = month_books["profit_claim"]
+    profit_known = claim.get("allowed") is not False and figures["net"]["amount"] is not None
+    books_as_of = date(year, month, max([*rev_by_day.keys(), *exp_by_day.keys()]))
     days = []
     rev_cum = exp_cum = 0.0
-    last_day = end.day
-    for day in range(1, last_day + 1):
+    for day in range(1, end.day + 1):
         rev_cum += rev_by_day.get(day, 0.0)
         exp_cum += exp_by_day.get(day, 0.0)
         days.append({
             "date": date(year, month, day).isoformat(),
             "revenue_cum": round(rev_cum, 2),
             "expense_cum": round(exp_cum, 2),
-            "profit_cum": round(rev_cum - exp_cum, 2),
+            "profit_cum": round(rev_cum - exp_cum, 2) if profit_known else None,
         })
     return {
         "period": f"{year}-{month:02d}",
         "days": days,
-        "totals": {"revenue": round(rev_cum, 2), "expense": round(exp_cum, 2),
-                   "profit": round(rev_cum - exp_cum, 2)},
+        "totals": {
+            "revenue": figures["revenue"]["amount"],
+            "expense": figures["costs"]["amount"],
+            "profit": figures["net"]["amount"],
+        },
+        "profit_label": None if profit_known else (claim.get("reason_he") or figures["net"].get("missing_label")),
+        "profit_claim": claim,
         "basis": "books",
-        "as_of": books_as_of.isoformat() if books_as_of else None,
-        "partial_banner": org_partial_banner(db, organization_id),
+        "as_of": books_as_of.isoformat(),
+        "partial_banner": month_books["partial_banner"],
         "derived": True,
         "source": "books.local_documents",
+        "pnl_source": "cashflow.period",
         "disclaimer": DISCLAIMER,
     }
 
