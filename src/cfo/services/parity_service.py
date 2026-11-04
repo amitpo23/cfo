@@ -404,8 +404,11 @@ def _check_internal_double_computation(db, org_id: int, as_of: date) -> dict[str
     cp = daily_reports_service.cumulative_pl(db, org_id, year, month)
     direct = _direct_pl_totals(db, org_id, year, month)
 
-    cp_revenue = float(cp["totals"]["revenue"])
-    cp_expense = float(cp["totals"]["expense"])
+    # A month with no counted books is null in cumulative_pl (חסר on screen).
+    # For the comparison it sums to nothing; the no_data gate below then
+    # reports "unknown", or "mismatch" when the direct count found documents.
+    cp_revenue = float(cp["totals"]["revenue"] or 0)
+    cp_expense = float(cp["totals"]["expense"] or 0)
     diff_rev = abs(cp_revenue - direct["revenue"])
     diff_exp = abs(cp_expense - direct["expense"])
     tolerance = INTERNAL_DOUBLE_COMPUTATION_TOLERANCE
