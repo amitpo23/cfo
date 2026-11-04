@@ -80,6 +80,9 @@ Fix after GO (owner only, cost-gated):
 
 - Touched-area tests: all new and updated BDO tests pass (`test_bdo_*`, `test_live_forecast_service`, `test_kpi_insights_bank_report`, `test_dashboard_fees`, `test_open_finance_routes`, dashboard/runway tests).
 - Frontend: `npx tsc --noEmit` clean, `eslint` clean on touched files, `npm run build` OK.
-- Full `pytest tests/`: see the PR comment for head vs main (e961c65). Failures that main also has are listed there as pre-existing.
+- Full `pytest tests/` (SQLite, offline), HEAD 71a10f2 vs main e961c65: HEAD 54 failed / 3567 passed, main 45 failed / 3553 passed. All 45 main failures also fail on HEAD, so they're pre-existing. Of the 9 that failed only on HEAD:
+  - `test_morning_cycle::test_snapshot_columns_populated_after_full_cycle` was a real regression from round 1 (`parity_service` called `float()` on the new null). Fixed in d02ac0d.
+  - The other 8 (per-key gate / SUMIT hard-rule / office key / coverage alerting) read `cron.py` source while it was being edited during the run. Rerun on the final code they pass: 220 passed across those files and every parity test file.
+  - The commits after 71a10f2 (809948b, 0f8c96e, d02ac0d) were verified by those targeted reruns, not by another full suite run.
 - Known pre-existing failure: `test_live_forecast_service.py::test_monthly_forecast_overdue_ar_and_ap_are_not_dropped` (also fails on main).
 - Nothing here has been checked against prod screens. Each item needs a logged-in look on a preview before the demo.
