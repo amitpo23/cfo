@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..models import BankTransaction, Contact, Invoice, CollectionReminder
 from .ar_service import AccountsReceivableService
+from .bank_match_settlements import bank_match_settlements
 
 OVERDUE_STATUSES = ["sent", "partially_paid", "overdue"]
 
@@ -114,13 +115,19 @@ class CollectionService:
         return planned
 
     def _bank_payment_detected(self, invoice: Invoice) -> bool:
-        """תקבול בבנק שהותאם לחשבונית עוצר גבייה גם לפני שהקבלה נרשמה ב-SUMIT."""
-        return self.db.query(BankTransaction.id).filter(
+        """תקבול בבנק שהותאם לחשבונית עוצר גבייה גם לפני שהקבלה נרשמה ב-SUMIT.
+
+        גם תקבול אחד לכמה חשבוניות (מסך התאמת הבנק): שורת החשבונית חיובית
+        על הבנק. שורת זיכוי שלילית — היא החזר ללקוח, לא תשלום חוב."""
+        direct = self.db.query(BankTransaction.id).filter(
             BankTransaction.organization_id == self.org_id,
             BankTransaction.matched_entity_type == "invoice",
             BankTransaction.matched_entity_id == invoice.id,
             BankTransaction.amount > 0,
         ).first() is not None
+        return direct or any(
+            line.amount > 0 for line in bank_match_settlements(self.db, self.org_id, ("invoice",), [invoice.id])
+        )
 
     def _recently_sent(self, contact_id: int, rtype: str, cooldown_hours: int) -> bool:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)

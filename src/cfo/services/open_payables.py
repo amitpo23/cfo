@@ -3,7 +3,7 @@
 A tax invoice stays on ``Bill`` with its original balance when the bank match
 or the journal does not rewrite that column. The open list reads the links
 that already exist: a reconciled bank row matched to the bill or to its
-payment, an accounting ``Payment.bill_id``, or a journal entry that names the
+payment, a bank-match decision line for the bill, an accounting ``Payment.bill_id``, or a journal entry that names the
 bill. The same settlement is often stored twice, so the cover is the largest
 of those readings, not their sum.
 """
@@ -46,6 +46,7 @@ def remaining_of(bill, cover: dict[int, Decimal]) -> Decimal | None:
 def confirmed_cover(db, organization_id: int) -> dict[int, Decimal]:
     """Settled amount per bill id, from links already stored. No provider call."""
     from ..models import BankTransaction, Bill, JournalEntry, Payment
+    from .bank_match_settlements import bank_match_settlements
     from .payment_evidence import accounting_payment_parts, is_accounting_payment
 
     payment_sum: dict[int, Decimal] = {}
@@ -86,6 +87,10 @@ def confirmed_cover(db, organization_id: int) -> dict[int, Decimal]:
         if pay is None or pay.organization_id != organization_id or not pay.bill_id:
             continue
         bank_via[pay.bill_id] = bank_via.get(pay.bill_id, Decimal("0")) + amount
+    # One bank row for many bills: each bill is covered by its own line, not the whole row.
+    for line in bank_match_settlements(db, organization_id, ("bill",)):
+        amount = abs(_d(line.amount))
+        bank_direct[line.entity_id] = bank_direct.get(line.entity_id, Decimal("0")) + amount
 
     journal_sum = _journal_cover(db, organization_id)
     cover: dict[int, Decimal] = {}

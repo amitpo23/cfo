@@ -24,6 +24,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
+from ..bank_match_settlements import MULTI_MATCH  # matched_entity_type when a row is explained by a decision
 from ..bank_reconciliation import BankTxnLite, DocLite, score_match
 from .filing import Txn, displayed_counterparty
 
@@ -37,7 +38,6 @@ CATEGORIES = {
     "cheque_discounting": "ניכיון צ׳קים (מימון)",
     "card_clearing": "סליקת כרטיסים",
 }
-MULTI_MATCH = "bank_match"  # matched_entity_type when a row is explained by a decision, not one document
 TOLERANCE = 1.00
 MAX_NOTE = 300
 MAX_DOCUMENTS = 200

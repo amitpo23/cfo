@@ -468,6 +468,17 @@ class BankMatchAction(BaseModel):
     note: str | None = Field(default=None, max_length=300)
 
 
+def _match_tables_or_error(db: Session) -> None:
+    """Before migration m50b2c3d4e5f the screen answers 503 with a message, not a 500."""
+    from ...services.bank_match_settlements import match_tables_ready
+    if not match_tables_ready(db):
+        raise DashboardError(
+            503, "migration_pending",
+            "מסך התאמת בנק עדיין לא הופעל בשרת הזה: טבלאות ההתאמה (migration m50b2c3d4e5f) לא הוחלו. "
+            "שאר המסכים עובדים כרגיל. ההפעלה דורשת גיבוי ואישור בעלים.",
+        )
+
+
 def _match_window(start: date | None, end: date | None):
     window_end = end or date.today()
     window_start = start or window_end.replace(day=1)
@@ -486,6 +497,7 @@ def bank_match(dashboard_id: int, start: date | None = None, end: date | None = 
     try:
         row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
         window_start, window_end = _match_window(start, end)
+        _match_tables_or_error(db)
     except DashboardError as exc:
         return _error(exc)
     report = load_report(db, row.primary_organization_id, window_start, window_end,
@@ -508,6 +520,7 @@ def bank_match_decide(dashboard_id: int, body: BankMatchAction,
     from ...services.dashboards.bank_match import decide
     try:
         row = service.get_dashboard(db, user, dashboard_id, allowed=service.EVIDENCE_ROLES)
+        _match_tables_or_error(db)
         result = decide(db, row.primary_organization_id, user.id, body.model_dump(exclude_none=True))
         db.commit()
     except DashboardError as exc:
@@ -885,6 +898,7 @@ def public_bank_match(slug: str, request: Request, start: date | None = None, en
         return error
     try:
         window_start, window_end = _match_window(start, end)
+        _match_tables_or_error(db)
     except DashboardError as exc:
         return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
     report = load_report(db, dashboard.primary_organization_id, window_start, window_end,

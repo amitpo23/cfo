@@ -28,6 +28,7 @@ from ..models import (
     TransactionType,
     Budget,
 )
+from .bank_match_settlements import bank_match_settlements
 
 
 class DashboardService:
@@ -530,6 +531,9 @@ class DashboardService:
                     BankTransaction.matched_entity_id.in_(invoice_ids),
                 ).all()
             }
+            matched_invoice_ids |= {
+                line.entity_id for line in bank_match_settlements(self.db, self.org_id, ("invoice",), invoice_ids)
+            }
 
         buckets = {
             "0_30": Decimal("0"),
@@ -647,6 +651,9 @@ class DashboardService:
                     BankTransaction.matched_entity_type == "bill",
                     BankTransaction.matched_entity_id.in_(bill_ids),
                 ).all()
+            }
+            matched_bill_ids |= {
+                line.entity_id for line in bank_match_settlements(self.db, self.org_id, ("bill",), bill_ids)
             }
 
         buckets = {"0_30": Decimal("0"), "31_60": Decimal("0"),
