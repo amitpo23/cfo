@@ -10,9 +10,13 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models import Bill, Organization
-from .financial_reports_service import FinancialReportsService
 from .financial_control_service import FinancialControlService
 from .ar_service import AccountsReceivableService
+
+
+def _fraction(percent):
+    """A percent (48.7) as the fraction Excel's 0.0% format expects (0.487). Missing stays empty."""
+    return None if percent is None else round(percent / 100, 4)
 
 
 class BankReportService:
@@ -36,10 +40,9 @@ class BankReportService:
         )
         company_name = org.name if org else "העסק"
 
-        reports = FinancialReportsService(self.db)
-        pl = reports.generate_profit_loss(
-            self.organization_id, period_start, today, compare_previous=False
-        )
+        # The same books figures /pnl shows for this range (cashflow.period).
+        from .dashboards.period_compare import books_pnl_summary
+        pl = books_pnl_summary(self.db, self.organization_id, period_start, today)
         # מקור אמת משותף עם מסך ה-KPI כדי שהמספרים יתאימו
         from .balance_snapshot import compute_balance_snapshot
         balance = compute_balance_snapshot(self.db, self.organization_id)
@@ -66,15 +69,7 @@ class BankReportService:
             "company_name": company_name,
             "generated_at": date.today().isoformat(),
             "period": {"start": period_start.isoformat(), "end": today.isoformat()},
-            "profit_loss": {
-                "total_revenue": float(pl.total_revenue or 0),
-                "total_expenses": float(pl.total_expenses or 0),
-                "gross_profit": float(pl.gross_profit or 0),
-                "gross_margin": float(pl.gross_margin or 0),
-                "operating_income": float(pl.operating_income or 0),
-                "net_income": float(pl.net_income or 0),
-                "net_margin": float(pl.net_margin or 0),
-            },
+            "profit_loss": pl,
             "balance_sheet": {
                 "total_assets": balance["total_assets"],
                 "total_current_assets": balance["current_assets"],
@@ -135,8 +130,9 @@ class BankReportService:
         def line(label: str, value, fmt: str = currency):
             nonlocal row
             ws.cell(row=row, column=1, value=label)
-            cell = ws.cell(row=row, column=2, value=value)
-            cell.number_format = fmt
+            cell = ws.cell(row=row, column=2, value="חסר" if value is None else value)
+            if value is not None:
+                cell.number_format = fmt
             row += 1
 
         pl = report["profit_loss"]
@@ -144,10 +140,10 @@ class BankReportService:
         line("סך הכנסות", pl["total_revenue"])
         line("סך הוצאות", pl["total_expenses"])
         line("רווח גולמי", pl["gross_profit"])
-        line("שולי רווח גולמי", pl["gross_margin"], percent)
+        line("שולי רווח גולמי", _fraction(pl["gross_margin"]), percent)
         line("רווח תפעולי", pl["operating_income"])
         line("רווח נקי", pl["net_income"])
-        line("שולי רווח נקי", pl["net_margin"], percent)
+        line("שולי רווח נקי", _fraction(pl["net_margin"]), percent)
         row += 1
 
         bs = report["balance_sheet"]

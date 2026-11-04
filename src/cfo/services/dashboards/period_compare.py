@@ -112,6 +112,33 @@ def books_months(db, organization_id: int, start: date, end: date, *, as_of: dat
     }
 
 
+def books_pnl_summary(db, organization_id: int, start: date, end: date, *, as_of: date | None = None) -> dict:
+    """The /pnl figures for a range, in the shape the bank report and executive panel show.
+
+    The net margin is a percent. Gross and operating profit are not separable
+    in the books, so they are null rather than a copy of the net.
+    """
+    books = books_months(db, organization_id, start, end, as_of=as_of)
+    totals = books["totals"]
+    revenue = totals["revenue"]["amount"]
+    costs = totals["costs"]["amount"]
+    net = totals["net"]["amount"]
+    margin = round(net / revenue * 100, 1) if net is not None and revenue else None
+    return {
+        "total_revenue": revenue,
+        "total_expenses": costs,
+        "gross_profit": None,
+        "gross_margin": None,
+        "operating_income": None,
+        "net_income": net,
+        "net_margin": margin,
+        "missing_label_he": totals["net"]["missing_label"] or totals["revenue"]["missing_label"],
+        "profit_claim": books["profit_claim"],
+        "partial_banner": books["partial_banner"],
+        "source": books["source"],
+    }
+
+
 def latest_books_month(db, organization_id: int, today: date, *, lookback_months: int = 24) -> dict:
     """The month every P&L screen opens on: this month if it has counted books, else the latest that has."""
     year, month = today.year, today.month

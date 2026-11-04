@@ -12,6 +12,28 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 
+NO_ACTUAL_HE = "אין ביצוע בפועל לחודש. הסטייה חסרה, לא 100%."
+
+
+def budget_panel(summary) -> Dict:
+    """Budget vs actual. With no actual there is no variance: חסר, not 100%."""
+    def row(category) -> Dict:
+        found = dict(vars(category))
+        if not found.get("actual_amount"):
+            found.update(actual_amount=None, variance=None, variance_percentage=None)
+        return found
+
+    known = bool(summary.total_actual)
+    return {
+        "total_budget": summary.total_budget,
+        "total_actual": summary.total_actual if known else None,
+        "total_variance": summary.total_variance if known else None,
+        "variance_percentage": summary.variance_percentage if known else None,
+        "missing_label_he": None if known else NO_ACTUAL_HE,
+        "categories": [row(c) for c in summary.categories],
+    }
+
+
 class ExecutiveDashboardService:
     def __init__(self, db: Session, organization_id: int = 1):
         self.db = db
@@ -50,18 +72,8 @@ class ExecutiveDashboardService:
 
     # 1. רווח והפסד
     def _profit_loss(self, start, end):
-        from .financial_reports_service import FinancialReportsService
-        pl = FinancialReportsService(self.db).generate_profit_loss(
-            self.organization_id, start, end, compare_previous=False
-        )
-        return {
-            "total_revenue": float(pl.total_revenue or 0),
-            "total_expenses": float(pl.total_expenses or 0),
-            "gross_profit": float(pl.gross_profit or 0),
-            "operating_income": float(pl.operating_income or 0),
-            "net_income": float(pl.net_income or 0),
-            "net_margin": float(pl.net_margin or 0),
-        }
+        from .dashboards.period_compare import books_pnl_summary
+        return books_pnl_summary(self.db, self.organization_id, start, end)
 
     # 2. פערי התאמת בנקים
     def _reconciliation(self, start, end):
@@ -83,13 +95,7 @@ class ExecutiveDashboardService:
         summary = BudgetService(
             self.db, organization_id=self.organization_id
         ).get_budget_vs_actual(end.year, end.month)
-        return {
-            "total_budget": summary.total_budget,
-            "total_actual": summary.total_actual,
-            "total_variance": summary.total_variance,
-            "variance_percentage": summary.variance_percentage,
-            "categories": [vars(c) for c in summary.categories],
-        }
+        return budget_panel(summary)
 
     # 5. בדיקת רווחיות
     def _profitability(self, start, end):

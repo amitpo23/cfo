@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import apiService from '../services/api';
 import { AgentPanel, FinanceCard, FinancePageShell, MetricCard } from './finance-ui';
+import { formatReportMoney } from './dailyReportsMoney';
 
 interface Props {
   darkMode?: boolean;
@@ -17,8 +18,9 @@ interface Panel {
   error?: string;
 }
 
-const fmt = (v: number) => `₪${Math.round(v || 0).toLocaleString()}`;
-const pct = (v: number) => `${((v || 0) * 100).toFixed(1)}%`;
+// Missing is חסר, never ₪0 or 0%. Percent values arrive as percents (48.7).
+const fmt = (v: number | null | undefined) => formatReportMoney(v);
+const percent = (v: number | null | undefined) => (v == null || Number.isNaN(v) ? 'חסר' : `${v.toFixed(1)}%`);
 
 const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
   const { data, isLoading } = useQuery({
@@ -88,10 +90,10 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
       }
       icon={Gauge}
       metrics={[
-        { label: 'רווח נקי', value: fmt(profitLoss.net_income || 0), tone: (profitLoss.net_income || 0) >= 0 ? 'emerald' : 'rose' },
+        { label: 'רווח נקי', value: fmt(profitLoss.net_income), tone: profitLoss.net_income == null ? 'slate' : profitLoss.net_income >= 0 ? 'emerald' : 'rose' },
         { label: 'תנועות לא מותאמות', value: String(unreconciledCount(bank)), tone: unreconciledCount(bank) > 0 ? 'amber' : 'emerald' },
-        { label: 'סטיית תקציב', value: `${(budget.variance_percentage || 0).toFixed(1)}%`, tone: (budget.variance_percentage || 0) < -5 ? 'rose' : 'blue' },
-        { label: 'עמלות', value: fmt(fees.total_fees || 0), tone: 'slate' },
+        { label: 'סטיית תקציב', value: percent(budget.variance_percentage), tone: budget.variance_percentage != null && budget.variance_percentage < -5 ? 'rose' : 'blue' },
+        { label: 'עמלות', value: fmt(fees.total_fees), tone: 'slate' },
       ]}
     >
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-4">
@@ -99,8 +101,8 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
           darkMode={darkMode}
           icon={TrendingUp}
           label="רווחיות"
-          value={fmt(profitLoss.total_revenue || 0)}
-          detail={`הוצאות: ${fmt(profitLoss.total_expenses || 0)}`}
+          value={fmt(profitLoss.total_revenue)}
+          detail={`הוצאות: ${fmt(profitLoss.total_expenses)}`}
           tone="emerald"
         />
         <MetricCard
@@ -108,15 +110,15 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
           icon={Building2}
           label="התאמות"
           value={String(unreconciledCount(bank))}
-          detail={`חשבוניות באיחור: ${fmt(bank.overdue_invoices_amount || 0)}`}
+          detail={`חשבוניות באיחור: ${fmt(bank.overdue_invoices_amount)}`}
           tone={unreconciledCount(bank) > 0 ? 'amber' : 'emerald'}
         />
         <MetricCard
           darkMode={darkMode}
           icon={Target}
           label="תקציב"
-          value={fmt(budget.total_actual || 0)}
-          detail={`תקציב: ${fmt(budget.total_budget || 0)}`}
+          value={fmt(budget.total_actual)}
+          detail={`תקציב: ${fmt(budget.total_budget)}`}
           tone="blue"
         />
         <MetricCard
@@ -135,8 +137,9 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
           {(d) => (<>
             <Row label="הכנסות" value={fmt(d.total_revenue)} />
             <Row label="הוצאות" value={fmt(d.total_expenses)} />
-            <Row label="רווח נקי" value={fmt(d.net_income)} warn={d.net_income < 0} />
-            <Row label="שולי רווח נקי" value={pct((d.net_margin || 0) / 100)} />
+            <Row label="רווח נקי" value={fmt(d.net_income)} warn={d.net_income != null && d.net_income < 0} />
+            {d.missing_label_he ? <div className="text-xs text-amber-700">{d.missing_label_he}</div> : null}
+            <Row label="שולי רווח נקי" value={percent(d.net_margin)} />
           </>)}
         </Card>
 
@@ -145,8 +148,8 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
           {(d) => (<>
             <Row label="תנועות לא מותאמות" value={String(unreconciledCount(d))}
               warn={unreconciledCount(d) > 0} />
-            <Row label="חשבוניות באיחור" value={fmt(d.overdue_invoices_amount ?? 0)} />
-            <Row label="תשלומים קרובים (14 י')" value={fmt(d.upcoming_bills_amount_14d ?? 0)} />
+            <Row label="חשבוניות באיחור" value={fmt(d.overdue_invoices_amount)} />
+            <Row label="תשלומים קרובים (14 י')" value={fmt(d.upcoming_bills_amount_14d)} />
           </>)}
         </Card>
 
@@ -156,7 +159,7 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
             Array.isArray(d) && d.length ? (
               <div className="space-y-1">
                 {d.slice(0, 5).map((a: any, i: number) => (
-                  <Row key={i} label={a.category_hebrew || a.category} value={fmt(a.actual_amount || 0)} warn />
+                  <Row key={i} label={a.category_hebrew || a.category} value={fmt(a.actual_amount)} warn />
                 ))}
               </div>
             ) : <div className="text-green-600 text-sm">אין חריגות תקציב</div>
@@ -168,8 +171,9 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
           {(d) => (<>
             <Row label="תקציב" value={fmt(d.total_budget)} />
             <Row label="ביצוע בפועל" value={fmt(d.total_actual)} />
-            <Row label="סטייה" value={`${(d.variance_percentage || 0).toFixed(1)}%`}
-              warn={(d.variance_percentage || 0) < -5} />
+            <Row label="סטייה" value={percent(d.variance_percentage)}
+              warn={d.variance_percentage != null && d.variance_percentage < -5} />
+            {d.missing_label_he ? <div className="text-xs text-amber-700">{d.missing_label_he}</div> : null}
           </>)}
         </Card>
 
@@ -180,7 +184,7 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
               <div className="space-y-1">
                 {d.items.slice(0, 5).map((it: any, i: number) => (
                   <Row key={i} label={it.name}
-                    value={`${pct((it.gross_margin || 0) / 100)} · ${fmt(it.revenue || 0)}`} />
+                    value={`${percent(it.gross_margin)} · ${fmt(it.revenue)}`} />
                 ))}
               </div>
             ) : <div className="text-gray-400 text-sm">אין נתוני רווחיות</div>
@@ -207,7 +211,7 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
         <Card icon={Percent} title="7. עמלות (בנק / אשראי / הלוואות)" panel={panels.fees}>
           {(d) => (<>
             <Row label="סך עמלות" value={fmt(d.total_fees)} warn={d.fees_pct_of_expenses > 5} />
-            <Row label="אחוז מההוצאות" value={`${(d.fees_pct_of_expenses || 0).toFixed(1)}%`} />
+            <Row label="אחוז מההוצאות" value={percent(d.fees_pct_of_expenses)} />
             {(d.by_type || []).map((t: any, i: number) => (
               <Row key={i} label={t.label} value={fmt(t.amount)} />
             ))}
@@ -251,7 +255,7 @@ const ExecutiveDashboard: React.FC<Props> = ({ darkMode }) => {
           },
           {
             title: 'המלצות לשיפור רווחיות',
-            text: `${fmt(fees.total_fees || 0)} בעמלות מזוהות. הסוכן בודק עמלות, חריגות תקציב ושחיקת מרווחים.`,
+            text: `${fmt(fees.total_fees)} בעמלות מזוהות. הסוכן בודק עמלות, חריגות תקציב ושחיקת מרווחים.`,
           },
         ]}
       />
