@@ -305,3 +305,76 @@ def test_refresh_all_audits_configuration_failure(client, fresh_org):
         assert audit.details["cost_credits"] == 20
     finally:
         db.close()
+
+
+def _seed_expired_without_accounts(org_id: int) -> None:
+    from cfo.database import SessionLocal
+    from cfo.models import Account, AccountType, BankConnection
+
+    db = SessionLocal()
+    try:
+        db.add_all([
+            BankConnection(
+                organization_id=org_id, connection_id=f"conn-live-{org_id}", bank_name="בנק פעיל",
+                provider_id="bank-a", status="ACTIVE",
+                last_refresh_at=datetime.utcnow() - timedelta(hours=2),
+            ),
+            BankConnection(
+                organization_id=org_id, connection_id=f"conn-dead-1-{org_id}", bank_name="בנק פג",
+                provider_id="bank-b", status="EXPIRED",
+            ),
+            BankConnection(
+                organization_id=org_id, connection_id=f"conn-dead-2-{org_id}", bank_name="בנק פג",
+                provider_id="bank-b", status="expired",
+            ),
+        ])
+        db.add(Account(
+            organization_id=org_id, name="Live", account_type=AccountType.BANK,
+            source="open_finance", external_id=f"open_finance:live-{org_id}",
+            open_finance_connection_id=f"conn-live-{org_id}", balance=100,
+            balance_as_of=datetime.utcnow() - timedelta(hours=2),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_status_hides_expired_connections_that_have_no_accounts(client, of_configured_org):
+    org_id = of_configured_org["org_id"]
+    _seed_expired_without_accounts(org_id)
+    body = client.get("/api/open-finance/status", headers=of_configured_org["headers"]).json()
+    assert [row["connection_id"] for row in body["connections"]] == [f"conn-live-{org_id}"]
+    assert body["count"] == 1
+    assert body["hidden_inactive_count"] == 2
+
+    shown = client.get(
+        "/api/open-finance/status", headers=of_configured_org["headers"],
+        params={"include_inactive": "true"},
+    ).json()
+    assert {row["connection_id"] for row in shown["connections"]} == {f"conn-live-{org_id}", f"conn-dead-1-{org_id}", f"conn-dead-2-{org_id}"}
+    assert {row["connection_id"]: row["inactive"] for row in shown["connections"]} == {
+        f"conn-live-{org_id}": False, f"conn-dead-1-{org_id}": True, f"conn-dead-2-{org_id}": True,
+    }
+
+
+def test_connections_list_hides_expired_connections_that_have_no_accounts(client, of_configured_org):
+    org_id = of_configured_org["org_id"]
+    _seed_expired_without_accounts(org_id)
+    body = client.get("/api/open-finance/connections", headers=of_configured_org["headers"]).json()
+    assert [row["connection_id"] for row in body["items"]] == [f"conn-live-{org_id}"]
+    assert body["hidden_inactive_count"] == 2
+
+
+def test_dashboard_provider_count_skips_expired_connections(of_configured_org):
+    from cfo.database import SessionLocal
+    from cfo.services.dashboards.provider_gate import provider_status
+
+    org_id = of_configured_org["org_id"]
+    _seed_expired_without_accounts(org_id)
+    db = SessionLocal()
+    try:
+        finance = provider_status(db, org_id)["open_finance"]
+    finally:
+        db.close()
+    assert finance["bank_connections"] == 1
+    assert finance["bank_connections_inactive"] == 2

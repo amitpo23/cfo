@@ -16,6 +16,17 @@ SUMIT_CONFIRMATION = "משוך מ-SUMIT"
 OPEN_FINANCE_CONFIRMATION = "רענן Open Finance"
 _CONNECTED_STATUSES = {"active", "env"}
 _BANK_CONNECTED = {"ACTIVE", "CONNECTED", "COMPLETED", "VALID"}
+_BANK_INACTIVE = {"EXPIRED", "REVOKED"}
+
+
+def bank_connection_inactive(bank) -> bool:
+    """A consent the provider expired or revoked. It no longer feeds bank data."""
+    return (bank.status or "").upper() in _BANK_INACTIVE
+
+
+def bank_connection_hidden(bank, accounts_count: int) -> bool:
+    """An inactive consent with no accounts behind it is noise on a screen, not a bank."""
+    return bank_connection_inactive(bank) and not accounts_count
 
 
 def sumit_quota(db) -> dict:
@@ -40,7 +51,8 @@ def provider_status(db, organization_id: int) -> dict:
     )
     finance_state = _integration_state(finance)
     finance_state["connected"] = finance_state["connected"] or any(_bank_connected(bank) for bank in banks)
-    finance_state["bank_connections"] = len(banks)
+    finance_state["bank_connections"] = sum(1 for bank in banks if not bank_connection_inactive(bank))
+    finance_state["bank_connections_inactive"] = sum(1 for bank in banks if bank_connection_inactive(bank))
     finance_state["last_refresh_at"] = _latest([bank.last_refresh_at for bank in banks])
     return {
         "organization_id": organization_id,
