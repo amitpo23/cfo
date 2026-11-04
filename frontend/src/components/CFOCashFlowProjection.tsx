@@ -71,6 +71,14 @@ const CFOCashFlowProjection: React.FC<Props> = ({ darkMode }) => {
   const outflow30 = sumKnown(first30.map((week) => flow(week.out)));
   const incomplete30 = first30.some((week) => (week.unknown ?? []).length > 0);
   const opening = data?.forecast?.opening?.amount ?? null;
+  // Today's opening is unknown when the bank balance is stale. The last booked
+  // balance is shown with its date instead, never as today's and never as 0.
+  const lines = data?.snapshot?.credit_lines?.accounts ?? [];
+  const lastBooked = opening == null && lines.length && lines.every((line) => line.balance != null)
+    ? { amount: lines.reduce((sum, line) => sum + (line.balance ?? 0), 0), as_of: lines.map((line) => line.as_of ?? '').sort()[0] || null }
+    : null;
+  /** A week with nothing known on either side has no net: חסר, not ₪0. */
+  const weekNet = (week: ForecastWeek) => (flow(week.in) == null && flow(week.out) == null ? null : week.net);
   const closing = weeks.length ? weeks[weeks.length - 1].closing : null;
   const missing = (data?.forecast?.missing ?? []).map((key) => MISSING_LABELS[key] ?? key);
 
@@ -107,7 +115,13 @@ const CFOCashFlowProjection: React.FC<Props> = ({ darkMode }) => {
         <div className={cardClass}>
           <p className={`text-sm ${muted}`}>יתרת פתיחה</p>
           <p className="mt-1 text-2xl font-bold">{formatReportMoney(opening)}</p>
-          <p className={`text-xs ${muted}`}>{data?.forecast?.opening?.as_of ? `נכון ל-${data.forecast.opening.as_of}` : 'חסר תאריך'}</p>
+          <p className={`text-xs ${muted}`}>
+            {data?.forecast?.opening?.as_of
+              ? `נכון ל-${data.forecast.opening.as_of}`
+              : lastBooked
+                ? `אין יתרה מהיום. אחרונה ידועה: ${formatReportMoney(lastBooked.amount)} נכון ל-${lastBooked.as_of ?? 'חסר'}`
+                : 'חסר תאריך'}
+          </p>
         </div>
         <div className={cardClass}>
           <p className={`text-sm ${muted}`}>כניסות צפויות (30 יום)</p>
@@ -163,8 +177,8 @@ const CFOCashFlowProjection: React.FC<Props> = ({ darkMode }) => {
                   <td className="px-2 py-2">{`${week.start.slice(8, 10)}.${week.start.slice(5, 7)}`}</td>
                   <td className="px-2 py-2 text-green-600">{formatReportMoney(flow(week.in))}</td>
                   <td className="px-2 py-2 text-red-600">{formatReportMoney(flow(week.out))}</td>
-                  <td className={`px-2 py-2 font-medium ${week.net != null && week.net < 0 ? 'text-red-600' : ''}`}>
-                    {formatReportMoney(week.net)}
+                  <td className={`px-2 py-2 font-medium ${weekNet(week) != null && (weekNet(week) ?? 0) < 0 ? 'text-red-600' : ''}`}>
+                    {formatReportMoney(weekNet(week))}
                   </td>
                   <td className={`px-2 py-2 font-bold ${week.closing != null && week.closing < 0 ? 'text-red-600' : ''}`}>
                     {formatReportMoney(week.closing)}
