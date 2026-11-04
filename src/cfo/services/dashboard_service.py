@@ -30,6 +30,69 @@ from ..models import (
 )
 
 
+_FORECAST_CACHE: dict[tuple[int, date], tuple[float, dict | None]] = {}
+_FORECAST_TTL_SECONDS = 120
+
+
+def published_cash_forecast(db, organization_id: int, today: date) -> dict | None:
+    """The 13-week forecast /cashflow/weekly serves. Cached briefly: one screen asks for it several times."""
+    import time
+    key = (organization_id, today)
+    hit = _FORECAST_CACHE.get(key)
+    if hit is not None and time.monotonic() - hit[0] < _FORECAST_TTL_SECONDS:
+        return hit[1]
+    from .dashboards.budget_fill import dashboard_for_org
+    from .dashboards.view_model import build_view, plan_payload
+    dashboard = dashboard_for_org(db, organization_id)
+    plan = plan_payload(db, dashboard.id) if dashboard is not None else None
+    view = build_view(db, organization_id, date(today.year, 1, 1), today, plan=plan)
+    forecast = view.get("cash_forecast")
+    _FORECAST_CACHE[key] = (time.monotonic(), forecast)
+    return forecast
+
+
+def _forecast_usable(forecast) -> bool:
+    if not isinstance(forecast, dict) or not forecast.get("weeks"):
+        return False
+    return forecast.get("status") in ("ready", "partial")
+
+
+def _weeks_from_forecast(forecast: dict, weeks: int, today: date) -> list:
+    """One row per week. A side with nothing known is None, never 0; past the horizon nothing is invented."""
+    rows = []
+    source_weeks = forecast.get("weeks") or []
+    for index in range(weeks):
+        if index >= len(source_weeks):
+            rows.append({
+                "week": (today + timedelta(weeks=index)).isoformat(),
+                "expected_inflows": None, "expected_outflows": None, "net_flow": None,
+                "cumulative_balance": None, "limit": None, "headroom": None,
+                "unknown": ["מעבר לאופק התחזית (13 שבועות)"], "source": "cash_forecast_13w",
+            })
+            continue
+        week = source_weeks[index]
+        inflow = week.get("in")
+        outflow = week.get("out")
+        inflow = None if not inflow else round(float(inflow), 2)
+        outflow = None if not outflow else round(abs(float(outflow)), 2)
+        net = week.get("net")
+        if inflow is None and outflow is None:
+            net = None
+        rows.append({
+            "week": week.get("start"),
+            "expected_inflows": inflow,
+            "expected_outflows": outflow,
+            "net_flow": net,
+            "cumulative_balance": week.get("closing"),
+            "limit": week.get("limit"),
+            "headroom": week.get("headroom"),
+            "unknown": week.get("unknown") or [],
+            "items": week.get("items") or [],
+            "source": "cash_forecast_13w",
+        })
+    return rows
+
+
 class DashboardService:
     def __init__(self, db: Session, organization_id: int):
         self.db = db
@@ -846,14 +909,19 @@ class DashboardService:
 
     # ===== Cash Flow Projection =====
 
-    def get_cashflow_projection(self, weeks: int = 12, scenario: str = "base") -> list:
+    def get_cashflow_projection(self, weeks: int = 12, scenario: str = "base",
+                                today: Optional[date] = None) -> list:
+        """Weekly expected flows for the next N weeks.
+
+        The 13-week forecast of /cashflow/weekly comes first: it carries loans,
+        payroll, cards, the operating run-rate and the budget rules, and keeps
+        cheque discounting as financing. Only an organization with no forecast
+        falls back to budget lines, then to open invoices and bills.
         """
-        Project cash flow for the next N weeks based on:
-        - Open invoices (expected collections by due date)
-        - Open bills (expected payments)
-        - Historical average for recurring items
-        """
-        today = date.today()
+        today = today or date.today()
+        forecast = published_cash_forecast(self.db, self.org_id, today)
+        if _forecast_usable(forecast):
+            return _weeks_from_forecast(forecast, weeks, today)
         budget_flows = self._budget_week_flows(today, weeks)
         cash_balance, _ = self._get_cash_balance()
         if budget_flows is not None:
