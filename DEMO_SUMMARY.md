@@ -28,11 +28,11 @@ This file contains no client figures. Every test uses made-up amounts.
 | 5 | Budget variance 100% when actual = 0 | **Done.** With no actual, the variance shows חסר, with a reason, in the total and per category. (b10ff59) |
 | 6 | Executive loads in ~10s | **Partly.** Insights are computed once instead of twice. Each panel returns `elapsed_ms`. Locally every panel is under 10 ms, so the prod slowness comes from data volume, and one read-only GET of `/api/dashboard/executive` on prod will show which panel is slow. No paid call was found: `generate_insights` is local, and OpenAI is used only by `get_ai_analysis`, which this screen doesn't call. (31a077d) |
 | 7 | One org's books are empty because its SUMIT sync never ran | **Diagnosed, not fixed** (needs GO). See below. |
-| 8 | Executive and bank report show 0 instead of חסר | **Done.** Missing amounts, ratios and percents show חסר. (b10ff59) |
+| 8 | Executive and bank report show 0 instead of חסר | **Done.** Missing amounts, ratios and percents show חסר on screen and in the bank Excel. The Excel also carries the checking lines and loans, reads the net bank flow from the right key (it used to write 0), and can't start a formula from an account name. (b10ff59, 809948b, 0f8c96e) |
 | 9 | Loans tile mixed with the credit line | **Done.** Loans are a separate figure, labelled "הלוואות (יתרה, בנפרד מהמסגרת)". The credit line is in the credit-lines table. (82fa07c) |
 | 10 | /cashflow opening/closing 0 and net 0 in weeks with inflows | **Done.** The old screen used `fmt(0)` on missing values. The new /cashflow shows חסר for an unknown opening or closing, and a week with nothing known on either side has net חסר, not ₪0. (9c1de16, 78e691b) |
 | 11 | Command Center bank 0/0 for the current month | **Done.** A month with no bank rows is חסר, not 0/0. (82fa07c) |
-| 12 | Prod bank data a week behind Financy | **Diagnosed, not fixed** (needs GO). See below. |
+| 12 | Prod bank data a week behind Financy | **Diagnosed. Code: an expired stored connection is now a named skip** (809948b). The data itself still needs GO. See below. |
 
 ## Diagnosis: books (7) and bank (12). Code reading only, nothing called.
 
@@ -40,16 +40,18 @@ This file contains no client figures. Every test uses made-up amounts.
 
 What the code does (`src/cfo/api/routes/cron.py::scheduled_sync_open_finance`):
 - Since the owner decision of 23.10, the 02:00 cron syncs nothing unless `OPEN_FINANCE_SCHEDULED_SYNC_ENABLED` is on. Since 26.10, `OPEN_FINANCE_SCHEDULED_SYNC_ORG_IDS` can name orgs that are synced anyway. **Any org not on that list has had no automatic bank sync since 23.10.** That matches data ending 26–28.10.
-- For an org on the list, `OpenFinanceConnector.fetch_bank_transactions` asks Financy only for the stored `connection_id` (`sync_engine.get_connector_for_org`, `creds["connection_id"]`). When a consent expires and the bank is reconnected, Financy issues a new connection id. If the stored id is the expired one, the sync returns nothing newer than the expiry, even though Financy has newer data under the new id. The six expired consents that P0-8 hides are what this looks like.
+- The cron sync **does not trigger a Financy refresh.** It only reads what Financy already holds: one accounts list plus the transactions list, paged, per org (`OpenFinanceConnector.fetch_accounts` / `fetch_bank_transactions`). Financy already has data to 3–4.11, so one read would bring it in.
+- The read covers only the org's stored `connection_id` (inside the encrypted `integration_connections.credentials_encrypted`, `sync_engine.get_connector_for_org`). When a consent expires and the bank is reconnected, Financy issues a new connection id. If the stored id is the expired one, the sync returns nothing newer than the expiry. The six expired consents that P0-8 hides are what this looks like.
+- **Code fix (809948b):** `_of_consent_gate` used to pass if *any* of the org's connections was ACTIVE. It now returns `skipped: stored_connection_not_active` when the stored connection is expired and a newer one is ACTIVE, so the next cron result names the cause instead of the feed going stale silently. Tests: `tests/test_bdo_of_stored_connection_gate.py`.
 
-To confirm on prod (read-only SELECTs, owner runs them or approves):
-1. `vercel env ls` / `/admin/cost-protection-status`: which org ids are in `OPEN_FINANCE_SCHEDULED_SYNC_ORG_IDS`.
-2. `SELECT organization_id, status, config->>'connection_id' FROM integration_connections WHERE source='open_finance';` compared with the ACTIVE connection ids on Financy's list (already known from the read-only audit).
-3. `SELECT * FROM sync_checkpoints WHERE source='open_finance' ORDER BY updated_at DESC;` for each org's last attempt and any `cooldown_until`.
+To confirm on prod (read-only, owner runs or approves):
+1. `/admin/cost-protection-status` or `vercel env ls`: which org ids are in `OPEN_FINANCE_SCHEDULED_SYNC_ORG_IDS`, and whether `OPEN_FINANCE_SCHEDULED_SYNC_ENABLED` is set. An old Vercel CLI shows encrypted values as empty, so the admin route is safer.
+2. `SELECT organization_id, connection_id, status, expiry_date, last_refresh_at FROM bank_connections WHERE source='open_finance' ORDER BY organization_id;` shows which consents are ACTIVE and which EXPIRED. The stored id is encrypted, so compare it through the cron result after this branch is deployed (`stored_connection_not_active`), or through an admin decrypt.
+3. `SELECT organization_id, entity_type, last_success_at, cooldown_until FROM sync_checkpoints WHERE source='open_finance' ORDER BY organization_id;` gives each org's last success and any cooldown.
 
-Fix after GO (no code change needed):
-- Point each org's stored `connection_id` at its ACTIVE Financy connection. This is a prod write, so it needs GO.
-- Add the org to `OPEN_FINANCE_SCHEDULED_SYNC_ORG_IDS`, or run one manual sync per org. Each sync is one refresh per connection. The read-only audit counted 4 ACTIVE connections, so it's about 4 refreshes plus their list calls, all inside the 20h gate. Financy's refresh-all route asks for the confirmation `I_CONFIRM_OPEN_FINANCE_REFRESH_20_CREDITS` (20 credits). Use per-connection refreshes instead.
+Fix after GO:
+- Point each org's stored `connection_id` at its ACTIVE Financy connection (the bind flow in `bank_coverage.py` writes `connection_id` + `of_connection_ids`). This is a prod write.
+- Then one manual sync per org, or add the org to `OPEN_FINANCE_SCHEDULED_SYNC_ORG_IDS`. Each sync costs list calls only (1 accounts call plus one transactions call per page; the number of pages depends on the rows since the last sync), no refresh credit, and stays inside the 20h gate. Do not use refresh-all (`I_CONFIRM_OPEN_FINANCE_REFRESH_20_CREDITS`). Financy already has the data.
 
 ### (7) One org's books are empty
 
@@ -59,14 +61,16 @@ What the code does:
 - The weekly pull runs with `pull_expenses=False`. Expenses in the filing queue don't come through that path.
 
 To confirm on prod (read-only):
-1. `SELECT id, organization_id, status, config FROM integration_connections WHERE source='sumit';` shows whether this org has an active row and whether its SUMIT company id is the expected one.
-2. `SELECT * FROM sync_checkpoints WHERE source='sumit' AND organization_id=<org>;`. No row means it never ran.
+1. `SELECT id, organization_id, status, config FROM integration_connections WHERE source='sumit';` shows whether this org has an active row. The SUMIT company id and key are in the encrypted `credentials_encrypted`, so checking that it is the expected company needs an admin decrypt.
+2. `SELECT entity_type, last_success_at, cooldown_until FROM sync_checkpoints WHERE source='sumit' AND organization_id=<org>;`. No row means it never ran.
 3. `SUMIT_ENV_CREDENTIAL_ORG_IDS` and `SUMIT_WEEKLY_PULL_ENABLED` in Vercel env.
 
 Fix after GO (owner only, cost-gated):
 - One manual SUMIT sync for this org. The code estimates **12 calls per org** (`SUMIT_WEEKLY_PULL_CALLS_PER_ORG`), against the test-track quota of 100/400 a month. Check `assert_paid_action_within_quota` and a fresh quota reading first. If the org uses env credentials, add its id to `SUMIT_ENV_CREDENTIAL_ORG_IDS`.
 
 ## What to avoid in the demo
+
+- **Both demo orgs' bank feeds are stale until (12) is fixed.** /cashflow will then show today's opening, closing and headroom as חסר in every week. That is correct, and the opening card shows the last booked balance with its date. Explain it as "no invented numbers", or run the GO steps above before 08:00.
 
 - /forecasting (open-documents view only). Use /cashflow.
 - The new bank-match screen (PR #103), unless it gets a GO.
