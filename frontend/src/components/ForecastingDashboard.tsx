@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { AlertCircle, Calendar, ChevronDown, Database, RefreshCw } from 'lucide-react';
 import api from '../services/api';
+import { PartialDataBanner } from './dashboardUi';
 
 interface ForecastComponent {
   source: string;
@@ -56,6 +57,7 @@ interface LiveForecastResponse {
   // חודש) — שורה אחת לכל הנחה שאכן הופעלה בתשובה הזו, לא רשימה גנרית.
   assumptions?: string[];
   message: string | null;
+  partial_banner?: { text_he?: string | null } | null;
 }
 
 // תיוג עברי למקורות הנתונים — מוצג כתגית "נכון לתאריך + מקורות" מעל התחזית,
@@ -113,6 +115,8 @@ const ForecastingDashboard: React.FC = () => {
           <option value={18}>18 חודשים</option>
         </select>
       </div>
+
+      <PartialDataBanner text={forecast?.partial_banner?.text_he} />
 
       {/* נכון לתאריך + מקורות נתונים */}
       {forecast && (

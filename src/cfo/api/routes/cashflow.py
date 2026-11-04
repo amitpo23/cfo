@@ -295,8 +295,11 @@ async def get_live_monthly_forecast(
     (AR/AP לפי due_date) + בסיס הוצאות חוזרות (ממוצע היסטורי). לא טבלת
     Transaction הקפואה. פירוק גלוי לכל חודש, honest-null כשאין נתונים.
     """
+    from ...services.dashboards.money_screens import org_partial_banner
     service = LiveForecastService(db, org_id)
-    return service.monthly_forecast(periods=periods)
+    result = service.monthly_forecast(periods=periods)
+    result["partial_banner"] = org_partial_banner(db, org_id)
+    return result
 
 
 # ============= Forecasting Endpoints =============
