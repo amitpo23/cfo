@@ -13,6 +13,7 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from ..models import BankTransaction, Invoice, Bill, Expense
+from .bank_match_settlements import assert_document_free, assert_not_decided
 
 
 class ManualReconciliationService:
@@ -35,11 +36,13 @@ class ManualReconciliationService:
             raise ValueError(f"Bank transaction {bank_txn_id} not found")
 
         self.assert_matchable(txn)
+        assert_not_decided(txn)
 
         # Validate entity exists
         entity = self.get_document(entity_type, entity_id)
         if not entity:
             raise ValueError(f"{entity_type} {entity_id} not found")
+        assert_document_free(self.db, self.organization_id, entity_type, entity_id)
 
         # Check amount tolerance (warn if mismatch but allow override)
         entity_amount = float(getattr(entity, "total", 0) or getattr(entity, "amount", 0) or 0)
@@ -64,6 +67,7 @@ class ManualReconciliationService:
             raise ValueError(f"Bank transaction {bank_txn_id} not found")
 
         self.assert_not_allocated(txn)
+        assert_not_decided(txn)
         self.clear_reconciled(txn)
         self.db.commit()
 

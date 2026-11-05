@@ -88,3 +88,20 @@ def bank_match_settlements(db, organization_id: int, entity_types: Iterable[str]
                    bank.transaction_date, bank.external_id)
         for line, bank in query.order_by(BankMatchDocument.id)
     ]
+
+
+def settled_document_keys(db, organization_id: int) -> set[tuple[str, int]]:
+    """(entity_type, entity_id) of every document a live decision settles. Suggesters skip these."""
+    return {(line.entity_type, line.entity_id) for line in bank_match_settlements(db, organization_id)}
+
+
+def assert_not_decided(txn) -> None:
+    """The older match paths may not clear or overwrite a decision. The match screen reopens it."""
+    if is_bank_match(txn):
+        raise ValueError("התנועה הוכרעה במסך התאמת בנק. שינוי או ביטול נעשים שם (פתיחה מחדש)")
+
+
+def assert_document_free(db, organization_id: int, entity_type: str, entity_id: int) -> None:
+    """A document a live decision settles cannot explain a second bank row."""
+    if entity_type in DOCUMENT_TYPES and bank_match_settlements(db, organization_id, (entity_type,), [entity_id]):
+        raise ValueError(f"המסמך {entity_type} #{entity_id} כבר מותאם לתנועת בנק במסך התאמת בנק")

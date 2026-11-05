@@ -171,6 +171,14 @@ def load_docs_for_org(db, organization_id: int) -> tuple[list[DocLite], list[Doc
                 name=getattr(r, "supplier_name", "") or getattr(r, "description", "") or "")
         for r in db.query(Expense).filter(Expense.organization_id == organization_id).all()
     ]
+    # A document an owner's bank-match decision settles is not offered again.
+    from .bank_match_settlements import settled_document_keys
+    settled = settled_document_keys(db, organization_id)
+    if settled:
+        invoices, bills, expenses = (
+            [doc for doc in docs if (doc.entity_type, doc.id) not in settled]
+            for docs in (invoices, bills, expenses)
+        )
     return invoices, bills, expenses
 
 

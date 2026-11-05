@@ -463,6 +463,13 @@ def synthesize_organization(db, organization_id: int) -> dict[str, Any]:
     invoice_rows = db.query(Invoice).filter(Invoice.organization_id == organization_id).all()
     bill_rows = db.query(Bill).filter(Bill.organization_id == organization_id).all()
     expense_rows = db.query(Expense).filter(Expense.organization_id == organization_id).all()
+    # Documents an owner's bank-match decision settles are explained: neither chased nor offered.
+    from .bank_match_settlements import settled_document_keys
+    settled = settled_document_keys(db, organization_id)
+    if settled:
+        invoice_rows = [r for r in invoice_rows if ("invoice", r.id) not in settled]
+        bill_rows = [r for r in bill_rows if ("bill", r.id) not in settled]
+        expense_rows = [r for r in expense_rows if ("expense", r.id) not in settled]
 
     invoices = [DocLite(id=r.id, entity_type="invoice", amount=float(r.total or 0),
                         date=r.issue_date or r.due_date, name=_rel_name(r, "contact"))

@@ -119,13 +119,18 @@ class FinancialControlService:
             BankTransaction.is_reconciled == False,  # noqa: E712
         ).order_by(BankTransaction.transaction_date.desc()).limit(limit).all()
 
+        from .bank_match_settlements import settled_document_keys
+        settled = settled_document_keys(self.db, self.organization_id)
         suggestions = []
         for bank_tx in bank_transactions:
-            candidates = self._candidate_matches(
-                bank_tx,
-                amount_tolerance=Decimal(str(amount_tolerance)),
-                date_tolerance_days=date_tolerance_days,
-            )
+            candidates = [
+                candidate for candidate in self._candidate_matches(
+                    bank_tx,
+                    amount_tolerance=Decimal(str(amount_tolerance)),
+                    date_tolerance_days=date_tolerance_days,
+                )
+                if (candidate.entity_type, candidate.entity_id) not in settled
+            ]
             suggestions.append(
                 asdict(
                     ReconciliationSuggestion(
@@ -169,6 +174,9 @@ class FinancialControlService:
         ).first()
         if not entity:
             raise ValueError(f"{entity_type} {entity_id} not found")
+        from .bank_match_settlements import assert_document_free, assert_not_decided
+        assert_not_decided(bank_tx)
+        assert_document_free(self.db, self.organization_id, entity_type, entity_id)
 
         bank_tx.matched_entity_type = entity_type
         bank_tx.matched_entity_id = entity_id
