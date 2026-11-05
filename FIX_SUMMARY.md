@@ -106,8 +106,11 @@ conftest forces a temporary SQLite DB.
 
 ## Remaining gaps (honest)
 
-1. **Account 10004 is not linked locally.** Nothing in the local DB ties a document to SUMIT account
-   10004:
+1. **Account 10004 is not linked in this matcher.** There is one local path that holds SUMIT chart
+   codes: `JournalEntry(source='reviewed_local_import')`, read by `dashboards/source_journal.py` with
+   `plan.journalAccountMap`. It exists only for import-only clients. **Next step:** read card sales from
+   10004 lines of that journal for those clients. Not implemented here. For synced clients, nothing ties a
+   document to 10004:
    - Journal entries are derived from our own chart.
    - SUMIT receipts are stored as `Payment.method='receipt'` without the card method.
 
@@ -127,6 +130,15 @@ conftest forces a temporary SQLite DB.
      generic lists.
    - A dedicated "clearing fee" UI is not built.
 4. `bank_query_service` keeps its own taxonomy (shape locked by tests). It only gained the card keyword.
+
+5. Gershayim: `כא"ל`/`שב"א` match the ASCII quote only. Bank text with ״ (U+05F4) won't match the
+   card rule for those two forms. The plain words (כאל, ישראכרט, מקס ...) do match.
+
+## Overlap with #103 (feat/simplify-b-bank-match)
+
+Both PRs change `bank_reconciliation.py`, `manual_reconciliation.py`, `financial_synthesis.py`
+and `bank_expense_gap.py`. Whichever merges second needs a rebase that keeps **both** B's
+settled-document rule and C's card-flow guards. Compare the files themselves, not the conflict count.
 
 ## GO notes
 
