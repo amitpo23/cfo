@@ -33,12 +33,14 @@ from typing import Any, Optional
 # טקסונומיית סיווג — קטגוריית Open Finance (main/sub) קודם, מילות מפתח
 # בתיאור כ-fallback.
 # --------------------------------------------------------------------- #
-CARD_SETTLEMENT_KEYWORDS = [
-    "ישראכרט", "isracard", "ויזה", "cal", "כאל", "מקס", "max",
-    "אמריקן אקספרס", "לאומי קארד", "diners",
-]
-CARD_SETTLEMENT_CATEGORY_SUB = {"CREDIT_CARD_CHECKING", "CREDIT_CARD"}
-CARD_SETTLEMENT_CATEGORY_MAIN = {"CREDIT_CARD"}
+# מילות חברות הכרטיסים וכלל הכיוון (נכנס=סליקה, יוצא=חיוב כרטיס) חיים
+# ב-card_flow_rules — מקור אחד גם להתאמת הבנק. התאמה כמילה שלמה.
+from .card_flow_rules import CARD_COMPANY_TERMS as CARD_SETTLEMENT_KEYWORDS  # noqa: E402
+from . import card_flow_rules as _card_rules  # noqa: E402
+from .card_flow_rules import (  # noqa: E402
+    CARD_CATEGORY_MAIN as CARD_SETTLEMENT_CATEGORY_MAIN,
+    CARD_CATEGORY_SUB as CARD_SETTLEMENT_CATEGORY_SUB,
+)
 
 TAX_KEYWORDS = [
     "מע\"מ", "מעמ", "מס הכנסה", "ביטוח לאומי", "רשות המסים",
@@ -157,26 +159,33 @@ def _money(amount: float, currency: str = "ILS") -> str:
     return f"{amount:,.2f} {symbol}"
 
 
-def classify_transaction(txn) -> str:
+def classify_transaction(txn, owner_aliases: Optional[list] = None) -> str:
     """מסווג תנועת בנק יוצאת (amount<0) לאחת מהקטגוריות:
-    card_settlement, tax_payment, salary, loan_or_finance, self_transfer,
-    bank_fee, other_excluded, או ברירת המחדל expense_candidate (הוצאה
-    אמיתית שצריכה מסמך). כשאין סיווג ברור — expense_candidate: עדיף
-    false-positive שייבדק מאשר החמצת הוצאה בלי מסמך.
+    card_settlement, owner_draw, tax_payment, salary, loan_or_finance,
+    self_transfer, bank_fee, other_excluded, או ברירת המחדל
+    expense_candidate (הוצאה אמיתית שצריכה מסמך). כשאין סיווג ברור —
+    expense_candidate: עדיף false-positive שייבדק מאשר החמצת הוצאה בלי מסמך.
 
-    תנועות נכנסות (amount>=0) אינן "הוצאה" מטבען — מוחזר other_excluded
-    כדי שקריאה שגויה על תנועת זיכוי לא תיספר בטעות כמועמדת-הוצאה."""
+    `owner_aliases`: כינויי הבעלים של הארגון (כמו כינויי intercompany) —
+    העברה אליהם היא חו"ז בעלים (owner_draw), לא הוצאה.
+
+    תנועות נכנסות (amount>=0) אינן "הוצאה": הפקדה מחברת כרטיסים היא
+    clearing_income (סליקה מול מכירות בכרטיס), וכל השאר other_excluded."""
     amount = float(getattr(txn, "amount", 0) or 0)
+    desc = getattr(txn, "description", None) or ""
     if amount >= 0:
+        if _card_rules.card_flow(desc, amount) == "clearing_income":
+            return "clearing_income"
         return "other_excluded"
 
-    desc = getattr(txn, "description", None) or ""
     cat_main = (_category_field(txn, "main") or "").upper()
     cat_sub = (_category_field(txn, "sub") or "").upper()
 
     if (cat_sub in CARD_SETTLEMENT_CATEGORY_SUB or cat_main in CARD_SETTLEMENT_CATEGORY_MAIN
-            or _contains_any(desc, CARD_SETTLEMENT_KEYWORDS)):
+            or _card_rules.card_flow(desc, amount) == "card_settlement"):
         return "card_settlement"
+    if _card_rules.is_owner_transfer(txn, owner_aliases):
+        return "owner_draw"
     if cat_main in TAX_CATEGORY_MAIN or _contains_any(desc, TAX_KEYWORDS):
         return "tax_payment"
     if cat_main in SALARY_CATEGORY_MAIN or _contains_any(desc, SALARY_KEYWORDS):
@@ -325,13 +334,16 @@ def gap_report(db, org_id: int, year: int, month: int) -> dict[str, Any]:
     undocumented_count = 0
     inflow_undocumented_total = 0.0
     inflow_undocumented_count = 0
+    clearing_total = 0.0
+    clearing_count = 0
 
     docs = _load_docs(db, org_id)
+    owner_aliases = _card_rules.owner_aliases_for_org(db, org_id)
     for t in rows:
         amount = float(t.amount or 0)
         if amount < 0:
             total_bank_outflow += abs(amount)
-            cls = classify_transaction(t)
+            cls = classify_transaction(t, owner_aliases)
             if cls != "expense_candidate":
                 bucket = excluded_by_class.setdefault(cls, {"count": 0, "total": 0.0})
                 bucket["count"] += 1
@@ -347,6 +359,7 @@ def gap_report(db, org_id: int, year: int, month: int) -> dict[str, Any]:
                 "category": {"main": _category_field(t, "main"), "sub": _category_field(t, "sub")},
                 "has_document": has_doc,
                 "matched_hint": match.get("hint") if match else None,
+                "counterparty": _card_rules.payee(t),
             })
             if has_doc:
                 documented_total += abs(amount)
@@ -354,6 +367,11 @@ def gap_report(db, org_id: int, year: int, month: int) -> dict[str, Any]:
                 undocumented_total += abs(amount)
                 undocumented_count += 1
         elif amount > 0:
+            # סליקה נטו מותאמת מול מכירות בכרטיס (N:1), לא מול חשבונית בודדת.
+            if classify_transaction(t) == "clearing_income":
+                clearing_count += 1
+                clearing_total += amount
+                continue
             if _find_invoice_match(db, org_id, t) is None:
                 inflow_undocumented_total += amount
                 inflow_undocumented_count += 1
@@ -378,6 +396,7 @@ def gap_report(db, org_id: int, year: int, month: int) -> dict[str, Any]:
         "inflows": {
             "undocumented_total": round(inflow_undocumented_total, 2),
             "undocumented_count": inflow_undocumented_count,
+            "clearing_income": {"count": clearing_count, "total": round(clearing_total, 2)},
         },
     }
 
@@ -413,15 +432,17 @@ def suppliers_missing_invoices(db, org_id: int, date_from: date, date_to: date) 
     unidentified_total = 0.0
     unidentified_txns: list[dict[str, Any]] = []
 
+    owner_aliases = _card_rules.owner_aliases_for_org(db, org_id)
     for t in rows:
-        if classify_transaction(t) != "expense_candidate":
+        if classify_transaction(t, owner_aliases) != "expense_candidate":
             continue
         if _find_document_match(db, org_id, t, docs=docs) is not None:
             continue
 
         amount = round(abs(float(t.amount or 0)), 2)
         txn_date = t.transaction_date
-        merchant = _merchant_name(t)
+        # נמען מ-Open Finance (merchant/payee/creditor) לפני נוסח התיאור.
+        merchant = _merchant_name(t) or _card_rules.payee(t)
         desc = t.description
 
         if merchant:
@@ -528,9 +549,10 @@ def scan_and_alert(db, org_id: int, lookback_days: int = 14) -> dict[str, int]:
             ins.resolved_at = datetime.utcnow()
             resolved += 1
 
+    owner_aliases = _card_rules.owner_aliases_for_org(db, org_id)
     for t in rows:
         scanned += 1
-        if classify_transaction(t) != "expense_candidate":
+        if classify_transaction(t, owner_aliases) != "expense_candidate":
             continue
         if _find_document_match(db, org_id, t, docs=docs) is not None:
             continue

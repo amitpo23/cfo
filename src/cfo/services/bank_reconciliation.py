@@ -26,6 +26,7 @@ class BankTxnLite:
     date: date
     description: str = ""
     is_provisional: bool = False
+    card_category: bool = False  # Open Finance tagged it a card charge
 
 
 @dataclass
@@ -56,16 +57,28 @@ def reconcile(
     date_window: int = 7,
     min_score: float = 0.5,
 ) -> dict[str, Any]:
-    """Return candidates; heuristic similarity is never a confirmed match."""
+    """Return candidates; heuristic similarity is never a confirmed match.
+
+    Card flows (card_flow_rules) are never offered 1:1: a card-company charge
+    needs no supplier document, and a clearing deposit is net of many sales.
+    They are listed under ``card_flows`` instead.
+    """
+    from .card_flow_rules import card_flow
+
     inflow_pool = list(invoices)
     outflow_pool = list(bills) + list(expenses or [])
     matches: list[Match] = []
+    card_flows: dict[str, list] = {"clearing_income": [], "card_settlement": []}
 
     # One receipt is offered against one document: the best score only.
     # A second invoice of the same amount does not become another candidate
     # of the same receipt. Two receipts may still both name one document;
     # that stays a review list and neither is confirmed.
     for txn in sorted(bank_txns, key=lambda t: abs(t.amount), reverse=True):
+        flow = card_flow(txn.description, txn.amount, txn.card_category)
+        if flow:
+            card_flows[flow].append(txn.id)
+            continue
         pool = inflow_pool if txn.amount > 0 else outflow_pool
         best: Optional[tuple[float, DocLite]] = None
         for doc in pool:
@@ -96,6 +109,7 @@ def reconcile(
             for tid in [t.id for t in bank_txns]
         ],
         "unmatched_docs": unmatched_docs,
+        "card_flows": {k: sorted(v, key=str) for k, v in card_flows.items()},
         "matched_count": 0,
         "candidate_count": len(matches),
         "txn_count": len(bank_txns),
@@ -175,6 +189,7 @@ def load_docs_for_org(db, organization_id: int) -> tuple[list[DocLite], list[Doc
 def reconcile_organization(db, organization_id: int, *, persist: bool = True) -> dict[str, Any]:
     """Load org rows, reconcile, and (optionally) persist matches."""
     from ..models import BankTransaction, Payment
+    from .card_flow_rules import has_card_category
 
     bank_rows = (
         db.query(BankTransaction)
@@ -185,6 +200,7 @@ def reconcile_organization(db, organization_id: int, *, persist: bool = True) ->
         BankTxnLite(
             id=r.id, amount=float(r.amount), date=r.transaction_date,
             description=r.description or "", is_provisional=bool(r.is_provisional),
+            card_category=has_card_category(r.raw_data),
         )
         for r in bank_rows
         if r.transaction_date is not None and not r.is_reconciled

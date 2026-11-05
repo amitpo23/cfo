@@ -28,6 +28,7 @@ from sqlalchemy import Integer, func, or_
 from sqlalchemy.orm import Session
 
 from ..models import Account, BankTransaction
+from .card_flow_rules import card_flow
 
 
 # --------------------------------------------------------------------- #
@@ -279,14 +280,18 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
 
 
 def _classify_bucket(txn: BankTransaction) -> str | None:
-    """Return an exclusion bucket name for an outgoing transaction, or None
+    """Card-company charges are matched by keyword too (card_flow_rules), so
+    an Isracard debit without the OF sub-category is not a missing document.
+
+    Return an exclusion bucket name for an outgoing transaction, or None
     if it doesn't match any known "explained" category (i.e. it's a
     missing-document candidate)."""
     desc = txn.description or ""
     cat_sub = (_category_sub(txn) or "").upper()
     cat_main = (_category_main(txn) or "").upper()
 
-    if cat_sub == CARD_SETTLEMENT_CATEGORY_SUB.upper():
+    if (cat_sub == CARD_SETTLEMENT_CATEGORY_SUB.upper()
+            or card_flow(desc, float(txn.amount or 0)) == "card_settlement"):
         return "card_settlement"
     if cat_main in CASH_CATEGORY_VALUES or cat_sub in CASH_CATEGORY_VALUES or _contains_any(desc, CASH_KEYWORDS):
         return "cash"
