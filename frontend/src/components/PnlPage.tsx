@@ -2,18 +2,22 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import api from '../services/api';
-import { PeriodCompareTable, PeriodControls, presetRange, type Grain, type PeriodCompare } from './PeriodCompare';
+import { PeriodCompareTable, PeriodControls, type Grain, type PeriodCompare } from './PeriodCompare';
 import { PartialDataBanner } from './dashboardUi';
+import { CumulativeTable, PnlChart } from './DailyPnl';
+import { periodQuery, pnlRange } from './periodDaily';
 
-const initial = presetRange('month');
+const initial = pnlRange('day');
 
 export default function PnlPage() {
-  const [grain, setGrain] = useState<Grain>('month');
+  const [grain, setGrain] = useState<Grain>('day');
   const [start, setStart] = useState(initial.start);
   const [end, setEnd] = useState(initial.end);
+  // One query. Chart, cumulative and period table all read report.data.
+  const query = periodQuery(grain, start, end);
   const report = useQuery({
-    queryKey: ['cashflow-period', grain, start, end],
-    queryFn: () => api.get<PeriodCompare>(`/cashflow/period?grain=${grain}&start=${start}&end=${end}`),
+    queryKey: query.queryKey,
+    queryFn: () => api.get<PeriodCompare>(query.url),
   });
   const slug = report.data?.dashboard_slug;
 
@@ -33,7 +37,7 @@ export default function PnlPage() {
           start={start}
           end={end}
           onGrain={(next) => {
-            const range = presetRange(next);
+            const range = pnlRange(next);
             setGrain(next);
             setStart(range.start);
             setEnd(range.end);
@@ -52,7 +56,11 @@ export default function PnlPage() {
         ].filter(Boolean).join(' ')}
       />
       {report.isError ? <p className="text-gray-600">אין רווח והפסד להצגה עד שנבחר ארגון פעיל.</p> : (
-        <PeriodCompareTable report={report.data ?? null} booksFirst />
+        <>
+          <PnlChart report={report.data ?? null} />
+          <CumulativeTable report={report.data ?? null} />
+          <PeriodCompareTable report={report.data ?? null} booksFirst />
+        </>
       )}
     </div>
   );
