@@ -183,6 +183,22 @@ class ManualReconciliationService:
             description=txn.description or "",
         )
 
+        # כלל מוצר (card_flow_rules): חיוב כרטיס לא מוצע מול ספק/הוצאה;
+        # הפקדת סליקה מוצעת מול סכום המכירות בכרטיס בחלון, עם עמלה.
+        from datetime import date as _date
+        from .card_flow_rules import card_flow, load_card_sales, match_clearing_deposit
+
+        flow = card_flow(txn_lite.description, txn_lite.amount)
+        if flow == "card_settlement":
+            return []
+        if flow == "clearing_income":
+            match = match_clearing_deposit(
+                abs(txn_lite.amount), txn_lite.date,
+                load_card_sales(self.db, self.organization_id), as_of=_date.today())
+            return [{"entity_type": "card_sales", "entity_id": None, "score": None,
+                     "amount": match["gross"], "date": txn_lite.date.isoformat(),
+                     "name": "מכירות בכרטיס אשראי", **match}]
+
         invoices, bills, expenses = load_docs_for_org(self.db, self.organization_id)
         candidates = []
 

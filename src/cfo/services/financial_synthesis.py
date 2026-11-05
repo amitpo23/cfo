@@ -110,9 +110,31 @@ def build_synthesis(
 
     # 1) Bank movements with no document.
     txn_by_id = {t.id: t for t in bank_txns}
+    card_settlements = set(recon["card_flows"]["card_settlement"])
+    clearing_deposits = set(recon["card_flows"]["clearing_income"])
     for txn_id in recon["unmatched_txns"]:
         t = txn_by_id.get(txn_id)
         if not t:
+            continue
+        # כללי card_flow_rules: חיוב כרטיס לא דורש חשבונית מס; סליקה נטו
+        # מותאמת מול סכום המכירות בכרטיס, עם עמלה.
+        if txn_id in card_settlements:
+            actions.append(_action(
+                "review_card_settlement", SEV_INFO,
+                f"Card company charge — {_money(abs(t.amount))}",
+                "Expense-card settlement: no tax invoice is required for the bank row. "
+                "Check it against the card statement; the purchases are documented per card line.",
+                amount=abs(t.amount), refs={"bank_txn_id": t.id},
+            ))
+            continue
+        if txn_id in clearing_deposits:
+            actions.append(_action(
+                "match_clearing_to_card_sales", SEV_MED,
+                f"Card clearing deposit — {_money(abs(t.amount))}",
+                "Net clearing deposit: match it to the card sales of the settlement window "
+                "and record the clearing fee (gross − net). Unknown gross leaves the fee missing.",
+                amount=abs(t.amount), refs={"bank_txn_id": t.id},
+            ))
             continue
         actions.append(_action(
             "review_bank_evidence", SEV_MED,
