@@ -28,6 +28,8 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
+from .bank_match_settlements import bank_match_settlements, is_bank_match
+
 
 # --------------------------------------------------------------------- #
 # טקסונומיית סיווג — קטגוריית Open Finance (main/sub) קודם, מילות מפתח
@@ -216,7 +218,11 @@ def _find_document_match(db, org_id: int, txn,
                          docs: Optional[tuple[list, list]] = None) -> Optional[dict[str, Any]]:
     """מוצא מסמך תואם לתנועה — ע"פ matched_entity_type/id קודם, ואז לפי
     סכום (±₪1) + טווח תאריכים (±7 ימים). מחזיר {"hint": ...} או None.
-    `docs`: תוצאת _load_docs לשימוש חוזר בין תנועות (אופציונלי)."""
+    `docs`: תוצאת _load_docs לשימוש חוזר בין תנועות (אופציונלי).
+    תנועה שהבעלים אישר במסך התאמת הבנק (כמה מסמכים, עמלה או קטגוריה)
+    מוסברת — אין מה לחפש לה מסמך."""
+    if is_bank_match(txn):
+        return {"hint": None}
     matched_type = getattr(txn, "matched_entity_type", None)
     if matched_type in ("bill", "expense"):
         from ..models import Bill, Expense
@@ -270,7 +276,7 @@ def has_document(db, org_id: int, txn) -> bool:
 
 def _find_invoice_match(db, org_id: int, txn) -> Optional[dict[str, Any]]:
     """כמו _find_document_match, אך לצד ההכנסות — Invoice מול תנועת זיכוי."""
-    if getattr(txn, "matched_entity_type", None) == "invoice":
+    if getattr(txn, "matched_entity_type", None) == "invoice" or is_bank_match(txn):
         return {"hint": None}
 
     txn_date = getattr(txn, "transaction_date", None)
@@ -327,11 +333,16 @@ def gap_report(db, org_id: int, year: int, month: int) -> dict[str, Any]:
     inflow_undocumented_count = 0
 
     docs = _load_docs(db, org_id)
+    # שורה שאושרה לפי קטגוריה (שכר, הלוואה, חו"ז בעלים...) — אין לה מסמך
+    # ואינה צריכה אחד. שורה שאושרה מול מסמכים — מתועדת.
+    with_documents = {line.bank_transaction_id for line in bank_match_settlements(db, org_id)}
     for t in rows:
         amount = float(t.amount or 0)
         if amount < 0:
             total_bank_outflow += abs(amount)
             cls = classify_transaction(t)
+            if cls == "expense_candidate" and is_bank_match(t) and t.id not in with_documents:
+                cls = "bank_match_category"
             if cls != "expense_candidate":
                 bucket = excluded_by_class.setdefault(cls, {"count": 0, "total": 0.0})
                 bucket["count"] += 1

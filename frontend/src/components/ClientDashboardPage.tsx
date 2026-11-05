@@ -18,6 +18,7 @@ import { DashboardFrame, DashboardLoginPrompt, DashboardSkeleton, EmptyState, Fi
 import { safeLoginHref } from './dashboardReturn';
 import { DASHBOARD_POLL_MS, revisionToken, shouldReloadView } from './dashboardLive';
 import TransferClassification from './TransferClassification';
+import BankMatch from './BankMatch';
 import { PeriodCompare, PeriodCompareTable, PeriodControls, isoDate, presetRange, type Grain } from './PeriodCompare';
 
 type CashMonth = {
@@ -1120,6 +1121,7 @@ export default function ClientDashboardPage() {
               ) : null}
               {tab === 'forecast' ? <ForecastPanel forecast={scoped.forecast} /> : null}
               {tab === 'classify' ? <TransferClassification dashboardId={editor?.id} slug={slugFromLocation()} /> : null}
+              {tab === 'match' ? <BankMatch dashboardId={editor?.id} slug={slugFromLocation()} start={rangeStart} end={rangeEnd} /> : null}
               {tab === 'budget' && editor ? (
                 <>
                   {filing ? (
@@ -1166,6 +1168,7 @@ const TABS = [
   { id: 'bva', label: 'תקציב מול ביצוע' },
   { id: 'forecast', label: 'תחזית' },
   { id: 'classify', label: 'סיווג העברות' },
+  { id: 'match', label: 'התאמת בנק' },
   { id: 'budget', label: 'תקציב ופרמטרים' },
 ] as const;
 

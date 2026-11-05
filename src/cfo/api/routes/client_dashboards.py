@@ -451,6 +451,93 @@ def accept_classification(dashboard_id: int, body: ClassificationWrite,
     return {"version": saved["version"], "rules": len(updated.get("statusRules") or []), "provider_calls": 0}
 
 
+class BankMatchDocumentRef(BaseModel):
+    entity_type: str
+    entity_id: int = Field(ge=1)
+
+
+class BankMatchAction(BaseModel):
+    transaction_id: int = Field(ge=1)
+    action: str
+    documents: list[BankMatchDocumentRef] | None = Field(default=None, max_length=200)
+    entity_type: str | None = None
+    entity_id: int | None = Field(default=None, ge=1)
+    fee: float | None = Field(default=None, ge=0)
+    category: str | None = Field(default=None, max_length=30)
+    target_account: str | None = Field(default=None, max_length=40)
+    note: str | None = Field(default=None, max_length=300)
+
+
+def _match_tables_or_error(db: Session) -> None:
+    """Before migration m50b2c3d4e5f the screen answers 503 with a message, not a 500."""
+    from ...services.bank_match_settlements import match_tables_ready
+    if not match_tables_ready(db):
+        raise DashboardError(
+            503, "migration_pending",
+            "מסך התאמת בנק עדיין לא הופעל בשרת הזה: טבלאות ההתאמה (migration m50b2c3d4e5f) לא הוחלו. "
+            "שאר המסכים עובדים כרגיל. ההפעלה דורשת גיבוי ואישור בעלים.",
+        )
+
+
+def _match_window(start: date | None, end: date | None):
+    window_end = end or date.today()
+    window_start = start or window_end.replace(day=1)
+    if window_start > window_end:
+        raise DashboardError(422, "bad_window", "טווח התאריכים הפוך")
+    if (window_end - window_start).days > 92:
+        raise DashboardError(422, "bad_window", "טווח התאמה עד 92 ימים")
+    return window_start, window_end
+
+
+@router.get("/dashboards/{dashboard_id}/bank-match")
+def bank_match(dashboard_id: int, start: date | None = None, end: date | None = None,
+               db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    """Bank rows against book documents, with the owner's אשר / בדיקה / חסר מסמך."""
+    from ...services.dashboards.bank_match import load_report
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=READ_ROLES)
+        window_start, window_end = _match_window(start, end)
+        _match_tables_or_error(db)
+    except DashboardError as exc:
+        return _error(exc)
+    report = load_report(db, row.primary_organization_id, window_start, window_end,
+                         view_model.plan_payload(db, row.id))
+    report["read_only"] = service.role_for(db, user, row) not in service.EVIDENCE_ROLES
+    if report["read_only"]:
+        report.pop("documents", None)  # the pick list is for the owner who decides
+    return report
+
+
+@router.post("/dashboards/{dashboard_id}/bank-match")
+def bank_match_decide(dashboard_id: int, body: BankMatchAction,
+                      db: Session = Depends(get_db_session), user: User = Depends(get_current_user)):
+    """One owner action on one bank row. Nothing is posted to SUMIT.
+
+    The decision, its documents and the bank row's match columns are written
+    in one transaction. Any failure rolls all of it back.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from ...services.dashboards.bank_match import decide
+    try:
+        row = service.get_dashboard(db, user, dashboard_id, allowed=service.EVIDENCE_ROLES)
+        _match_tables_or_error(db)
+        result = decide(db, row.primary_organization_id, user.id, body.model_dump(exclude_none=True))
+        db.commit()
+    except DashboardError as exc:
+        db.rollback()
+        return _error(exc)
+    except ValueError as exc:
+        db.rollback()
+        return _error(DashboardError(422, "invalid_match", str(exc)))
+    except IntegrityError:
+        db.rollback()
+        return _error(DashboardError(409, "match_conflict", "המסמך כבר מותאם לתנועת בנק אחרת"))
+    except Exception:
+        db.rollback()
+        raise
+    return {**result, "provider_calls": 0}
+
+
 @router.post("/dashboards/{dashboard_id}/snapshots", status_code=201)
 def publish_snapshot(dashboard_id: int, db: Session = Depends(get_db_session),
                      user: User = Depends(get_current_user)):
@@ -798,6 +885,26 @@ def public_unclassified(slug: str, request: Request, start: date | None = None, 
     plan = view_model.plan_payload(db, dashboard.id)
     report = load_queue(db, dashboard.primary_organization_id, window_start, window_end, plan)
     report["coverage_only"] = False
+    return _public_response(report)
+
+
+@public_router.get("/d/{slug}/bank-match")
+def public_bank_match(slug: str, request: Request, start: date | None = None, end: date | None = None,
+                      db: Session = Depends(get_db_session)):
+    """The match screen, read-only. Decisions are made by a signed-in owner. No provider call."""
+    from ...services.dashboards.bank_match import load_report
+    dashboard, error = _public_dashboard_or_error(slug, request, db)
+    if error is not None:
+        return error
+    try:
+        window_start, window_end = _match_window(start, end)
+        _match_tables_or_error(db)
+    except DashboardError as exc:
+        return _public_response({"error": {"code": exc.code, "message_he": exc.message_he}}, exc.status)
+    report = load_report(db, dashboard.primary_organization_id, window_start, window_end,
+                         view_model.plan_payload(db, dashboard.id))
+    report["read_only"] = True
+    report.pop("documents", None)
     return _public_response(report)
 
 

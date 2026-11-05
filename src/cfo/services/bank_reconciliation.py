@@ -163,12 +163,22 @@ def load_docs_for_org(db, organization_id: int) -> tuple[list[DocLite], list[Doc
                 name=_vendor_name(r))
         for r in db.query(Bill).filter(Bill.organization_id == organization_id).all()
     ]
+    # The bank pays an expense's total with VAT. ``amount`` is before VAT.
     expenses = [
-        DocLite(id=r.id, entity_type="expense", amount=float(getattr(r, "amount", 0) or 0),
+        DocLite(id=r.id, entity_type="expense",
+                amount=float(getattr(r, "total", 0) or getattr(r, "amount", 0) or 0),
                 date=getattr(r, "expense_date", None) or getattr(r, "date", None),
                 name=getattr(r, "supplier_name", "") or getattr(r, "description", "") or "")
         for r in db.query(Expense).filter(Expense.organization_id == organization_id).all()
     ]
+    # A document an owner's bank-match decision settles is not offered again.
+    from .bank_match_settlements import settled_document_keys
+    settled = settled_document_keys(db, organization_id)
+    if settled:
+        invoices, bills, expenses = (
+            [doc for doc in docs if (doc.entity_type, doc.id) not in settled]
+            for docs in (invoices, bills, expenses)
+        )
     return invoices, bills, expenses
 
 
@@ -240,3 +250,9 @@ def _contact_name(invoice) -> str:
 def _vendor_name(bill) -> str:
     vendor = getattr(bill, "vendor", None)
     return getattr(vendor, "name", "") if vendor else ""
+
+
+# Public names for callers outside this module (the bank match screen).
+score_match = _score
+contact_name = _contact_name
+vendor_name = _vendor_name

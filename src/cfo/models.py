@@ -2136,6 +2136,56 @@ class BankTransaction(Base):
     )
 
 
+class BankMatchDecision(Base):
+    """The owner's decision on one bank row: approved, check or missing_doc.
+
+    An approved row is explained by documents (``BankMatchDocument`` lines,
+    one or many) or by a category with a target account (owner current
+    account, payroll, loan, cheque discounting, card clearing). Nothing here
+    is posted to SUMIT.
+    """
+    __tablename__ = "bank_match_decisions"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    bank_transaction_id = Column(Integer, ForeignKey("bank_transactions.id"), nullable=False)
+    status = Column(String(20), nullable=False)  # approved | check | missing_doc
+    kind = Column(String(20), nullable=True)  # documents | category (approved only)
+    category = Column(String(30), nullable=True)
+    target_account = Column(String(40), nullable=True)
+    fee_amount = Column(Numeric(precision=12, scale=2), nullable=True)
+    note = Column(String(300), nullable=True)
+    decided_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    decided_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_bank_match_decision_txn", "organization_id", "bank_transaction_id", unique=True),
+    )
+
+
+class BankMatchDocument(Base):
+    """One document that explains part of an approved bank row.
+
+    ``amount`` is the document's signed effect on the bank: a sale invoice
+    is +, a sale credit note −, a supplier bill or expense −, a supplier
+    credit +. A document explains one bank row only.
+    """
+    __tablename__ = "bank_match_documents"
+
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    decision_id = Column(Integer, ForeignKey("bank_match_decisions.id", ondelete="CASCADE"), nullable=False)
+    bank_transaction_id = Column(Integer, ForeignKey("bank_transactions.id"), nullable=False)
+    entity_type = Column(String(20), nullable=False)
+    entity_id = Column(Integer, nullable=False)
+    amount = Column(Numeric(precision=12, scale=2), nullable=False)
+
+    __table_args__ = (
+        Index("ix_bank_match_document_entity", "organization_id", "entity_type", "entity_id", unique=True),
+        Index("ix_bank_match_document_decision", "decision_id"),
+    )
+
+
 class JournalEntry(Base):
     """Journal entry from accounting system"""
     __tablename__ = "journal_entries"

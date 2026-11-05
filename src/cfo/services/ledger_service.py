@@ -734,6 +734,22 @@ def contact_card(db, organization_id: int, contact_id: int, *,
                 "amount": round(-abs(_f(bt.amount)), 2),
             }))
 
+    # One bank row for many documents (bank-match screen): each document is
+    # settled by its own line, not the whole bank row. The line is signed on
+    # the bank (invoice +, credit note −, bill −, supplier credit +), so a
+    # card's movement is −line for an invoice and +line for a bill.
+    from .bank_match_settlements import bank_match_settlements
+    for entity_type, ids in (("invoice", invoice_ids), ("bill", bill_ids)):
+        for line in bank_match_settlements(db, organization_id, (entity_type,), ids):
+            if (line.entity_type, line.entity_id) in settled_docs or not _in_period(line.bank_date, start, end):
+                continue
+            raw_movements.append((line.bank_date, {
+                "type": "bank_settlement",
+                "document": line.bank_external_id or f"BANK-{line.bank_transaction_id}",
+                "description": "תקבול/תשלום בבנק (לא נרשם כתשלום)",
+                "amount": round(-line.amount if entity_type == "invoice" else line.amount, 2),
+            }))
+
     raw_movements.sort(key=lambda m: m[0] or date.max)
 
     movements = []
