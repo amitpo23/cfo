@@ -18,7 +18,10 @@ cards** (money out). So:
 | Bank row | Category | Meaning |
 |---|---|---|
 | amount > 0, card-company term | `clearing_income` | weekly net clearing deposit for card sales |
-| amount < 0, card-company term, or OF sub `CREDIT_CARD_CHECKING`/`CREDIT_CARD` | `card_settlement` | expense-card charge |
+| amount < 0, card-company term, or OF category `CREDIT_CARD_CHECKING`/`CREDIT_CARD` | `card_settlement` | expense-card charge |
+
+The OF category is honoured in every path: gap engine, `reconcile_organization`
+(`BankTxnLite.card_category`) and `suggest_matches`.
 
 The hypothesis in the brief ("take Max out of the card keyword list") was
 rejected on purpose. An outgoing Max card bill would then become
@@ -51,11 +54,14 @@ Card-company terms: מקס/max, ישראכרט/isracard, כאל/כא"ל/cal, ו�
   - No card sales in the window gives `status=missing`, `reason=no_card_sales_in_window`, `gross=None`,
     `fee=None`, with `as_of`. **Never 0.**
 - **Card-sale evidence (explicit only):**
-  - `Payment.method == "credit_card"`
-  - or a SUMIT invoice whose `raw_data.Payments[]` has `Type == "CreditCard"` (amount = the card part).
+  - a SUMIT invoice whose `raw_data.Payments[]` has `Type == "CreditCard"` (amount = the card part);
+  - or `Payment.method == "credit_card"` with no `bill_id`, so a vendor paid by card is not a sale.
+    A payment on an invoice already counted through its `Payments[]` is skipped, so nothing is
+    counted twice (tested).
 - It is never a confirmed match. It is a suggestion for review, as with the rest of reconcile.
 - Wired into:
-  - `suggest_matches()`: one `card_sales` suggestion carrying the result.
+  - `suggest_matches()`: one `card_sales` suggestion carrying the result, with `applyable: False`.
+    It is evidence for review; the apply path does not accept `card_sales`.
   - `reconcile()`: no 1:1 against an invoice, listed under `card_flows.clearing_income`.
   - Synthesis: `match_clearing_to_card_sales`.
   - `gap_report`: `inflows.clearing_income` with `{count, total}`. Clearing deposits are no longer counted as
@@ -96,6 +102,11 @@ Card-company terms: מקס/max, ישראכרט/isracard, כאל/כא"ל/cal, ו�
    10004:
    - Journal entries are derived from our own chart.
    - SUMIT receipts are stored as `Payment.method='receipt'` without the card method.
+
+   **Not verified:** the read-back shape of a SUMIT document's `Payments[]`. In code, `Type`/`Amount`
+   appear only on the create side (`_document_payment_payload`, cash/cheque). That a synced invoice's
+   `raw_data.Payments[]` carries `Type == "CreditCard"` is an assumption, and checking it needs one
+   SUMIT read (needs a GO).
 
    Until a SUMIT readback stores the income account or payment type, `load_card_sales` finds
    card sales only from the two explicit sources above. In production most clearing deposits will

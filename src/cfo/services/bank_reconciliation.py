@@ -26,6 +26,7 @@ class BankTxnLite:
     date: date
     description: str = ""
     is_provisional: bool = False
+    card_category: bool = False  # Open Finance tagged it a card charge
 
 
 @dataclass
@@ -74,7 +75,7 @@ def reconcile(
     # of the same receipt. Two receipts may still both name one document;
     # that stays a review list and neither is confirmed.
     for txn in sorted(bank_txns, key=lambda t: abs(t.amount), reverse=True):
-        flow = card_flow(txn.description, txn.amount)
+        flow = card_flow(txn.description, txn.amount, txn.card_category)
         if flow:
             card_flows[flow].append(txn.id)
             continue
@@ -188,6 +189,7 @@ def load_docs_for_org(db, organization_id: int) -> tuple[list[DocLite], list[Doc
 def reconcile_organization(db, organization_id: int, *, persist: bool = True) -> dict[str, Any]:
     """Load org rows, reconcile, and (optionally) persist matches."""
     from ..models import BankTransaction, Payment
+    from .card_flow_rules import has_card_category
 
     bank_rows = (
         db.query(BankTransaction)
@@ -198,6 +200,7 @@ def reconcile_organization(db, organization_id: int, *, persist: bool = True) ->
         BankTxnLite(
             id=r.id, amount=float(r.amount), date=r.transaction_date,
             description=r.description or "", is_provisional=bool(r.is_provisional),
+            card_category=has_card_category(r.raw_data),
         )
         for r in bank_rows
         if r.transaction_date is not None and not r.is_reconciled

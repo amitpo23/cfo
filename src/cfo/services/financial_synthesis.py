@@ -110,8 +110,9 @@ def build_synthesis(
 
     # 1) Bank movements with no document.
     txn_by_id = {t.id: t for t in bank_txns}
-    card_settlements = set(recon["card_flows"]["card_settlement"])
-    clearing_deposits = set(recon["card_flows"]["clearing_income"])
+    card_flows = recon.get("card_flows") or {}
+    card_settlements = set(card_flows.get("card_settlement") or [])
+    clearing_deposits = set(card_flows.get("clearing_income") or [])
     for txn_id in recon["unmatched_txns"]:
         t = txn_by_id.get(txn_id)
         if not t:

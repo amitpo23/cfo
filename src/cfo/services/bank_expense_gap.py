@@ -37,8 +37,10 @@ from typing import Any, Optional
 # ב-card_flow_rules — מקור אחד גם להתאמת הבנק. התאמה כמילה שלמה.
 from .card_flow_rules import CARD_COMPANY_TERMS as CARD_SETTLEMENT_KEYWORDS  # noqa: E402
 from . import card_flow_rules as _card_rules  # noqa: E402
-CARD_SETTLEMENT_CATEGORY_SUB = {"CREDIT_CARD_CHECKING", "CREDIT_CARD"}
-CARD_SETTLEMENT_CATEGORY_MAIN = {"CREDIT_CARD"}
+from .card_flow_rules import (  # noqa: E402
+    CARD_CATEGORY_MAIN as CARD_SETTLEMENT_CATEGORY_MAIN,
+    CARD_CATEGORY_SUB as CARD_SETTLEMENT_CATEGORY_SUB,
+)
 
 TAX_KEYWORDS = [
     "מע\"מ", "מעמ", "מס הכנסה", "ביטוח לאומי", "רשות המסים",

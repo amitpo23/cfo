@@ -360,3 +360,60 @@ def test_gap_report_uses_saved_owner_filing_rule(fresh_org):
 @pytest.mark.parametrize("desc", ["מקס סטוק", "MAX STOCK"])
 def test_retail_chain_named_max_is_not_a_card_company(desc):
     assert rules.card_flow(desc, -80) is None
+
+
+def test_card_sales_ignore_vendor_card_payments_and_do_not_double_count(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        bill = Bill(organization_id=org_id, bill_number="B-2", status=BillStatus.PAID,
+                    issue_date=TODAY, total=Decimal("300"))
+        inv = Invoice(organization_id=org_id, invoice_number="INV-2", status=InvoiceStatus.PAID,
+                      issue_date=TODAY - timedelta(days=2), total=Decimal("500"),
+                      subtotal=Decimal("500"), tax=Decimal("0"), balance=Decimal("0"),
+                      raw_data={"Payments": [{"Type": "CreditCard", "Amount": 500}]})
+        db.add_all([bill, inv])
+        db.flush()
+        db.add(Payment(organization_id=org_id, bill_id=bill.id, amount=Decimal("300"),
+                       method="credit_card", payment_date=TODAY))
+        db.add(Payment(organization_id=org_id, invoice_id=inv.id, amount=Decimal("500"),
+                       method="credit_card", payment_date=TODAY - timedelta(days=2)))
+        db.commit()
+        sales = rules.load_card_sales(db, org_id)
+        assert sum(s.amount for s in sales) == 500.0
+    finally:
+        db.close()
+
+
+def test_suggest_matches_of_card_category_without_keyword_offers_no_bill(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        db.add(Bill(organization_id=org_id, bill_number="B-3", status=BillStatus.RECEIVED,
+                    issue_date=TODAY, total=Decimal("1500")))
+        txn = _db_txn(db, org_id, -1500, "חיוב חודשי",
+                      raw={"category": {"main": "INCOMES_EXPENSES", "sub": "CREDIT_CARD_CHECKING"}})
+        db.commit()
+        assert ManualReconciliationService(db, org_id).suggest_matches(txn.id) == []
+    finally:
+        db.close()
+
+
+def test_reconcile_honours_of_card_category_without_keyword():
+    txns = [BankTxnLite(id=4, amount=-1500.0, date=D, description="חיוב חודשי",
+                        card_category=True)]
+    bills = [DocLite(id=7, entity_type="bill", amount=1500.0, date=D, name="x")]
+    out = reconcile(txns, [], bills)
+    assert out["candidates"] == []
+    assert out["card_flows"]["card_settlement"] == [4]
+
+
+def test_clearing_suggestion_is_not_applyable(fresh_org):
+    org_id = fresh_org()["org_id"]
+    db = SessionLocal()
+    try:
+        txn = _db_txn(db, org_id, 980, "מקס איט פיננסים")
+        db.commit()
+        assert ManualReconciliationService(db, org_id).suggest_matches(txn.id)[0]["applyable"] is False
+    finally:
+        db.close()

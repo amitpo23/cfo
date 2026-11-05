@@ -58,8 +58,12 @@ def mentions_card_company(text: Optional[str]) -> bool:
     return bool(_CARD_RE.search(text))
 
 
-def card_flow(description: Optional[str], amount: float) -> Optional[str]:
-    """``clearing_income`` / ``card_settlement`` / None לפי כיוון ותיאור."""
+def card_flow(description: Optional[str], amount: float,
+              card_category: bool = False) -> Optional[str]:
+    """``clearing_income`` / ``card_settlement`` / None לפי כיוון ותיאור.
+    `card_category`: קטגוריית Open Finance של חיוב כרטיס — חיוב יוצא גם בלי מילת מפתח."""
+    if card_category and amount < 0:
+        return "card_settlement"
     if not mentions_card_company(description):
         return None
     if amount > 0:
@@ -67,6 +71,20 @@ def card_flow(description: Optional[str], amount: float) -> Optional[str]:
     if amount < 0:
         return "card_settlement"
     return None
+
+
+CARD_CATEGORY_SUB = {"CREDIT_CARD_CHECKING", "CREDIT_CARD"}
+CARD_CATEGORY_MAIN = {"CREDIT_CARD"}
+
+
+def has_card_category(raw) -> bool:
+    """קטגוריית Open Finance (main/sub) של חיוב כרטיס אשראי."""
+    cat = raw.get("category") if isinstance(raw, dict) else None
+    if not isinstance(cat, dict):
+        return False
+    main = str(cat.get("main") or "").upper()
+    sub = str(cat.get("sub") or "").upper()
+    return sub in CARD_CATEGORY_SUB or main in CARD_CATEGORY_MAIN
 
 
 def payee(row) -> Optional[str]:
@@ -186,10 +204,7 @@ def load_card_sales(db, organization_id: int) -> list[CardSale]:
     from ..models import Invoice, Payment
 
     sales: list[CardSale] = []
-    for p in db.query(Payment).filter(Payment.organization_id == organization_id,
-                                      Payment.method == "credit_card").all():
-        if p.payment_date and p.amount:
-            sales.append(CardSale(id=f"payment:{p.id}", amount=float(p.amount), date=p.payment_date))
+    invoices_counted: set[int] = set()
     for inv in db.query(Invoice).filter(Invoice.organization_id == organization_id).all():
         raw = inv.raw_data if isinstance(inv.raw_data, dict) else {}
         pays = raw.get("Payments") if isinstance(raw.get("Payments"), list) else []
@@ -198,4 +213,13 @@ def load_card_sales(db, organization_id: int) -> list[CardSale]:
         when = inv.issue_date or inv.due_date
         if card > 0 and when:
             sales.append(CardSale(id=f"invoice:{inv.id}", amount=round(card, 2), date=when))
+            invoices_counted.add(inv.id)
+    # תקבול בכרטיס בלבד (לא תשלום לספק בכרטיס), ולא פעמיים מול חשבונית שכבר נספרה.
+    for p in db.query(Payment).filter(Payment.organization_id == organization_id,
+                                      Payment.method == "credit_card",
+                                      Payment.bill_id.is_(None)).all():
+        if p.invoice_id in invoices_counted:
+            continue
+        if p.payment_date and p.amount:
+            sales.append(CardSale(id=f"payment:{p.id}", amount=float(p.amount), date=p.payment_date))
     return sales
