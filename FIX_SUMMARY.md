@@ -1,7 +1,7 @@
 # Simplify C — Max clearing ↔ card sales, expense-card charges (FIX_SUMMARY)
 
 Branch: `feat/simplify-c-max-card-rules` · base: `e961c65` (#102, Simplify A on main)
-HEAD: see the "HEAD" line at the bottom (updated after the last commit).
+HEAD (code): `bcfd1f7`. This FIX_SUMMARY update is the commit after it.
 
 Scope: C only. A is on main; B (#103) stays on `feat/simplify-b-bank-match`.
 No migration, no prod, no SUMIT/Open Finance calls, no frontend change.
@@ -91,10 +91,18 @@ Card-company terms: מקס/max, ישראכרט/isracard, כאל/כא"ל/cal, ו�
 
 ## Tests
 
-- New: `tests/test_card_flow_rules.py`, 45 tests on synthetic data only. Every one was watched red before
+Run locally (GitHub CI is billing-blocked). The test env is cleared of the shell's Vercel variables;
+conftest forces a temporary SQLite DB.
+
+- New: `tests/test_card_flow_rules.py`, 49 tests on synthetic data only. Every one was watched red before
   the code was written.
-- Targeted suites with the related modules: see the results below.
-- Full suite, base vs HEAD: see the results below.
+- Related suites (card_flow_rules, bank_expense_gap, bank_reconciliation, financial_synthesis,
+  manual_reconciliation ×2, bank_query_service, owner_presentation, ai_chat_tools): **204 passed**.
+- Full suite, each run in its own clean worktree:
+  - base `e961c65`: **45 failed, 3,553 passed, 10 skipped**
+  - HEAD `bcfd1f7`: **45 failed, 3,602 passed, 10 skipped**
+  - The set of failed tests is **identical by name**. No new failure; +49 are the new tests.
+- Frontend not touched, so `tsc` is not needed.
 
 ## Remaining gaps (honest)
 
