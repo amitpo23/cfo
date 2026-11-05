@@ -1,7 +1,7 @@
 # Simplify F: daily skills, summary
 
 - Branch: `feat/simplify-f-daily-skills`, based on `e961c65` (#102)
-- Content commit: `0b40ecc` (red test: `991af75`)
+- Content commits: `0b40ecc` + review fixes `18a2b6e` (red test: `991af75`)
 - Not merged. No deploy, no migration, no SUMIT/OF calls.
 
 ## Skills (`.agents/skills/`, same tree as `rezef-operator`)
@@ -9,8 +9,8 @@
 | id | path | gate |
 |---|---|---|
 | `daily-file` | `.agents/skills/daily-file/SKILL.md` | Wraps `sumit-file-expenses`; Amit's GO for every final save; `scripts/sumit_daily_file_expenses.js` named as forbidden |
-| `daily-bank-match` | `.agents/skills/daily-bank-match/SKILL.md` | Local only; ends "balanced" (unmatched=0 and gap `undocumented_count`=0) or a blocked list with one fixed reason per row |
-| `of-accounts-sync` | `.agents/skills/of-accounts-sync/SKILL.md` | Admin, owner-requested per run, 20h check via `/api/sync/runs`; `allow_implicit_invocation: false`; refresh-all (20 credits) kept out |
+| `daily-bank-match` | `.agents/skills/daily-bank-match/SKILL.md` | Local only. "Balanced" means gap out+in `undocumented_count`=0 and every unmatched row either matched or given a reason; `no_document_expected:<class>` does not block. Matches are proposed and wait for confirmation until #103 |
+| `of-accounts-sync` | `.agents/skills/of-accounts-sync/SKILL.md` | Admin, owner-requested per run. Full sync without `entity_types`. 20h check through `/api/sync/runs`, and any attempt counts, `failed` included. `allow_implicit_invocation: false`. refresh-all (20 credits) is kept out |
 | `daily-pnl-cash` | `.agents/skills/daily-pnl-cash/SKILL.md` | One `GET /api/cashflow/period?grain=day` call: today = `periods[-1]`, MTD = `totals`; source + as-of on every figure; חסר instead of 0 |
 
 Routing: `rezef-operator` gets a "Daily loop" table (file → match → optional OF sync → pnl-cash).
@@ -33,7 +33,10 @@ change touches no `src/`); the known baseline on main is 45 failures.
 
 1. **`POST /api/sync/run` has no admin gate and no 20h gate.** Only a 15-minute
    cooldown. The 20h interval is enforced in cron and in `connections/refresh-all`.
-   The skill enforces both rules, but code does not. A real fix belongs in
+   The skill enforces both rules, but code does not. Also, a run with `entity_types`
+   does not advance the `__source__` checkpoint that cron reads, so a subset sync is
+   invisible to the cron and could be spent twice. The skill therefore runs a full
+   sync (OF's non-bank fetchers make no network call). A real fix belongs in
    `cfo_sync.trigger_sync` (separate PR).
 2. **Loop order versus "no contradictory numbers".** Running the OF sync after
    matching brings in unmatched rows. The skills keep the order Amit asked for and
@@ -47,4 +50,10 @@ change touches no `src/`); the known baseline on main is 45 failures.
    payload is BOOKED only. The skill labels each count with its source.
 6. **Card/Max (#105) and 1:N (#103) are not on main.** They appear as blocked reasons
    (`card_settlement`, `split_payment_1_to_n`) until those PRs merge.
-7. **org 6 (D)** is blocked; the skills forbid inventing credentials.
+7. **On main, `match_transaction` doesn't check whether the document is already matched**
+   to another bank row (#103 adds `assert_document_free`). Until #103 merges, the
+   skill proposes matches and writes only after confirmation.
+8. **`/unmatched` doesn't return a classification class per row.** The class
+   (`no_document_expected:<class>`) comes from the description, cross-checked against
+   the counts in `excluded_by_class`; anything unclear → `unclassified`.
+9. **org 6 (D)** is blocked; the skills forbid inventing credentials.
