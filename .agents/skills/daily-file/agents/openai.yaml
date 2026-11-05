@@ -1,0 +1,6 @@
+interface:
+  display_name: "Daily File"
+  short_description: "Morning SUMIT expense-queue filing (wraps sumit-file-expenses)"
+  default_prompt: "Use $daily-file to count the SUMIT intake queue and run the approved filing runbook after Amit's explicit GO."
+policy:
+  allow_implicit_invocation: true

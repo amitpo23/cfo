@@ -1,0 +1,6 @@
+interface:
+  display_name: "Open Finance Accounts Sync"
+  short_description: "Admin-only, owner-requested OF accounts+transactions pull before the report"
+  default_prompt: "Use $of-accounts-sync only when Amit explicitly asked for an Open Finance sync for this run; check the 20h gate first."
+policy:
+  allow_implicit_invocation: false

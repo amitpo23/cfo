@@ -1,0 +1,6 @@
+interface:
+  display_name: "Daily Bank Match"
+  short_description: "Match the month's bank rows until balanced or blocked with reasons"
+  default_prompt: "Use $daily-bank-match to match this month's bank transactions and end with balanced or an explicit blocked list."
+policy:
+  allow_implicit_invocation: true

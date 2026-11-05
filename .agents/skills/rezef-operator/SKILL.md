@@ -35,6 +35,22 @@ references it routes to.
   `docs/REZEF_OPERATING_SYSTEM.md`.
 - Implementation priority: the active gate in `docs/MASTER_EXECUTION_PLAN.md`.
 
+## Daily loop (once a day, per organization)
+
+Run these skills in this order. Each one ends with a report whose figures
+carry a source and an `as_of`, and shows unknown values as חסר, never 0.
+
+| # | Skill | When | Gate |
+|---|---|---|---|
+| 1 | `daily-file` | Morning | Amit's explicit GO for every final save. Wraps `sumit-file-expenses` |
+| 2 | `daily-bank-match` | After filing | Local only. Ends balanced or with a blocked list, one reason per row |
+| 3 | `of-accounts-sync` | Optional, before the report | Admin, Amit asked for this run, last OF attempt ≥20h old, full sync. Never scheduled |
+| 4 | `daily-pnl-cash` | After matching | One `/api/cashflow/period` call. Day + month to date |
+
+If step 3 brought in new bank transactions, run step 2 again before step 4.
+The read-only freshness check (step 1 of
+`docs/bookkeeper_kb/00-role-and-daily-order.md`) is not a sync.
+
 ## Work in this order
 
 1. Identify the source of truth, organization, period and `as_of`.
