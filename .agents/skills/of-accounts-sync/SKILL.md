@@ -23,20 +23,26 @@ description: Optional slot in Rezef's daily loop, right before the P&L/cash repo
 ב-main, `POST /api/sync/run` אוכף רק cooldown של 15 דקות. שער 20 השעות
 (`of_sync_min_interval_hours`) נאכף ב-cron וב-`connections/refresh-all`, לא כאן.
 
-1. `GET /api/sync/runs?limit=20` → הריצה האחרונה עם `source == "open_finance"` ו-
-   `status` ב-`completed`/`partial`.
-2. `finished_at` לפני פחות מ-20 שעות → **עצירה**. מדווחים "נמשך ב-<finished_at>, הבא
-   מותר אחרי <finished_at + 20h>" וממשיכים ל-`daily-pnl-cash` עם הנתונים הקיימים.
+1. `GET /api/sync/runs?limit=100` → הריצה האחרונה עם `source == "open_finance"`,
+   **בכל סטטוס**, כולל `failed`. ריצה שנכשלה כבר צרכה קריאות. אם ב-100 הריצות האחרונות
+   אין אף ריצת `open_finance`, כותבים זאת ולא מסיקים "מעולם לא רץ".
+2. `started_at` של הריצה הזו לפני פחות מ-20 שעות → **עצירה**. מדווחים "ניסיון אחרון
+   ב-<started_at>, הבא מותר אחרי <started_at + 20h>", וממשיכים ל-`daily-pnl-cash` עם
+   הנתונים הקיימים.
 3. אם יש הרשאת SUPER_ADMIN: `GET /api/admin/cost-protection-status` →
    `open_finance.sync_min_interval_hours`. אם הערך גבוה מ-20, עובדים לפיו.
 
 ## הריצה
 
 ```
-POST /api/sync/run?source=open_finance&entity_types=accounts,bank_transactions
+POST /api/sync/run?source=open_finance
 ```
 
-- `accounts` לפני `bank_transactions` (הקוד מוסיף אותו אם חסר — `ensure_open_finance_accounts`).
+- **בלי `entity_types`.** ריצה עם `entity_types` לא מעדכנת את ה-checkpoint
+  (`__source__`) שה-cron בודק (`sync_engine.run_full_sync`). אז ה-cron של הארגונים
+  שברשימה עלול לסנכרן שוב בתוך פחות מ-20 שעות. ריצה מלאה ל-Open Finance עולה אותו
+  דבר: שאר הישויות (לקוחות, חשבוניות וכו') מוחזרות ריקות בלי קריאת רשת
+  (`open_finance_connector.py`). בפועל נמשכים `accounts` ו-`bank_transactions`.
 - ריצה אחת. 429 (cooldown) או כישלון → עצירה ודיווח. **אין ניסיון חוזר** באותו יום.
 - אחרי הריצה: `GET /api/sync/runs?limit=5` → `status`, `counts`, `error_summary`.
 
@@ -69,3 +75,4 @@ OF sync <ארגון> · as-of <YYYY-MM-DD HH:MM>
 - לעקוף את שער 20 השעות, לנסות שוב אחרי 429, או לשנות env/דגלים.
 - להירשם לשירות בתשלום, ליצור חיבור/consent חדש, או להמציא credentials (למשל org 6).
 - להפוך משיכה שנכשלה ל-0 או ל"אין תנועות".
+- merge, מיגרציה לפרוד, או שינוי ב-`vercel.json`.

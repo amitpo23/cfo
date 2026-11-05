@@ -44,7 +44,7 @@ carry a source and an `as_of`, and shows unknown values as חסר, never 0.
 |---|---|---|---|
 | 1 | `daily-file` | Morning | Amit's explicit GO for every final save. Wraps `sumit-file-expenses` |
 | 2 | `daily-bank-match` | After filing | Local only. Ends balanced or with a blocked list, one reason per row |
-| 3 | `of-accounts-sync` | Optional, before the report | Admin, Amit asked for this run, last OF sync ≥20h old. Never scheduled |
+| 3 | `of-accounts-sync` | Optional, before the report | Admin, Amit asked for this run, last OF attempt ≥20h old, full sync. Never scheduled |
 | 4 | `daily-pnl-cash` | After matching | One `/api/cashflow/period` call. Day + month to date |
 
 If step 3 brought in new bank transactions, run step 2 again before step 4.

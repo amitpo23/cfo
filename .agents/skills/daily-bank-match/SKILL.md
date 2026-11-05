@@ -16,8 +16,8 @@ description: Morning step 2 of Rezef's daily loop — after filing, classify and
 
 ## לפני שמתחילים
 
-- טריות: `GET /api/sync/runs?limit=20`. ריצת `open_finance` אחרונה ב-`completed` מעל
-  26 שעות = הבנק לא טרי. ממשיכים, אבל כל שורה מסומנת `bank_stale` והדוח הוא
+- טריות: `GET /api/sync/runs?limit=100`. ריצת `open_finance` אחרונה ב-`completed`
+  לפני יותר מ-26 שעות = הבנק לא טרי. ממשיכים, אבל כל שורה מסומנת `bank_stale` והדוח
   "לא-סמכותי" (צעד 1 ב-`00-role-and-daily-order.md`). **לא** מסנכרנים מכאן.
 - טווח: מה-1 בחודש עד היום (`as_of` = היום).
 
@@ -27,21 +27,29 @@ description: Morning step 2 of Rezef's daily loop — after filing, classify and
    אין עימוד בנתיב. אם חזרו בדיוק 1000 שורות — לכתוב
    "מוצגות 1000 מתוך ≥1000", לא "הכול". חיתוך שקט אסור.
 2. **פער מסמכים.** `GET /api/daily-reports/bank-expense-gap?year=<YYYY>&month=<M>`.
-   לכל יציאה: `has_document`, `matched_hint`, ו-`excluded_by_class` (העברות, שכר,
-   מס, כרטיס אשראי וכו' — לא הוצאה שדורשת חשבונית).
-3. **הצעות.** לכל שורה פתוחה: `GET /api/reconcile-manual/match-suggestions/<bank_txn_id>`
-   (או `GET /api/control/reconciliation/suggestions?start_date=…&end_date=…` לקבוצה).
-4. **החלה — רק כשאין ספק.** מועמד יחיד, סכום זהה, ספק זהה, תאריך סביר:
-   `POST /api/reconcile-manual/match` עם `bank_txn_id`, `entity_type`, `entity_id`.
-   ההתאמה מקומית והפיכה (`POST /api/reconcile-manual/unmatch`). כל השאר → רשימת חסומים.
+   לכל יציאה: `has_document`, `matched_hint`. בסיכום: `excluded_by_class` (יציאות
+   שלא נדרש להן מסמך) ו-`inflows.undocumented_count` (כניסות בלי חשבונית).
+3. **הצעות.** לכל שורה פתוחה: `GET /api/reconcile-manual/match-suggestions/<bank_txn_id>`.
+   משתמשים רק בהצעות של הנתיב הזה, כי אותו שירות כותב את ההתאמה בצעד 4.
+4. **הצעה, ואחריה אישור.** ב-main, `POST /api/reconcile-manual/match` לא בודק אם המסמך
+   כבר מותאם לתנועת בנק אחרת (#103 מוסיף `assert_document_free`). לכן עד מיזוג #103:
+   - מציגים לעמית רשימת התאמות מוצעות. בכל אחת מועמד יחיד, סכום זהה, ספק זהה ותאריך סביר.
+   - **רק אחרי אישורו** כותבים כל אחת ב-`POST /api/reconcile-manual/match` עם
+     `bank_txn_id`, `entity_type` (`invoice`/`bill`/`expense`) ו-`entity_id`.
+   ההתאמה מקומית והפיכה (`POST /api/reconcile-manual/unmatch`). כל השאר עובר לרשימת החסומים.
 5. **ספירה חוזרת** של צעדים 1–2.
 
 ## מאוזן — ההגדרה המדויקת
 
-החודש **מאוזן** רק כששני התנאים מתקיימים:
+החודש **מאוזן** כששלושת התנאים מתקיימים:
 
-- אפס שורות בטווח ב-`/api/reconcile-manual/unmatched` (מקור: `is_reconciled=false`), **וגם**
-- `totals.undocumented_count == 0` ב-`/api/daily-reports/bank-expense-gap`.
+- `totals.undocumented_count == 0` ב-`/api/daily-reports/bank-expense-gap` (יציאות), **וגם**
+- `inflows.undocumented_count == 0` באותו דוח (כניסות בלי חשבונית), **וגם**
+- כל שורה בטווח ב-`/api/reconcile-manual/unmatched` (מקור: `is_reconciled=false`) הותאמה
+  היום, או קיבלה סיבה מהטבלה למטה.
+
+שורה עם `no_document_expected:<class>` **לא** מונעת איזון. היא מדווחת בשורה נפרדת,
+עם הספירה והסכום מ-`excluded_by_class`. כל סיבה אחרת = החודש חסום.
 
 לכתוב ליד כל מונה את מקורו. דוח הפער מסנן לפי `transaction_date` בלי סינון BOOKED,
 ואילו `/api/cashflow/period` סופר BOOKED בלבד. לכן המונים עשויים להיות שונים
@@ -49,32 +57,37 @@ description: Morning step 2 of Rezef's daily loop — after filing, classify and
 
 ## רשימת חסומים — סיבה לכל שורה
 
-כל שורה שלא הותאמה נכנסת לרשימה עם אחת הסיבות האלה. אין דילוג שקט.
+כל שורה שלא הותאמה מקבלת אחת הסיבות האלה. אין דילוג שקט.
 
-| סיבה | מתי |
-|---|---|
-| `no_document` | אין מסמך מתויק כנגד היציאה. חוזר ל-`daily-file` או לבקשת חשבונית מהספק |
-| `multiple_candidates` | יותר ממועמד אחד, או ציון דומה |
-| `amount_mismatch` | מועמד יחיד, סכום שונה (עמלה, תשלום חלקי) |
-| `split_payment_1_to_n` | תשלום אחד מול כמה חשבוניות. ב-main אין עדיין התאמה 1:N; אחרי מיזוג #103 — דרך מסך ההתאמה |
-| `card_settlement` | חיוב/זיכוי כרטיס (Max, ישראכרט וכו'). הכלל מחכה ל-#105; עד אז לא מנחשים |
-| `owner_decision` | משיכת בעלים, הוצאה פרטית, צד שלישי — תור הכרעה |
-| `bank_stale` | הבנק לא טרי (ראה "לפני שמתחילים") |
+| סיבה | מתי | חוסם איזון |
+|---|---|---|
+| `no_document_expected:<class>` | לא נדרש מסמך. `<class>` היא אחת המחלקות של `classify_transaction`: `self_transfer`, `salary`, `tax_payment`, `loan_or_finance`, `bank_fee`, `card_settlement`, `other_excluded`. משתמשים בה רק כשהתיאור מתאים למחלקה ויש לה ספירה ב-`excluded_by_class` | לא |
+| `no_document` | אין מסמך מתויק כנגד היציאה או הכניסה. חוזר ל-`daily-file`, או לבקשת חשבונית מהספק | כן |
+| `multiple_candidates` | יותר ממועמד אחד, או ציונים דומים | כן |
+| `amount_mismatch` | מועמד יחיד בסכום שונה (עמלה, תשלום חלקי) | כן |
+| `split_payment_1_to_n` | תשלום אחד מול כמה חשבוניות. ב-main אין עדיין התאמה 1:N. אחרי מיזוג #103 — דרך מסך ההתאמה | כן |
+| `card_rule_pending_105` | זיכוי Max או חיוב כרטיס שהמחלקה שלו ב-main שגויה או לא ברורה. הכלל מחכה ל-#105. עד אז לא מנחשים | כן |
+| `owner_decision` | משיכת בעלים, הוצאה פרטית, צד שלישי. נכנס לתור הכרעה | כן |
+| `unclassified` | לא ברור לאיזו מחלקה השורה שייכת. לא מנחשים | כן |
+| `bank_stale` | הבנק לא טרי (ראה "לפני שמתחילים") | כן |
 
 ```
 התאמת בנק <ארגון> · <YYYY-MM-01>–<YYYY-MM-DD> · as-of <YYYY-MM-DD HH:MM>
-הותאמו היום: <N> · לא מותאמות (unmatched, is_reconciled): <N> · ללא מסמך (gap): <N>
+הותאמו היום: <N> · לא מותאמות (unmatched, is_reconciled): <N>
+ללא מסמך — יציאות (gap): <N> · כניסות (gap.inflows): <N>
+לא נדרש מסמך (excluded_by_class): <class> <N> / <סכום> · ...
 סטטוס: מאוזן | חסום
 חסומים:
   <תאריך> · <תיאור> · <סכום> · <סיבה> · <מה צריך כדי לשחרר>
 ```
 
-סכום שלא ידוע מופיע כ-`חסר` עם התאריך, לא 0.
+סכום לא ידוע מופיע כ-`חסר` עם התאריך, לא 0.
 
 ## אסור
 
-- להתאים כשיש ספק, "כדי שהמונה ירד". מונה נמוך עם התאמות שגויות גרוע ממונה גבוה.
+- להתאים כשיש ספק "כדי שהמונה ירד". מונה נמוך עם התאמות שגויות גרוע ממונה גבוה.
+- לכתוב התאמה בלי אישור, כל עוד #103 לא מוזג.
 - לסנכרן SUMIT או Open Finance מתוך הסקיל (זה `of-accounts-sync`, באישור).
 - לסגור מנה, לרשום תשלום ב-SUMIT, או לשנות ספרים רשמיים.
-- לממש כאן את הקוד של #103 או #105, למזג ענפים, או להריץ מיגרציה בפרוד.
+- לממש כאן את הקוד של #103 או #105, לעשות merge לענפים, או להריץ מיגרציה בפרוד.
 - להמציא פרטי חיבור לארגון שאינו מחובר (org 6).

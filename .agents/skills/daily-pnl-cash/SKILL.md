@@ -76,3 +76,4 @@ GET /api/cashflow/period?grain=day&start=<YYYY-MM-01>&end=<YYYY-MM-DD היום>
 - לקרוא ל-`/api/cashflow/monthly`, `/api/cashflow/daily` או כל מקור נוסף לאותו דוח.
 - לסנכרן ספק, לשנות קוד בצד השרת (חישוב יום שקט = החלטת בעלים), או לממש את UI של #106.
 - להמציא נתונים לארגון שאינו מחובר (org 6).
+- merge, מיגרציה לפרוד, או הפעלת cron.

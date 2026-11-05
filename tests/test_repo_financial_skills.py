@@ -79,6 +79,8 @@ def test_daily_skills_exist_with_bilingual_frontmatter():
         assert re.search(r"[֐-׿]", description), f"{skill}: no Hebrew trigger"
         assert re.search(r"[A-Za-z]{4,}", description), f"{skill}: no English trigger"
         assert "חסר" in body, f"{skill}: missing the חסר≠0 rule"
+        for forbidden in ("merge", "מיגרציה", "org 6"):
+            assert forbidden in body, f"{skill}: does not forbid {forbidden}"
         assert (SKILLS_DIR / skill / "agents/openai.yaml").exists()
 
 
@@ -109,6 +111,9 @@ def test_of_sync_is_never_implicit_and_never_scheduled():
     assert policy["policy"]["allow_implicit_invocation"] is False
     _, body = _frontmatter("of-accounts-sync")
     assert "20" in body and "/api/sync/runs" in body
+    # A subset sync does not advance the checkpoint the nightly cron gate reads.
+    assert "POST /api/sync/run?source=open_finance\n" in body
+    assert "entity_types=" not in body
 
 
 def _registered_paths() -> set[str]:
