@@ -1,0 +1,6 @@
+interface:
+  display_name: "Daily P&L + Cash"
+  short_description: "Day and month-to-date P&L and cash from one period payload"
+  default_prompt: "Use $daily-pnl-cash to print today's and month-to-date P&L and cash from one /api/cashflow/period call, with source and as-of on every figure."
+policy:
+  allow_implicit_invocation: true

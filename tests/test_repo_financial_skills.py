@@ -114,12 +114,9 @@ def test_of_sync_is_never_implicit_and_never_scheduled():
 def _registered_paths() -> set[str]:
     from cfo.api import app
 
-    paths = set()
-    for route in app.routes:
-        path = getattr(route, "path", None)
-        if path:
-            paths.add(re.sub(r"\{[^}]+\}", "{}", path))
-    return paths
+    # Included routers are lazy here, so app.routes misses them; the schema
+    # lists every mounted path (same source as tests/test_rezef_kb.py).
+    return {re.sub(r"\{[^}]+\}", "{}", path) for path in app.openapi()["paths"]}
 
 
 def test_daily_skills_cite_only_registered_endpoints():
