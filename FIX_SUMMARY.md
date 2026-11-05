@@ -3,6 +3,60 @@
 מיפוי 21 הפריטים ברשימת התיקונים ל-CTO. טסטים: `tests/test_bank_match.py` (25 עוברים) ו-`frontend/src/components/bankMatchModel.test.ts` (7 עוברים, vitest).
 סבב 2 (03.11): סוויטה מלאה, הענף 3,579 / 46 מול baseline `450bed1` 3,569 / 45. הכשל החדש היחיד (`test_the_migration_adds_it_on_top_of_the_single_head`) תוקן. התוצאות העדכניות נמצאות בסעיף (c) למטה.
 
+## סבב 4 (05.11.2026): כותבים ומציעים מכבדים החלטת התאמה
+
+**סטטוס פער `matched_entity_type`: נסגר בכל הקוראים והכותבים שמצאתי**, חוץ מהחריגים שמפורטים בטבלה למטה. קוד: commit `974c955`. ה-head של הענף: ה-commit של הסעיף הזה (ראו `git log -1`).
+
+בסבב 3 הקוראים כבר למדו שהחלטה 1:N או לפי קטגוריה מסלקת מסמכים. שלוש קבוצות קוד אחרות לא בדקו את זה:
+- **מסלולי ההתאמה הישנים:** route ההתאמה הידנית ו-`apply_bank_reconciliation` בדשבורד ה-CFO יכלו לנקות או לדרוס שורת בנק שמחזיקה החלטה. הם גם יכלו להתאים מסמך שכבר סולק לשורת בנק שנייה. השורה השנייה נראתה אז מוסברת, וההוצאה הבלתי-מתועדת נעלמה מהפער.
+- **המציעים:** הציעו שוב מסמכים שכבר סולקו.
+- **ה-worklist של הסינתזה:** ביקש לגבות חשבונית שהותאמה 1:N.
+
+כלל אחד, ב-`bank_match_settlements.py`:
+- `settled_document_keys`: כל המסמכים שהחלטה חיה מסלקת.
+- `assert_not_decided`: אוסר לנקות או לדרוס שורה שמחזיקה החלטה. שינוי של החלטה נעשה רק במסך ההתאמה, דרך פתיחה מחדש.
+- `assert_document_free`: אוסר להתאים מסמך שהחלטה חיה כבר מסלקת.
+
+| מקום | שינוי | טסט (`tests/test_bank_match_writers.py`) |
+|---|---|---|
+| `ManualReconciliationService.match_transaction` / `unmatch_transaction` | מסרבים לשורה שמחזיקה החלטה, ולמסמך שכבר סולק | `test_the_manual_route_cannot_clear_or_overwrite_a_decision`, `test_a_settled_document_cannot_be_matched_to_a_second_bank_row` |
+| `FinancialControlService.apply_bank_reconciliation` | אותו דבר | `test_apply_bank_reconciliation_cannot_overwrite_a_decision`, ואותו טסט מסמך-שני |
+| `load_docs_for_org`, ולכן `reconcile_organization` ו-`suggest_matches` | מסמך שסולק לא מוצע ולא מופיע ב-`unmatched_docs` | `test_suggesters_do_not_offer_a_settled_document` |
+| `FinancialControlService.suggest_bank_reconciliations` | מסנן מועמדים שסולקו | אותו טסט |
+| `financial_synthesis.synthesize_organization` | מסמכים שסולקו לא נרדפים (גבייה/תשלום) ולא מוצעים | `test_the_synthesis_worklist_does_not_chase_documents_matched_one_to_many` |
+| ביקורת | פתיחה מחדש משחררת את המסמכים. חשבונית פתוחה שלא הותאמה עדיין נרדפת | `test_a_reopened_decision_frees_its_documents_for_the_manual_route`, `test_the_synthesis_worklist_still_chases_an_unmatched_invoice` |
+
+**red check:** לפני התיקון 5 מתוך 7 הטסטים נכשלו מהסיבה הנכונה: `DID NOT RAISE`, מסמך שסולק הוצע שוב, ונוצר `collect_receivable` לחשבונית שהותאמה. 2 טסטי הביקורת עברו. אחרי התיקון כל ה-7 עוברים.
+
+**מצאי `matched_entity_type` ו-`is_reconciled` (grep על `src/cfo`):**
+
+| מקום | מצב |
+|---|---|
+| `open_payables.confirmed_cover` וכל הקוראים שלו: masav, admin, ap_service, ar_ap_aging, dashboard, daily_reports, live_forecast, live_cash_flow, balance_snapshot, alert_engine, bank_report, ai_analytics, payable_workbench, financial_control, view_model | ✅ סבב 3 |
+| `dashboard_service` AR/AP aging, `ledger_service.contact_card`, `bank_expense_gap`, `collection_service` | ✅ סבב 3 |
+| `manual_reconciliation`, `financial_control_service` (apply + suggest), `bank_reconciliation.load_docs_for_org`, `financial_synthesis` | ✅ סבב 4 |
+| מסננים של `is_reconciled == False`: bank_query, cfo_brain, financial_control suggest, admin count, financial_synthesis bank, `unreconciled_bank_count` | ✅ ללא שינוי, לפי התכנון: שורת החלטה מסומנת `is_reconciled=True` |
+| `payable_settlement`, `collection_allocation_service:91` | ✅ ללא שינוי: כבר מסרבים לשורה מותאמת |
+| `reconcile_organization` `result["matches"]` → `reconciliation_dispatch`, `ai_chat_tools`, morning cycle | ✅ ללא שינוי: מוציא `entity_type='bank_match'` עם id של החלטה. `reconciliation_dispatch._load_entity` מחזיר `{type, id}` בלי לפענח, ושום צרכן לא קורס. `build_synthesis` קורא ל-`reconcile()` הטהור, ושם `matches` תמיד ריק |
+| `accounting_event_service`, `bank_reconciliation.matches` | ✅ ללא שינוי: רק מדווחים את הערך |
+| `check_reconciliation` (שורת צ׳ק → `bank_transaction`) | ⏳ לא שונה: כותב על שורת הצ׳ק בלי לבדוק `is_reconciled`. זה קיים גם ב-1:1, ולכן מחוץ ל-scope |
+| `bank_coverage._pair` / `bank_status` supersede | ⏳ פער ידוע: שורה שמחזיקה החלטה עלולה להיות מסומנת superseded. ה-helper מפסיק אז לספור אותה, והחשבון נפתח מחדש בשקט. מסך ההתאמה משתמש באותו כלל, ולכן שניהם עקביים. לא תוקן בסבב הזה |
+| התאמה 1:1 (לא `bank_match`) של חשבונית ב-synthesis ובמציעים | ⏳ ללא שינוי (parity): מסמך שהותאם 1:1 עדיין מוצע ונרדף כמו קודם. התיקון כאן מוגבל להחלטות מסך ההתאמה |
+| masav עם `bill_ids` מפורשים | ⏳ ללא שינוי: בבחירה מפורשת `cover` לא נבדק, גם ב-1:1. זו הכרעת בעלים לגבי בחירה ידנית |
+
+**בדיקות (05.11.2026, מקומי, `env -i` ריק מסביבה כדי שלא תיגע ב-`DATABASE_URL` של ה-shell):**
+
+| בדיקה | תוצאה |
+|---|---|
+| `tests/test_bank_match_writers.py` | `7 passed` |
+| bank_match, consumers, writers, bank_reconciliation, financial_control, financial_synthesis, manual_reconciliation(+suggest), morning_cycle, moshko_reconciliation_tool, open_payables, reconciliation_dispatch, schema_semantic, `test_sumit_rate_limit_hard_rule` | `135 passed, 1 failed`. הכשל (`test_reconciliation_dispatch.py::test_sumit_dispatch_marks_unsupported_when_connector_has_no_writeback`) נכשל זהה גם על baseline `59c9025` |
+| `pytest tests/` על הענף | `45 failed, 3595 passed, 10 skipped in 945.57s` |
+| `pytest tests/` על baseline `59c9025` (worktree נקי, באותו זמן) | `45 failed, 3588 passed, 10 skipped in 945.24s` |
+| השוואת כשלים לפי שם (`comm -3`) | **0 הבדלים.** ההפרש של +7 עוברים הוא הקובץ החדש |
+| frontend | לא נגעתי ב-UI, ולכן לא הרצתי tsc/build. מסלול המסך אשר / בדיקה / חסר מסמך (`STATUSES`/`ACTIONS` ב-`dashboards/bank_match.py`) לא שונה |
+
+**migration `m50b2c3d4e5f`:** לא שונה ולא הוחל. עדיין דורש pg_dump ו-GO של עמית, לפי הסעיף ⚠️ למטה. לפני ה-migration הכלל החדש לא קורא את הטבלאות: `bank_match_settlements` מחזיר `[]` כשאין שורת `bank_match`.
+
 ## סבב 3 (04.11.2026): פערי האימות
 
 ### (c) CI למטה, ולכן הכול הורץ מקומית (04.11.2026)
