@@ -57,7 +57,7 @@ export function PnlChart({ report }: { report: PeriodCompare | null }) {
             <CartesianGrid strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="label" reversed tick={{ fontSize: 11 }} tickFormatter={(label: string) => (report.grain === 'day' ? label.slice(8) : label)} />
             <YAxis orientation="right" tick={{ fontSize: 11 }} tickFormatter={(value: number) => money.format(value)} width={80} />
-            <Tooltip formatter={(value) => cell(typeof value === 'number' ? value : null)} labelFormatter={(label: string) => label} />
+            <Tooltip filterNull={false} formatter={(value) => cell(typeof value === 'number' ? value : null)} labelFormatter={(label: string) => label} />
             <Legend />
             <Bar dataKey={income} name={source === 'books' ? 'הכנסות' : 'נכנס'} fill="#16a34a" radius={[3, 3, 0, 0]} />
             <Bar dataKey={expense} name={source === 'books' ? 'הוצאות' : 'יוצא'} fill="#dc2626" radius={[3, 3, 0, 0]} />

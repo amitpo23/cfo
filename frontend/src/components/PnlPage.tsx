@@ -7,10 +7,10 @@ import { PartialDataBanner } from './dashboardUi';
 import { CumulativeTable, PnlChart } from './DailyPnl';
 import { periodQuery, pnlRange } from './periodDaily';
 
-const initial = pnlRange('day');
+const initial = pnlRange('month');
 
 export default function PnlPage() {
-  const [grain, setGrain] = useState<Grain>('day');
+  const [grain, setGrain] = useState<Grain>('month');
   const [start, setStart] = useState(initial.start);
   const [end, setEnd] = useState(initial.end);
   // One query. Chart, cumulative and period table all read report.data.
