@@ -15,6 +15,7 @@ from ..database import SessionLocal
 from ..config import settings
 from ..integrations.sumit_integration import SumitIntegration
 from .sumit_request_budget import SumitRequestLimiter
+from .vat_utils import vat_rate_for
 from ..integrations.sumit_models import (
     DocumentRequest, DocumentResponse, DocumentItem,
     SendDocumentRequest, DocumentListRequest, ExpenseRequest
@@ -68,7 +69,7 @@ class InvoiceItem:
     description: str
     quantity: float
     unit_price: float
-    vat_rate: float = 17.0
+    vat_rate: float = 18.0
     discount_percent: float = 0.0
     item_code: Optional[str] = None
     unit: str = "יחידה"
@@ -205,7 +206,8 @@ class InvoiceService:
                 description=item['description'],
                 quantity=item.get('quantity', 1),
                 unit_price=item['unit_price'],
-                vat_rate=item.get('vat_rate', 17.0),
+                vat_rate=(item['vat_rate'] if item.get('vat_rate') is not None
+                          else float(vat_rate_for(issue_date) * 100)),
                 discount_percent=item.get('discount_percent', 0),
                 item_code=item.get('item_code'),
                 unit=item.get('unit', 'יחידה')
@@ -249,7 +251,7 @@ class InvoiceService:
                 description=item.description,
                 quantity=Decimal(str(item.quantity)),
                 price=Decimal(str(item.unit_price)),
-                vat_rate=Decimal(str(item.vat_rate)) if item.vat_rate else None,
+                vat_rate=Decimal(str(item.vat_rate)) if item.vat_rate is not None else None,
                 discount=Decimal(str(item.discount_percent)) if item.discount_percent else None
             )
             for item in invoice.items

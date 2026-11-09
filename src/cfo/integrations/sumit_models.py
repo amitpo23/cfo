@@ -95,6 +95,16 @@ class DocumentRequest(BaseModel):
     # Links this document to the one it credits/relates to (SUMIT
     # OriginalDocumentID) — e.g. a credit note crediting an invoice.
     original_document_id: Optional[str] = None
+    # Item prices are NET by default (the UI adds VAT on top). True = prices
+    # already include VAT (SUMIT VATIncluded).
+    prices_include_vat: bool = False
+    # Used only when the customer is referenced by name (no SUMIT ID):
+    # SUMIT CompanyNumber is what triggers an allocation-number request.
+    customer_tax_id: Optional[str] = None
+    customer_email: Optional[str] = None
+    # Details.SendByEmail — only when the user chose to send.
+    send_by_email: bool = False
+    email_address: Optional[str] = None
 
 
 class DocumentResponse(BaseModel):

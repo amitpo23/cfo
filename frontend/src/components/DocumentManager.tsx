@@ -5,6 +5,7 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import apiService from '../services/api';
+import { allocationWarning, normalizeTaxId } from './documentForm';
 
 type DocType = { value: string; label: string };
 type ContactSuggestion = {
@@ -12,6 +13,7 @@ type ContactSuggestion = {
   name: string;
   email?: string | null;
   external_id?: string | null;
+  tax_id?: string | null;
 };
 type Line = { description: string; quantity: number; price: number; vatRate: number };
 type Created = {
@@ -21,6 +23,8 @@ type Created = {
   external_id?: string | null;
   total?: number;
   sumit?: { pdf_url?: string | null } | null;
+  sent?: { email?: string | null } | null;
+  warnings?: string[];
 };
 type IssuedRow = {
   id?: number;
@@ -77,6 +81,9 @@ export const DocumentManager: React.FC = () => {
   const [customerName, setCustomerName] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
+  const [customerTaxId, setCustomerTaxId] = useState('');
+  const [sendEmail, setSendEmail] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [originalInvoiceId, setOriginalInvoiceId] = useState('');
   const [notes, setNotes] = useState('');
@@ -123,6 +130,11 @@ export const DocumentManager: React.FC = () => {
     }, { net: 0, tax: 0, total: 0 });
   }, [items]);
 
+  const taxId = normalizeTaxId(customerTaxId);
+  const today = new Date().toISOString().slice(0, 10);
+  const allocationNote = allocationWarning(documentType, totals.net, taxId.value, today);
+  const sendTo = (recipientEmail.trim() || customerEmail.trim()) || null;
+
   const payloadItems = items
     .filter((line) => line.description.trim())
     .map((line) => ({
@@ -140,18 +152,25 @@ export const DocumentManager: React.FC = () => {
       customer_name: customerName.trim(),
       customer_email: customerEmail || null,
       customer_address: null,
+      customer_tax_id: taxId.value,
       items: payloadItems,
+      prices_include_vat: false,
       issue_date: null,
       due_date: null,
       notes: notes.trim() || null,
       send_to_sumit: sendToSumit,
-      send_email: Boolean(customerEmail) && sendToSumit,
+      send_email: sendEmail && sendToSumit,
+      recipient_email: sendEmail ? recipientEmail.trim() || null : null,
       original_invoice_id: documentType === 'credit_note' && originalInvoiceId ? Number(originalInvoiceId) : null,
       payments: null,
     };
   }
 
-  const ready = customerName.trim().length > 0 && payloadItems.length > 0 && payloadItems.every((line) => line.quantity > 0);
+  const ready = customerName.trim().length > 0
+    && payloadItems.length > 0
+    && payloadItems.every((line) => line.quantity > 0)
+    && !taxId.error
+    && (!sendEmail || Boolean(sendTo));
 
   async function saveLocal() {
     setBusy(true);
@@ -214,6 +233,8 @@ export const DocumentManager: React.FC = () => {
           <p>מספר מסמך: {result.document_number || 'עדיין אין מספר מסאמית'}</p>
           <p>מזהה SUMIT: {result.external_id || 'לא נשלח ל-SUMIT'}</p>
           <p>סכום: {money(Number(result.total || 0))}</p>
+          <p>{result.sent ? `נשלח במייל אל ${result.sent.email || 'כתובת הלקוח'}` : 'לא נשלח במייל'}</p>
+          {(result.warnings || []).map((warning) => <p key={warning} className="text-amber-900">{warning}</p>)}
           {result.sumit?.pdf_url ? (
             <a className="mt-2 inline-block underline" href={result.sumit.pdf_url} target="_blank" rel="noopener noreferrer">קישור למסמך</a>
           ) : null}
@@ -253,6 +274,7 @@ export const DocumentManager: React.FC = () => {
                           setCustomerName(contact.name);
                           setCustomerId(contact.external_id || String(contact.id));
                           if (contact.email) setCustomerEmail(contact.email);
+                          if (contact.tax_id) setCustomerTaxId(contact.tax_id);
                           setShowSuggestions(false);
                         }}
                       >
@@ -266,6 +288,20 @@ export const DocumentManager: React.FC = () => {
             <label className="text-sm">אימייל
               <input className="mt-1 w-full rounded-lg border px-3 py-2" type="email" value={customerEmail} aria-label="אימייל" onChange={(event) => setCustomerEmail(event.target.value)} />
             </label>
+            <label className="text-sm">ח.פ / ע.מ
+              <input className="mt-1 w-full rounded-lg border px-3 py-2" inputMode="numeric" value={customerTaxId} placeholder="9 ספרות" aria-label="ח.פ / ע.מ" aria-invalid={Boolean(taxId.error)} onChange={(event) => setCustomerTaxId(event.target.value)} />
+              {taxId.error ? <span className="mt-1 block text-xs text-red-700">{taxId.error}</span> : null}
+            </label>
+            <div className="text-sm">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={sendEmail} aria-label="לשלוח את המסמך במייל" onChange={(event) => setSendEmail(event.target.checked)} />
+                לשלוח את המסמך במייל
+              </label>
+              {sendEmail ? (
+                <input className="mt-1 w-full rounded-lg border px-3 py-2" type="email" value={recipientEmail} placeholder={customerEmail || 'כתובת לשליחה'} aria-label="כתובת לשליחה" onChange={(event) => setRecipientEmail(event.target.value)} />
+              ) : null}
+              {sendEmail && !sendTo ? <span className="mt-1 block text-xs text-red-700">חסרה כתובת מייל לשליחה</span> : null}
+            </div>
             {documentType === 'credit_note' ? (
               <label className="text-sm">מזהה המסמך המזוכה
                 <input className="mt-1 w-full rounded-lg border px-3 py-2" inputMode="numeric" value={originalInvoiceId} aria-label="מסמך מקור לזיכוי" onChange={(event) => setOriginalInvoiceId(event.target.value)} />
@@ -275,7 +311,7 @@ export const DocumentManager: React.FC = () => {
 
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="font-medium">שורות</h2>
+              <h2 className="font-medium">שורות <span className="text-xs font-normal text-stone-500">(מחיר ליחידה לפני מע״מ)</span></h2>
               <button type="button" className="text-sm underline" onClick={() => setItems([...items, { description: '', quantity: 1, price: 0, vatRate: 18 }])}>הוספת שורה</button>
             </div>
             {items.map((line, index) => (
@@ -290,7 +326,7 @@ export const DocumentManager: React.FC = () => {
                   next[index] = { ...line, quantity: Number(event.target.value) };
                   setItems(next);
                 }} />
-                <input className="col-span-2 rounded-lg border px-3 py-2" type="number" min="0" step="0.01" aria-label={`מחיר ${index + 1}`} value={line.price} onChange={(event) => {
+                <input className="col-span-2 rounded-lg border px-3 py-2" type="number" min="0" step="0.01" aria-label={`מחיר ${index + 1}`} title="מחיר ליחידה לפני מע״מ" value={line.price} onChange={(event) => {
                   const next = [...items];
                   next[index] = { ...line, price: Number(event.target.value) };
                   setItems(next);
@@ -310,6 +346,7 @@ export const DocumentManager: React.FC = () => {
             <p>מע״מ: {money(totals.tax)}</p>
             <p className="text-lg font-semibold">סה״כ: {money(totals.total)}</p>
           </section>
+          {allocationNote ? <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">{allocationNote}</p> : null}
 
           <label className="block text-sm">הערה
             <textarea className="mt-1 w-full rounded-lg border px-3 py-2" value={notes} aria-label="הערה" onChange={(event) => setNotes(event.target.value)} />
@@ -318,7 +355,8 @@ export const DocumentManager: React.FC = () => {
           {confirming ? (
             <section className="rounded-lg border border-amber-300 bg-amber-50 p-3" role="dialog" aria-label="אישור הפקה">
               <p className="font-medium">לאשר הפקה ב-SUMIT?</p>
-              <p className="mt-1 text-sm">{typeLabel} עבור {customerName} · {money(totals.total)}. זו שליחה אמיתית לסאמית, לא טיוטה.</p>
+              <p className="mt-1 text-sm">{typeLabel} עבור {customerName} · {money(totals.net)} + מע״מ = {money(totals.total)}. זו שליחה אמיתית לסאמית, לא טיוטה.</p>
+              <p className="mt-1 text-sm">ח.פ / ע.מ: {taxId.value || 'לא הוזן'} · {sendEmail ? `יישלח במייל אל ${sendTo}` : 'לא יישלח במייל'}</p>
               <div className="mt-3 flex gap-2">
                 <button type="button" className="rounded-lg bg-emerald-700 px-4 py-2 text-white disabled:opacity-50" disabled={busy} onClick={() => void issueToSumit()}>
                   {busy ? 'שולח…' : 'אישור ושליחה'}

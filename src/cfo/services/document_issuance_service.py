@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 from ..integrations.sumit_models import ChargeRequest, DocumentItem, DocumentPayment, DocumentRequest, SendDocumentRequest
 from ..models import Contact, Invoice, InvoiceStatus
 from .contact_service import resolve_or_create_contact
+from .israeli_tax_rules import allocation_threshold_for
 from .sync_engine import get_connector_for_org
+from .vat_utils import vat_rate_for
 
 # SUMIT floors amounts to cents; treat balances at or below this as fully offset.
 _ZERO_BALANCE_EPSILON = Decimal("0.01")
@@ -33,6 +35,21 @@ ISSUABLE_DOCUMENT_TYPES = {
     "credit_note": "חשבונית זיכוי",
     "payment_request": "דרישת תשלום",
 }
+
+# Documents that need an allocation number (מספר הקצאה) above the threshold.
+_ALLOCATION_DOCUMENT_TYPES = {"invoice", "invoice_receipt"}
+
+
+def normalize_tax_id(raw: Optional[str]) -> Optional[str]:
+    """ח.פ / ע.מ / ת.ז as a 9-digit string (leading zeros kept); empty → None."""
+    if raw is None:
+        return None
+    value = "".join(ch for ch in str(raw) if ch not in " -")
+    if not value:
+        return None
+    if not value.isdigit() or len(value) != 9:
+        raise ValueError("ח.פ / ע.מ חייב להכיל 9 ספרות בדיוק")
+    return value
 
 
 class DocumentIssuanceService:
@@ -75,10 +92,14 @@ class DocumentIssuanceService:
         recipient_email: Optional[str] = None,
         original_invoice_id: Optional[int] = None,
         payments: Optional[list[dict[str, Any]]] = None,
+        customer_tax_id: Optional[str] = None,
+        prices_include_vat: bool = False,
+        send_to_email: Optional[str] = None,
     ) -> dict[str, Any]:
         document_type = document_type.strip().lower()
         if document_type not in ISSUABLE_DOCUMENT_TYPES:
             raise ValueError(f"סוג מסמך לא נתמך: {document_type}")
+        customer_tax_id = normalize_tax_id(customer_tax_id)
 
         original_invoice: Optional[Invoice] = None
         if original_invoice_id is not None:
@@ -90,7 +111,8 @@ class DocumentIssuanceService:
 
         issue = issue_date or date.today()
         due = due_date or issue + timedelta(days=30)
-        line_items = [self._line_item(item) for item in items]
+        default_rate = vat_rate_for(issue) * Decimal("100")
+        line_items = [self._line_item(item, default_rate, prices_include_vat) for item in items]
         subtotal = sum(item["subtotal"] for item in line_items)
         tax = sum(item["tax"] for item in line_items)
         total = sum(item["total"] for item in line_items)
@@ -112,6 +134,8 @@ class DocumentIssuanceService:
         contact = resolve_or_create_contact(
             self.db, self.organization_id, name=customer_name, email=recipient_email,
         )
+        if customer_tax_id and not contact.tax_id:
+            contact.tax_id = customer_tax_id
 
         invoice = Invoice(
             organization_id=self.organization_id,
@@ -168,6 +192,11 @@ class DocumentIssuanceService:
                 currency=currency,
                 original_document_id=original_invoice.external_id if original_invoice else None,
                 payments=[self._document_payment(p) for p in payments] if payments else None,
+                prices_include_vat=prices_include_vat,
+                customer_tax_id=customer_tax_id or contact.tax_id,
+                customer_email=recipient_email,
+                send_by_email=send_email,
+                email_address=send_to_email or recipient_email,
             )
             client = await connector._get_client()
             async with client:
@@ -188,12 +217,11 @@ class DocumentIssuanceService:
                     "sumit": sumit_response,
                 }
                 if send_email:
-                    sent_response = await client.send_document(
-                        SendDocumentRequest(
-                            document_id=response.document_id,
-                            recipient_email=recipient_email,
-                        )
-                    )
+                    # Sent by SUMIT itself via Details.SendByEmail on create.
+                    sent_response = {
+                        "via": "SendByEmail",
+                        "email": send_to_email or recipient_email,
+                    }
 
         if original_invoice is not None:
             invoice.raw_data = {**(invoice.raw_data or {}), "credited_invoice_id": original_invoice.id}
@@ -226,10 +254,25 @@ class DocumentIssuanceService:
             "due_date": invoice.due_date.isoformat() if invoice.due_date else None,
             "sumit": sumit_response,
             "sent": sent_response,
+            "warnings": self._allocation_warnings(document_type, issue, subtotal, customer_tax_id or contact.tax_id),
         }
         if original_invoice is not None:
             result["credited_invoice_id"] = original_invoice.id
         return result
+
+    @staticmethod
+    def _allocation_warnings(
+        document_type: str, issue: date, subtotal: Decimal, tax_id: Optional[str],
+    ) -> list[str]:
+        if document_type not in _ALLOCATION_DOCUMENT_TYPES or tax_id:
+            return []
+        threshold = allocation_threshold_for(issue)
+        if threshold is None or subtotal <= threshold:
+            return []
+        return [
+            f"סכום לפני מע\"מ ₪{subtotal:,.2f} מעל סף מספר ההקצאה (₪{threshold:,.0f}) "
+            "ואין ח.פ / ע.מ ללקוח — SUMIT לא יבקש מספר הקצאה והלקוח לא יוכל לנכות את המע\"מ"
+        ]
 
     async def create_scheduled_occurrence(self, invoice_id: int) -> list[dict[str, Any]]:
         """8.1 — clone an already-issued document into its next scheduled
@@ -391,15 +434,23 @@ class DocumentIssuanceService:
             due_date=date.fromisoformat(payment["due_date"]) if payment.get("due_date") else None,
         )
 
-    def _line_item(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _line_item(
+        self, item: dict[str, Any], default_rate: Decimal, prices_include_vat: bool = False,
+    ) -> dict[str, Any]:
         quantity = Decimal(str(item.get("quantity", 1)))
         unit_price = Decimal(str(item.get("unit_price", 0)))
-        vat_rate = Decimal(str(item.get("vat_rate", 17)))
+        raw_rate = item.get("vat_rate")
+        vat_rate = default_rate if raw_rate is None else Decimal(str(raw_rate))
         discount = Decimal(str(item.get("discount", item.get("discount_percent", 0)) or 0))
-        net = quantity * unit_price
+        amount = quantity * unit_price
         if discount:
-            net = net * (Decimal("1") - (discount / Decimal("100")))
-        tax = net * (vat_rate / Decimal("100"))
+            amount = amount * (Decimal("1") - (discount / Decimal("100")))
+        if prices_include_vat:
+            net = amount / (Decimal("1") + vat_rate / Decimal("100"))
+            tax = amount - net
+        else:
+            net = amount
+            tax = net * (vat_rate / Decimal("100"))
         return {
             "description": item["description"],
             "quantity": float(quantity),
