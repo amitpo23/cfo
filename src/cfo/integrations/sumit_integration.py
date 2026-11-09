@@ -1288,8 +1288,27 @@ class SumitIntegration(BaseIntegration):
         Returns:
             DocumentResponse with created document
         """
+        from ..services.vat_utils import vat_rate_for
+
+        # The UI prices are net; SUMIT's VATRate unit (18 vs 0.18) is not
+        # documented, so we never send it. Only the statutory rate for the
+        # document date is issuable — SUMIT then applies the company default.
+        statutory_rate = vat_rate_for(document.issue_date) * Decimal("100")
+        for item in document.items:
+            if item.vat_rate is not None and item.vat_rate != statutory_rate:
+                raise ValueError(
+                    f"שיעור מע\"מ {item.vat_rate}% שונה מהשיעור החוקי "
+                    f"({statutory_rate.normalize()}%) — הפקה בשיעור אחר עדיין לא נתמכת"
+                )
+
+        customer = self._customer_ref(document.customer_id)
+        if "ID" not in customer:
+            if document.customer_tax_id:
+                customer["CompanyNumber"] = document.customer_tax_id
+            if document.customer_email:
+                customer["EmailAddress"] = document.customer_email
         details: Dict[str, Any] = {
-            "Customer": self._customer_ref(document.customer_id),
+            "Customer": customer,
             "Type": self._map_document_type(document.document_type),
             "Language": self._map_language(document.language),
             "Currency": document.currency or "ILS",
@@ -1300,6 +1319,11 @@ class SumitIntegration(BaseIntegration):
             details["DueDate"] = document.due_date.isoformat()
         if document.notes:
             details["Description"] = document.notes
+        if document.send_by_email:
+            send: Dict[str, Any] = {"Original": True, "SendAsPaymentRequest": False}
+            if document.email_address:
+                send = {"EmailAddress": document.email_address, **send}
+            details["SendByEmail"] = send
 
         payload_extra: Dict[str, Any] = {}
         if document.original_document_id:
@@ -1337,9 +1361,18 @@ class SumitIntegration(BaseIntegration):
         payload: Dict[str, Any] = {
             "Details": details,
             "Items": items,
-            "VATIncluded": True,
+            "VATIncluded": document.prices_include_vat,
             **payload_extra,
         }
+
+        # Expected totals, computed locally (SUMIT's create response has none).
+        if document.prices_include_vat:
+            vat = total - total / (Decimal("1") + statutory_rate / Decimal("100"))
+        else:
+            vat = total * statutory_rate / Decimal("100")
+            total += vat
+        vat = vat.quantize(Decimal("0.01"))
+        total = total.quantize(Decimal("0.01"))
 
         data = await self._post("/accounting/documents/create/", payload)
         doc_id = str(data.get("DocumentID", ""))
@@ -1350,7 +1383,7 @@ class SumitIntegration(BaseIntegration):
             document_type=document.document_type,
             customer_id=str(data.get("CustomerID") or document.customer_id),
             total_amount=total,
-            vat_amount=Decimal("0"),
+            vat_amount=vat,
             status="open",
             issue_date=issue,
             due_date=document.due_date,

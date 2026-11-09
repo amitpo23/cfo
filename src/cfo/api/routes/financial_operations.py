@@ -36,7 +36,7 @@ class InvoiceItemRequest(BaseModel):
     description: str = Field(..., description="תיאור הפריט")
     quantity: float = Field(..., gt=0, description="כמות")
     unit_price: float = Field(..., ge=0, description="מחיר ליחידה")
-    vat_rate: float = Field(default=17.0, ge=0, description="שיעור מע\"מ")
+    vat_rate: Optional[float] = Field(default=None, ge=0, description="שיעור מע\"מ; ריק = השיעור החוקי לתאריך המסמך")
     discount: float = Field(default=0, ge=0, description="הנחה")
 
 
@@ -52,6 +52,7 @@ class CreateInvoiceRequest(BaseModel):
     due_date: Optional[str] = Field(None, description="תאריך לתשלום")
     notes: Optional[str] = Field(None, description="הערות")
     send_to_sumit: bool = Field(default=True, description="שליחה ל-SUMIT")
+    send_email: bool = Field(default=False, description="שליחת המסמך במייל ללקוח")
 
 
 class ReceivedInvoiceRequest(BaseModel):
@@ -171,7 +172,7 @@ async def create_invoice(
             due_date=date.fromisoformat(request.due_date) if request.due_date else None,
             notes=request.notes,
             send_to_sumit=request.send_to_sumit,
-            send_email=bool(request.customer_email and request.send_to_sumit),
+            send_email=bool(request.send_email and request.send_to_sumit),
         )}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -226,7 +227,10 @@ class CreateDocumentRequest(BaseModel):
     customer_name: str = Field(..., description="שם לקוח/ספק")
     customer_email: Optional[str] = None
     customer_address: Optional[str] = None
+    customer_tax_id: Optional[str] = Field(default=None, description="ח.פ / ע.מ של הלקוח (9 ספרות)")
     items: List[InvoiceItemRequest] = Field(..., description="פריטים")
+    prices_include_vat: bool = Field(default=False, description="מחירי השורות כוללים מע\"מ")
+    recipient_email: Optional[str] = Field(default=None, description="כתובת לשליחה במקום מייל הלקוח")
     issue_date: Optional[str] = None
     due_date: Optional[str] = None
     notes: Optional[str] = None
@@ -301,6 +305,9 @@ async def create_document(
             notes=request.notes,
             send_to_sumit=request.send_to_sumit,
             send_email=request.send_email,
+            send_to_email=request.recipient_email,
+            customer_tax_id=request.customer_tax_id,
+            prices_include_vat=request.prices_include_vat,
             original_invoice_id=request.original_invoice_id,
             payments=[p.model_dump() for p in request.payments] if request.payments else None,
         )}

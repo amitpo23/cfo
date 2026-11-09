@@ -30,6 +30,7 @@ async def list_contacts(
                 "phone": c.phone,
                 "contact_type": c.contact_type.value,
                 "external_id": c.external_id,
+                "tax_id": c.tax_id,
             }
             for c in results
         ],
